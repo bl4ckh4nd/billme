@@ -51,6 +51,12 @@ services:
       BILLME_PRINT_WEB_URL: http://web:8080
       BILLME_PRINT_WEB_PRO_URL: http://web-pro:8080
       BILLME_PRINT_API_URL: http://server-api:3100
+      # Server-wide secrets only travel to the endpoints pinned here, never to one a workspace typed in.
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+      RESEND_API_KEY: ${RESEND_API_KEY:-}
+      PORTAL_API_KEY: ${BILLME_PORTAL_PUBLISH_API_KEY:?set BILLME_PORTAL_PUBLISH_API_KEY in .env.server-mode}
+      BILLME_PUBLIC_PORTAL_URL: ${BILLME_PUBLIC_PORTAL_URL:-http://localhost:3001}
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
       OPENROUTER_VLM_MODEL: ${OPENROUTER_VLM_MODEL:-google/gemini-3.7-flash}
       OPENROUTER_VLM_MODELS: ${OPENROUTER_VLM_MODELS:-google/gemini-3.7-flash}
@@ -79,6 +85,7 @@ services:
       WORKER_PORTAL_SYNC_INTERVAL_MS: ${WORKER_PORTAL_SYNC_INTERVAL_MS:-60000}
       WORKER_MAINTENANCE_INTERVAL_MS: ${WORKER_MAINTENANCE_INTERVAL_MS:-86400000}
       WORKER_RUN_ONCE: ${WORKER_RUN_ONCE:-0}
+      SMTP_HOST: ${SMTP_HOST:-}
       SMTP_PASSWORD: ${SMTP_PASSWORD:-}
       RESEND_API_KEY: ${RESEND_API_KEY:-}
     depends_on:

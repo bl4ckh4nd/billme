@@ -21,7 +21,11 @@ import { addDays, draftOffer, issueInvoice, newClient, today } from './fixtures.
  * How this can fail (each one has a test below):
  * - scheduling: a job running for a tenant that is not configured, outside its
  *   window, with automation off, or twice in one window; the worker touching
- *   another tenant's data; starting on an unmigrated database
+ *   another tenant's data; starting on an unmigrated database; a second workspace
+ *   never served (only the oldest one), one broken workspace stopping the others
+ * - platform secrets: the server's SMTP password sent to an SMTP host a workspace
+ *   typed into its settings instead of the host the operator pinned (SMTP_HOST);
+ *   the portal key sent to a portal address other than BILLME_PUBLIC_PORTAL_URL
  * - recurring invoices: a due profile generating no invoice or two (second run,
  *   two workers at once), a future / inactive / ended profile generating one, one
  *   broken profile stopping the others, the profile not advancing, the number not
@@ -151,9 +155,11 @@ describe('server worker', () => {
   let portal: Awaited<ReturnType<typeof startPortalStub>>;
   const workers: ServerWorkerRuntime[] = [];
   const previousSmtpPassword = process.env.SMTP_PASSWORD;
+  const previousSmtpHost = process.env.SMTP_HOST;
 
   before(async () => {
     process.env.SMTP_PASSWORD = 'smtp-secret'; // the hosted API reads it to accept /email/send
+    process.env.SMTP_HOST = '127.0.0.1'; // the only host that secret may go to
     h = await startHostedServer('worker');
     smtp = await startSmtpStub();
     portal = await startPortalStub();
@@ -164,6 +170,7 @@ describe('server worker', () => {
     await portal.close();
     await h.close();
     if (previousSmtpPassword === undefined) delete process.env.SMTP_PASSWORD; else process.env.SMTP_PASSWORD = previousSmtpPassword;
+    if (previousSmtpHost === undefined) delete process.env.SMTP_HOST; else process.env.SMTP_HOST = previousSmtpHost;
   });
 
   const smtpSettings = (port = smtp.port) => ({ provider: 'smtp', smtpHost: '127.0.0.1', smtpPort: port, smtpSecure: false, smtpUser: 'worker', fromName: 'Muster GmbH', fromEmail: 'info@muster.example' });
@@ -186,6 +193,7 @@ describe('server worker', () => {
       databaseUrl: h.wire.url,
       tenantId,
       ...(env.smtpPassword === null ? {} : { smtpPassword: env.smtpPassword ?? 'smtp-secret' }),
+      smtpHost: '127.0.0.1',
     }, createWorkerLogger('error'));
     await instance.init();
     workers.push(instance);
@@ -205,7 +213,7 @@ describe('server worker', () => {
       const w = await worker(`ghost-${randomUUID()}`);
       for (const job of [w.runRecurringJob, w.runDunningJob, w.runQueuedEmailJob, w.runTaxFilingSubmissionJob, w.runPortalSyncJob, w.runMaintenanceJob]) {
         const result = await job.call(w);
-        assert.deepEqual({ status: result.status, message: result.message }, { status: 'skipped', message: 'No primary tenant is bootstrapped yet' });
+        assert.deepEqual({ status: result.status, message: result.message }, { status: 'skipped', message: 'No workspace is set up yet' });
       }
     });
 
@@ -231,6 +239,45 @@ describe('server worker', () => {
       assert.equal((await w.runRecurringJob()).status, 'skipped', 'enabled, but the window is hours away');
       assert.equal((await w.runDunningJob()).status, 'skipped');
       assert.equal((await invoicesOf(tenant)).length, 0);
+    });
+
+    test('without a tenant filter every active workspace is served, and one broken workspace does not stop the others', async () => {
+      const own = await startHostedServer('worker-workspaces');
+      try {
+        const workspace = async (label: string) => {
+          const email = uniqueEmail(label);
+          const { tenantId } = await seedMember(own.wire, { product: 'lite', email, fullName: label, role: 'owner' });
+          const { token } = await own.login('lite', email);
+          const settings = await own.putSettings('lite', token, { automation: { recurringEnabled: true, recurringRunTime: dueWindow(), dunningEnabled: false } });
+          const api = own.liteApi(token);
+          const { id: clientId } = await api.clients.upsert({ client: newClient() as never });
+          return { tenantId, token, settings, clientId };
+        };
+        const first = await workspace('ws-first');
+        const second = await workspace('ws-second');
+        const broken = await workspace('ws-broken');
+        for (const ws of [first, second]) {
+          assert.equal((await own.http('POST', '/api/v1/lite/recurring', { token: ws.token, body: { reason: 'Abo', profile: profile(ws.clientId) } })).status, 200);
+        }
+        // A settings row the worker cannot read must only block its own workspace.
+        await own.wire.sql(`UPDATE server_settings SET settings_json = '{"broken":' WHERE tenant_id = $1`, [broken.tenantId]);
+        await own.wire.sql(`UPDATE tenants SET status = 'suspended' WHERE id = $1`, [(await seedMember(own.wire, { product: 'lite', email: uniqueEmail('ws-suspended'), fullName: 'Suspended', role: 'owner' })).tenantId]);
+
+        const w = new ServerWorkerRuntime({ databaseUrl: own.wire.url, smtpHost: '127.0.0.1' }, createWorkerLogger('error'));
+        await w.init();
+        workers.push(w);
+        const result = await w.runRecurringJob();
+        const perTenant = (result.details?.tenants ?? []) as Array<{ tenantId: string; status: string }>;
+        assert.equal(result.status, 'blocked', 'the broken workspace is reported');
+        assert.deepEqual(perTenant.map((entry) => entry.status).sort(), ['blocked', 'completed', 'completed']);
+        assert.equal(perTenant.find((entry) => entry.tenantId === broken.tenantId)?.status, 'blocked');
+        for (const ws of [first, second]) {
+          const invoices = (await own.http('GET', '/api/v1/lite/invoices', { token: ws.token })).body as unknown[];
+          assert.equal(invoices.length, 1, `workspace ${ws.tenantId} got its recurring invoice`);
+        }
+      } finally {
+        await own.close();
+      }
     });
 
     test('the worker refuses to start against a database the migrator has not prepared', async () => {
@@ -415,7 +462,9 @@ describe('server worker', () => {
       const tenant = await newTenant('dunning-noprovider', { ...dunningOn(), email: { provider: 'none', smtpHost: '', smtpPort: 587, smtpSecure: true, smtpUser: '', fromName: '', fromEmail: '' } });
       const invoice = await overdueInvoice(tenant, 30);
       const w = await worker(tenant.tenantId);
-      await assert.rejects(w.runDunningJob(), /Email provider not configured/);
+      const result = await w.runDunningJob();
+      assert.equal(result.status, 'blocked');
+      assert.match(result.message, /Email provider not configured/);
       assert.equal((await h.http('GET', `/api/v1/lite/invoices/${invoice.id}`, { token: tenant.token })).body.dunningLevel ?? 0, 0);
     });
   });
@@ -490,6 +539,26 @@ describe('server worker', () => {
       const noProvider = await (await worker(tenant.tenantId)).runQueuedEmailJob();
       assert.deepEqual({ status: noProvider.status, message: noProvider.message }, { status: 'blocked', message: 'Email provider not configured' });
       assert.equal((await outbox(tenant))[0]!.status, 'pending', 'the mail is still waiting');
+    });
+
+    test('the server\'s SMTP password never goes to a host the workspace chose instead of the pinned one', async () => {
+      smtp.reset();
+      const tenant = await newTenant('mail-pinned', { email: smtpSettings() });
+      const invoice = await issueInvoice(tenant.api, { client: 'Gepinnt' });
+      assert.equal((await queue(tenant, invoice.id)).body.success, true);
+      // "localhost" reaches the same stub as 127.0.0.1, so a leak would show up there.
+      await updateSettings(tenant, { email: { ...smtpSettings(), smtpHost: 'localhost' } });
+      const result = await (await worker(tenant.tenantId)).runQueuedEmailJob();
+      assert.equal(result.status, 'blocked');
+      assert.match(result.message, /localhost ist auf diesem Server nicht freigegeben/);
+      assert.equal(smtp.mails.length, 0, 'nothing was delivered with the platform password');
+      assert.equal((await outbox(tenant))[0]!.status, 'pending');
+      const viaApi = await h.http('POST', '/api/v1/lite/email/test-config', { token: tenant.token, body: { provider: 'smtp', smtpHost: 'localhost', smtpPort: smtp.port, smtpSecure: false, smtpUser: 'x' } });
+      assert.equal(viaApi.body.success, false);
+      assert.match(viaApi.body.error, /nicht freigegeben/);
+      const queuedAgain = await queue(tenant, invoice.id, { subject: 'Zweiter Versuch' });
+      assert.equal(queuedAgain.body.success, false, 'the API refuses to queue for an unpinned host');
+      assert.equal(smtp.mails.length, 0);
     });
 
     test('an unreachable SMTP server schedules a retry with backoff, then delivers; after the last attempt the mail is failed', async () => {
@@ -624,6 +693,25 @@ describe('server worker', () => {
       assert.equal((await rows(`SELECT 1 FROM audit_log WHERE tenant_id = $1 AND action = 'offer.portal_decision' AND entity_id = $2`, [tenant.tenantId, id])).length, 1);
     });
 
+    test('the server\'s portal key is only sent to the pinned portal address', async () => {
+      const saved = { key: process.env.PORTAL_API_KEY, pin: process.env.BILLME_PUBLIC_PORTAL_URL };
+      process.env.PORTAL_API_KEY = 'portal-secret';
+      process.env.BILLME_PUBLIC_PORTAL_URL = portal.url;
+      try {
+        // "localhost" reaches the same stub as the pinned 127.0.0.1 address, so a leak would show up there.
+        const elsewhere = await newTenant('portal-unpinned', { portal: { baseUrl: portal.url.replace('127.0.0.1', 'localhost') } });
+        const offer = await draftOffer(elsewhere.api, { client: 'Portal Kunde' });
+        portal.requests.length = 0;
+        const refused = await h.http('POST', '/api/v1/lite/portal/publish-offer', { token: elsewhere.token, body: { offerId: offer.id } });
+        assert.equal(refused.status, 409, refused.text);
+        assert.match(refused.body.message, /nicht freigegeben/);
+        assert.equal(portal.requests.length, 0, 'nothing reached the portal with the platform key');
+      } finally {
+        if (saved.key === undefined) delete process.env.PORTAL_API_KEY; else process.env.PORTAL_API_KEY = saved.key;
+        if (saved.pin === undefined) delete process.env.BILLME_PUBLIC_PORTAL_URL; else process.env.BILLME_PUBLIC_PORTAL_URL = saved.pin;
+      }
+    });
+
     test('no portal URL is skipped, a non-https URL is refused, another tenant\'s offers are not polled', async () => {
       const without = await newTenant('portal-none');
       assert.deepEqual(await (await worker(without.tenantId)).runPortalSyncJob().then((r) => [r.status, r.message]), ['skipped', 'Portal base URL is not configured']);
@@ -634,7 +722,9 @@ describe('server worker', () => {
       await publish(insecure, `tok-insecure-${randomUUID()}`);
       const stored = JSON.parse((await rows<{ settings_json: string }>('SELECT settings_json FROM server_settings WHERE tenant_id = $1', [insecure.tenantId]))[0]!.settings_json);
       await h.wire.sql('UPDATE server_settings SET settings_json = $2 WHERE tenant_id = $1', [insecure.tenantId, JSON.stringify({ ...stored, portal: { baseUrl: 'http://portal.example.com' } })]);
-      await assert.rejects((await worker(insecure.tenantId)).runPortalSyncJob(), /https/, 'a URL that slipped into the database is still refused by the worker');
+      const insecureRun = await (await worker(insecure.tenantId)).runPortalSyncJob();
+      assert.equal(insecureRun.status, 'blocked', 'a URL that slipped into the database is still refused by the worker');
+      assert.match(insecureRun.message, /https/);
 
       const a = await newTenant('portal-a', { portal: { baseUrl: portal.url } });
       const b = await newTenant('portal-b', { portal: { baseUrl: portal.url } });
@@ -849,7 +939,8 @@ describe('server worker', () => {
       const timer = setTimeout(() => child.kill('SIGKILL'), 150_000);
       child.on('close', (code) => {
         clearTimeout(timer);
-        const lines = stdout.split('\n').filter(Boolean).flatMap((line) => { try { return [JSON.parse(line)]; } catch { return []; } });
+        // Warnings (a blocked workspace) go to stderr, the rest to stdout.
+        const lines = `${stdout}\n${stderr}`.split('\n').filter(Boolean).flatMap((line) => { try { return [JSON.parse(line)]; } catch { return []; } });
         resolve({ code, lines, stderr });
       });
     });

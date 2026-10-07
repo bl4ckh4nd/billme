@@ -37,6 +37,7 @@ import {
   processDunningRun,
   runMaintenanceSweep,
   runRecurringInvoiceRun,
+  assertPinnedEndpoint,
   shouldRunScheduledDunning,
   shouldRunScheduledRecurring,
   createTaxFilingService,
@@ -57,6 +58,8 @@ type WorkerSettings = z.infer<typeof SettingsSchema>;
 export interface WorkerEnvironment {
   databaseUrl: string;
   smtpPassword?: string;
+  /** The only SMTP host the server's SMTP_PASSWORD may be sent to. */
+  smtpHost?: string;
   resendApiKey?: string;
   tenantId?: string;
 }
@@ -113,13 +116,10 @@ export class ServerWorkerRuntime {
   }
 
   async runRecurringJob(): Promise<WorkerTaskResult> {
-    const resolved = await this.resolveScope();
-    if (!resolved) {
-      return {
-        status: 'skipped',
-        message: 'No primary tenant is bootstrapped yet',
-      };
-    }
+    return this.forEachTenant((resolved) => this.runRecurringJobFor(resolved));
+  }
+
+  private async runRecurringJobFor(resolved: ScopeResolution): Promise<WorkerTaskResult> {
 
     const settingsSnapshot = await this.readSettings(resolved.scope);
     if (!settingsSnapshot) {
@@ -171,13 +171,10 @@ export class ServerWorkerRuntime {
   }
 
   async runDunningJob(): Promise<WorkerTaskResult> {
-    const resolved = await this.resolveScope();
-    if (!resolved) {
-      return {
-        status: 'skipped',
-        message: 'No primary tenant is bootstrapped yet',
-      };
-    }
+    return this.forEachTenant((resolved) => this.runDunningJobFor(resolved));
+  }
+
+  private async runDunningJobFor(resolved: ScopeResolution): Promise<WorkerTaskResult> {
 
     const settingsSnapshot = await this.readSettings(resolved.scope);
     if (!settingsSnapshot) {
@@ -239,7 +236,9 @@ export class ServerWorkerRuntime {
       secretStore: {
         get: async (key) => {
           if (key === 'smtp.password') {
-            return this.env.smtpPassword ?? null;
+            if (!this.env.smtpPassword) return null;
+            assertPinnedEndpoint({ configured: settingsSnapshot.settings.email.smtpHost, pinned: this.env.smtpHost, pinnedEnvName: 'SMTP_HOST', label: 'SMTP-Server' });
+            return this.env.smtpPassword;
           }
           return this.env.resendApiKey ?? null;
         },
@@ -263,13 +262,10 @@ export class ServerWorkerRuntime {
   }
 
   async runQueuedEmailJob(): Promise<WorkerTaskResult> {
-    const resolved = await this.resolveScope();
-    if (!resolved) {
-      return {
-        status: 'skipped',
-        message: 'No primary tenant is bootstrapped yet',
-      };
-    }
+    return this.forEachTenant((resolved) => this.runQueuedEmailJobFor(resolved));
+  }
+
+  private async runQueuedEmailJobFor(resolved: ScopeResolution): Promise<WorkerTaskResult> {
 
     const settingsSnapshot = await this.readSettings(resolved.scope);
     if (!settingsSnapshot) {
@@ -371,10 +367,10 @@ export class ServerWorkerRuntime {
   }
 
   async runTaxFilingSubmissionJob(): Promise<WorkerTaskResult> {
-    const resolved = await this.resolveScope();
-    if (!resolved) {
-      return { status: 'skipped', message: 'No primary tenant is bootstrapped yet' };
-    }
+    return this.forEachTenant((resolved) => this.runTaxFilingSubmissionJobFor(resolved));
+  }
+
+  private async runTaxFilingSubmissionJobFor(resolved: ScopeResolution): Promise<WorkerTaskResult> {
 
     const result = await submitQueuedTaxFilings({
       scope: resolved.scope,
@@ -404,13 +400,10 @@ export class ServerWorkerRuntime {
   }
 
   async runPortalSyncJob(): Promise<WorkerTaskResult> {
-    const resolved = await this.resolveScope();
-    if (!resolved) {
-      return {
-        status: 'skipped',
-        message: 'No primary tenant is bootstrapped yet',
-      };
-    }
+    return this.forEachTenant((resolved) => this.runPortalSyncJobFor(resolved));
+  }
+
+  private async runPortalSyncJobFor(resolved: ScopeResolution): Promise<WorkerTaskResult> {
 
     const settingsSnapshot = await this.readSettings(resolved.scope);
     if (!settingsSnapshot) {
@@ -459,13 +452,10 @@ export class ServerWorkerRuntime {
   }
 
   async runMaintenanceJob(): Promise<WorkerTaskResult> {
-    const resolved = await this.resolveScope();
-    if (!resolved) {
-      return {
-        status: 'skipped',
-        message: 'No primary tenant is bootstrapped yet',
-      };
-    }
+    return this.forEachTenant((resolved) => this.runMaintenanceJobFor(resolved));
+  }
+
+  private async runMaintenanceJobFor(resolved: ScopeResolution): Promise<WorkerTaskResult> {
 
     const result = await runMaintenanceSweep(resolved.scope, {
       retentionRepo: createPostgresMaintenanceRepository(this.currentQueryable()),
@@ -509,18 +499,39 @@ export class ServerWorkerRuntime {
     });
   }
 
-  private async resolveScope(): Promise<ScopeResolution | null> {
+  /**
+   * Runs a job once per active workspace (or only WORKER_TENANT_ID). A failing
+   * workspace is reported as blocked and never stops the others.
+   */
+  private async forEachTenant(job: (resolved: ScopeResolution) => Promise<WorkerTaskResult>): Promise<WorkerTaskResult> {
     const tenantRepository = createPostgresTenantRepository(this.currentQueryable());
-    const tenant = this.env.tenantId
-      ? await tenantRepository.getById(this.env.tenantId)
-      : await tenantRepository.getPrimary();
-    if (!tenant) {
-      return null;
+    const ids = this.env.tenantId
+      ? [this.env.tenantId]
+      : (await this.pool.query<{ id: string }>("SELECT id FROM tenants WHERE status = 'active' ORDER BY created_at, id")).rows.map((row) => row.id);
+    const results: Array<WorkerTaskResult & { tenantId: string }> = [];
+    for (const id of ids) {
+      const tenant = await tenantRepository.getById(id);
+      if (!tenant || tenant.status !== 'active') continue;
+      let result: WorkerTaskResult;
+      try {
+        result = await job({ tenant, scope: createDefaultTenantScope(tenant.id, tenant.product) });
+      } catch (error) {
+        result = this.blockedJob(error instanceof Error ? error.message : String(error));
+      }
+      results.push({ ...result, tenantId: tenant.id });
     }
-
+    if (results.length === 0) return { status: 'skipped', message: 'No workspace is set up yet' };
+    if (results.length === 1) {
+      const { tenantId: _tenantId, ...only } = results[0]!;
+      return only;
+    }
+    const status = results.some((result) => result.status === 'blocked')
+      ? 'blocked'
+      : results.some((result) => result.status === 'completed') ? 'completed' : 'skipped';
     return {
-      tenant,
-      scope: createDefaultTenantScope(tenant.id, tenant.product),
+      status,
+      message: `${results.length} workspaces processed`,
+      details: { tenants: results.map(({ tenantId, status: tenantStatus, message, details }) => ({ tenantId, status: tenantStatus, message, details })) },
     };
   }
 
@@ -545,6 +556,7 @@ export class ServerWorkerRuntime {
       if (!this.env.smtpPassword) {
         throw new Error('SMTP password not configured');
       }
+      assertPinnedEndpoint({ configured: settings.email.smtpHost, pinned: this.env.smtpHost, pinnedEnvName: 'SMTP_HOST', label: 'SMTP-Server' });
 
       return {
         provider: 'smtp',

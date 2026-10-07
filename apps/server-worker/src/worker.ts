@@ -26,6 +26,7 @@ const booleanFromEnv = (value: string | undefined): boolean => {
 const envSchema = z.object({
   DATABASE_URL: z.string().trim().min(1).optional(),
   SMTP_PASSWORD: z.string().optional(),
+  SMTP_HOST: z.string().optional(),
   RESEND_API_KEY: z.string().optional(),
   WORKER_TENANT_ID: z.string().trim().min(1).optional(),
   WORKER_RUN_ONCE: z.string().optional(),
@@ -44,6 +45,7 @@ const runtime = new ServerWorkerRuntime(
   {
     databaseUrl: env.DATABASE_URL ?? defaultDatabaseUrl,
     smtpPassword: env.SMTP_PASSWORD,
+    smtpHost: env.SMTP_HOST,
     resendApiKey: env.RESEND_API_KEY,
     tenantId: env.WORKER_TENANT_ID,
   },
@@ -98,7 +100,8 @@ const scheduleJob = (job: SupportedJob) => {
 
   const run = async () => {
     const result = await job.execute();
-    log.info(result.message, {
+    // A blocked workspace no longer throws (the others keep running), so it has to stand out in the log.
+    (result.status === 'blocked' ? log.warn : log.info).call(log, result.message, {
       status: result.status,
       ...(result.details ?? {}),
     });
@@ -172,7 +175,7 @@ if (booleanFromEnv(env.WORKER_RUN_ONCE)) {
       name: job.name,
       run: async () => {
         const result = await job.execute();
-        logger.info(result.message, {
+        (result.status === 'blocked' ? logger.warn : logger.info).call(logger, result.message, {
           job: job.name,
           status: result.status,
           ...(result.details ?? {}),

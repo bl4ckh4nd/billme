@@ -45,7 +45,7 @@ import {
   type ServerDatabase,
   type ServerDatabaseSession,
 } from '@billme/server-data';
-import { runRecurringInvoiceRun } from '@billme/server-core';
+import { assertPinnedEndpoint, runRecurringInvoiceRun } from '@billme/server-core';
 import type { AuthSession } from './auth.js';
 import { ApiError, typedRoute } from './http.js';
 import { requireAutomationMutationSession, toMutationActor } from './runtimeContext.js';
@@ -359,6 +359,20 @@ export const registerAutomationRoutes = (
   const integration = options.desktopIntegration;
   const secretFor = async (key: EmbeddedSecretKey): Promise<string | undefined> =>
     (integration ? await integration.getSecret(key) : process.env[ENV_SECRET_NAMES[key]]) || undefined;
+  // Only the hosted server shares one set of secrets between workspaces; the desktop has one local user.
+  const hosted = app.runtimeProfile === 'server';
+  /** The server's portal key only goes to the portal the operator pinned. */
+  const portalApiKeyFor = async (baseUrl: string): Promise<string | undefined> => {
+    const apiKey = await secretFor('portal.apiKey');
+    if (apiKey && hosted) {
+      try {
+        assertPinnedEndpoint({ configured: baseUrl, pinned: process.env.BILLME_PUBLIC_PORTAL_URL, pinnedEnvName: 'BILLME_PUBLIC_PORTAL_URL', label: 'Kundenportal' });
+      } catch (error) {
+        throw new ApiError(409, error instanceof Error ? error.message : String(error));
+      }
+    }
+    return apiKey;
+  };
 
   type RenderedPdf = { bytes: Uint8Array; fileName: string };
   const fromFile = async (exported: Promise<{ path: string }>): Promise<RenderedPdf> => {
@@ -425,6 +439,9 @@ export const registerAutomationRoutes = (
     if (settings.email.provider === 'smtp') {
       const pass = await secretFor('smtp.password');
       if (!pass) throw new Error(`SMTP-Passwort fehlt. ${missingSecretSuffix}`);
+      if (hosted) {
+        assertPinnedEndpoint({ configured: settings.email.smtpHost, pinned: process.env.SMTP_HOST, pinnedEnvName: 'SMTP_HOST', label: 'SMTP-Server' });
+      }
       return {
         provider: 'smtp' as const,
         config: {
@@ -550,7 +567,7 @@ export const registerAutomationRoutes = (
       const reservation = await reserveOfferPortalToken(db, session.scope, session, body.offerId);
       const publication = await portalClient.publishOffer({
         baseUrl,
-        apiKey: await secretFor('portal.apiKey'),
+        apiKey: await portalApiKeyFor(baseUrl),
         token: reservation.token,
         snapshot: {
           ...reservation.offer,
@@ -598,7 +615,7 @@ export const registerAutomationRoutes = (
       const reservation = await reserveInvoicePortalToken(db, session.scope, session, body.invoiceId);
       const publication = await portalClient.publishInvoice({
         baseUrl,
-        apiKey: await secretFor('portal.apiKey'),
+        apiKey: await portalApiKeyFor(baseUrl),
         token: reservation.token,
         snapshot: reservation.invoice,
         customerRef: scopedCustomerRef(session.scope, reservation.invoice.clientId ?? reservation.invoice.id),
@@ -663,7 +680,7 @@ export const registerAutomationRoutes = (
         const baseUrl = requirePortalBaseUrl(settings.settings);
         const publication = await portalClient[clientMethod]({
           baseUrl,
-          apiKey: await secretFor('portal.apiKey'),
+          apiKey: await portalApiKeyFor(baseUrl),
           customerRef: scopedCustomerRef(session.scope, body.customerRef),
           customerLabel: body.customerLabel,
           expiresInDays: body.expiresInDays,
@@ -736,8 +753,16 @@ export const registerAutomationRoutes = (
       if (body.provider === 'smtp') {
         const pass = await secretFor('smtp.password');
         if (!pass) return { success: false, error: `SMTP-Passwort fehlt. ${missingSecretSuffix}` };
+        const host = body.smtpHost ?? settings.settings.email.smtpHost;
+        if (hosted) {
+          try {
+            assertPinnedEndpoint({ configured: host, pinned: process.env.SMTP_HOST, pinnedEnvName: 'SMTP_HOST', label: 'SMTP-Server' });
+          } catch (error) {
+            return { success: false, error: error instanceof Error ? error.message : String(error) };
+          }
+        }
         return testEmailConfig('smtp', {
-          host: body.smtpHost ?? settings.settings.email.smtpHost,
+          host,
           port: body.smtpPort ?? settings.settings.email.smtpPort,
           secure: body.smtpSecure ?? settings.settings.email.smtpSecure,
           auth: { user: body.smtpUser ?? settings.settings.email.smtpUser, pass },

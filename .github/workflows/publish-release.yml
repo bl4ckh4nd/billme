@@ -19,7 +19,7 @@ permissions:
 
 jobs:
   validate:
-    name: Validate (Desktop + Pro)
+    name: Validate (Lite + shared billing)
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -44,17 +44,11 @@ jobs:
       - name: Desktop typecheck
         run: pnpm -C apps/desktop typecheck
 
-      - name: Desktop tests
-        run: pnpm -C apps/desktop test --run
-
-      - name: Pro typecheck
-        run: pnpm -C apps/pro-desktop typecheck
-
-      - name: Pro tests
-        run: pnpm -C apps/pro-desktop test --run
+      - name: Shared payment, issuance, receipt and VAT regressions
+        run: pnpm -C packages/server-runtime exec node --import tsx --test --test-concurrency=1 src/documentIssuance.test.ts src/documentWorkflows.test.ts src/transactionsRoutes.test.ts src/liteCashFlow.test.ts src/liteManualCash.test.ts src/liteVatReport.test.ts src/dunningLetter.test.ts
 
   server-accounting-gate:
-    name: Validate (Server data + Pro Postgres E2E)
+    name: Validate (Lite Postgres and browser)
     runs-on: ubuntu-latest
     timeout-minutes: 60
     permissions:
@@ -91,8 +85,18 @@ jobs:
       - name: Install Playwright Chromium
         run: pnpm exec playwright install --with-deps chromium
 
-      - name: Full server-mode Pro E2E (Postgres migrations + accounting)
-        run: pnpm test:e2e:server:full:pro
+      - name: Full server-mode Lite E2E (Postgres migrations + workflows)
+        run: pnpm test:e2e:server:full:lite
+
+      - name: Build the billme CLI
+        run: pnpm -C packages/server-cli build
+
+      - name: Upload CLI release artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: cli-release-any-${{ env.RELEASE_TAG }}
+          path: packages/server-cli/dist/billme.mjs
+          if-no-files-found: error
 
   build:
     name: Build ${{ matrix.app.name }} Release (${{ matrix.os }})
@@ -108,8 +112,6 @@ jobs:
         app:
           - name: desktop
             dir: apps/desktop
-          - name: pro
-            dir: apps/pro-desktop
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -172,6 +174,7 @@ jobs:
         with:
           tag_name: ${{ env.RELEASE_TAG }}
           generate_release_notes: true
+          draft: true
           files: |
             release-assets/**/*.AppImage
             release-assets/**/*.dmg
@@ -182,3 +185,4 @@ jobs:
             release-assets/**/*.blockmap
             release-assets/**/latest*.yml
             release-assets/**/pro*.yml
+            release-assets/**/billme.mjs

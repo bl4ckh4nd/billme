@@ -34,6 +34,16 @@ Edit `.env.server-mode` before the first start:
 
 `BILLME_PUBLIC_API_URL` is baked into the two web images at build time. Rebuild `web` and `web-pro` after changing it.
 
+Two optional settings serve the `billme` CLI:
+
+- `BILLME_PUBLIC_WEB_URL` / `BILLME_PUBLIC_WEB_PRO_URL`: where people open the web apps. `billme login` prints a
+  link to them; without these it only shows the code, which is then typed in under Einstellungen → System → CLI-Zugriff.
+- PDF export (`billme pdf export`, `GET /api/v1/{product}/documents/:kind/:id/pdf`) is rendered by a headless
+  Chromium inside the `server-api` container, which opens the web apps over the compose network
+  (`BILLME_PRINT_WEB_URL`, `BILLME_PRINT_WEB_PRO_URL`, `BILLME_PRINT_API_URL`; preset in the compose file). That Chromium runs without
+  its own sandbox (`BILLME_CHROMIUM_NO_SANDBOX=1`) in the same container as the database credentials and only loads
+  the web app and the API. To switch PDF rendering off, remove the `BILLME_PRINT_*` lines and leave `BILLME_PUBLIC_WEB_URL` unset; the route then answers 501.
+
 ## Start the deployment
 
 ```bash
@@ -130,6 +140,7 @@ This is the approved first-pass E2E scope for server mode:
 | Auth + bootstrap | Cover first-owner bootstrap through the public auth flow, then login and session restore via `/api/v1/lite/auth/me` and `/api/v1/auth/me?product=pro`. | Add product-boundary assertions: lite token rejected on pro routes, pro token rejected on lite routes, logout clears stored session, expired/invalid token returns user to auth screen. | First owner should be created through public auth routes, not direct DB seeding. |
 | Lite web | Bootstrap/login, mount the shared renderer shell, visit the major lite routes, create one client, create one invoice or offer draft from that client, and verify one export path works. | CRUD for clients, invoices, offers, and recurring profiles; settings write/read; document number reserve/release/finalize; JSON export and CSV export; session survives reload. | Align with implemented lite routes under `/api/v1/lite/*` and the mounted desktop renderer navigation (`dashboard`, `clients`, `documents`). |
 | Pro web | Bootstrap/login, open the core hash routes (`overview`, `documents`, `clients`, `catalog`, `settings`, `accounting`), and persist one settings/catalog record. | Persist articles, bank accounts, templates, active templates, workflow entries, tax mappings, and suggestion rules; verify ledger stats/accounts load and accounting deep links stay stable after reload. | Align with `apps/web-pro/src/App.tsx` and `/api/v1/pro/*` routes. |
+| `billme` CLI | Log in with a password session, list the generated actions, create a client and an invoice, export its PDF with the ZUGFeRD attachment and the EÜR PDF, check the audit reason, then do a device login confirmed in the Lite web app and log out again (`tests/e2e/server/lite/cli.mjs`). | — | Leaves `test-results/server-mode/cli/` (transcript and PDFs). |
 | Worker-driven flows | Verify the worker service starts inside the Docker stack and reaches a healthy idle state before any tenant exists. | Run recurring generation, dunning, queued email dispatch, portal decision sync, and maintenance against seeded data; assert durable DB side effects (`invoices`, `dunning_history`, email outbox/log rows, offer decision updates, retention deletions, audit entries). | Use test-friendly intervals or run-once execution; do not require real SMTP/Resend credentials or a real offer portal. |
 | SQLite import + migration | Run `packages/server-data/src/cli/import-sqlite.ts` against a minimal Lite fixture and assert `sqlite_import_runs.status='completed'` plus basic tenant/settings/document counts. | Run populated Lite and Pro fixtures, assert supported tables import losslessly enough by row counts and audit-chain verification, assert unsupported populated tables fail unless partial import is enabled, and assert importing into a non-empty tenant fails cleanly. | Use the real import CLI so migrations and import-run bookkeeping are exercised together. |
 

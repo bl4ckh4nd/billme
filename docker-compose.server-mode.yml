@@ -1,6 +1,6 @@
 services:
   postgres:
-    image: postgres:16-alpine
+    image: docker.io/library/postgres:16-alpine
     user: "${BILLME_POSTGRES_RUN_AS:-}"
     restart: unless-stopped
     environment:
@@ -42,6 +42,13 @@ services:
       PORT: 3100
       SESSION_SECRET: ${BILLME_SESSION_SECRET:?set BILLME_SESSION_SECRET in .env.server-mode (openssl rand -hex 32)}
       DATABASE_URL: postgresql://${BILLME_POSTGRES_USER:-billme}:${BILLME_POSTGRES_PASSWORD:-billme}@postgres:5432/${BILLME_POSTGRES_DB:-billme}
+      BILLME_PUBLIC_WEB_URL: ${BILLME_PUBLIC_WEB_URL:-}
+      BILLME_PUBLIC_WEB_PRO_URL: ${BILLME_PUBLIC_WEB_PRO_URL:-}
+      # PDF rendering loads the web apps over the compose network. The print view calls the API by its
+      # service name: Chromium restricts a page on the network from reaching loopback.
+      BILLME_PRINT_WEB_URL: http://web:8080
+      BILLME_PRINT_WEB_PRO_URL: http://web-pro:8080
+      BILLME_PRINT_API_URL: http://server-api:3100
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
       OPENROUTER_VLM_MODEL: ${OPENROUTER_VLM_MODEL:-google/gemini-3.7-flash}
       OPENROUTER_VLM_MODELS: ${OPENROUTER_VLM_MODELS:-google/gemini-3.7-flash}

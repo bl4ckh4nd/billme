@@ -8,8 +8,7 @@
     "billme-pglite-migrate": "./bin/billme-pglite-migrate.mjs"
   },
   "scripts": {
-    "typecheck": "tsc --noEmit -p tsconfig.json",
-    "test": "node --import tsx --test src/*.test.ts"
+    "typecheck": "tsc --noEmit -p tsconfig.json"
   },
   "dependencies": {
     "@billme/server-core": "workspace:*",

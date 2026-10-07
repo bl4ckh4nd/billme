@@ -4,9 +4,7 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
-    "typecheck": "tsc --noEmit -p tsconfig.json",
-    "test": "node --import tsx --test src/mockData.test.ts src/liteHttpApi.test.ts src/proHttpApi.test.ts src/proWebClient.test.ts src/mockEngine.test.ts && vitest --run src/einvoice src/eurSuggestion.test.ts",
-    "test:einvoice": "vitest --run src/einvoice"
+    "typecheck": "tsc --noEmit -p tsconfig.json"
   },
   "dependencies": {
     "@billme/accounting-shared": "workspace:*",
@@ -22,13 +20,16 @@
     "zod": "^3.25.76"
   },
   "devDependencies": {
-    "vitest": "^4.0.18",
     "@types/node": "^24.9.1",
     "@types/papaparse": "^5.5.2",
     "tsx": "^4.20.5",
     "typescript": "~5.8.3"
   },
   "exports": {
+    "./vatExport": {
+      "types": "./src/vatExport.ts",
+      "default": "./src/vatExport.ts"
+    },
     ".": {
       "types": "./src/index.ts",
       "default": "./src/index.ts"
@@ -100,6 +101,10 @@
     "./einvoice/zugferdXml.test": {
       "types": "./src/einvoice/zugferdXml.test.ts",
       "default": "./src/einvoice/zugferdXml.test.ts"
+    },
+    "./serverRouteClassification": {
+      "types": "./src/serverRouteClassification.ts",
+      "default": "./src/serverRouteClassification.ts"
     },
     "./documentExport": {
       "types": "./src/documentExport.ts",

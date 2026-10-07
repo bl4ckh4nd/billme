@@ -6,7 +6,7 @@
   "type": "module",
   "scripts": {
     "typecheck": "tsc --noEmit -p tsconfig.json",
-    "test": "node --import tsx --test src/**/*.test.ts",
+    "test": "node --import tsx ../integration-tests/src/with-pglite-wire.ts node --import tsx --test src/**/*.test.ts",
     "migrate": "tsx src/cli/migrate.ts",
     "import:sqlite": "tsx src/cli/import-sqlite.ts"
   },

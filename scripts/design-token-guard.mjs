@@ -75,11 +75,11 @@ const rules = [
   },
   {
     id: 'R-06',
-    description: 'off-scale micro font size (12px is the floor)',
+    description: 'px-literal micro font size (11px is the floor and is written text-micro or text-eyebrow)',
     pattern: /text-\[(?:[0-9]|1[01])px\]/g,
     // The document editor places field labels on the A4 sheet at print scale,
-    // where 12px would not match the printed document. Its 10px and 11px labels
-    // carry file-level comments; 8px and 9px stay banned.
+    // where the type roles would not match the printed document. Its 10px and
+    // 11px labels carry file-level comments; 8px and 9px stay banned.
     allow: [
       /^packages\/desktop-designer\/src\/document-editor\/DocumentFlowEditor\.tsx$/,
     ],

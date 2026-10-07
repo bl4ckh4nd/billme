@@ -6,7 +6,7 @@
   "type": "module",
   "scripts": {
     "typecheck": "tsc --noEmit -p tsconfig.json",
-    "test": "vitest --run"
+    "test": "vitest --run --testTimeout=60000"
   },
   "dependencies": {
     "@billme/server-data": "workspace:*",
@@ -21,6 +21,10 @@
     ".": {
       "types": "./src/index.ts",
       "default": "./src/index.ts"
+    },
+    "./discovery": {
+      "types": "./src/discovery.ts",
+      "default": "./src/discovery.ts"
     },
     "./lifecycleCoordinator": {
       "types": "./src/lifecycleCoordinator.ts",

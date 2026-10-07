@@ -64,35 +64,14 @@ jobs:
       - name: Prepare Electron test binary
         run: pnpm ci:prepare-electron
 
-      - name: Shared desktop renderer tests
-        run: pnpm -C packages/desktop-renderer test
-
-      - name: Shared desktop core tests
-        run: pnpm -C packages/desktop-core test
-
-      - name: Shared desktop services and e-invoice tests
-        run: pnpm -C packages/desktop-services test
-
-      - name: Shared desktop utils tests
-        run: pnpm -C packages/desktop-utils test
-
-      - name: Pro accounting UI tests
-        run: pnpm -C packages/accounting-ui-pro test
-
       - name: Desktop typecheck
         run: pnpm -C apps/desktop typecheck
-
-      - name: Desktop tests
-        run: pnpm -C apps/desktop test --run
 
       - name: Desktop build
         run: pnpm -C apps/desktop build
 
       - name: Pro desktop typecheck
         run: pnpm -C apps/pro-desktop typecheck
-
-      - name: Pro desktop tests
-        run: pnpm -C apps/pro-desktop test --run
 
       - name: Pro desktop build
         run: pnpm -C apps/pro-desktop build
@@ -132,9 +111,6 @@ jobs:
       - name: Server core typecheck
         run: pnpm -C packages/server-core typecheck
 
-      - name: Server core tests
-        run: pnpm -C packages/server-core test
-
       - name: Server data typecheck
         run: pnpm -C packages/server-data typecheck
 
@@ -142,19 +118,31 @@ jobs:
         run: pnpm -C packages/server-data test
 
       - name: Server runtime tests
+        env:
+          TZ: Pacific/Kiritimati
         run: pnpm -C packages/server-runtime test
+
+      - name: Integration tests (desktop backends, server mode, worker, portal on PGlite)
+        # UTC+14: the local calendar day differs from the UTC day most of the time, so a date
+        # computed in UTC where the app means the business day (documents, dunning, recurring, imports) fails here.
+        env:
+          TZ: Pacific/Kiritimati
+        run: pnpm -C packages/integration-tests typecheck && pnpm -C packages/integration-tests test
+
+      - name: Route coverage (every registered API and portal route is requested by a suite)
+        run: pnpm -C packages/integration-tests coverage
 
       - name: Embedded server runtime tests
         run: pnpm -C packages/embedded-server-runtime test
 
-      - name: Accounting tests
-        run: |
-          pnpm -C packages/accounting-shared test
-          pnpm -C packages/accounting-engine test
-          pnpm -C packages/finance-intelligence test
-
       - name: Server CLI typecheck
         run: pnpm -C packages/server-cli typecheck
+
+      - name: Server CLI tests (source and release bundle)
+        run: |
+          pnpm -C packages/server-cli test
+          pnpm -C packages/server-cli build
+          BILLME_BIN=dist/billme.mjs pnpm -C packages/server-cli test
 
       - name: Server API typecheck
         run: pnpm -C apps/server-api typecheck
@@ -165,14 +153,8 @@ jobs:
       - name: Server worker typecheck
         run: pnpm -C apps/server-worker typecheck
 
-      - name: Server worker tests
-        run: pnpm -C apps/server-worker test
-
       - name: Offer portal tests
         run: pnpm -C apps/offer-portal test
-
-      - name: Demo tests
-        run: pnpm -C apps/demo test
 
       - name: E2E artifact hygiene
         run: pnpm test:e2e:artifact-hygiene

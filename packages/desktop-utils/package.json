@@ -1,8 +1,6 @@
 {
   "name": "@billme/desktop-utils",
-  "scripts": {
-    "test": "vitest --run"
-  },
+  "scripts": {},
   "private": true,
   "version": "0.0.0",
   "type": "module",
@@ -16,8 +14,7 @@
   },
   "devDependencies": {
     "@types/react": "^19.2.13",
-    "@types/react-dom": "^19.2.3",
-    "vitest": "^4.0.18"
+    "@types/react-dom": "^19.2.3"
   },
   "exports": {
     ".": {

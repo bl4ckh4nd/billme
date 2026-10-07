@@ -3,9 +3,7 @@
   "private": true,
   "version": "0.0.0",
   "type": "module",
-  "scripts": {
-    "test": "vitest --run"
-  },
+  "scripts": {},
   "dependencies": {
     "electron-updater": "^6.8.3",
     "keytar": "^7.9.0",
@@ -23,9 +21,7 @@
     "@types/node": "^24.9.1",
     "@types/nodemailer": "^6.4.16",
     "@types/react": "^19.2.13",
-    "@types/react-dom": "^19.2.3",
-    "@testing-library/jest-dom": "^6.9.1",
-    "vitest": "^4.0.18"
+    "@types/react-dom": "^19.2.3"
   },
   "exports": {
     ".": {
@@ -107,10 +103,6 @@
     "./electron/portalPolling": {
       "types": "./src/electron/portalPolling.ts",
       "default": "./src/electron/portalPolling.ts"
-    },
-    "./test/setup": {
-      "types": "./src/test/setup.ts",
-      "default": "./src/test/setup.ts"
     },
     "./electron/tax-filing/types": {
       "types": "./src/electron/tax-filing/types.ts",

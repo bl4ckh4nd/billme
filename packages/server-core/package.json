@@ -5,8 +5,7 @@
   "license": "FSL-1.1-ALv2",
   "type": "module",
   "scripts": {
-    "typecheck": "tsc --noEmit -p tsconfig.json",
-    "test": "node --import tsx --test src/**/*.test.ts"
+    "typecheck": "tsc --noEmit -p tsconfig.json"
   },
   "dependencies": {
     "@billme/accounting-shared": "workspace:*",

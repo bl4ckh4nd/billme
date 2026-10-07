@@ -12,10 +12,12 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@billme/desktop-services": "workspace:*",
     "@billme/server-core": "workspace:*",
     "@billme/server-data": "workspace:*",
     "@billme/server-runtime": "workspace:*",
     "fastify": "^5.6.1",
+    "playwright-core": "1.58.2",
     "zod": "^3.25.76"
   },
   "devDependencies": {

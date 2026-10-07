@@ -3,10 +3,12 @@ version: alpha
 name: billme
 description: >-
   Design system for the billme invoice/accounting suite (Lite + Pro desktop and
-  server-mode browser shells). A bright lime accent over a clean light UI, with
-  near-black premium surfaces for the document/invoice editor. Tokens are the
-  source of truth; defined in packages/ui/styles.css (Tailwind v4 @theme) and
-  mirrored as TS constants in packages/ui/src/utils/colors.ts.
+  server-mode browser shells). Bordered white cards on a grey ground, a lime
+  accent as the one signal, dense 13px controls, and a near-black viewport for
+  the rendered document. The target is the prototype "billme Kontor.html" in
+  the repo root. Tokens are the source of truth; defined in
+  packages/ui/styles.css (Tailwind v4 @theme) and mirrored as TS constants in
+  packages/ui/src/utils/colors.ts.
 colors:
   ink-0: "#ffffff"
   ink-25: "#f9fafb"
@@ -53,13 +55,25 @@ colors:
   surface: "#ffffff"
   surface-muted: "#f9fafb"
   surface-sunken: "#f3f4f6"
+  ground: "#f3f4f6"
+  rail: "#ffffff"
+  foreground-secondary: "#4a4d52"
   muted: "#64686d"
   border: "#e5e6e9"
   border-subtle: "#f3f4f6"
+  border-strong: "#d2d4d7"
   control-border: "#87898d"
   control-border-hover: "#6f7276"
+  selected: "#0d0e11"
+  selected-foreground: "#ffffff"
   focus-ring: "#0d0e11"
   focus-ring-dark: "#d9f944"
+  surface-toast: "#0d0e11"
+  border-toast: "#0d0e11"
+  donut-2: "#3a3d42"
+  donut-3: "#5c6065"
+  donut-4: "#77797e"
+  donut-5: "#8e9195"
   disabled-foreground: "#4a4d52"
   disabled-surface: "#e5e6e9"
   success: "#22c55e"
@@ -96,10 +110,16 @@ layers:
 typography:
   title:
     fontFamily: "Inter Variable, Inter, system-ui, sans-serif"
-    fontSize: "1.5rem"
+    fontSize: "1rem"
     fontWeight: 600
-    lineHeight: 1.333
-    letterSpacing: "-0.02em"
+    lineHeight: 1.5
+    letterSpacing: "-0.015em"
+  heading:
+    fontFamily: "{typography.title.fontFamily}"
+    fontSize: "1.0625rem"
+    fontWeight: 600
+    lineHeight: 1.412
+    letterSpacing: "-0.01em"
   section:
     fontFamily: "{typography.title.fontFamily}"
     fontSize: "0.9375rem"
@@ -110,6 +130,11 @@ typography:
     fontSize: "0.875rem"
     fontWeight: 400
     lineHeight: 1.429
+  control:
+    fontFamily: "{typography.title.fontFamily}"
+    fontSize: "0.8125rem"
+    fontWeight: 400
+    lineHeight: 1.385
   label:
     fontFamily: "{typography.title.fontFamily}"
     fontSize: "0.8125rem"
@@ -120,12 +145,23 @@ typography:
     fontSize: "0.75rem"
     fontWeight: 400
     lineHeight: 1.333
-  figure:
+  micro:
     fontFamily: "{typography.title.fontFamily}"
-    fontSize: "2rem"
+    fontSize: "0.6875rem"
+    fontWeight: 400
+    lineHeight: 1.455
+  eyebrow:
+    fontFamily: "{typography.title.fontFamily}"
+    fontSize: "0.6875rem"
     fontWeight: 600
-    lineHeight: 1.125
-    letterSpacing: "-0.02em"
+    lineHeight: 1.455
+    letterSpacing: "0.04em"
+  figure:
+    fontFamily: "JetBrains Mono Variable, JetBrains Mono, ui-monospace, monospace"
+    fontSize: "1.5rem"
+    fontWeight: 700
+    lineHeight: 1.167
+    letterSpacing: "-0.025em"
 rounded:
   xs: "0.25rem"
   sm: "0.375rem"
@@ -136,6 +172,7 @@ rounded:
   3xl: "1.25rem"
   control: "0.5rem"
   card: "0.75rem"
+  tile: "0.875rem"
   panel: "1rem"
   modal: "1.25rem"
 components:
@@ -147,12 +184,22 @@ components:
   button-secondary:
     backgroundColor: "{colors.surface}"
     textColor: "{colors.foreground}"
+    rounded: "{rounded.control}"
+    height: "34px"
   input:
     backgroundColor: "{colors.surface}"
     rounded: "{rounded.control}"
+    height: "34px"
+  card:
+    backgroundColor: "{colors.surface}"
+    rounded: "{rounded.card}"
 ---
 
 # billme Design System
+
+The target is the prototype `billme Kontor.html` in the repo root (its CSS is
+lines 6–574). Where this document and the prototype disagree, the prototype
+wins and this document is corrected.
 
 ## Direction dials
 
@@ -172,16 +219,15 @@ Consequences that are checked in review:
 - Overlay enter and exit is interaction feedback and is allowed; its values are in Motion below.
 - Reduced motion is handled once, globally: `packages/ui/styles.css` neutralises animation and transition durations under `prefers-reduced-motion: reduce`. New animation still needs its own guard so it does not depend on that override.
 - `pnpm check:design-tokens` enforces this section and the rest of the token rules in CI, including `font-black` (P-01), transitions on layout properties (P-02), raw `<table>` outside `@billme/ui` (P-03; the customer document canvas and the server-rendered offer portal are exempt) and icon sizes off the scale (P-04).
-- The near-black editor ramp stays: it is the document viewport, where the rendered page is the subject and chrome must recede. That is the reason for dark surfaces in an otherwise light product, not a dark-mode default.
 
 ## Overview
 
-billme is a German invoicing and accounting suite. Its visual identity pairs a
-confident, energetic **lime accent (`#d9f944`)** with a calm, content-first
-**light UI**, and switches to near-black surfaces for the document and invoice
-editor so the rendered page reads as the hero. The feel is precise, calm and
-slightly editorial: tight radii, layered hairline shadows, weight-driven
-hierarchy, and one lime signal per view.
+billme is a German invoicing and accounting suite. The interface is a dense
+working tool: a white side rail, a white top bar that names the page, and
+bordered white cards placed directly on a grey ground. Controls are 34px high
+and set in 13px. The **lime accent (`#d9f944`)** is the one signal per view.
+The near-black ramp is kept for the viewport of the rendered document, where
+the white page is the subject.
 
 Tokens are defined once and consumed everywhere:
 
@@ -189,9 +235,8 @@ Tokens are defined once and consumed everywhere:
 - Type-safe mirror: `packages/ui/src/utils/colors.ts`
 - Primitive components: `packages/ui/src/components/` (the exported set is listed in Components below)
 
-Use token-backed utilities (`bg-accent`, `text-foreground`,
-`border-dark-border-subtle`, `rounded-2xl`, …), not raw hex or default palette
-utilities.
+Use token-backed utilities (`bg-ground`, `text-foreground-secondary`,
+`border-border`, `rounded-card`, …), not raw hex or default palette utilities.
 
 ## Colors
 
@@ -212,10 +257,10 @@ Change a ramp step, not a role. The role tokens below point into the ramps.
 
 | Token | Hex | Usage |
 | --- | --- | --- |
-| `accent` | `#d9f944` | Primary action fill, paid state, one focal data point per view |
+| `accent` | `#d9f944` | Primary action fill, progress fill, one focal data point per view |
 | `accent-hover` | `#cfed41` | Hover state for accent surfaces |
 | `accent-foreground` | `#0d0e11` | Text/icons on accent |
-| `accent-50` / `accent-100` | `#f7fee4` / `#edfcbf` | Selected-row and active-item tints |
+| `accent-50` / `accent-200` | `#f7fee4` / `#e4fc8c` | Selected row, current menu item, accent pill fill and its border |
 | `accent-700` / `accent-800` | `#6c7e06` / `#4d5a07` | The only lime values that may carry text on light surfaces (4.54:1 / 7.55:1 on white) |
 
 `accent` is a fill color only. It measures 1.19:1 against white, so never use
@@ -223,55 +268,63 @@ Change a ramp step, not a role. The role tokens below point into the ramps.
 Use `focus-ring` for light surfaces, and `accent-800` when lime-coded state has
 to be written as text.
 
-Lime is a signal, not a surface. It marks the primary action, the active or
-paid state, and at most one focal data point per view (for example the current
-period in a chart). A full card filled with lime is not allowed; scarcity is
-what makes it read as premium.
+Lime is a signal, not a surface. It marks the primary action, progress, and at
+most one focal data point per view (for example the first donut segment). A
+full card filled with lime is not allowed.
 
-### Inverse surfaces and the contrast budget
+### Surfaces and text
 
-The product is light, and contrast is deliberate. The inverse roles are:
-`surface-inverse`, `surface-inverse-raised`, `surface-inverse-overlay`,
-`border-inverse`, `inverse-foreground`, and `inverse-muted` (8.11:1 on raised).
-The older `dark-*` names map onto the same values for existing call sites;
-new code uses the inverse role names. `error-inverse` and `info-inverse` are
-the semantic hues for icons and text on inverse surfaces. On inverse surfaces, depth comes from
-lighter raised steps, not from shadows, and lime is the signature foreground.
+| Role | Light / dark | Use |
+| --- | --- | --- |
+| `ground` | `#f3f4f6` / `#0d0e11` | The shell background every card sits on. Also the text on a filled neutral pill (`bg-foreground text-ground`). |
+| `rail` | `#ffffff` / `#101214` | The side rail |
+| `surface` | `#ffffff` / `#181a1d` | Cards, top bar, inputs, modals, popovers |
+| `surface-muted` | `#f9fafb` / `#14161a` | Table head, row hover, the inset panel inside an overview card |
+| `surface-sunken` | `#f3f4f6` / `#101214` | Inset fills: segmented track, search field, neutral pill, icon tile, hover of buttons and menu items |
+| `foreground` | `#0d0e11` / `#ffffff` | Primary text |
+| `foreground-secondary` | `#4a4d52` / `#d2d4d7` | Nav items, field labels, neutral pills, chart legends |
+| `muted` | `#64686d` / `#aeb1b6` | Secondary copy, table heads, eyebrows, placeholder icons |
+| `border` | `#e5e6e9` / `#2e3034` | Card edges, table lines, separators, neutral pill edge |
+| `border-strong` | `#d2d4d7` / `#42454a` | Secondary button, key cap, T-Konto rule, hovered card-like control |
+| `control-border` | `#87898d` / `#6f7276` | Inputs, selects, textareas, the S/H toggle, checkboxes |
+| `control-border-hover` | `#6f7276` / `#87898d` | Hovered input boundary |
+| `surface-toast` / `border-toast` | `#0d0e11` / `#1c1e22`, edge `#0d0e11` / `#42454a` | Toast and chart tooltip, with `text-inverse-foreground` |
+| `donut-2` … `donut-5` | `#3a3d42 #5c6065 #77797e #8e9195` / `#dfe1e4 #bdc0c4 #9da0a5 #82858a` | Donut segments after the first, which is `accent`. One hue, lightness by size. |
 
-Inverse surfaces are allowed only for:
+`background` stays as the page default behind the shell; the shell root itself
+is `bg-ground`. `surface-sunken` is no longer the shell ground: its dark value
+(`#101214`) is lighter than the ground (`#0d0e11`).
 
-- the document editor chrome (rails, inspector, viewport), where the white A4
-  page is the hero;
-- tooltips, toasts, and the command palette;
-- **at most one focal element per view**, such as the dashboard's open
-  receivables card or the statistics revenue figure.
-
-A second inverse card on the same view spends the budget twice and flattens the
-hierarchy it was meant to create.
-
-### Light UI
-
-`background` and `surface` are white. Use `surface-muted` for inset tiles,
-`surface-sunken` (ink-50) for the app shell ground that surfaces sit on, `muted`
-for secondary copy, and `border`/`border-subtle` for separation.
-
-`muted` is `#64686d` (ink-600): secondary copy clears 4.5:1 on every light
-ground the product uses (white 5.61:1, surface-muted 5.37:1, sunken 5.10:1).
-
-`border` is a decorative separator only: at 1.25:1 against white it cannot
-outline a control. Interactive controls use `control-border` (`#87898d`, 3.50:1
-on white, 3.18:1 on sunken) so their boundary meets the 3:1 non-text
-requirement. When a control's only affordance is its outline, that outline must
-use `control-border`.
-A hovered control strengthens its outline with `control-border-hover` (one ink
-step darker in light, one lighter in dark), never with a raw `ink-*` class, so
-the hover stays visible in both themes.
+`selected` / `selected-foreground` is the one filled mark per control (checked
+box, on switch, active nav item, current step, pressed S/H side): ink in light,
+lime in dark.
 
 `focus-ring` is `#0d0e11` for light surfaces and `focus-ring-dark` is `#d9f944`
 for inverse surfaces. Disabled controls use `disabled-foreground` and
 `disabled-surface`; in this product, disabled often signals a locked accounting
 period or an immutable posted record, so it must be unmistakable rather than
 merely faded.
+
+### Inverse surfaces
+
+The inverse roles are `surface-inverse`, `surface-inverse-raised`,
+`surface-inverse-overlay`, `border-inverse`, `inverse-foreground` and
+`inverse-muted` (8.11:1 on raised). The older `dark-*` names map onto the same
+values for existing call sites; new code uses the inverse role names.
+`error-inverse` and `info-inverse` are the semantic hues for icons and text on
+inverse surfaces. On inverse surfaces, depth comes from lighter raised steps,
+and lime is the signature foreground.
+
+Inverse surfaces are for:
+
+- the viewport of the rendered document: the document editor chrome and the
+  receipt preview, where the white page is the subject;
+- the `dark` button variant (ink fill, white label).
+
+Toasts and chart tooltips use `surface-toast`, which is ink in light and a
+bordered raised step in dark. The command palette is a regular modal on
+`surface`. The prototype has no inverse focal card; a page that still has one
+turns it into a bordered card when it is ported.
 
 ### Dark mode
 
@@ -280,13 +333,12 @@ rail footer or the command palette; the choice is a per-device preference
 (`useThemePreference` in `@billme/ui`) written to `<html data-theme>`. System
 follows `prefers-color-scheme`.
 
-Only role tokens change (`background`, `surface*`, `foreground`, `muted`,
-`border*`, `control-border`, the semantic `-bg/-border/-text` triples, the
-accent tints, `status-*`, shadows). The ink and accent ramps stay literal, so
-anything that must flip uses a role, never a ramp step. `selected` /
-`selected-foreground` is the one filled mark per control (checked box, on
-switch, active nav item, current step): ink in light, lime in dark. Values are
-mirrored in `darkRoles` in `packages/ui/src/utils/colors.ts`.
+Only role tokens change (`background`, `ground`, `rail`, `surface*`,
+`foreground*`, `muted`, `border*`, `control-border`, `donut-*`, the semantic
+`-bg/-border/-text` triples, the accent tints, `status-*`, shadows). The ink
+and accent ramps stay literal, so anything that must flip uses a role, never a
+ramp step. Values are mirrored in `darkRoles` in
+`packages/ui/src/utils/colors.ts`.
 
 The rendered document stays light: a subtree marked `data-theme="light"`
 (document pages, the designer page) keeps light roles inside a dark shell, and
@@ -300,23 +352,32 @@ inlining the glyph, so the convention stays in one place.
 
 ### Semantic colors
 
-Each role has a base, a tinted `-bg`, a `-border`, and an AA-safe `-text`
+Each role has a base, a tinted `-bg`, a soft `-border`, and an AA-safe `-text`
 foreground: `success-text`, `warning-text`, `error-text`, and `info-text` for
 the `success`, `warning`, `error`, and `info` roles. The base tokens are for
-fills and borders; text on a `-bg` surface must use the matching `-text` token.
-The `-bg` tints carry 60% of the hue's chroma, so a row of semantic tiles reads
-as information rather than decoration.
+fills and dots; text on a `-bg` surface must use the matching `-text` token.
+Banners, validation rows and pills all use the same triple:
+`bg-*-bg border-*-border text-*-text`.
 
-### Invoice status
+### Status pills
 
-`status-paid`, `status-open`, `status-overdue`, and `status-draft` provide their
-matching text/border tokens. Every status pill needs a visible boundary at
-≥3:1 because the pill shape is what makes status scannable in an invoice list;
-`status-open-border` (ink-500, `#6f7276`), `status-draft-border`, and
-`status-cancelled-border` provide the neutral boundaries. `status-overdue-text`
-is `#b91c1c` and `status-draft-text` is ink-700 (`#4a4d52`); both clear 4.5:1 at
-12px, which is not large text under WCAG. Render through
-`getStatusColors()` or `Badge` instead of re-deriving status palettes inline.
+A pill is 11px/500 (`text-micro font-medium`), `px-1.75 py-0.5`,
+`rounded-full`, with a 1px border in the soft token of its tone:
+
+| Tone | Fill | Border | Text |
+| --- | --- | --- | --- |
+| neutral | `surface-sunken` | `border` | `foreground-secondary` |
+| success / warning / error / info | `*-bg` | `*-border` | `*-text` |
+| accent | `accent-50` | `accent-200` | `accent-800` |
+| filled (active filter) | `foreground` | `foreground` | `ground`, 600 |
+
+The pill border is decorative. It measures about 1.2:1 against its fill and is
+not what identifies the pill: the text does, at ≥4.5:1 on its tint, and the
+word itself names the status. The `status-*-border` tokens (3:1) stay defined
+for existing call sites and are no longer the rule. The accent pill uses
+`accent-800` for its text because `accent-700` measures 4.38:1 on `accent-50`.
+Render through `Badge` or `getStatusColors()` instead of re-deriving pill
+palettes inline.
 
 ## Typography
 
@@ -325,22 +386,36 @@ The single family is **Inter Variable**, self-hosted through
 offline desktop apps and print output never fall back to a system font. `body`
 sets `font-feature-settings: "cv11", "ss03", "calt"`.
 
-Hierarchy comes from weight contrast, not from size or uppercase. Use the type
-roles (Tailwind utilities generated from `--text-*`):
+`body` is 14px / 1.429 (set in `packages/ui/styles.css`; the root stays 16px,
+so rem-based utilities keep their size). Text without a size utility renders at
+14px. Controls and dense rows are 13px and say so with a type role: a primitive
+sets `text-control` (weight from the component) or `text-label` (500). Nothing
+relies on inheriting 13px.
+
+Type roles (Tailwind utilities generated from `--text-*`):
 
 | Utility | Size / line height | Weight | Use |
 | --- | --- | --- | --- |
-| `text-title` | 24/32, −0.02em | 600 | The one page title per view |
-| `text-section` | 15/22 | 600 | Section and card headings |
-| `text-sm` | 14/20 | 400 | Body copy and table cells |
-| `text-label` | 13/18 | 500 | Field labels, nav items, secondary emphasis |
-| `text-caption` | 12/16 | 400 | Metadata, in `text-muted` |
-| `text-figure` | 32/36, −0.02em | 600 | KPI and hero amounts, always `tabular-nums` |
+| `text-title` | 16/24, −0.015em | 600 | The page title in the shell top bar; modal titles |
+| `text-heading` | 17/24, −0.01em | 600 | Title of an overview card (the 16px-radius cards of Übersicht) |
+| `text-section` | 15/22 | 600 | Title of a regular card, empty-state heading |
+| `text-sm` | 14/20 | 400 | Body copy; add `font-semibold` for list-row and pane titles |
+| `text-control` | 13/18 | inherits | Inputs, selects, table cells, menu items, banners |
+| `text-label` | 13/18 | 500 | Buttons (primary adds `font-semibold`), nav items, KPI labels |
+| `text-caption` | 12/16 | 400 | Top-bar subtitle, metadata in `text-muted`, small buttons, segmented items; field labels at `font-medium text-foreground-secondary` |
+| `text-micro` | 11/16 | 400 | Pills and key caps (`font-medium`), counts, field hints, timeline meta |
+| `text-eyebrow` | 11/16, 0.04em | 600 | Rail group titles, table heads, section marks inside a form; written with `uppercase text-muted` |
+| `text-figure` | 24/28, −0.025em | 700 | KPI values, always `tabular-nums` |
 
-Weights are 400, 500 and 600. `font-bold` is reserved for figures;
-`font-black` is not used. Uppercase with tracking is reserved for table column
-headers (12px, 500, 0.04em). Field labels are sentence case. Headings get
-`text-wrap: balance` and paragraphs `text-wrap: pretty` from the base layer.
+The page title lives in the shell top bar: one `h1` at `text-title` with an
+optional 12px subtitle in `text-muted` beside it. There is no 24px title in the
+content area; the content starts with its cards.
+
+Weights are 400, 500 and 600; 700 is for figures (KPI values, list-row amounts,
+totals). `font-black` is not used. Uppercase belongs to `text-eyebrow` only:
+rail group titles, table heads and section marks. Field labels and card titles
+are sentence case. Headings get `text-wrap: balance` and paragraphs
+`text-wrap: pretty` from the base layer.
 
 All monetary amounts, quantities, totals, and KPI figures use `tabular-nums` so
 digits align as values update. Apply it to amount cells, totals, and metric
@@ -350,43 +425,93 @@ Figures are set in **JetBrains Mono Variable** (`--font-mono`, self-hosted via
 `@fontsource-variable/jetbrains-mono`): every `tabular-nums` element in the app
 chrome switches to the mono face, because amounts, account numbers, document
 numbers and IBANs are read digit by digit and a transposed digit is easier to
-spot in a monospace face. The rendered document keeps its own typography.
+spot in a monospace face. Key caps use `font-mono` too. The rendered document
+keeps its own typography.
 
 ## Accessibility
 
-WCAG 2.2 AA is binding for this product. Body text must be ≥4.5:1; large text
-and non-text/UI boundaries must be ≥3:1; focus indicators must be visible at
-≥3:1; interactive targets must be at least 24×24; and status must never be
-encoded by color alone.
+WCAG 2.2 AA is binding for this product:
+
+- Text is ≥4.5:1 on its ground. `muted` clears it on every surface (white
+  5.61:1, surface-muted 5.37:1, ground 5.10:1); `foreground-secondary` is
+  8.49:1 on white.
+- A control whose outline is its only affordance (input, select, textarea,
+  checkbox, the S/H toggle) uses `control-border`: 3.50:1 on white, 3.18:1 on
+  the ground. Hover strengthens it with `control-border-hover`, never with a
+  raw `ink-*` class.
+- Focus is a 2px `focus-ring` outline at ≥3:1, offset 2px (inputs: offset 0).
+- Interactive targets are at least 24×24.
+- Status is never encoded by color alone: a pill carries its word, a KPI tick
+  sits beside its label.
+
+Where the prototype accepts a softer value, the boundary is decorative and
+something else carries the meaning:
+
+- **Pill borders** use the soft `*-border` tokens (about 1.2:1). The text
+  carries the status.
+- **Secondary buttons and key caps** use `border-strong` (1.49:1 on white). A
+  button is identified by its label and its fill on the card; hover moves the
+  edge to `control-border`.
+- **Segmented track, search field, cards** use `border` (1.25:1). The selected
+  segment is identified by its raised fill and weight 600, the search field by
+  its icon, placeholder and key caps.
 
 ## Layout and depth
 
-Content sits on white surfaces over the sunken shell ground. Elevation is a
-layered, transparent, ink-tinted shadow scale. Every step carries a 1px hairline
-ring, so a raised surface needs no separate border:
+Surfaces are bordered cards directly on the ground: `bg-surface border
+border-border rounded-card`, no shadow. The border is the separator. Shadow is
+reserved for things that float, and those carry a border as well:
 
 | Utility | Use |
 | --- | --- |
-| `shadow-xs` | Resting card, the inset shell panel |
-| `shadow-sm` | Hover-lifted row or card, segmented-control thumb |
-| `shadow-md` / `shadow-xl` | Popover, menu, combobox, date picker |
-| `shadow-lg` / `shadow-2xl` | Modal, toast |
+| none | Cards, tiles, panes, table containers, the top bar, the rail |
+| `shadow-thumb` | The selected item of a segmented control |
+| `shadow-lift` | Popover, menu, combobox list, date picker, modal, toast, chart tooltip, sticky totals, the rail as a drawer |
 
-Inverse surfaces take no shadow; they step up to `surface-inverse-raised`
-instead. Overlays use `bg-dark-base/20` with `backdrop-blur-sm`.
+`shadow-lift` and `shadow-thumb` have no hairline ring, so they sit on a
+bordered surface without doubling its edge. The older steps `shadow-xs` …
+`shadow-2xl` carry a 1px ring and stay defined for call sites that have not
+been ported; do not use them in new code and never beside a border.
 
-The editor uses a three-pane shell (left tools, center viewport, right
-properties) on inverse surfaces with `no-print` chrome.
+**Shell.** The rail is 236px, `bg-rail` with a right border. The top bar is a
+`bg-surface` strip with a bottom border, `px-5 py-2.5`, holding the page title,
+the subtitle, the search field and the primary action at the far right. The
+content scrolls below it with 20px padding, at most 1500px wide.
 
-Two page layouts exist, and each route uses exactly one:
+**Cards.** A card head is `px-3.5 py-3` with a bottom border and a
+`text-section` title; the body is `p-3.5` (14px), or flush for a table. Gaps
+between cards are 12–14px.
 
-- **Panel pages** (lists, forms, detail views, the designer excluded): one raised
-  `rounded-panel` surface fills the content area and holds the `PageHeader`.
-- **Overview pages** (Übersicht, Statistiken): the `PageHeader` sits on the sunken
-  ground and the content is a grid of raised cards, one of which may be the
-  inverse focal card.
+**Overview cards** (Übersicht) are the softer variant: `rounded-panel` (16px),
+head `px-4.5 pt-4 pb-3` without a bottom border, `text-heading` title, body
+`px-4.5 pb-4.5`. An overview card may hold one inset panel
+(`bg-surface-muted border border-border rounded-card p-3.5`) and bordered
+legend rows; that is the only nesting allowed.
 
-Overlay content—dropdowns, popovers, dialogs, and toasts—must render through
+**KPI tiles** are `rounded-tile` (14px), `px-4 py-3.5`: a `text-label
+text-muted` label with a 3×14px tone tick, the value in `text-figure
+tabular-nums`, and a 13px `text-muted` addition under it.
+
+**Pages.** Every route is cards on the ground. The former panel page (one
+raised `rounded-panel` surface filling the content area with a `PageHeader`
+inside) is gone: lists are a card with a flush table, forms are one card per
+group, and creating a record opens a modal. The document editor keeps its A4
+direct-editing layout on the inverse viewport with `no-print` chrome.
+
+**Modal.** 560px wide, top aligned (`pt-[8vh]`), `rounded-modal`, border plus
+`shadow-lift`. The scrim is `bg-ink-950/45` without blur. Head `px-4.5 pt-4
+pb-2.5` with a `text-title` heading, body `px-4.5 pb-4` with 12px gaps, foot
+`px-4.5 py-3` with a top border and right-aligned actions.
+
+**Popover and menu.** `rounded-card`, border plus `shadow-lift`, `p-1.5`; items
+are `rounded-control px-2.25 py-2 text-control`, hover `bg-surface-sunken`,
+current `bg-accent-50`.
+
+**Toast.** `bg-surface-toast border border-border-toast
+text-inverse-foreground rounded-control shadow-lift`, `px-3 py-2.5
+text-control`.
+
+Overlay content (dropdowns, popovers, dialogs, toasts) must render through
 `Portal` and use the layer variables `--z-dropdown: 30`, `--z-overlay: 40`, and
 `--z-toast: 50`. Tailwind v4 has no z-index theme namespace, so consume these
 as `z-[var(--z-dropdown)]`, `z-[var(--z-overlay)]`, and `z-[var(--z-toast)]`;
@@ -394,30 +519,65 @@ as `z-[var(--z-dropdown)]`, `z-[var(--z-overlay)]`, and `z-[var(--z-toast)]`;
 the app shell hijacks `position: fixed`, and this repo has already been bitten
 by it.
 
-## Shapes
+## Controls
 
-A precision scale. The step utilities stay for existing call sites; primitives
-and new code use the semantic aliases.
+| Control | Values |
+| --- | --- |
+| Button | 34px high (`h-8.5`), `px-3`, `rounded-control`, `text-label`, gap 7px. Small: 28px, `px-2.25`, `text-caption font-medium`. Flat: no shadow. |
+| Button, primary | `bg-accent border-accent text-accent-foreground font-semibold`; hover `accent-hover` |
+| Button, secondary | `bg-surface border-border-strong text-foreground`; hover `bg-surface-sunken border-control-border` |
+| Button, ghost | transparent border and fill; hover `bg-surface-sunken` |
+| Button, danger | tinted: `bg-error-bg border-error-border text-error-text` |
+| Button, dark | `bg-ink-950 text-inverse-foreground`; hover `ink-800` |
+| IconButton | 32×32, `rounded-control`, `text-muted`; hover `bg-surface-sunken text-foreground`. The card kebab is 30×30. |
+| Input, Select, Textarea | 34px min height, `px-2.25 py-1.5`, `rounded-control`, `border-control-border`, `bg-surface`, `text-control`. Read-only: `bg-surface-sunken text-muted`. Numeric: right aligned, `tabular-nums`. Select draws its own chevron. |
+| Field | label `text-caption font-medium text-foreground-secondary`, 4px above the control; required mark in `error-text`; hint `text-micro text-muted` |
+| Segmented control | track `bg-surface-sunken border border-border rounded-control p-0.5`, 32px overall; items 26px, `rounded-sm px-2.5 text-caption font-medium text-muted`; selected `bg-surface text-foreground font-semibold shadow-thumb` |
+| Kbd | one box per key: `font-mono text-micro text-muted bg-surface rounded-xs px-1 border border-border-strong border-b-2` |
+| Table | container is a card with a flush body. Head: `text-eyebrow uppercase text-muted bg-surface-muted`, `px-3 py-2` (32px), bottom `border-border`, sticky. Cell: `text-control`, `px-3 py-2.25` (rows around 40px), bottom `border-border`, none on the last row. Hover `bg-surface-muted`, selected `bg-accent-50` without a bar. Numeric cells right aligned. |
+| List row | `gap-3.25 py-3.25`, dashed bottom `border-border`; 36px icon tile (`rounded-lg`, `bg-surface-sunken text-foreground-secondary` or a semantic `-bg`/`-text` pair); title `text-sm font-semibold`, subtitle `text-caption text-muted`, value 15px/700 mono |
+| Progress | 22px high, fully rounded, hatched track, `bg-accent` fill with a 1.5px `foreground` end line |
+| Banner | `rounded-control border px-3 py-2.5 text-control` in a semantic triple |
+
+Primary actions: one lime `Button` per view, in the top bar at the far right or
+at the end of a modal foot. Everything else on the same view is `secondary`,
+`ghost` or an `IconButton`.
+
+## Shapes
 
 | Alias | Value | Use |
 | --- | --- | --- |
-| `rounded-control` | 8px | Buttons, inputs, selects, segmented items, menu items |
-| `rounded-card` | 12px | Cards, table containers, list rows |
-| `rounded-panel` | 16px | The shell content panel, side panels, popovers |
+| `rounded-xs` | 4px | Checkboxes, key caps |
+| `rounded-sm` | 6px | Segmented items, combobox options, the brand mark |
+| `rounded-control` | 8px | Buttons, inputs, selects, segmented track, menu items, banners, toasts, donut legend rows, the card kebab |
+| `rounded-card` | 12px | Cards, panes, table containers, popovers, the inset panel, icon tiles |
+| `rounded-tile` | 14px | KPI tiles |
+| `rounded-panel` | 16px | Overview cards |
 | `rounded-modal` | 20px | Dialogs |
 
-| Step | Value |
-| --- | --- |
-| `rounded-xs` | 4px (checkboxes, key caps) |
-| `rounded-sm` | 6px |
-| `rounded-md` | 8px |
-| `rounded-lg` / `rounded-xl` | 12px |
-| `rounded-2xl` | 16px |
-| `rounded-3xl` | 20px |
+The step utilities (`rounded-md` 8px, `rounded-lg` / `rounded-xl` 12px,
+`rounded-2xl` 16px, `rounded-3xl` 20px) stay for existing call sites.
+
+Three prototype radii are mapped onto the scale instead of getting a token,
+because each belongs to one element and sits 1–2px from a step: the kebab (9px)
+and the donut legend row (10px) use `rounded-control`, the icon tile (11px)
+uses `rounded-card`.
 
 Nested corners are concentric: outer radius = inner radius + the padding
-between them. `rounded-full` is reserved for status pills, count badges, and
-avatars. Controls are never pills.
+between them. `rounded-full` is reserved for status pills, count badges,
+steppers, the progress bar and avatars. Controls are never pills.
+
+## Icons
+
+The own icon set (`packages/ui/src/icons/kontor.tsx`) is preferred: a 16px
+grid, stroke 1.5, no fill, `currentColor`. Lucide is allowed where no own icon
+exists. `packages/ui/styles.css` renders every lucide icon at the same 1.5px
+line (`stroke-width: 1.5` with a non-scaling stroke), so the two sets carry one
+weight; no call site sets a stroke width.
+
+Sizes: 12 beside captions, 14 in dense controls, 16 by default (buttons,
+headings, nav, IconButton), 20 in tiles. 24, 32 and 48 are for illustrations
+only (empty and error states).
 
 ## Motion
 
@@ -451,15 +611,17 @@ Two more motions are defined once in `packages/ui/styles.css`:
 ## Components
 
 Primitives live in `@billme/ui` (`packages/ui/src/components/`). Prefer them
-over re-implementing chrome:
+over raw `<button>`, `<input>`, `<select>`, `<textarea>`, `<table>` and
+hand-built card or pill class strings. Their measures are in Controls and
+Layout above.
 
 - **Amount** — Formats euro amounts with automatic, always-visible, or accounting signs and accessible labels.
 - **AuthScreen** — Provides the shared Lite/Pro browser sign-in and first-account setup screen, with server status and a hidden server-address dialog.
-- **Badge** — Renders invoice and document status pills with semantic fill, text, and border tokens.
+- **Badge** — Renders status pills with the soft semantic triple (see Status pills).
 - **BalanceIndicator** — Shows whether Soll and Haben balance, including the two sides and their difference.
 - **BillmeLogo** — Renders the Billme wordmark; the mark stays accent and the lettering follows `currentColor`.
 - **Button** — Provides primary, secondary, danger, ghost, and dark actions with sizes, loading, and disabled states.
-- **Card** — Provides a token-backed content surface with configurable radius, border, and shadow.
+- **Card** — The bordered content surface: `border-border`, no shadow, 12px radius.
 - **Combobox** — Provides searchable/autocomplete selection with keyboard navigation, optional free text, and a portal list.
 - **ConfirmDialog** — Provides a modal confirmation flow with optional destructive styling, details, and a required reason.
 - **DatePicker** — Provides a German-localized date input and keyboard-navigable calendar with date bounds.
@@ -473,34 +635,35 @@ over re-implementing chrome:
 - **Textarea** — Provides a labeled multiline input with shared styling, required state, hints, and errors.
 - **Toast** — Provides transient success, error, info, or progress feedback with optional actions and dismissal.
 - **ValidationSummary** — Provides an assertive, linked list of form errors that jumps to each invalid control.
-- **PageHeader** — The one page title per view, with description, back link, right-aligned actions (primary last) and a toolbar row.
-- **SegmentedControl** — One choice from a small fixed set (filters, view modes, time ranges); a radio group with a sliding raised thumb.
-- **Table** — `Table`, `TableHeader`, `TableBody`, `TableFooter`, `TableRow`, `TableHead`, `TableCell`: sticky header, sortable columns (`aria-sort`), `numeric` cells with tabular figures, interactive and selected rows. The only place uppercase column labels are allowed.
+- **PageHeader** — Actions and toolbar row of a page. The title is shown by the shell top bar, not in the content.
+- **SegmentedControl** — One choice from a small fixed set (filters, view modes, time ranges); a radio group on a bordered track.
+- **Table** — `Table`, `TableHeader`, `TableBody`, `TableFooter`, `TableRow`, `TableHead`, `TableCell`: sticky header, sortable columns (`aria-sort`), `numeric` cells with tabular figures, interactive and selected rows.
 - **Menu** — Anchored action menu with arrow keys, typeahead and focus return; the home for row actions.
-- **Tooltip** — Short supplementary label on hover and keyboard focus, on the inverse surface; never the only accessible name. Attaches to its child without a wrapper, flips below near the title bar, and stays hidden while the child's menu or panel is expanded.
-- **Icons** — lucide at four sizes: 12 beside captions, 14 in dense controls, 16 by default (buttons, headings, IconButton), 20 in tiles. 24, 32 and 48 are for illustrations only (empty and error states).
-- **IconButton** — Square icon-only button (32/36px) with a 40px hit area; `aria-label` is required and doubles as its tooltip. Pass `tooltip` for a shorter label ("Aktionen" instead of "Aktionen für RE-2023-001"), or `tooltip={false}` where it would be noise. Do not add a native `title`.
+- **Tooltip** — Short supplementary label on hover and keyboard focus; never the only accessible name. Attaches to its child without a wrapper, flips below near the title bar, and stays hidden while the child's menu or panel is expanded.
+- **IconButton** — Square icon-only button (32px) with a 40px hit area; `aria-label` is required and doubles as its tooltip. Pass `tooltip` for a shorter label ("Aktionen" instead of "Aktionen für RE-2023-001"), or `tooltip={false}` where it would be noise. Do not add a native `title`.
 - **Checkbox** / **Switch** — Native checkbox with house styling and a mixed state; an on/off switch for settings that apply immediately.
-- **Metric** — Label, tabular figure and hint; a tone dot plus the label carries status, never colour alone. The `sparkline` slot sits beside the figure.
+- **Metric** — Label, tabular figure and hint; a tone tick plus the label carries status, never colour alone. The `sparkline` slot sits beside the figure.
 - **Sparkline** — Word-sized trend line (no axes) for a `Metric` or a figure; the last point is the current period, and its label names the latest direction for screen readers. Only where a real per-period series exists.
 - **Avatar**, **Kbd**, **Spinner** — Initials, key caps and the only loading spinner.
 - **BarChart** — Single-series SVG bars with a hover value and a screen-reader table; the current period is the one lime bar.
+- **Donut** — 134px ring with the total in the centre (value above its label) and the legend to its right; segments are `accent`, then `donut-2` … `donut-5`.
 
 Overlay motion is shared: `useExitTransition` keeps a closing overlay mounted for its exit, and `useAnchoredPosition` places a portalled overlay and sets its `--origin`.
-
-Primary actions: one lime `Button` per view (the default variant). Everything else on the same view is `secondary`, `ghost` or an `IconButton`.
 
 ## Do's and Don'ts
 
 **Do**
 
-- Use token-backed utilities such as `bg-dark-2`, `border-border`,
-  `text-muted`, and `rounded-2xl`.
+- Use token-backed utilities such as `bg-ground`, `border-border`,
+  `text-foreground-secondary`, and `rounded-card`.
 - Add a new token in **both** `packages/ui/styles.css` and
   `packages/ui/src/utils/colors.ts` when a genuinely new, intentional value is
-  needed.
+  needed. A new `text-*`, `rounded-*` or `shadow-*` role is also registered in
+  `packages/ui/src/utils/cn.ts`, or `cn()` drops it beside a colour utility.
 - Reuse `@billme/ui` primitives and the `getStatusColors()`/
   `getDunningColors()` helpers instead of inlining palettes.
+- Write 11px as `text-micro` or `text-eyebrow`, never `text-[0.6875rem]` or
+  `text-[11px]`.
 
 **Don't**
 
@@ -510,9 +673,12 @@ Primary actions: one lime `Button` per view (the default variant). Everything el
 - Don't introduce one-off colors that already have a semantic token.
 - Never use the accent as a focus ring or as text or an icon color on light
   surfaces; it is a fill color only.
-- Never nest cards.
-- Declare elevation once: use a border or a shadow, never a 1px border under a
-  wide soft shadow.
+- Don't put a shadow on a card, tile or pane. Shadow means the surface floats.
+- Don't use the ring shadows (`shadow-xs` … `shadow-2xl`) beside a border.
+- Don't nest cards, except the one inset panel and the legend rows of an
+  overview card.
+- Don't put a page title in the content area; it belongs to the top bar.
+- Don't blur the modal scrim.
 - Guard every animation with `prefers-reduced-motion`, and animate transform or
   opacity rather than layout properties.
 
@@ -520,4 +686,6 @@ Primary actions: one lime `Button` per view (the default variant). Everything el
 
 Print/PDF document components and user-customizable or data-driven colors keep
 self-contained styling for fidelity and user choice. These include print
-templates and canvas element fills.
+templates and canvas element fills. The rendered document
+(`packages/desktop-designer/src/flow/*`, any `data-theme="light"` subtree) is
+not restyled by these rules.

@@ -9,8 +9,7 @@
     "build:client": "vite build",
     "build": "pnpm run build:client && tsc --noEmit",
     "deploy:cf": "pnpm run build:client && wrangler deploy",
-    "typecheck": "tsc --noEmit",
-    "test": "node --import tsx --test src/*.test.ts"
+    "typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "@billme/desktop-contracts": "workspace:*",

@@ -226,21 +226,35 @@ Set `WORKER_RUN_ONCE=1` to run every job once and exit — useful for debugging 
 
 ### `billme` CLI
 
-`packages/server-cli` provides a typed HTTP client and the `billme` binary. Named profiles are stored
-in `~/.config/billme/server-cli.json`.
+`billme` runs almost every action of the app from a terminal: it is generated from the same contract
+the app itself uses, so new actions appear in the CLI without extra work. It talks to a running
+desktop app (Lite or Pro) or to a server-mode instance. The release ships it as a single file,
+`billme.mjs`, for Node 20+; in the repo, `packages/server-cli/bin/billme.mjs` runs it from source.
 
 ```
-billme auth       login | bootstrap | me
-billme meta       health | capabilities
-billme clients    list | get | upsert | delete
-billme invoices   list | get | create | upsert | delete
-billme offers     list | get | create | upsert | delete
-billme recurring  list | get | upsert | delete
-billme settings   get | set
-billme numbers    reserve | release | finalize
-billme documents  export-json | export-csv
-billme pro        articles | accounts | templates
+billme login                      # desktop app, self-hosted instance or (later) cloud
+billme actions [--json]           # every action of the current product
+billme invoices create --client-id <id> --document '{"items":[…],"amount":200,"status":"open"}'
+billme invoices list
+billme pdf export --kind invoice --id <id> --out rechnung.pdf
+billme <group> <command> --help   # arguments and result of one action
+billme api GET /api/v1/lite/invoices/<id>
+billme logout
 ```
+
+- **Login** is a device login: the CLI shows a code, you confirm it in the app under
+  Einstellungen → System → CLI-Zugriff, and the CLI gets a token of its own. Server mode also prints a
+  link when `BILLME_PUBLIC_WEB_URL` is set. `--read-only` asks for a token that can only read.
+  Tokens are listed and revoked in the same place. Without a terminal, pass
+  `--target desktop` or `--base-url <api-url>`; `BILLME_TOKEN` supplies a token directly.
+- **Input** is JSON (`--input <file|->`) and/or one flag per top-level argument (`--client-id`);
+  non-scalar flags take JSON or `@file`. Output is JSON on stdout, errors are JSON on stderr.
+  Exit codes: 1 runtime, 2 usage, 3 authentication, 4 target unreachable.
+- **Audit**: writes are logged as `<user> (CLI: <label>)`. The reason defaults to
+  `billme-cli (<label>)`; `--reason` sets your own.
+- **PDF** works wherever a renderer exists: through the running desktop app, and in server mode when
+  the API image has Chromium and a web app URL (both set up in `docker-compose.server-mode.yml`).
+- Profiles live in `~/.config/billme/server-cli.json` (mode 0600).
 
 ### Migrating legacy desktop data to PGlite
 

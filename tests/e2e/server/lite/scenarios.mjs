@@ -1,6 +1,7 @@
 import { expect } from '@playwright/test';
 import { randomUUID } from 'node:crypto';
 import { readServerHarnessState } from '../harness.mjs';
+import { completeBusinessOnboardingIfVisible, fillSetupCodeIfAsked } from '../onboarding.mjs';
 import {
   apiJson,
   applyLiteSession,
@@ -36,6 +37,7 @@ export const runLiteAuthScenario = async (page, scenarioKey = 'auth-flow') => {
 
   if (await bootstrapButton.isVisible().catch(() => false)) {
     await expect(page.getByRole('heading', { name: 'Billme einrichten' })).toBeVisible();
+    await fillSetupCodeIfAsked(page, state);
     await page.getByLabel('Dein Name').fill(identity.fullName);
     await page.getByLabel('E-Mail-Adresse').fill(identity.email);
     await page.getByLabel('Passwort', { exact: true }).fill(litePassword);
@@ -45,6 +47,19 @@ export const runLiteAuthScenario = async (page, scenarioKey = 'auth-flow') => {
     await page.getByLabel('E-Mail-Adresse').fill(identity.email);
     await page.getByLabel('Passwort', { exact: true }).fill(litePassword);
     await loginButton.click();
+  }
+
+  // A fresh tenant opens the business wizard; the USt-IdNr. alone satisfies §14 UStG.
+  const onboarded = await completeBusinessOnboardingIfVisible(page, {
+    scenarioKey,
+    readyHeading: 'Übersicht',
+    company: 'Billme Lite',
+    taxNumber: { label: 'USt-IdNr.', value: 'DE123456789' },
+  });
+  if (onboarded) {
+    await page.reload({ waitUntil: 'networkidle' });
+    await expect(page.getByRole('heading', { name: 'Übersicht', level: 1 })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Richte deinen Firmenkopf ein' })).toHaveCount(0);
   }
 
   await expect(page.getByRole('button', { name: 'Abmelden' })).toBeVisible();

@@ -12,6 +12,8 @@ export interface AuthScreenCredentials {
   fullName: string;
   email: string;
   password: string;
+  /** Only sent while setting up a server that requires a setup code. */
+  setupToken?: string;
 }
 
 export interface AuthScreenProps {
@@ -22,6 +24,8 @@ export interface AuthScreenProps {
   defaultServerUrl: string;
   /** Neutral hint such as "Du wurdest abgemeldet." shown above the form. */
   notice?: string | null;
+  /** The server only accepts the first account together with its setup code (BILLME_SETUP_TOKEN). */
+  setupTokenRequired?: boolean;
   initialCredentials?: Partial<AuthScreenCredentials>;
   /** Rejects with the server error; the screen translates it for the user. */
   onSubmit: (credentials: AuthScreenCredentials) => Promise<void>;
@@ -60,6 +64,9 @@ export const describeAuthError = (error: unknown): string => {
   const message = error instanceof Error ? error.message : String(error);
   if (/invalid email or password/i.test(message)) {
     return 'E-Mail oder Passwort stimmt nicht. Prüfe beides und versuche es noch einmal.';
+  }
+  if (/invalid setup token/i.test(message)) {
+    return 'Der Einrichtungscode stimmt nicht. Du findest ihn in der Server-Konfiguration unter BILLME_SETUP_TOKEN.';
   }
   if (/bootstrap already completed/i.test(message)) {
     return 'Billme ist bereits eingerichtet. Lade die Seite neu und melde dich mit deinem Konto an.';
@@ -150,6 +157,7 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
   serverUrl,
   defaultServerUrl,
   notice,
+  setupTokenRequired = false,
   initialCredentials,
   onSubmit,
   onRetry,
@@ -160,6 +168,7 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
   const [fullName, setFullName] = React.useState(initialCredentials?.fullName ?? '');
   const [email, setEmail] = React.useState(initialCredentials?.email ?? '');
   const [password, setPassword] = React.useState(initialCredentials?.password ?? '');
+  const [setupToken, setSetupToken] = React.useState('');
   const [fieldErrors, setFieldErrors] = React.useState<Partial<Record<keyof AuthScreenCredentials, string>>>({});
   const [submitError, setSubmitError] = React.useState<string | null>(null);
   const [submitting, setSubmitting] = React.useState(false);
@@ -172,10 +181,12 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
   const serverDescriptionId = React.useId();
 
   const isSetup = mode === 'setup';
+  const needsSetupToken = isSetup && setupTokenRequired;
 
   const handleSubmit = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     const nextErrors: typeof fieldErrors = {};
+    if (needsSetupToken && !setupToken.trim()) nextErrors.setupToken = 'Bitte gib den Einrichtungscode ein.';
     if (isSetup && !fullName.trim()) nextErrors.fullName = 'Bitte gib deinen Namen ein.';
     if (!email.trim()) nextErrors.email = 'Bitte gib deine E-Mail-Adresse ein.';
     else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())) nextErrors.email = 'Das sieht nicht nach einer E-Mail-Adresse aus.';
@@ -189,7 +200,12 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
 
     setSubmitting(true);
     try {
-      await onSubmit({ fullName: fullName.trim(), email: email.trim(), password });
+      await onSubmit({
+        fullName: fullName.trim(),
+        email: email.trim(),
+        password,
+        ...(needsSetupToken ? { setupToken: setupToken.trim() } : {}),
+      });
     } catch (error) {
       setSubmitError(describeAuthError(error));
     } finally {
@@ -280,7 +296,7 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
                   <h1 className="text-2xl font-semibold tracking-tight">{isSetup ? 'Billme einrichten' : 'Willkommen zurück'}</h1>
                   <p className="text-sm text-muted">
                     {isSetup
-                      ? 'Lege das erste Konto an. Es erhält alle Rechte und kann danach weitere Personen einladen.'
+                      ? 'Lege das erste Konto an. Es erhält alle Rechte.'
                       : `Melde dich bei ${brand.name} an.`}
                   </p>
                 </div>
@@ -297,6 +313,18 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
                   </div>
                 ) : null}
 
+                {needsSetupToken ? (
+                  <Input
+                    label="Einrichtungscode"
+                    fullWidth
+                    autoComplete="off"
+                    spellCheck={false}
+                    hint="Steht in der Server-Konfiguration unter BILLME_SETUP_TOKEN."
+                    value={setupToken}
+                    onChange={(event) => setSetupToken(event.target.value)}
+                    error={fieldErrors.setupToken}
+                  />
+                ) : null}
                 {isSetup ? (
                   <Input
                     label="Dein Name"

@@ -26,6 +26,7 @@ const supportedEnvKeys = [
   'BILLME_API_PORT',
   'BILLME_PUBLIC_API_URL',
   'BILLME_SESSION_SECRET',
+  'BILLME_SETUP_TOKEN',
   'BILLME_WEB_PORT',
   'BILLME_WEB_PRO_PORT',
   'BILLME_PORTAL_PORT',
@@ -672,6 +673,7 @@ const startServerModeProcessStack = async (state, startupError) => {
     HOST: '127.0.0.1',
     PORT: String(state.ports.api),
     SESSION_SECRET: env.BILLME_SESSION_SECRET ?? randomValue(),
+    BILLME_SETUP_TOKEN: env.BILLME_SETUP_TOKEN ?? '',
     BILLME_PUBLIC_WEB_URL: state.urls.web,
     BILLME_PUBLIC_WEB_PRO_URL: state.urls.webPro,
     // The API prints PDFs with the browser the suite itself uses.
@@ -839,6 +841,7 @@ const createRuntimeState = async () => {
     BILLME_API_PORT: apiPort,
     BILLME_PUBLIC_API_URL: publicApiUrl,
     BILLME_SESSION_SECRET: processEnv.BILLME_SESSION_SECRET ?? userEnv.BILLME_SESSION_SECRET ?? randomValue(),
+    BILLME_SETUP_TOKEN: processEnv.BILLME_SETUP_TOKEN ?? userEnv.BILLME_SETUP_TOKEN ?? randomValue(),
     BILLME_WEB_PORT: webPort,
     BILLME_WEB_PRO_PORT: webProPort,
     BILLME_PORTAL_PORT: portalPort,

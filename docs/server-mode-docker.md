@@ -26,6 +26,7 @@ Edit `.env.server-mode` before the first start:
 - optionally set `BILLME_POSTGRES_DATA_DIR` to an absolute host path if PostgreSQL should use a bind-mounted data directory instead of the default named volume
 - optionally set `BILLME_POSTGRES_RUN_AS` if PostgreSQL must run under a specific container uid:gid
 - set `BILLME_SESSION_SECRET` to a long random value
+- set `BILLME_SETUP_TOKEN` (`openssl rand -hex 16`); the browser asks for it as "Einrichtungscode" when the first owner is created
 - set `BILLME_PUBLIC_API_URL` to the API URL that browsers will call (for local Docker use `http://localhost:3100`)
 - optionally adjust exposed ports and worker intervals
 - optionally set `WORKER_RUN_ONCE=1` for run-once worker debugging or future E2E scenarios
@@ -56,7 +57,7 @@ Open:
 - Pro shell: `http://localhost:${BILLME_WEB_PRO_PORT:-4176}`
 - API health: `http://localhost:${BILLME_API_PORT:-3100}/health`
 
-On a clean database, open one of the browser shells and complete the bootstrap flow for the first owner account.
+On a clean database, open one of the browser shells and complete the bootstrap flow for the first owner account with the setup code (or `billme auth bootstrap --setup-token …`). The new tenant starts with default settings, so the business onboarding wizard opens right after the first login.
 
 ## Operations
 

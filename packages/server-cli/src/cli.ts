@@ -82,7 +82,7 @@ const helpText = `billme <group> <command> [options]
   billme actions [--json]           every action of the current product
   billme <group> <command> --help   arguments and result of one action
   billme api <METHOD> <path>        any API endpoint that has no action
-  billme auth login|bootstrap|me
+  billme auth login|bootstrap|me   bootstrap: --setup-token or BILLME_SETUP_TOKEN
   billme meta health|capabilities
 
 Action arguments: --input <path|-> with a JSON object, and/or one flag per
@@ -308,7 +308,11 @@ const runAuth = async (command: string | undefined, args: ParsedArgs, io: CliIo,
   const credentials = { email: requireStringFlag(args, 'email'), password: requireStringFlag(args, 'password') };
   const body = command === 'login'
     ? loginRequestSchema.parse(credentials)
-    : bootstrapRequestSchema.parse({ ...credentials, fullName: requireStringFlag(args, 'full-name') });
+    : bootstrapRequestSchema.parse({
+      ...credentials,
+      fullName: requireStringFlag(args, 'full-name'),
+      setupToken: getStringFlag(args, 'setup-token') ?? io.env.BILLME_SETUP_TOKEN,
+    });
   const auth = await requestJson(context, transport, 'POST', `/api/v1/auth/${command}?product=${context.product}`, body) as { token: string };
 
   if (!getBooleanFlag(args, 'save', true)) {

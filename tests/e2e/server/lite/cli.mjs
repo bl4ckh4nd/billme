@@ -17,7 +17,7 @@ const owner = { email: 'lite-owner@billme-e2e.local', password: 'billme-server-1
  * Drives the real `billme` binary against a running server-mode API and leaves
  * every command with its exit code and output in `test-results/server-mode/cli/`.
  */
-export const runLiteCliScenario = async (apiUrl, page) => {
+export const runLiteCliScenario = async (apiUrl, page, { setupToken = process.env.BILLME_SETUP_TOKEN ?? '' } = {}) => {
   const configDir = await fs.mkdtemp(path.join(os.tmpdir(), 'billme-cli-e2e-'));
   const transcript = [];
 
@@ -59,7 +59,7 @@ export const runLiteCliScenario = async (apiUrl, page) => {
     const session = await ok([
       'auth', status.bootstrapped ? 'login' : 'bootstrap',
       '--email', owner.email, '--password', owner.password, '--full-name', owner.fullName,
-    ]);
+    ], { env: { BILLME_SETUP_TOKEN: setupToken } });
     assert.equal(session.json().user.email, owner.email);
 
     // The catalog comes from the contract: shell-only routes are absent, composites are present.
@@ -76,7 +76,7 @@ export const runLiteCliScenario = async (apiUrl, page) => {
     assert.equal(shadowed.code, 2);
     assert.deepEqual(JSON.parse(shadowed.stderr).error.issues.filter((issue) => issue.path[0] === 'profile').length, 1);
 
-    // A fresh tenant has no settings and cannot number anything; onboarding normally writes them.
+    // A fresh tenant starts with empty default settings; the wizard normally fills them in.
     const settings = (await ok(['settings', 'get'])).json() ?? JSON.parse(execFileSync(
       process.execPath,
       ['--import', 'tsx', '-e', "import('@billme/desktop-services/mockData').then((m) => console.log(JSON.stringify(m.DEFAULT_SETTINGS)))"],

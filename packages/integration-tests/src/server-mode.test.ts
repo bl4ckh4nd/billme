@@ -24,6 +24,11 @@ import { draftInvoice, draftOffer, issueInvoice, newClient } from './fixtures.js
  *   configured instance, malformed credentials reaching the store; the
  *   product-neutral `/api/v1/auth/*` routes (CLI `whoami`) answering differently
  *   from the product routes (500 instead of 401/409, the wrong product's session)
+ * - first owner: a configured setup code (BILLME_SETUP_TOKEN) bypassed on one of
+ *   the bootstrap routes, a rejected attempt leaving a tenant behind, the status
+ *   not telling the browser to ask for the code; a new tenant without settings
+ *   (the browser shell then never opens the business wizard), an older tenant
+ *   without settings staying that way after an API restart
  * - sessions: an expired, tampered, foreign-secret, product-swapped or
  *   cookie/local-token request accepted; a weak or default SESSION_SECRET
  *   accepted once a database is configured; a user demoted or removed while
@@ -183,6 +188,95 @@ describe('server mode', () => {
         statuses.push((await h.http('POST', '/api/v1/lite/auth/login', { body: { email: victim, password: `guess-${attempt}` } })).status);
       }
       assert.ok(statuses.includes(429), `15 wrong passwords in a row all answered ${[...new Set(statuses)]}`);
+    });
+  });
+
+  describe('first owner and setup code', () => {
+    const SETUP_TOKEN = 'setup-code-0123456789abcdef';
+    const owner = (token?: string) => ({ email: uniqueEmail('first-owner'), password: PASSWORD, fullName: 'First Owner', ...(token === undefined ? {} : { setupToken: token }) });
+
+    test('without a setup code configured the status does not ask for one', async () => {
+      const status = await h.http('GET', '/api/v1/lite/auth/bootstrap/status');
+      assert.equal(status.status, 200, status.text);
+      assert.notEqual(status.body.setupTokenRequired, true);
+    });
+
+    test('with a setup code only the right code creates the first owner, on every bootstrap route', async () => {
+      const s = await startHostedServer('server-mode-setup-code', { setupToken: SETUP_TOKEN });
+      try {
+        for (const path of ['/api/v1/lite/auth/bootstrap/status', '/api/v1/auth/bootstrap/status?product=lite']) {
+          const status = await s.http('GET', path);
+          assert.equal(status.status, 200, status.text);
+          assert.deepEqual(status.body, { bootstrapped: false, userCount: 0, setupTokenRequired: true });
+        }
+        for (const path of ['/api/v1/lite/auth/bootstrap', '/api/v1/auth/bootstrap?product=lite']) {
+          for (const token of [undefined, '', 'wrong-code', `${SETUP_TOKEN}x`]) {
+            const response = await s.http('POST', path, { body: owner(token) });
+            assert.equal(response.status, 403, `${path} with ${String(token)} -> ${response.status} ${response.text}`);
+            assert.equal(response.body.token, undefined);
+          }
+        }
+        assert.equal((await s.wire.sql('SELECT count(*)::int AS n FROM tenants')).rows[0].n, 0, 'a rejected bootstrap leaves no tenant behind');
+        assert.equal((await s.http('GET', '/api/v1/lite/auth/bootstrap/status')).body.bootstrapped, false);
+
+        const first = owner(SETUP_TOKEN);
+        const boot = await s.http('POST', '/api/v1/lite/auth/bootstrap', { body: first });
+        assert.equal(boot.status, 200, boot.text);
+        const again = await s.http('POST', '/api/v1/auth/bootstrap?product=lite', { body: owner(SETUP_TOKEN) });
+        assert.equal(again.status, 409, 'the code does not open a configured product a second time');
+        const pro = await s.http('POST', '/api/v1/pro/auth/bootstrap', { body: owner('wrong-code') });
+        assert.equal(pro.status, 403, 'Pro on the same API is guarded as well');
+        assert.equal((await s.http('POST', '/api/v1/lite/auth/login', { body: { email: first.email, password: PASSWORD } })).status, 200, 'login needs no setup code');
+      } finally {
+        await s.close();
+      }
+    });
+
+    test('a new tenant starts with default settings the wizard can complete, and they survive a restart', async () => {
+      const s = await startHostedServer('server-mode-first-settings', { setupToken: SETUP_TOKEN });
+      try {
+        const first = owner(SETUP_TOKEN);
+        const boot = await s.http('POST', '/api/v1/lite/auth/bootstrap', { body: first });
+        assert.equal(boot.status, 200, boot.text);
+        const settings = await s.http('GET', '/api/v1/lite/settings', { token: boot.body.token });
+        assert.equal(settings.status, 200, settings.text);
+        assert.ok(settings.body, 'a fresh tenant must have settings, otherwise the browser never shows onboarding');
+        assert.equal(settings.body.company.name, '');
+        assert.notEqual(settings.body.onboardingCompleted, true);
+
+        const completed = { ...settings.body, onboardingCompleted: true, company: { ...settings.body.company, name: 'Erste GmbH', owner: 'Erika', street: 'Weg 1', zip: '10115', city: 'Berlin', email: 'info@erste.example' }, finance: { ...settings.body.finance, vatId: 'DE123456789' } };
+        const saved = await s.http('PUT', '/api/v1/lite/settings', { token: boot.body.token, body: { reason: 'Onboarding abgeschlossen', settings: completed } });
+        assert.equal(saved.status, 200, saved.text);
+
+        const restarted = await startHostedServer('server-mode-first-settings-restart', { wire: s.wire, recorder: s.recorder, setupToken: SETUP_TOKEN });
+        try {
+          const after = await restarted.http('GET', '/api/v1/lite/settings', { token: boot.body.token });
+          assert.equal(after.body.company.name, 'Erste GmbH', 'the restart repair must not overwrite completed settings');
+          assert.equal(after.body.onboardingCompleted, true);
+        } finally {
+          await restarted.close();
+        }
+      } finally {
+        await s.close();
+      }
+    });
+
+    test('a tenant created before settings were seeded gets them on the next API start', async () => {
+      const email = uniqueEmail('legacy-owner');
+      const { tenantId } = await seedMember(h.wire, { product: 'lite', email, fullName: 'Legacy Owner', role: 'owner' });
+      const { token } = await h.login('lite', email);
+      assert.equal((await h.http('GET', '/api/v1/lite/settings', { token })).body, null, 'precondition: no settings row');
+      const restarted = await startHostedServer('server-mode-settings-repair', { wire: h.wire, recorder: h.recorder });
+      try {
+        const settings = await restarted.http('GET', '/api/v1/lite/settings', { token });
+        assert.equal(settings.status, 200, settings.text);
+        assert.equal(settings.body?.company.name, '');
+        const other = await restarted.http('GET', '/api/v1/lite/settings', { token: b.token });
+        assert.equal(other.body.company.name, 'Bob Handel', 'existing settings stay untouched');
+        assert.ok(tenantId);
+      } finally {
+        await restarted.close();
+      }
     });
   });
 

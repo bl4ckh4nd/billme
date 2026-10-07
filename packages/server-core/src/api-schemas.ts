@@ -32,6 +32,8 @@ export const bootstrapRequestSchema = z.object({
   email: z.string().email(),
   password: z.string().min(12),
   fullName: z.string().min(1),
+  /** Required when the server sets BILLME_SETUP_TOKEN; keeps a fresh public instance from being claimed by anyone. */
+  setupToken: z.string().optional(),
 });
 export type BootstrapRequest = z.infer<typeof bootstrapRequestSchema>;
 
@@ -66,6 +68,7 @@ export type AuthSessionInfo = z.infer<typeof authSessionInfoSchema>;
 export const bootstrapStatusSchema = z.object({
   bootstrapped: z.boolean(),
   userCount: z.number().int().nonnegative(),
+  setupTokenRequired: z.boolean().optional(),
 });
 export type BootstrapStatus = z.infer<typeof bootstrapStatusSchema>;
 

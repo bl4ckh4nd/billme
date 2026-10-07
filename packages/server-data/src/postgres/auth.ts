@@ -13,7 +13,7 @@ import {
   type UserAccount,
 } from "@billme/server-core";
 import { withSerializablePostgresTransaction } from "./connection.js";
-import { createPostgresBillingDependencies } from "./billing.js";
+import { createPostgresBillingDependencies, saveServerSettings } from "./billing.js";
 
 export interface ServerAuthStore {
   getBootstrapStatus(product: ServerProduct): Promise<BootstrapStatus>;
@@ -79,7 +79,12 @@ const toAuthResponse = (
   },
 });
 
-export const createPostgresAuthStore = (pool: Pool): ServerAuthStore => ({
+export interface PostgresAuthStoreOptions {
+  /** Settings a new tenant starts with, so the browser shell can show onboarding instead of an unconfigured app. */
+  readonly initialSettingsJson?: string;
+}
+
+export const createPostgresAuthStore = (pool: Pool, options: PostgresAuthStoreOptions = {}): ServerAuthStore => ({
   async getBootstrapStatus(product) {
     const db = createDrizzle(pool);
     const rows = await db
@@ -166,6 +171,9 @@ export const createPostgresAuthStore = (pool: Pool): ServerAuthStore => ({
         createdAt: now,
         updatedAt: now,
       });
+      if (options.initialSettingsJson) {
+        await saveServerSettings(client, { tenantId: tenant.id, settingsJson: options.initialSettingsJson, createdAt: now, updatedAt: now });
+      }
 
       return toAuthResponse(tenant.id, product, {
         id: userId,

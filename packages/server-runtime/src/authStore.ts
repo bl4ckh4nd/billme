@@ -1,4 +1,4 @@
-import { randomUUID, scryptSync } from 'crypto';
+import { createHash, randomUUID, scryptSync, timingSafeEqual } from 'crypto';
 import {
   normalizeEmailAddress,
   type BootstrapStatus,
@@ -9,6 +9,7 @@ import {
   type ServerRole,
 } from '@billme/server-core';
 import { createPostgresAuthStore, createPostgresPool } from '@billme/server-data';
+import { DEFAULT_SETTINGS } from '@billme/desktop-services/mockData';
 
 type UserRecord = AuthUser & {
   tenantId: string;
@@ -115,14 +116,40 @@ export class InMemoryAuthStore implements AuthStore {
 
 type PoolLike = ReturnType<typeof createPostgresPool>;
 
+const sameSecret = (candidate: string, expected: string): boolean =>
+  timingSafeEqual(createHash('sha256').update(candidate).digest(), createHash('sha256').update(expected).digest());
+
+/**
+ * With a setup token configured, only someone who knows it can create the first
+ * owner; without one the bootstrap stays open (local development, E2E stacks).
+ */
+const requireSetupToken = (store: AuthStore, setupToken: string | undefined): AuthStore => {
+  if (!setupToken) return store;
+  return {
+    async getBootstrapStatus(product) {
+      return { ...(await store.getBootstrapStatus(product)), setupTokenRequired: true };
+    },
+    async bootstrap(product, input) {
+      if (!input.setupToken || !sameSecret(input.setupToken, setupToken)) {
+        throw Object.assign(new Error('Invalid setup token'), { statusCode: 403 });
+      }
+      return store.bootstrap(product, input);
+    },
+    login: (product, input) => store.login(product, input),
+  };
+};
+
 export const createAuthStore = ({
   pool,
+  env = process.env,
+  setupToken = env.BILLME_SETUP_TOKEN?.trim() || undefined,
 }: {
   pool?: PoolLike;
   env?: NodeJS.ProcessEnv;
+  setupToken?: string;
 } = {}): AuthStore => {
-  if (!pool) {
-    return new InMemoryAuthStore();
-  }
-  return createPostgresAuthStore(pool);
+  const store = pool
+    ? createPostgresAuthStore(pool, { initialSettingsJson: JSON.stringify(DEFAULT_SETTINGS) })
+    : new InMemoryAuthStore();
+  return requireSetupToken(store, setupToken);
 };

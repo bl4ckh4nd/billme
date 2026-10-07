@@ -44,6 +44,7 @@ export function BrowserDocumentShell({ product, defaultApiUrl, sessionStorageKey
   const [mode, setMode] = React.useState<AuthScreenMode>('checking');
   const [session, setSession] = React.useState<Session | null>(null);
   const [notice, setNotice] = React.useState('');
+  const [setupTokenRequired, setSetupTokenRequired] = React.useState(false);
   const [checkRun, setCheckRun] = React.useState(0);
   const generation = React.useRef(0);
   const client = React.useMemo(() => createServerApiClient(apiUrl), [apiUrl]);
@@ -83,6 +84,7 @@ export function BrowserDocumentShell({ product, defaultApiUrl, sessionStorageKey
         const [status, validated] = await Promise.all([client.getBootstrapStatusFor(product), validate().catch(() => null)]);
         if (generation.current !== current) return;
         setMode(status.bootstrapped ? 'login' : 'setup');
+        setSetupTokenRequired(status.setupTokenRequired === true);
         setSession(validated);
         if (validated) localStorage.setItem(sessionStorageKey, JSON.stringify(validated));
         else localStorage.removeItem(sessionStorageKey);
@@ -93,7 +95,7 @@ export function BrowserDocumentShell({ product, defaultApiUrl, sessionStorageKey
     return () => { generation.current++; controller.abort(); };
   }, [apiUrl, client, product, sessionStorageKey, checkRun]);
 
-  const submit = async (input: { email: string; password: string; fullName: string }) => {
+  const submit = async (input: { email: string; password: string; fullName: string; setupToken?: string }) => {
     const current = ++generation.current;
     try {
       const result = mode === 'setup' ? await client.bootstrapFor(product, input) : await client.loginFor(product, input);
@@ -120,6 +122,6 @@ export function BrowserDocumentShell({ product, defaultApiUrl, sessionStorageKey
   };
   if (session) return <RendererHost session={session} mount={mount} onLogout={logout} product={product} />;
   return <AuthScreen product={product} mode={mode} serverUrl={apiUrl} defaultServerUrl={defaultApiUrl}
-    notice={notice} initialCredentials={initialCredentials} onSubmit={submit} onServerUrlChange={changeServer}
+    notice={notice} setupTokenRequired={setupTokenRequired} initialCredentials={initialCredentials} onSubmit={submit} onServerUrlChange={changeServer}
     onRetry={() => { generation.current++; setCheckRun((run) => run + 1); }} />;
 }

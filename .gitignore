@@ -50,3 +50,8 @@ pr-billme.md
 .codex
 .impeccable.md
 playwright-report/
+
+# Local tooling and credentials, never committed
+.unraundenv
+.orca/
+.test-logs/

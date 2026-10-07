@@ -59,7 +59,10 @@ const buildScenarioList = () => {
       scenarios.push({ name: 'lite-worker-flows', kind: 'plain', run: () => runWorkerFlowScenario('lite') });
     }
     // Last in the Lite list: it completes onboarding and turns on e-invoicing in the tenant the others share.
-    scenarios.push({ name: 'lite-cli', kind: 'browser', run: async (page) => runLiteCliScenario((await readServerHarnessState()).urls.api, page) });
+    scenarios.push({ name: 'lite-cli', kind: 'browser', run: async (page) => {
+      const state = await readServerHarnessState();
+      await runLiteCliScenario(state.urls.api, page, { setupToken: state.env?.BILLME_SETUP_TOKEN });
+    } });
   }
 
   if (includePro) {

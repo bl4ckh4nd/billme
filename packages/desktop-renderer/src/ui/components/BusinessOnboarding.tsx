@@ -211,9 +211,12 @@ const withReportingProfile = (draft: BusinessOnboardingDraft): BusinessOnboardin
 const reportingProfileOf = (draft: BusinessOnboardingDraft): BusinessReportingProfile =>
   draft.businessReportingProfile ?? DEFAULT_BUSINESS_REPORTING_PROFILE;
 
+// §14 UStG: the invoice needs the Steuernummer or the USt-IdNr., either one is enough.
+const hasTaxNumber = (draft: BusinessOnboardingDraft) => Boolean(trim(draft.finance.taxId) || trim(draft.finance.vatId));
+
 const getInitialStepIndex = (draft: BusinessOnboardingDraft) => {
   if (!trim(draft.company.name)) return 0;
-  if (!trim(draft.finance.taxId)) return 1;
+  if (!hasTaxNumber(draft)) return 1;
   return 2;
 };
 
@@ -238,7 +241,7 @@ const validateBillingStep = (draft: BusinessOnboardingDraft): Partial<Record<Fie
   const errors: Partial<Record<FieldPath, string>> = {};
   const profile = reportingProfileOf(draft);
 
-  if (!trim(draft.finance.taxId)) errors['finance.taxId'] = 'Bitte gib die Steuernummer ein.';
+  if (!hasTaxNumber(draft)) errors['finance.taxId'] = 'Bitte gib die Steuernummer oder die USt-IdNr. ein.';
   if (!trim(draft.numbers.invoicePrefix)) {
     errors['numbers.invoicePrefix'] = 'Bitte lege ein Rechnungs-Präfix fest.';
   }
@@ -309,7 +312,7 @@ const countEssentials = (draft: BusinessOnboardingDraft) => {
     trim(draft.company.zip),
     trim(draft.company.city),
     trim(draft.company.email),
-    trim(draft.finance.taxId),
+    hasTaxNumber(draft),
     trim(draft.numbers.invoicePrefix),
     trim(draft.numbers.offerPrefix),
   ];
@@ -714,12 +717,19 @@ export const BusinessOnboarding: React.FC<BusinessOnboardingProps> = ({
                       id={FIELD_IDS['finance.taxId']}
                       label="Steuernummer"
                       fullWidth
-                      required
                       value={draft.finance.taxId}
                       onChange={(event) => updateFinance('taxId', event.target.value)}
                       placeholder="123/456/78900"
-                      hint="Die Steuernummer findest du auf Schreiben vom Finanzamt. Sie ist nicht die USt-IdNr."
+                      hint="Steht auf Schreiben vom Finanzamt. Steuernummer oder USt-IdNr. genügt."
                       error={errors['finance.taxId']}
+                    />
+                    <Input
+                      id="onboarding-finance-vat-id"
+                      label="USt-IdNr."
+                      fullWidth
+                      value={draft.finance.vatId}
+                      onChange={(event) => updateFinance('vatId', event.target.value)}
+                      placeholder="DE123456789"
                     />
                     <Input
                       id={FIELD_IDS['legal.paymentTermsDays']}
@@ -950,14 +960,6 @@ export const BusinessOnboarding: React.FC<BusinessOnboardingProps> = ({
                     value={draft.finance.bic}
                     onChange={(event) => updateFinance('bic', event.target.value)}
                     placeholder="GENODEF1XXX"
-                  />
-                  <Input
-                    id="onboarding-finance-vat-id"
-                    label="USt-IdNr."
-                    fullWidth
-                    value={draft.finance.vatId}
-                    onChange={(event) => updateFinance('vatId', event.target.value)}
-                    placeholder="DE123456789"
                   />
                   <div className="md:col-span-2">
                     <Input

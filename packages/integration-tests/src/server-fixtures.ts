@@ -61,6 +61,8 @@ export const startHostedServer = async (suite: string, options: {
   recorder?: ReturnType<typeof createRecorder>;
   migrate?: boolean;
   sessionSecret?: string;
+  /** BILLME_SETUP_TOKEN of this instance; the first owner needs it. */
+  setupToken?: string;
   renderDocumentPdf?: BuildServerApiOptions['renderDocumentPdf'];
   openRouterVlmService?: BuildServerApiOptions['openRouterVlmService'];
   /** A fixed port for callers outside this process (browser E2E); random by default. */
@@ -77,6 +79,7 @@ export const startHostedServer = async (suite: string, options: {
       runtime: 'server',
       logger: false,
       sessionSecret: options.sessionSecret ?? SESSION_SECRET,
+      setupToken: options.setupToken,
       renderDocumentPdf: options.renderDocumentPdf,
       openRouterVlmService: options.openRouterVlmService,
     });

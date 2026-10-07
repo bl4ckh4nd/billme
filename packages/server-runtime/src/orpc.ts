@@ -48,6 +48,9 @@ const mapAuthError = (error: unknown): never => {
   if (error instanceof Error && 'statusCode' in error && error.statusCode === 429) {
     throw new ORPCError('TOO_MANY_REQUESTS', { status: 429, message });
   }
+  if (error instanceof Error && 'statusCode' in error && error.statusCode === 403) {
+    throw new ORPCError('FORBIDDEN', { status: 403, message });
+  }
   if (message === 'Invalid email or password') {
     throw new ORPCError('UNAUTHORIZED', { message });
   }

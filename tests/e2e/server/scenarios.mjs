@@ -21,10 +21,14 @@ export const runStackSmokeScenario = async () => {
   await expect(liteBootstrapResponse.json()).resolves.toEqual({
     bootstrapped: false,
     userCount: 0,
+    // The stack runs with BILLME_SETUP_TOKEN, so a fresh instance cannot be claimed without it.
+    setupTokenRequired: true,
   });
   await expect(proBootstrapResponse.json()).resolves.toEqual({
     bootstrapped: false,
     userCount: 0,
+    // The stack runs with BILLME_SETUP_TOKEN, so a fresh instance cannot be claimed without it.
+    setupTokenRequired: true,
   });
 
   expect(workerHealth).toBe('healthy');

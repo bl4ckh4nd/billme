@@ -3,10 +3,12 @@ import { createNumberingPortsForDb } from './numbering.js';
 import { convertServerOfferToInvoice } from './offerConversion.js';
 import Fastify, { type FastifyInstance } from 'fastify';
 import cors from '@fastify/cors';
+import { DEFAULT_SETTINGS } from '@billme/desktop-services/mockData';
 import { z } from 'zod';
 import {
   authUserSchema,
   bootstrapRequestSchema,
+  bootstrapStatusSchema,
   capabilitiesResponseSchema,
   clientSchema,
   clientProjectSchema,
@@ -122,6 +124,8 @@ export interface BuildServerApiOptions {
   readonly product?: 'lite' | 'pro';
   readonly logger?: boolean;
   readonly sessionSecret?: string;
+  /** Required to create the first owner; defaults to BILLME_SETUP_TOKEN. */
+  readonly setupToken?: string;
   readonly localAuth?: EmbeddedLocalAuthOptions;
   /** Embedded runtime: reported by `/health` so the CLI can verify a discovered port. */
   readonly instanceId?: string;
@@ -1499,11 +1503,21 @@ export const buildServerApi = async (options: BuildServerApiOptions = {}): Promi
     await convertLegacyServerTemplates(app.serverDatabase).catch((error) => {
       app.log.error({ err: error }, 'Konvertierung der Alt-Vorlagen fehlgeschlagen');
     });
+    if (runtime === 'server') {
+      // Tenants bootstrapped before settings were seeded at bootstrap never saw onboarding; give them the same defaults.
+      const seededAt = new Date().toISOString();
+      await app.serverDatabase.query(
+        `INSERT INTO server_settings (tenant_id, settings_json, created_at, updated_at)
+         SELECT id, $1, $2, $2 FROM tenants
+         ON CONFLICT (tenant_id) DO NOTHING`,
+        [JSON.stringify(DEFAULT_SETTINGS), seededAt],
+      );
+    }
   }
 
   app.decorate('tokenService', new SessionTokenService(options.sessionSecret ?? process.env.SESSION_SECRET));
   const authPool = runtime === 'server' && app.serverPool ? app.serverPool : undefined;
-  app.decorate('authStore', createAuthStore({ pool: authPool, env: process.env }));
+  app.decorate('authStore', createAuthStore({ pool: authPool, env: process.env, ...(options.setupToken ? { setupToken: options.setupToken } : {}) }));
 
   typedRoute(app, {
     method: 'GET',
@@ -1606,10 +1620,7 @@ export const buildServerApi = async (options: BuildServerApiOptions = {}): Promi
       method: 'GET',
       url: '/api/v1/auth/bootstrap/status',
       query: productAuthStatusQuerySchema,
-      response: z.object({
-        bootstrapped: z.boolean(),
-        userCount: z.number().int().nonnegative(),
-      }),
+      response: bootstrapStatusSchema,
       async handler({ query }) {
         return app.authStore.getBootstrapStatus(query.product);
       },

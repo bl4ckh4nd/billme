@@ -1,5 +1,6 @@
 import { expect } from '@playwright/test';
 import { readServerHarnessState } from '../harness.mjs';
+import { completeBusinessOnboardingIfVisible, fillSetupCodeIfAsked } from '../onboarding.mjs';
 import {
   PRO_SESSION_STORAGE_KEY,
   createOwnerCredentials,
@@ -17,42 +18,8 @@ const proOwner = createOwnerCredentials('pro');
 const liteOwner = createOwnerCredentials('lite');
 
 
-const completeProOnboardingIfVisible = async (page, scenarioKey = 'server-pro') => {
-  const heading = page.getByRole('heading', { name: 'Richte deinen Firmenkopf ein' });
-  const workspaceHeading = page.getByRole('heading', { name: 'Buchen', level: 1 });
-
-  // Authentication only starts refreshData. Wait for either the onboarding
-  // dialog or the hydrated workspace before deciding that no setup is needed.
-  // Otherwise the logout button can win the race and be covered by the dialog.
-  await expect.poll(async () => {
-    if (await heading.isVisible().catch(() => false)) return 'onboarding';
-    if (await workspaceHeading.isVisible().catch(() => false)) return 'ready';
-    return 'loading';
-  }, { timeout: 30_000 }).toMatch(/^(onboarding|ready)$/);
-
-  if (!(await heading.isVisible().catch(() => false))) return;
-
-  const slug = scenarioKey.replace(/[^a-z0-9-]+/gi, '-').toLowerCase();
-
-  await page.getByLabel('Firmenname').fill(`Billme Pro ${slug}`);
-  await page.getByLabel('Inhaber oder Geschäftsführung').fill('Billme Pro Owner');
-  await page.getByLabel('Straße und Hausnummer').fill('Teststrasse 1');
-  await page.getByLabel('PLZ').fill('10115');
-  await page.getByLabel('Stadt').fill('Berlin');
-  await page.getByLabel('E-Mail für Angebote und Rechnungen').fill(`pro+${slug}@billme-e2e.local`);
-  await page.getByRole('button', { name: 'Weiter zu Abrechnung' }).click();
-
-  await page.getByLabel('Steuernummer').fill('12/345/67890');
-  await page.getByLabel('Zahlungsziel in Tagen').fill('14');
-  await page.getByLabel('Rechnungs-Präfix').fill('RE-%Y-');
-  await page.getByLabel('Angebots-Präfix').fill('ANG-%Y-');
-  await page.getByRole('button', { name: 'Weiter zu Weitere Angaben' }).click();
-
-  await page.getByLabel('Bankname').fill('Berliner Testbank');
-  await page.getByLabel('IBAN').fill('DE02120300000000202051');
-  await page.getByRole('button', { name: 'Arbeitsbereich einrichten' }).click();
-  await expect(heading).toHaveCount(0);
-};
+const completeProOnboardingIfVisible = (page, scenarioKey = 'server-pro') =>
+  completeBusinessOnboardingIfVisible(page, { scenarioKey, readyHeading: 'Buchen', company: 'Billme Pro' });
 
 export const runProSmokeScenario = async (page) => {
   const state = await readServerHarnessState();
@@ -73,6 +40,7 @@ export const runProAuthRestoreScenario = async (page) => {
   await expect(bootstrapButton.or(loginButton)).toBeVisible();
 
   if (await bootstrapButton.isVisible().catch(() => false)) {
+    await fillSetupCodeIfAsked(page, state);
     await page.getByLabel('Dein Name').fill(proOwner.fullName);
   }
   await page.getByLabel('E-Mail-Adresse').fill(proOwner.email);

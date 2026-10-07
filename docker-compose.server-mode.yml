@@ -41,6 +41,8 @@ services:
       HOST: 0.0.0.0
       PORT: 3100
       SESSION_SECRET: ${BILLME_SESSION_SECRET:?set BILLME_SESSION_SECRET in .env.server-mode (openssl rand -hex 32)}
+      # Asked for when the first account is created, so nobody else can claim a fresh instance.
+      BILLME_SETUP_TOKEN: ${BILLME_SETUP_TOKEN:?set BILLME_SETUP_TOKEN in .env.server-mode (openssl rand -hex 16)}
       DATABASE_URL: postgresql://${BILLME_POSTGRES_USER:-billme}:${BILLME_POSTGRES_PASSWORD:-billme}@postgres:5432/${BILLME_POSTGRES_DB:-billme}
       BILLME_PUBLIC_WEB_URL: ${BILLME_PUBLIC_WEB_URL:-}
       BILLME_PUBLIC_WEB_PRO_URL: ${BILLME_PUBLIC_WEB_PRO_URL:-}

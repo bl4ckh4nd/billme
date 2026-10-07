@@ -232,6 +232,28 @@ describe('server mode', () => {
       }
     });
 
+    test('several people who know the code: exactly one becomes owner, even when they submit at the same moment', async () => {
+      const s = await startHostedServer('server-mode-setup-race', { setupToken: SETUP_TOKEN });
+      try {
+        const people = Array.from({ length: 6 }, () => owner(SETUP_TOKEN));
+        const results = await Promise.all(people.map((body, index) =>
+          s.http('POST', index % 2 ? '/api/v1/auth/bootstrap?product=lite' : '/api/v1/lite/auth/bootstrap', { body })));
+        const statuses = results.map((response) => response.status).sort();
+        assert.deepEqual(statuses, [200, 409, 409, 409, 409, 409], results.map((response) => `${response.status} ${response.text}`).join('\n'));
+        assert.equal((await s.wire.sql("SELECT count(*)::int AS n FROM tenants WHERE product = 'lite'")).rows[0].n, 1);
+        assert.equal((await s.wire.sql('SELECT count(*)::int AS n FROM user_accounts')).rows[0].n, 1, 'the losers leave no account behind');
+        const winner = people[results.findIndex((response) => response.status === 200)];
+        for (const person of people) {
+          const login = await s.http('POST', '/api/v1/lite/auth/login', { body: { email: person.email, password: PASSWORD } });
+          assert.equal(login.status, person === winner ? 200 : 401, `${person.email} -> ${login.status}`);
+        }
+        const later = await s.http('POST', '/api/v1/lite/auth/bootstrap', { body: owner(SETUP_TOKEN) });
+        assert.equal(later.status, 409, 'knowing the code later does not create a second account');
+      } finally {
+        await s.close();
+      }
+    });
+
     test('a new tenant starts with default settings the wizard can complete, and they survive a restart', async () => {
       const s = await startHostedServer('server-mode-first-settings', { setupToken: SETUP_TOKEN });
       try {

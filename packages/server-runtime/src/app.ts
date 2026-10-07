@@ -79,7 +79,7 @@ import {
   taxAuditExportArtifactSchema,
 } from '@billme/desktop-contracts-pro/schemas';
 import { SessionTokenService, checkSessionSecret, type AuthSession, type AuthSessionInfo } from './auth.js';
-import { createAuthStore } from './authStore.js';
+import { createAuthStore, resolveSetupToken } from './authStore.js';
 import { buildAuditEntry, withInvoiceHistory, withOfferHistory } from './auditHistory.js';
 import { assertOfferContentEditable, assertInvoiceContentEditable, cancelUnpaidRevisionSource, chainIssueBodySchema, settleCorrectedSource, settledInvoiceStatus, issueDocumentChain, lockChainSource, postOpenedBillingDocument } from './documentIssuance.js';
 import { ApiError, registerErrorHandler, typedRoute } from './http.js';
@@ -96,6 +96,8 @@ import { registerAuditRoutes } from './auditRoutes.js';
 import { registerEurRuleRoutes } from './eurRuleRoutes.js';
 import { registerDocumentTemplateRoutes } from './documentTemplateRoutes.js';
 import { authenticateCliToken, isDeviceLoginPath, registerCliAccessRoutes } from './cliAccessRoutes.js';
+import { createPlatformMailer, type PlatformMailer } from './platformMail.js';
+import { registerWorkspaceRoutes } from './workspaceRoutes.js';
 import {
   requireDatabase,
   requireAuditExportSession,
@@ -126,6 +128,8 @@ export interface BuildServerApiOptions {
   readonly sessionSecret?: string;
   /** Required to create the first owner; defaults to BILLME_SETUP_TOKEN. */
   readonly setupToken?: string;
+  /** Sends invitation and password-reset mail; defaults to useSend from the environment. */
+  readonly platformMailer?: PlatformMailer;
   readonly localAuth?: EmbeddedLocalAuthOptions;
   /** Embedded runtime: reported by `/health` so the CLI can verify a discovered port. */
   readonly instanceId?: string;
@@ -1420,6 +1424,8 @@ export const buildServerApi = async (options: BuildServerApiOptions = {}): Promi
   const product = options.product ?? 'lite';
   const app = Fastify({
     logger: options.logger ?? true,
+    // Behind a reverse proxy (Traefik on Coolify) request.ip is the proxy unless the forwarded header is trusted.
+    trustProxy: process.env.BILLME_TRUST_PROXY === '1',
   });
 
   app.decorate('runtimeProfile', runtime);
@@ -1561,6 +1567,12 @@ export const buildServerApi = async (options: BuildServerApiOptions = {}): Promi
   registerCliAccessRoutes(app, runtime === 'embedded' ? [product] : supportedServerProducts);
 
   if (runtime === 'server') {
+    registerWorkspaceRoutes(app, {
+      setupToken: options.setupToken ?? resolveSetupToken(),
+      initialSettingsJson: JSON.stringify(DEFAULT_SETTINGS),
+      mailer: options.platformMailer ?? createPlatformMailer(),
+      webUrls: { lite: process.env.BILLME_PUBLIC_WEB_URL?.trim(), pro: process.env.BILLME_PUBLIC_WEB_PRO_URL?.trim() },
+    });
     typedRoute(app, {
     method: 'POST',
     url: '/api/v1/auth/bootstrap',

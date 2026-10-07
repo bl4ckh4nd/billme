@@ -119,6 +119,13 @@ type PoolLike = ReturnType<typeof createPostgresPool>;
 const sameSecret = (candidate: string, expected: string): boolean =>
   timingSafeEqual(createHash('sha256').update(candidate).digest(), createHash('sha256').update(expected).digest());
 
+/** True when no setup code is configured, or the candidate is that code. */
+export const acceptsSetupToken = (candidate: string | undefined, setupToken: string | undefined): boolean =>
+  !setupToken || Boolean(candidate && sameSecret(candidate, setupToken));
+
+export const resolveSetupToken = (env: NodeJS.ProcessEnv = process.env): string | undefined =>
+  env.BILLME_SETUP_TOKEN?.trim() || undefined;
+
 /**
  * With a setup token configured, only someone who knows it can create the first
  * owner; without one the bootstrap stays open (local development, E2E stacks).
@@ -130,7 +137,7 @@ const requireSetupToken = (store: AuthStore, setupToken: string | undefined): Au
       return { ...(await store.getBootstrapStatus(product)), setupTokenRequired: true };
     },
     async bootstrap(product, input) {
-      if (!input.setupToken || !sameSecret(input.setupToken, setupToken)) {
+      if (!acceptsSetupToken(input.setupToken, setupToken)) {
         throw Object.assign(new Error('Invalid setup token'), { statusCode: 403 });
       }
       return store.bootstrap(product, input);
@@ -142,7 +149,7 @@ const requireSetupToken = (store: AuthStore, setupToken: string | undefined): Au
 export const createAuthStore = ({
   pool,
   env = process.env,
-  setupToken = env.BILLME_SETUP_TOKEN?.trim() || undefined,
+  setupToken = resolveSetupToken(env),
 }: {
   pool?: PoolLike;
   env?: NodeJS.ProcessEnv;

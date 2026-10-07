@@ -37,11 +37,11 @@ export interface ServerAuthStore {
   }>;
 }
 
-const derivePasswordHash = (password: string, salt: string): string => {
+export const derivePasswordHash = (password: string, salt: string): string => {
   return scryptSync(password, salt, 64).toString("hex");
 };
 
-const createSalt = (): string => randomUUID().replaceAll("-", "");
+export const createSalt = (): string => randomUUID().replaceAll("-", "");
 
 const createTenantSeed = (product: ServerProduct) => {
   const suffix = product === "pro" ? "pro" : "lite";

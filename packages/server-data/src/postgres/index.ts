@@ -27,3 +27,4 @@ export * from './recurring.js';
 export * from './liteCash.js';
 export * from './liteVat.js';
 export * from './dunningDelivery.js';
+export * from './workspaceAccess.js';

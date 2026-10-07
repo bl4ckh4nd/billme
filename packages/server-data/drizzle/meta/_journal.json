@@ -260,6 +260,13 @@
       "when": 1790985600004,
       "tag": "0037_server_data_posted_invoice_projections",
       "breakpoints": false
+    },
+    {
+      "idx": 38,
+      "version": "7",
+      "when": 1790985600005,
+      "tag": "0038_server_data_workspace_access",
+      "breakpoints": false
     }
   ]
 }

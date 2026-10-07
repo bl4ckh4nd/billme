@@ -73,6 +73,27 @@ export const cliTokens = pgTable("cli_tokens", {
   expiresAt: text("expires_at"),
 });
 
+export const workspaceInvitations = pgTable("workspace_invitations", {
+  id: text("id"),
+  tenantId: text("tenant_id"),
+  email: text("email"),
+  role: text("role"),
+  tokenHash: text("token_hash"),
+  invitedByUserId: text("invited_by_user_id"),
+  createdAt: text("created_at"),
+  expiresAt: text("expires_at"),
+  acceptedAt: text("accepted_at"),
+  revokedAt: text("revoked_at"),
+});
+
+export const passwordResetTokens = pgTable("password_reset_tokens", {
+  tokenHash: text("token_hash"),
+  userId: text("user_id"),
+  createdAt: text("created_at"),
+  expiresAt: text("expires_at"),
+  usedAt: text("used_at"),
+});
+
 export const userPasswordCredentials = pgTable("user_password_credentials", {
   userId: text("user_id"),
   passwordSalt: text("password_salt"),

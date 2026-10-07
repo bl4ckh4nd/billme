@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { previewCsv, type CsvMapping, type CsvPreviewResult, commitCsv } from '@billme/desktop-services/csvImport';
 import { isReceivableDocumentKind, type Invoice, type TenantScope } from '@billme/server-core';
-import { createPostgresBillingDependencies } from './billing.js';
+import { createPostgresBillingDependencies, creditedAmount, settledInvoiceStatus } from './billing.js';
 import { appendWithClient } from './audit.js';
 import { runInTransaction, type PostgresQueryable } from './connection.js';
 import type { ServerDatabase, ServerDatabaseSession } from '../database.js';
@@ -635,17 +635,14 @@ export const linkServerTransaction = async (
     throw new Error('TRANSACTION_ALREADY_LINKED');
   }
   const cashCents = Math.round(transaction.amount * 100);
-  const outstandingCents = Math.round(invoice.amount * 100) - (invoice.payments ?? []).reduce((sum, payment) => sum + Math.round(payment.amount * 100), 0);
+  // Issued credit notes reduce what is still owed, like payments do.
+  const outstandingCents = Math.round(invoice.amount * 100) - Math.round(await creditedAmount(session, scope, invoiceId) * 100)
+    - (invoice.payments ?? []).reduce((sum, payment) => sum + Math.round(payment.amount * 100), 0);
   const applied = appliedAmountCents ?? Math.min(cashCents, outstandingCents);
   if (!Number.isSafeInteger(applied) || applied <= 0 || applied > cashCents || applied > outstandingCents) throw new Error('PAYMENT_ALLOCATION_INVALID');
   const payment = { id: transactionPaymentId(transaction.id), date: transaction.date, amount: applied / 100, method: 'Überweisung' };
-  const updatedInvoice: Invoice = {
-    ...invoice,
-    payments: [...(invoice.payments ?? []), payment],
-    status: (invoice.payments ?? []).reduce((sum, entry) => sum + Number(entry.amount), 0) + payment.amount >= invoice.amount
-      ? 'paid'
-      : invoice.status,
-  };
+  const withPayment: Invoice = { ...invoice, payments: [...(invoice.payments ?? []), payment] };
+  const updatedInvoice: Invoice = { ...withPayment, status: await settledInvoiceStatus(session, scope, withPayment) };
   const savedInvoice = await dependencies.invoiceRepo.save(scope, updatedInvoice, { replacePayments: true });
   await query(session,
     `UPDATE transactions SET linked_invoice_id = $1 WHERE tenant_id = $2 AND id = $3`,
@@ -674,12 +671,8 @@ export const unlinkServerTransaction = async (
     // would remove a legitimate second payment with the same values.
     const paymentId = transactionPaymentId(transaction.id);
     const payments = (invoice.payments ?? []).filter((payment) => payment.id !== paymentId);
-    const totalPaid = payments.reduce((sum, payment) => sum + Number(payment.amount), 0);
-    const updatedInvoice: Invoice = {
-      ...invoice,
-      payments,
-      status: totalPaid >= invoice.amount ? 'paid' : 'open',
-    };
+    // A cancelled invoice stays cancelled; otherwise payments and credit notes decide.
+    const updatedInvoice: Invoice = { ...invoice, payments, status: await settledInvoiceStatus(session, scope, { ...invoice, payments }) };
     const savedInvoice = await dependencies.invoiceRepo.save(scope, updatedInvoice, { replacePayments: true });
     await audit(session, scope, 'invoice', invoice.id, 'payment_unlinked', reason, invoice, savedInvoice, actor);
   }

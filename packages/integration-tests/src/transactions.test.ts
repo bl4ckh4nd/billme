@@ -34,7 +34,9 @@ import { datevEvidence, draftInvoice, issueInvoice, today } from './fixtures.js'
  * - linking: wrong payment identity, wrong status after partial/over/full
  *   payment, one bank line paying two invoices, two lines over-paying one
  *   invoice under concurrency, drafts/cancelled/credit notes/paid invoices/
- *   expenses/pending lines accepted, no audit, unlink removing the wrong payment
+ *   expenses/pending lines accepted, no audit, unlink removing the wrong payment;
+ *   an issued credit note ignored, so the customer's remaining payment over-pays
+ *   the invoice or never settles it, and unlinking reopens it
  * - suggestions: bad ranking, paid/draft/credit documents suggested, more than
  *   five, partial payments ignored
  * - cash entries: lost updates (expectedUpdatedAt), edits of matched entries,
@@ -742,6 +744,20 @@ for (const product of PRODUCTS) describe(`transactions, banking and cash (${prod
       const restored = await euerItems();
       assert.equal(restored.filter((item) => item.sourceId === tx.id).length, 1, 'unlinked: the bank line is back');
       assert.ok(!restored.some((item) => item.sourceId.startsWith(`${invoice.id}:payment`)));
+    });
+
+    test('a partial credit note counts: the rest settles the invoice, more is not allocated, unlink reopens it', async () => {
+      const invoice = await newInvoice();
+      await h.api.documents.chainIssue({ operation: 'correction', id: randomUUID(), invoiceId: invoice.id, kind: 'credit_note', amount: 38, date: today(), dueDate: today(), reason: 'Teilgutschrift' } as never);
+      const rest = invoice.amount - 38;
+      const full = await bankLine(invoice.amount);
+      const allocated = await h.api.transactions.link({ transactionId: full.id, invoiceId: invoice.id });
+      assert.equal(allocated.invoice!.payments[0]!.amount, rest, 'only what is still owed is allocated');
+      assert.equal(allocated.invoice!.status, 'paid', 'payment plus credit note settle the invoice');
+      const listed = (await txsOf(full.accountId!)).find((entry) => entry.id === full.id)!;
+      assert.equal(listed.unallocatedAmountCents, 3800, 'the over-payment stays visible on the bank line');
+      await h.api.transactions.unlink({ transactionId: full.id });
+      assert.equal((await invoiceOf(invoice.id)).status, 'open');
     });
 
     test('a partial amount leaves the invoice open; the remaining payment closes it', async () => {

@@ -11,7 +11,6 @@ import {
   invoiceSchema,
   offerSchema,
   reserveDocumentNumber,
-  settleInvoiceStatusFromPayments,
   prepareInvoiceForIssue,
   InvoiceIssueError,
   type IssuerSettings,
@@ -105,16 +104,7 @@ export const cancelUnpaidRevisionSource = async (transaction: ServerDatabaseSess
   await repositories.auditLog.append(auth.scope, buildAuditEntry(auth.scope, auth, 'invoice', source.id, 'invoice.cancelled_for_revision', reason, source, cancelled));
 };
 
-/**
- * The status an issued invoice derives from what settled it: its payments and its
- * issued credit notes. Payments alone would reopen an invoice a credit note covered.
- */
-export const settledInvoiceStatus = async (session: ServerDatabaseSession, scope: TenantScope, invoice: Invoice): Promise<Invoice['status']> => {
-  const credits = await session.query<{ amount: string | number }>("SELECT amount FROM invoices WHERE tenant_id=$1 AND source_document_id=$2 AND document_kind='credit_note' AND status<>'draft'", [scope.tenantId, invoice.id]);
-  const credited = credits.rows.reduce((sum, row) => sum + Math.abs(Number(row.amount)), 0);
-  const settledBy = credited ? [...invoice.payments, { id: 'credit-notes', date: invoice.date, amount: credited, method: 'Gutschrift' }] : invoice.payments;
-  return settleInvoiceStatusFromPayments({ ...invoice, payments: settledBy }).status;
-};
+export { settledInvoiceStatus } from '@billme/server-data';
 
 /**
  * An issued Stornorechnung cancels its source, and credit notes that cover what

@@ -2006,3 +2006,22 @@ export const insertAuditRow = async (
     actor: row.actor,
   });
 };
+
+/** What issued credit notes took off an invoice; like payments, they settle it. */
+export const creditedAmount = async (session: PostgresQueryable, scope: TenantScope, invoiceId: string): Promise<number> => {
+  const credits = await session.query<{ amount: string | number }>("SELECT amount FROM invoices WHERE tenant_id=$1 AND source_document_id=$2 AND document_kind='credit_note' AND status<>'draft'", [scope.tenantId, invoiceId]);
+  return credits.rows.reduce((sum, row) => sum + Math.abs(Number(row.amount)), 0);
+};
+
+/**
+ * The status an issued invoice derives from what settled it: its payments and its
+ * issued credit notes. Payments alone would reopen an invoice a credit note covered.
+ */
+export const settledInvoiceStatus = async (session: PostgresQueryable, scope: TenantScope, invoice: Invoice): Promise<Invoice['status']> => {
+  if (!['open', 'overdue', 'paid'].includes(invoice.status)) return invoice.status;
+  const settledCents = Math.round(await creditedAmount(session, scope, invoice.id) * 100)
+    + invoice.payments.reduce((sum, payment) => sum + Math.round(Number(payment.amount) * 100), 0);
+  if (settledCents >= Math.round(invoice.amount * 100)) return 'paid';
+  // Removing the last payment reopens the invoice too.
+  return invoice.status === 'paid' ? 'open' : invoice.status;
+};

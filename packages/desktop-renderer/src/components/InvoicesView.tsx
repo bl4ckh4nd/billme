@@ -27,6 +27,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import { v4 as uuidv4 } from 'uuid';
 import { localIsoDate } from '@billme/desktop-utils';
 import { SkeletonLoader } from '../ui/components/SkeletonLoader';
+import { CHAIN_START_LABELS, ChainSourcePicker, type ChainStartAction } from './invoices/ChainSourcePicker';
 import {
   calculateDaysOverdue,
   calculateInvoiceTaxSnapshot,
@@ -85,6 +86,25 @@ type ChainAction =
   | 'credit_note'
   | 'cancellation_invoice'
   | 'revision';
+
+type KindFilter = 'all' | 'invoice' | 'order_confirmation' | 'delivery_note' | 'settlement' | 'correction';
+
+const KIND_FILTER_LABELS: Record<KindFilter, string> = {
+  all: 'Alle Belegarten',
+  invoice: 'Rechnungen',
+  order_confirmation: 'Auftragsbestätigungen',
+  delivery_note: 'Lieferscheine',
+  settlement: 'Abschlags-, Teil- und Schlussrechnungen',
+  correction: 'Gutschriften und Stornos',
+};
+
+const KIND_FILTERS: Record<Exclude<KindFilter, 'all'>, ReadonlyArray<NonNullable<Invoice['documentKind']>>> = {
+  invoice: ['invoice'],
+  order_confirmation: ['order_confirmation'],
+  delivery_note: ['delivery_note'],
+  settlement: ['advance_invoice', 'partial_invoice', 'final_invoice'],
+  correction: ['credit_note', 'cancellation_invoice'],
+};
 
 type AmountChainAction = Extract<ChainAction, 'advance_invoice' | 'partial_invoice' | 'final_invoice' | 'credit_note' | 'cancellation_invoice'>;
 
@@ -161,7 +181,10 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
 
   // Document-chain amount actions use an in-app dialog because Electron has no
   // native prompt support. The number is reserved only after confirmation.
-  const [chainAmountDialog, setChainAmountDialog] = useState<{ action: AmountChainAction } | null>(null);
+  const [chainAmountDialog, setChainAmountDialog] = useState<{ action: AmountChainAction; source: Invoice | Offer } | null>(null);
+  // "Neu" menu: a follow-up document waits here until its source document is picked.
+  const [chainStart, setChainStart] = useState<ChainStartAction | null>(null);
+  const [kindFilter, setKindFilter] = useState<KindFilter>('all');
   const [chainAmountInput, setChainAmountInput] = useState('');
   const [chainAmountError, setChainAmountError] = useState<string | null>(null);
   const [chainIssuePending, setChainIssuePending] = useState(false);
@@ -253,6 +276,8 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
   }, [initialDocumentType, initialSelectedId, initialStatus]);
 
   const filteredDocuments = currentData.filter(doc => {
+    const matchesKind = documentType !== 'invoice' || kindFilter === 'all' || KIND_FILTERS[kindFilter].includes((doc as Invoice).documentKind ?? 'invoice');
+    if (!matchesKind) return false;
     const matchesFilter = filter === 'all' || doc.status === filter;
     const matchesSearch = doc.client.toLowerCase().includes(searchTerm.toLowerCase()) ||
                           doc.number.toLowerCase().includes(searchTerm.toLowerCase());
@@ -426,8 +451,8 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
     })();
   };
 
-  const persistChainDocument = (action: ChainAction, amount?: number) => {
-    if (!selectedDocument || chainIssuePending) return;
+  const persistChainDocument = (action: ChainAction, amount?: number, source: Invoice | Offer | undefined = selectedDocument) => {
+    if (!source || chainIssuePending) return;
     void (async () => {
       try {
         const today = localIsoDate();
@@ -445,17 +470,17 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
 
         let issuePayload: ChainIssueIntent;
         if (action === 'order_confirmation') {
-          issuePayload = { operation: action, offerId: selectedDocument.id, date: today, reason };
+          issuePayload = { operation: action, offerId: source.id, date: today, reason };
         } else if (action === 'delivery_note') {
-          issuePayload = { operation: action, orderId: selectedDocument.id, date: today, reason };
+          issuePayload = { operation: action, orderId: source.id, date: today, reason };
         } else if (action === 'revision') {
-          issuePayload = { operation: action, invoiceId: selectedDocument.id, date: today, reason };
+          issuePayload = { operation: action, invoiceId: source.id, date: today, reason };
         } else if (action === 'credit_note' || action === 'cancellation_invoice') {
           if (amount === undefined) throw new Error('Ein Korrekturbetrag ist erforderlich.');
-          issuePayload = { operation: 'correction', invoiceId: selectedDocument.id, kind: action, amount, date: today, reason };
+          issuePayload = { operation: 'correction', invoiceId: source.id, kind: action, amount, date: today, reason };
         } else {
           if (amount === undefined) throw new Error('Ein Rechnungsbetrag ist erforderlich.');
-          issuePayload = { operation: 'settlement_invoice', orderId: selectedDocument.id, kind: action, amount, date: today, reason };
+          issuePayload = { operation: 'settlement_invoice', orderId: source.id, kind: action, amount, date: today, reason };
         }
         // The intent string excludes the operation id, so a retry after a lost
         // response reuses the same id while any changed intent starts anew.
@@ -473,7 +498,8 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
             ...current.filter((invoice) => invoice.id !== issued.id),
           ]);
           await queryClient.invalidateQueries({ queryKey: ['invoices'] });
-          if (action === 'order_confirmation') {
+          // Every chain document is an invoice-kind document, also when started from the offers list.
+          if (documentType !== 'invoice') {
             setDocumentType('invoice');
             setSelectedIds(new Set());
           }
@@ -489,19 +515,30 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
     })();
   };
 
-  const handleCreateChainDocument = (action: ChainAction) => {
+  const handleCreateChainDocument = (action: ChainAction, source: Invoice | Offer | undefined = selectedDocument) => {
     if (chainIssuePending) return;
-    if (!selectedDocument) return;
-    if (action === 'order_confirmation' && documentType !== 'offer') return;
-    if (action !== 'order_confirmation' && documentType !== 'invoice') return;
-    if (action === 'delivery_note' && selectedDocument.documentKind !== 'order_confirmation') return;
+    if (!source) return;
+    const sourceIsOffer = !('documentKind' in source) || offers.some((offer) => offer.id === source.id);
+    if (action === 'order_confirmation' && !sourceIsOffer) return;
+    if (action !== 'order_confirmation' && sourceIsOffer) return;
+    if (action === 'delivery_note' && source.documentKind !== 'order_confirmation') return;
     if (isAmountChainAction(action)) {
-      setChainAmountInput(selectedDocument.amount.toFixed(2));
+      setChainAmountInput(source.amount.toFixed(2));
       setChainAmountError(null);
-      setChainAmountDialog({ action });
+      setChainAmountDialog({ action, source });
       return;
     }
-    persistChainDocument(action);
+    persistChainDocument(action, undefined, source);
+  };
+
+  /** Documents a follow-up from the "Neu" menu may start from. */
+  const chainSources = (action: ChainStartAction | null): Array<Invoice | Offer> => {
+    if (action === 'order_confirmation') return offers.filter((offer) => offer.status === 'accepted' || offer.shareDecision === 'accepted');
+    if (action === 'delivery_note' || action === 'advance_invoice') return invoices.filter((invoice) => invoice.documentKind === 'order_confirmation');
+    if (action === 'credit_note' || action === 'cancellation_invoice') {
+      return invoices.filter((invoice) => isBillingDocumentKind(invoice.documentKind) && invoice.status !== 'draft' && invoice.status !== 'cancelled');
+    }
+    return [];
   };
 
   const cancelChainAmount = () => {
@@ -519,9 +556,9 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
       setChainAmountError('Bitte einen gültigen Betrag größer als 0 eingeben.');
       return;
     }
-    const { action } = chainAmountDialog;
+    const { action, source } = chainAmountDialog;
     cancelChainAmount();
-    persistChainDocument(action, amount);
+    persistChainDocument(action, amount, source);
   };
 
   const switchDocumentType = (type: 'invoice' | 'offer') => {
@@ -1783,6 +1820,16 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
       {renderPaymentDeleteModal()}
       {renderBulkDeleteModal()}
       {renderChainAmountDialog()}
+      <ChainSourcePicker
+        action={chainStart}
+        sources={chainSources(chainStart)}
+        onClose={() => setChainStart(null)}
+        onPick={(source) => {
+          const action = chainStart;
+          setChainStart(null);
+          if (action) handleCreateChainDocument(action, source);
+        }}
+      />
       {reminderConfirmation && (
         <ConfirmDialog
           open
@@ -1797,7 +1844,7 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
 
       <PageHeader
         title="Rechnungen & Angebote"
-        description={`${filteredDocuments.length} von ${currentData.length} ${documentType === 'invoice' ? 'Rechnungen' : 'Angeboten'}`}
+        description={`${filteredDocuments.length} von ${currentData.length} ${documentType === 'invoice' ? 'Belegen' : 'Angeboten'}`}
         actions={
           <>
             {filter === 'overdue' && overdueInvoices.length > 0 && (
@@ -1819,6 +1866,21 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
               <RefreshCw size={16} aria-hidden="true" />
               Abos
             </Button>
+            <Menu
+              aria-label="Folgebeleg anlegen"
+              align="end"
+              trigger={(props) => (
+                <Button variant="secondary" {...props} title="Auftragsbestätigung, Lieferschein, Abschlag, Gutschrift oder Storno zu einem bestehenden Beleg">
+                  <FileText size={16} aria-hidden="true" />
+                  Folgebeleg
+                </Button>
+              )}
+              items={(['order_confirmation', 'delivery_note', 'advance_invoice', 'credit_note', 'cancellation_invoice'] as const).map((action) => ({
+                id: `new-${action}`,
+                label: `${CHAIN_START_LABELS[action]} …`,
+                onSelect: () => setChainStart(action),
+              }))}
+            />
             <Button onClick={() => onCreateInvoice(documentType)}>
               <Plus size={16} aria-hidden="true" />
               {documentType === 'invoice' ? 'Neue Rechnung' : 'Neues Angebot'}
@@ -1833,6 +1895,13 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
               onChange={switchDocumentType}
               options={[{ value: 'invoice', label: 'Rechnungen' }, { value: 'offer', label: 'Angebote' }]}
             />
+            {documentType === 'invoice' ? (
+              <Select aria-label="Belegart" value={kindFilter} onChange={(event) => setKindFilter(event.target.value as KindFilter)}>
+                {(Object.keys(KIND_FILTER_LABELS) as KindFilter[]).map((key) => (
+                  <option key={key} value={key}>{KIND_FILTER_LABELS[key]}</option>
+                ))}
+              </Select>
+            ) : null}
             <SegmentedControl
               aria-label="Status"
               value={filter}

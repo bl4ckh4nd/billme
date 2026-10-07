@@ -6,7 +6,7 @@ import { createLiteWebBillmeApi } from './api/createLiteWebApi';
 const mount = (element: HTMLElement, { apiUrl, token, onLogout, signal, workspaces }: BrowserMountContext) => {
   const api = createLiteWebBillmeApi({ baseUrl: apiUrl, token, onAuthFailure: onLogout, onRequestClose: onLogout });
   return mountDesktopRendererApp(element, { api, signal, runtime: {
-    shell: 'web', product: 'lite', navigation: ['dashboard', 'clients', 'documents', 'finance'],
+    shell: 'web', product: 'lite',
     onLogout, validateVatId: api.validateVatId, workspaces,
   } });
 };

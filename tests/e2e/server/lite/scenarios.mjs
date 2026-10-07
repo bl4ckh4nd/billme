@@ -419,3 +419,72 @@ export const runLiteWorkspacesScenario = async (page, scenarioKey = 'workspaces'
   await expect(page.getByRole('button', { name: new RegExp(`^Erste ${ns}`) })).toBeVisible();
   await shot(page, '06-switched-back');
 };
+
+/**
+ * Lite web navigation and the document kinds beyond invoice and offer: projects
+ * and services are reachable, a follow-up document is started from the list's
+ * "Folgebeleg" menu with its source picked there, and the kind filter narrows the
+ * list to that kind.
+ */
+export const runLiteDocumentKindsScenario = async (page, scenarioKey = 'document-kinds') => {
+  const runtime = await getLiteRuntime();
+  const identity = createLiteIdentity(scenarioKey);
+  const { session, seed } = await provisionLiteSession({ apiBaseUrl: runtime.state.urls.api, databaseUrl: runtime.databaseUrl, ...identity });
+  expect(seed).not.toBeNull();
+  await applyLiteSession(page, runtime.state, session, '/');
+
+  for (const [name, heading] of [['Projekte', 'Projekte'], ['Leistungen', 'Leistungen']]) {
+    await page.getByRole('navigation', { name: 'Hauptnavigation' }).getByRole('button', { name, exact: true }).click();
+    await expect(page.getByRole('heading', { name: heading, level: 1 })).toBeVisible();
+  }
+  await shot(page, '01-services');
+
+  const offer = await page.evaluate(async ({ clientId }) => {
+    const api = globalThis.billmeApi;
+    const draft = await api.documents.createFromClient({ kind: 'offer', clientId });
+    const saved = await api.offers.upsert({ offer: { ...draft, amount: 300, items: [{ kind: 'item', description: 'Montage', quantity: 1, price: 300, total: 300 }] }, reason: 'create' });
+    return api.offers.upsert({ offer: { ...saved, status: 'open', shareDecision: 'accepted', acceptedAt: new Date().toISOString() }, reason: 'Angebot angenommen' });
+  }, { clientId: seed.clients[0].id });
+
+  await page.goto(liteAppUrl(runtime.state, '/documents'), { waitUntil: 'networkidle' });
+  // A hash route does not reload the app; reload so the list sees the offer created through the API.
+  await page.reload({ waitUntil: 'networkidle' });
+  const startFollowUp = async (label, sourceNumber) => {
+    await page.getByRole('button', { name: 'Folgebeleg' }).click();
+    await page.getByRole('menuitem', { name: `${label} …` }).click();
+    const dialog = page.getByRole('dialog', { name: `${label} erstellen` });
+    await expect(dialog).toBeVisible();
+    await dialog.getByRole('button', { name: new RegExp(sourceNumber) }).click();
+  };
+
+  await startFollowUp('Auftragsbestätigung', offer.number);
+  await expect(page.getByText(/^Auftragsbestätigung .* erstellt\.$/)).toBeVisible();
+  const order = page.getByRole('heading', { level: 1 });
+  const orderNumber = (await order.innerText()).trim();
+  await page.getByRole('button', { name: 'Zurück zur Liste' }).click();
+
+  await startFollowUp('Lieferschein', orderNumber);
+  await expect(page.getByText(/^Lieferschein .* erstellt\.$/)).toBeVisible();
+  const deliveryNumber = (await page.getByRole('heading', { level: 1 }).innerText()).trim();
+  await shot(page, '02-delivery-note');
+  await page.getByRole('button', { name: 'Zurück zur Liste' }).click();
+
+  await page.getByLabel('Belegart').selectOption('delivery_note');
+  const rows = page.getByRole('table').getByRole('row');
+  await expect(rows.filter({ hasText: deliveryNumber })).toHaveCount(1);
+  await expect(rows.filter({ hasText: orderNumber })).toHaveCount(0);
+  await page.getByLabel('Belegart').selectOption('order_confirmation');
+  await expect(rows.filter({ hasText: orderNumber })).toHaveCount(1);
+  await expect(rows.filter({ hasText: deliveryNumber })).toHaveCount(0);
+  await shot(page, '03-kind-filter');
+
+  // A credit note is offered only issued invoices as its source, never the order or delivery note.
+  await page.getByRole('button', { name: 'Folgebeleg' }).click();
+  await page.getByRole('menuitem', { name: 'Gutschrift …' }).click();
+  const creditSources = page.getByRole('dialog', { name: 'Gutschrift erstellen' }).getByRole('list', { name: 'Mögliche Ausgangsbelege' });
+  await expect(creditSources.getByRole('button').first()).toContainText('Rechnung');
+  await expect(creditSources.getByRole('button', { name: new RegExp(orderNumber) })).toHaveCount(0);
+  await expect(creditSources.getByRole('button', { name: new RegExp(deliveryNumber) })).toHaveCount(0);
+  await shot(page, '04-credit-sources');
+  await page.getByRole('dialog', { name: 'Gutschrift erstellen' }).getByRole('button', { name: 'Abbrechen' }).click();
+};

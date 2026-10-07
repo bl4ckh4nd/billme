@@ -2,7 +2,7 @@ import React from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useNavigate } from '@tanstack/react-router';
 import { Briefcase, FileText, Package, Search, Users, type LucideIcon } from 'lucide-react';
-import { Kbd, Portal, cn } from '@billme/ui';
+import { Kbd, Portal } from '@billme/ui';
 import { ipc } from '../../runtime-api';
 
 type SearchResult = {
@@ -160,12 +160,11 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({ open, onClose, c
         data-active={idx === active}
         onClick={() => run(item)}
         onMouseMove={() => setHighlight(idx)}
-        className={cn(
-          'flex w-full items-start gap-3 rounded-control px-3 py-2 text-left text-sm text-foreground',
-          idx === active ? 'bg-surface-sunken' : 'hover:bg-surface-sunken',
-        )}
+        className={`flex w-full items-start gap-2.5 rounded-control px-2.25 py-2 text-left text-control text-foreground ${
+          idx === active ? 'bg-surface-sunken' : 'hover:bg-surface-sunken'
+        }`}
       >
-        <Icon size={16} className="mt-0.5 shrink-0 text-muted" aria-hidden="true" />
+        <Icon size={16} className="mt-px shrink-0 text-muted" aria-hidden="true" />
         {item.kind === 'command' ? (
           <span className="truncate">{item.command.title}</span>
         ) : (
@@ -184,13 +183,13 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({ open, onClose, c
   return (
     <Portal>
       <div
-        className="fixed inset-0 z-[var(--z-overlay)] flex items-start justify-center overflow-y-auto bg-surface-inverse/45 px-4 pb-4 pt-[10vh]"
+        className="fixed inset-0 z-[var(--z-overlay)] flex items-start justify-center overflow-y-auto bg-ink-950/45 px-4 pb-4 pt-[8vh]"
         onMouseDown={(event) => {
           if (event.target === event.currentTarget) onClose();
         }}
       >
-        <div role="dialog" aria-modal="true" aria-label="Suche und Befehle" className="w-full max-w-xl rounded-modal bg-surface shadow-2xl">
-          <div className="flex items-center gap-2.5 border-b border-border px-4 py-3">
+        <div role="dialog" aria-modal="true" aria-label="Suche und Befehle" className="w-full max-w-140 rounded-modal border border-border bg-surface shadow-lift">
+          <div className="flex items-center gap-3 px-4.5 pt-4">
             <Search size={16} className="shrink-0 text-muted" aria-hidden="true" />
             <input
               ref={inputRef}
@@ -217,25 +216,25 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({ open, onClose, c
               role="combobox"
               aria-expanded="true"
               aria-controls="command-palette-list"
-              className="h-8 min-w-0 flex-1 bg-transparent text-sm text-foreground placeholder:text-muted focus-visible:outline-none"
+              className="h-6 min-w-0 flex-1 bg-transparent text-sm text-foreground placeholder:text-muted focus-visible:outline-none"
             />
             <Kbd>Esc</Kbd>
           </div>
-          <div ref={listRef} id="command-palette-list" role="listbox" aria-label="Treffer" className="max-h-[50vh] overflow-y-auto p-2">
+          <div ref={listRef} id="command-palette-list" role="listbox" aria-label="Treffer" className="scrollbar-hide max-h-[44vh] overflow-y-auto px-2.25 pb-3 pt-2.5">
             {matchingCommands.length > 0 && (
               <div role="group" aria-label="Befehle">
-                <p className="px-3 pb-1 pt-1 text-caption font-medium text-muted">Befehle</p>
+                <p className="px-2.25 pb-1 pt-1 text-caption font-medium text-muted">Befehle</p>
                 {matchingCommands.map((command, idx) => row({ kind: 'command', key: command.key, command }, idx))}
               </div>
             )}
-            {query.length === 1 && <p className="px-3 py-3 text-caption text-muted">Ab 2 Zeichen wird auch in Rechnungen, Kunden und Artikeln gesucht.</p>}
+            {query.length === 1 && <p className="px-2.25 py-3 text-caption text-muted">Ab 2 Zeichen wird auch in Rechnungen, Kunden und Artikeln gesucht.</p>}
             {query.length >= 2 && (
               <div role="group" aria-label="Treffer" className={matchingCommands.length > 0 ? 'mt-1 border-t border-border-subtle pt-1' : undefined}>
-                <p className="px-3 pb-1 pt-2 text-caption font-medium text-muted">Treffer</p>
+                <p className="px-2.25 pb-1 pt-2 text-caption font-medium text-muted">Treffer</p>
                 {loading ? (
-                  <p className="px-3 py-3 text-caption text-muted">Suche läuft …</p>
+                  <p className="px-2.25 py-3 text-caption text-muted">Suche läuft …</p>
                 ) : dataResults.length === 0 ? (
-                  <p className="px-3 py-3 text-caption text-muted">Keine Treffer in Rechnungen, Kunden und Artikeln.</p>
+                  <p className="px-2.25 py-3 text-caption text-muted">Keine Treffer in Rechnungen, Kunden und Artikeln.</p>
                 ) : (
                   dataResults.map((result, i) => row({ kind: 'result', key: result.key, result }, matchingCommands.length + i))
                 )}

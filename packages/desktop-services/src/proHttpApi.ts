@@ -292,6 +292,11 @@ const reportSnapshotParser: Parser<z.infer<typeof reportSnapshotRecordSchema>> =
 };
 
 const parseServerLegacyGuvReport = (input: unknown): z.infer<typeof guvClientReportSchema> => {
+  const canonical = guvClientReportSchema.safeParse(input);
+  if (canonical.success) {
+    const snapshot = isRecord(input) ? reportSnapshotSchema.safeParse(input.snapshot) : undefined;
+    return snapshot?.success ? { ...canonical.data, from: snapshot.data.from, to: snapshot.data.to } : canonical.data;
+  }
   const legacy = ipcRoutes['pro:getGuvReport'].result.parse(input);
   const unmappedAccounts = legacy.unmappedAccounts?.map((item) => item.accountNumber) ?? [];
   return guvClientReportSchema.parse({
@@ -314,6 +319,11 @@ const parseServerLegacyGuvReport = (input: unknown): z.infer<typeof guvClientRep
       blocking: legacy.blocking ?? false,
     },
   });
+};
+
+const parseServerEurFact = (input: unknown) => {
+  const { actor, ...fact } = z.object({ actor: z.object({ id: z.string(), displayName: z.string().optional() }) }).passthrough().parse(input);
+  return { ...fact, actorId: actor.id, actorName: actor.displayName };
 };
 
 const buildUrl = (
@@ -706,16 +716,16 @@ export const createProWebClient = (config: ProWebClientConfig) => {
       return requestJson({ method: 'PUT', body: input, parser: (payload) => payload }, '/api/v1/pro/accounting/reports/eur/classifications');
     },
     saveEurCashFact(input: { sourceType: 'transaction' | 'invoice'; sourceId: string; taxYear: number; kind: string; amountNet: number; flowType?: 'income' | 'expense'; eurLineId?: string; splits?: unknown[]; reason: string; idempotencyKey?: string }) {
-      return requestJson({ method: 'POST', body: input, parser: (payload) => payload }, '/api/v1/pro/accounting/reports/eur/facts/cash');
+      return requestJson({ method: 'POST', body: input, parser: parseServerEurFact }, '/api/v1/pro/accounting/reports/eur/facts/cash');
     },
     listEurCashFacts(taxYear: number) {
-      return requestJson({ parser: parseArray((input) => input), query: { taxYear } }, '/api/v1/pro/accounting/reports/eur/facts/cash');
+      return requestJson({ parser: parseArray(parseServerEurFact), query: { taxYear } }, '/api/v1/pro/accounting/reports/eur/facts/cash');
     },
     saveEurAnnexFact(input: { taxYear: number; annex: string; lineId: string; amount: number; sourceId?: string; date?: string; reason: string; idempotencyKey?: string }) {
-      return requestJson({ method: 'POST', body: input, parser: (payload) => payload }, '/api/v1/pro/accounting/reports/eur/facts/annex');
+      return requestJson({ method: 'POST', body: input, parser: parseServerEurFact }, '/api/v1/pro/accounting/reports/eur/facts/annex');
     },
     listEurAnnexFacts(taxYear: number, annex?: string) {
-      return requestJson({ parser: parseArray((input) => input), query: { taxYear, annex } }, '/api/v1/pro/accounting/reports/eur/facts/annex');
+      return requestJson({ parser: parseArray(parseServerEurFact), query: { taxYear, annex } }, '/api/v1/pro/accounting/reports/eur/facts/annex');
     },
     listAccountingSourceRuns() {
       return requestJson({ parser: parseArray(accountingSourceRunParser) }, '/api/v1/pro/accounting/source-runs');

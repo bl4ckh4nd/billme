@@ -1,6 +1,6 @@
 import { useId, useRef, useState } from 'react';
-import { X, Building2 } from 'lucide-react';
-import { Modal } from '@billme/ui';
+import { X } from 'lucide-react';
+import { Button, IconButton, Input, Modal } from '@billme/ui';
 import { ipc } from '../ipc/client';
 import { useQueryClient } from '@tanstack/react-query';
 import { v4 as uuidv4 } from 'uuid';
@@ -66,109 +66,74 @@ export const BankAccountModal = ({ isOpen, onClose }: BankAccountModalProps) => 
       onClose={onClose}
       titleId={titleId}
       descriptionId={descriptionId}
-      className="max-h-[90vh] flex flex-col"
+      className="flex max-h-[84vh] flex-col"
     >
-      {/* Header */}
-      <div className="flex items-center justify-between p-6 border-b border-border">
-        <div className="flex items-center gap-3">
-          <div className="w-10 h-10 rounded-md bg-dark-base text-accent flex items-center justify-center">
-            <Building2 size={20} aria-hidden="true" />
-          </div>
-          <div>
-            <h2 id={titleId} className="text-xl font-semibold text-foreground">Neues Bankkonto</h2>
-            <p id={descriptionId} className="text-sm text-muted mt-0.5">
-              Fügen Sie ein neues Konto hinzu
-            </p>
-          </div>
+      <div className="flex items-start gap-3 px-4.5 pt-4 pb-2.5">
+        <div className="min-w-0 flex-1">
+          <h2 id={titleId} className="text-title text-foreground">Neues Bankkonto</h2>
+          <p id={descriptionId} className="text-caption text-muted">
+            Fügen Sie ein neues Konto hinzu
+          </p>
         </div>
-        <button
-          type="button"
-          aria-label="Dialog schließen"
-          onClick={onClose}
-          className="p-2 rounded-lg text-muted hover:bg-surface-muted transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
-        >
-          <X size={20} aria-hidden="true" />
-        </button>
+        <IconButton aria-label="Dialog schließen" tooltip={false} size="sm" onClick={onClose}>
+          <X size={16} aria-hidden="true" />
+        </IconButton>
       </div>
 
-      {/* Form */}
-      <div className="p-6 space-y-4 overflow-y-auto">
+      <div className="flex flex-col gap-3 overflow-y-auto px-4.5 pt-1 pb-4">
         {error && (
-          <div role="alert" className="bg-error-bg border border-error-border rounded-xl p-3 text-sm text-error-text">
+          <div role="alert" className="rounded-control border border-error-border bg-error-bg px-3 py-2.5 text-control text-error-text">
             {error}
           </div>
         )}
 
-        <div>
-          <label htmlFor="bank-account-name" className="block text-sm font-medium text-foreground mb-2">
-            Kontoname *
-          </label>
-          <input
-            id="bank-account-name"
-            ref={nameInputRef}
-            type="text"
-            value={formData.name}
-            aria-invalid={showNameError && !formData.name.trim() ? true : undefined}
-            aria-describedby={showNameError && !formData.name.trim() ? 'bank-account-name-error' : undefined}
-            onChange={(e) => {
-              setFormData({ ...formData, name: e.target.value });
-              setError(null);
-              setShowNameError(false);
-            }}
-            placeholder="z.B. Geschäftskonto"
-            className={`w-full bg-surface-muted border rounded-xl p-3 text-sm font-medium focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring ${showNameError && !formData.name.trim() ? 'border-error' : 'border-control-border'}`}
-          />
-          {showNameError && !formData.name.trim() && (
-            <p id="bank-account-name-error" className="mt-1 text-xs text-error-text">Kontoname ist erforderlich.</p>
-          )}
-        </div>
+        <Input
+          id="bank-account-name"
+          ref={nameInputRef}
+          label="Kontoname"
+          required
+          type="text"
+          value={formData.name}
+          error={showNameError && !formData.name.trim() ? 'Kontoname ist erforderlich.' : undefined}
+          onChange={(e) => {
+            setFormData({ ...formData, name: e.target.value });
+            setError(null);
+            setShowNameError(false);
+          }}
+          placeholder="z.B. Geschäftskonto"
+          fullWidth
+        />
 
-        <div>
-          <label htmlFor="bank-account-iban" className="block text-sm font-medium text-foreground mb-2">
-            IBAN (optional)
-          </label>
-          <input
-            id="bank-account-iban"
-            type="text"
-            value={formData.iban}
-            onChange={(e) => setFormData({ ...formData, iban: e.target.value })}
-            placeholder="DE89 3704 0044 0532 0130 00"
-            className="px-3 h-10 hover:border-control-border-hover w-full bg-surface border border-control-border rounded-control text-sm font-mono focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
-          />
-        </div>
+        <Input
+          id="bank-account-iban"
+          label="IBAN (optional)"
+          type="text"
+          value={formData.iban}
+          onChange={(e) => setFormData({ ...formData, iban: e.target.value })}
+          placeholder="DE89 3704 0044 0532 0130 00"
+          className="font-mono"
+          fullWidth
+        />
 
-        <div>
-          <label htmlFor="bank-account-balance" className="block text-sm font-medium text-foreground mb-2">
-            Anfangssaldo
-          </label>
-          <input
-            id="bank-account-balance"
-            type="number"
-            step="0.01"
-            value={formData.balance}
-            onChange={(e) => setFormData({ ...formData, balance: e.target.value })}
-            className="px-3 h-10 hover:border-control-border-hover w-full bg-surface border border-control-border rounded-control text-sm tabular-nums focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
-          />
-        </div>
+        <Input
+          id="bank-account-balance"
+          label="Anfangssaldo"
+          type="number"
+          step="0.01"
+          value={formData.balance}
+          onChange={(e) => setFormData({ ...formData, balance: e.target.value })}
+          className="tabular-nums"
+          fullWidth
+        />
       </div>
 
-      {/* Footer */}
-      <div className="p-6 border-t border-border flex justify-end gap-3">
-        <button
-          type="button"
-          onClick={onClose}
-          className="px-5 py-2.5 rounded-xl font-semibold text-muted hover:bg-surface-muted transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
-        >
+      <div className="flex flex-wrap justify-end gap-2 border-t border-border px-4.5 py-3">
+        <Button variant="ghost" onClick={onClose}>
           Abbrechen
-        </button>
-        <button
-          type="button"
-          onClick={handleSave}
-          disabled={isSaving}
-          className="px-5 py-2.5 rounded-xl font-semibold bg-accent text-accent-foreground hover:bg-accent-hover disabled:bg-disabled-surface disabled:text-disabled-foreground disabled:cursor-not-allowed transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
-        >
+        </Button>
+        <Button onClick={handleSave} disabled={isSaving}>
           {isSaving ? 'Speichern...' : 'Speichern'}
-        </button>
+        </Button>
       </div>
     </Modal>
   );

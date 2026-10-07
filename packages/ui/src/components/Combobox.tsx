@@ -192,7 +192,7 @@ function ComboboxInner<T extends ComboboxItem>(
   };
 
   const optionRows = filtered.length === 0 ? (
-    <div className="px-3 py-2 text-sm text-muted">Keine Treffer</div>
+    <div className="px-2.25 py-2 text-control text-muted">Keine Treffer</div>
   ) : filtered.map((item, index) => {
     const selected = selectedId === undefined ? getLabel(item) === value : item.id === selectedId;
     const richRow = showAvatar || selectedId !== undefined;
@@ -205,9 +205,9 @@ function ComboboxInner<T extends ComboboxItem>(
         aria-label={getLabel(item)}
         className={cn(
           richRow
-            ? 'flex cursor-pointer items-start gap-2 border-b border-border-subtle px-3 py-2 last:border-0'
-            : 'flex min-w-0 cursor-pointer flex-col border-b border-border-subtle px-3 py-2 last:border-0',
-          index === activeIndex ? 'bg-surface-muted' : null,
+            ? 'flex cursor-pointer items-start gap-2 rounded-sm px-2.25 py-2'
+            : 'flex min-w-0 cursor-pointer flex-col rounded-sm px-2.25 py-2',
+          index === activeIndex ? 'bg-surface-sunken' : selected ? 'bg-accent-50' : null,
         )}
         onMouseDown={(event) => {
           event.preventDefault();
@@ -217,19 +217,19 @@ function ComboboxInner<T extends ComboboxItem>(
       >
         {richRow ? (
           <>
-            {showAvatar ? <span aria-hidden="true" className="flex size-6 shrink-0 items-center justify-center rounded-full bg-surface-muted text-xs font-semibold text-foreground">{getLabel(item).trim().charAt(0).toUpperCase()}</span> : null}
+            {showAvatar ? <span aria-hidden="true" className="flex size-6 shrink-0 items-center justify-center rounded-full bg-surface-sunken text-micro font-semibold text-foreground-secondary">{getLabel(item).trim().charAt(0).toUpperCase()}</span> : null}
             <div className="min-w-0 flex-1">
-              <div className="truncate whitespace-nowrap text-sm font-semibold text-foreground" title={getLabel(item)}>{getLabel(item)}</div>
+              <div className="truncate whitespace-nowrap text-control font-medium text-foreground" title={getLabel(item)}>{getLabel(item)}</div>
               {getSublabel?.(item) ? (
-                <div className="mt-0.5 truncate whitespace-nowrap text-xs text-muted">{getSublabel(item)}</div>
+                <div className="mt-0.5 truncate whitespace-nowrap text-caption text-muted">{getSublabel(item)}</div>
               ) : null}
             </div>
             {selectedId !== undefined && selected ? <Check className="mt-0.5 shrink-0 text-foreground" size={14} aria-hidden="true" /> : null}
           </>
         ) : (
           <>
-            <div className="min-w-0 max-w-full truncate whitespace-nowrap text-sm font-semibold text-foreground" title={getLabel(item)}>{getLabel(item)}</div>
-            {getSublabel?.(item) ? <div className="mt-0.5 max-w-full truncate whitespace-nowrap text-xs text-muted">{getSublabel(item)}</div> : null}
+            <div className="min-w-0 max-w-full truncate whitespace-nowrap text-control font-medium text-foreground" title={getLabel(item)}>{getLabel(item)}</div>
+            {getSublabel?.(item) ? <div className="mt-0.5 max-w-full truncate whitespace-nowrap text-caption text-muted">{getSublabel(item)}</div> : null}
           </>
         )}
       </div>
@@ -318,8 +318,8 @@ function ComboboxInner<T extends ComboboxItem>(
             }
           }}
           className={cn(
-            'w-full rounded-lg border border-control-border bg-surface-muted py-2 pr-2 text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring disabled:cursor-not-allowed disabled:border-disabled-foreground disabled:bg-disabled-surface disabled:text-disabled-foreground disabled:placeholder:text-disabled-foreground disabled:opacity-100',
-            leadingIcon || showSearchIcon ? null : 'pl-2',
+            'w-full rounded-control border border-control-border bg-surface py-1.75 pr-2.25 text-control focus-visible:outline-2 focus-visible:outline-offset-0 focus-visible:outline-focus-ring disabled:cursor-not-allowed disabled:border-disabled-foreground disabled:bg-disabled-surface disabled:text-disabled-foreground disabled:placeholder:text-disabled-foreground disabled:opacity-100',
+            leadingIcon || showSearchIcon ? null : 'pl-2.25',
             inputClassName,
             leadingIcon ? 'pl-6' : showSearchIcon ? 'pl-7' : null,
             showChevron ? 'pr-6' : null,
@@ -333,7 +333,7 @@ function ComboboxInner<T extends ComboboxItem>(
             ref={popupRef}
             onPointerDown={() => { popupPointerDownRef.current = true; }}
             className={cn(
-              'ui-enter-popover fixed z-[var(--z-dropdown)] overflow-hidden rounded-card bg-surface shadow-md',
+              'ui-enter-popover fixed z-[var(--z-dropdown)] overflow-hidden rounded-card border border-border bg-surface shadow-lift',
               popupClosing && popoverExitClass,
             )}
             style={popupPosition
@@ -345,13 +345,13 @@ function ComboboxInner<T extends ComboboxItem>(
               } as React.CSSProperties
               : { visibility: 'hidden' }}
           >
-            <div id={listboxId} role="listbox" className="max-h-56 overflow-auto">
+            <div id={listboxId} role="listbox" className="max-h-56 overflow-auto p-1.5">
               {optionRows}
             </div>
             {footer ? (
               <button
                 type="button"
-                className="flex w-full items-center gap-2 border-t border-border px-3 py-2 text-left text-sm font-semibold text-foreground hover:bg-surface-muted focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                className="flex w-full items-center gap-2 border-t border-border px-3.75 py-2.5 text-left text-control font-medium text-foreground hover:bg-surface-sunken focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-focus-ring"
                 onMouseDown={(event) => {
                   event.preventDefault();
                   selectFooter();

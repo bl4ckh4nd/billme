@@ -45,7 +45,8 @@ export type DomainAccountingSourceFact = Omit<AccountingSourceFact, 'lines'> & {
 
 export type AccountingSourceRun = {
   id: string;
-  sourceType: AccountingSourceType;
+  // Settlement commands keep their command name as source type.
+  sourceType: AccountingSourceType | 'correction' | 'skonto' | 'bad_debt' | 'advance_settlement';
   sourceId: string;
   sourceRevision: string;
   status: 'posted' | 'rejected' | 'noop' | 'prepared';

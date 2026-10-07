@@ -11,7 +11,7 @@ export interface TableProps extends React.TableHTMLAttributes<HTMLTableElement> 
   density?: TableDensity;
   /** Classes for the scroll container (height limits, margins). */
   containerClassName?: string;
-  /** Drop the raised container when the table already sits inside a card. */
+  /** Drop the bordered container when the table already sits inside a card. */
   bare?: boolean;
 }
 
@@ -23,8 +23,8 @@ export interface TableProps extends React.TableHTMLAttributes<HTMLTableElement> 
 export const Table = React.forwardRef<HTMLTableElement, TableProps>(
   ({ density = 'regular', containerClassName, bare = false, className, children, ...props }, ref) => (
     <DensityContext.Provider value={density}>
-      <div className={cn('relative w-full overflow-auto', !bare && 'rounded-card bg-surface shadow-xs', containerClassName)}>
-        <table ref={ref} className={cn('w-full border-separate border-spacing-0 text-sm', className)} {...props}>
+      <div className={cn('relative w-full overflow-auto', !bare && 'rounded-card border border-border bg-surface', containerClassName)}>
+        <table ref={ref} className={cn('w-full border-separate border-spacing-0 text-control leading-normal', className)} {...props}>
           {children}
         </table>
       </div>
@@ -67,7 +67,7 @@ export const TableRow = React.forwardRef<HTMLTableRowElement, TableRowProps>(
       className={cn(
         'group group/row transition-colors motion-reduce:transition-none',
         interactive && 'cursor-pointer hover:bg-surface-muted focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-focus-ring',
-        selected && 'bg-accent-50 hover:bg-accent-50 [&>td:first-child]:shadow-[inset_2px_0_0_var(--color-ink-950)]',
+        selected && 'bg-accent-50 hover:bg-accent-50',
         className,
       )}
       {...props}
@@ -92,10 +92,9 @@ export const TableHead: React.FC<TableHeadProps> = ({ numeric = false, sort, onS
       scope="col"
       aria-sort={sortable ? (sort === 'asc' ? 'ascending' : sort === 'desc' ? 'descending' : 'none') : undefined}
       className={cn(
-        'whitespace-nowrap border-b border-border bg-surface-muted px-3 text-caption font-medium uppercase tracking-[0.04em] text-muted',
-        density === 'compact' ? 'h-8' : 'h-9',
+        'whitespace-nowrap border-b border-border bg-surface-muted px-3 text-eyebrow uppercase tracking-[0.03em] text-muted *:align-top',
+        density === 'compact' ? 'py-1.5' : 'py-2',
         numeric ? 'text-right' : 'text-left',
-        'first:pl-4 last:pr-4',
         className,
       )}
       {...props}
@@ -129,11 +128,10 @@ export const TableCell: React.FC<TableCellProps> = ({ numeric = false, muted = f
   return (
     <td
       className={cn(
-        'border-b border-border-subtle px-3 align-middle group-last/row:border-b-0',
-        density === 'compact' ? 'h-9' : 'h-11',
+        'border-b border-border px-3 align-middle group-last/row:border-b-0',
+        density === 'compact' ? 'py-1.5' : 'py-2.25',
         numeric && 'text-right tabular-nums',
         muted ? 'text-muted' : 'text-foreground',
-        'first:pl-4 last:pr-4',
         className,
       )}
       {...props}

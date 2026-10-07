@@ -1,6 +1,6 @@
 import React from 'react';
 import { X, Plus, Trash2 } from 'lucide-react';
-import { Button, EmptyState, ErrorState, Modal } from '@billme/ui';
+import { Badge, Button, EmptyState, ErrorState, IconButton, Input, Modal, Select } from '@billme/ui';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { ipc } from '../ipc/client';
 
@@ -142,113 +142,77 @@ export const ProAccountRulesModal: React.FC<ProAccountRulesModalProps> = ({
       onClose={onClose}
       titleId={titleId}
       descriptionId={descriptionId}
-      className="flex max-h-[92vh] max-w-3xl flex-col"
+      className="flex max-h-[84vh] max-w-3xl flex-col"
     >
-      <div className="flex items-center justify-between border-b border-border p-6">
-        <div>
-          <h2 id={titleId} className="text-lg font-semibold text-foreground">Kontierungsvorschlag-Regeln</h2>
-          <p id={descriptionId} className="text-xs text-muted">Regeln für {chartFramework}</p>
+      <div className="flex items-start gap-3 px-4.5 pb-2.5 pt-4">
+        <div className="min-w-0 flex-1">
+          <h2 id={titleId} className="text-title text-foreground">Kontierungsvorschlag-Regeln</h2>
+          <p id={descriptionId} className="text-caption text-muted">Regeln für {chartFramework}</p>
         </div>
-        <button
-          type="button"
-          aria-label="Dialog schließen"
-          onClick={onClose}
-          className="p-2 rounded-lg text-muted hover:bg-surface-muted transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
-        >
-          <X size={20} aria-hidden="true" />
-        </button>
+        <IconButton aria-label="Dialog schließen" tooltip={false} onClick={onClose}>
+          <X size={16} aria-hidden="true" />
+        </IconButton>
       </div>
 
-      <div className="flex-1 overflow-auto p-6">
+      <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-auto px-4.5 pb-4 pt-1">
         {isAdding ? (
-          <div className="rounded-xl border border-border bg-surface-muted p-4 mb-4">
+          <div className="rounded-card border border-border bg-surface-muted p-3.5">
             <h3 className="mb-3 text-sm font-semibold text-foreground">{editId ? 'Regel bearbeiten' : 'Neue Regel'}</h3>
-            <div className="grid grid-cols-2 gap-3 mb-3">
-              <div>
-                <label htmlFor="rule-field" className="block text-xs font-semibold text-foreground mb-1">Feld</label>
-                <select
-                  id="rule-field"
-                  value={field}
-                  onChange={(e) => setField(e.target.value as RuleField)}
-                  className="px-2.5 h-8 hover:border-control-border-hover w-full rounded-control border border-control-border bg-surface text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
-                >
-                  {(Object.entries(FIELD_LABELS) as [RuleField, string][]).map(([k, v]) => (
-                    <option key={k} value={k}>{v}</option>
-                  ))}
-                </select>
-              </div>
-              <div>
-                <label htmlFor="rule-operator" className="block text-xs font-semibold text-foreground mb-1">Bedingung</label>
-                <select
-                  id="rule-operator"
-                  value={operator}
-                  onChange={(e) => setOperator(e.target.value as RuleOperator)}
-                  className="px-2.5 h-8 hover:border-control-border-hover w-full rounded-control border border-control-border bg-surface text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
-                >
-                  {(Object.entries(OPERATOR_LABELS) as [RuleOperator, string][]).map(([k, v]) => (
-                    <option key={k} value={k}>{v}</option>
-                  ))}
-                </select>
-              </div>
+            <div className="mb-3 grid grid-cols-2 gap-3">
+              <Select id="rule-field" label="Feld" fullWidth value={field} onChange={(e) => setField(e.target.value as RuleField)}>
+                {(Object.entries(FIELD_LABELS) as [RuleField, string][]).map(([k, v]) => (
+                  <option key={k} value={k}>{v}</option>
+                ))}
+              </Select>
+              <Select id="rule-operator" label="Bedingung" fullWidth value={operator} onChange={(e) => setOperator(e.target.value as RuleOperator)}>
+                {(Object.entries(OPERATOR_LABELS) as [RuleOperator, string][]).map(([k, v]) => (
+                  <option key={k} value={k}>{v}</option>
+                ))}
+              </Select>
             </div>
 
             <div className="mb-3">
-              <label htmlFor="rule-value" className="block text-xs font-semibold text-foreground mb-1">Wert</label>
-              <input
+              <Input
                 id="rule-value"
+                label="Wert"
+                fullWidth
                 value={value}
                 onChange={(e) => setValue(e.target.value)}
                 placeholder="z.B. telefon, telekom, aws"
-                className="px-2.5 h-8 hover:border-control-border-hover w-full rounded-control border border-control-border bg-surface text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
               />
             </div>
 
-            <div className="grid grid-cols-3 gap-3 mb-3">
-              <div>
-                <label htmlFor="rule-target" className="block text-xs font-semibold text-foreground mb-1">Zielkonto</label>
-                <select
-                  id="rule-target"
-                  value={targetAccountNumber}
-                  onChange={(e) => setTargetAccountNumber(e.target.value)}
-                  className="px-2.5 h-8 hover:border-control-border-hover w-full rounded-control border border-control-border bg-surface text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
-                >
-                  <option value="">Bitte wählen ...</option>
-                  {accounts.map((acc) => (
-                    <option key={acc.id} value={acc.accountNumber}>
-                      {acc.accountNumber} - {acc.name}
-                    </option>
-                  ))}
-                </select>
-                {accountsError ? (
-                  <p className="mt-1 text-xs text-error-text">
-                    Konten konnten nicht geladen werden. Ohne sie lässt sich keine Regel anlegen.
-                  </p>
-                ) : null}
-              </div>
-              <div>
-                <label htmlFor="rule-flow" className="block text-xs font-semibold text-foreground mb-1">Art</label>
-                <select
-                  id="rule-flow"
-                  value={flowType}
-                  onChange={(e) => setFlowType(e.target.value as RuleFlow)}
-                  className="px-2.5 h-8 hover:border-control-border-hover w-full rounded-control border border-control-border bg-surface text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
-                >
-                  {(Object.entries(FLOW_LABELS) as [RuleFlow, string][]).map(([k, v]) => (
-                    <option key={k} value={k}>{v}</option>
-                  ))}
-                </select>
-              </div>
-              <div>
-                <label htmlFor="rule-priority" className="block text-xs font-semibold text-foreground mb-1">Priorität</label>
-                <input
-                  id="rule-priority"
-                  type="number"
-                  min={0}
-                  value={priority}
-                  onChange={(e) => setPriority(Number(e.target.value))}
-                  className="px-2.5 h-8 hover:border-control-border-hover w-full rounded-control border border-control-border bg-surface text-sm tabular-nums focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
-                />
-              </div>
+            <div className="mb-3 grid grid-cols-3 gap-3">
+              <Select
+                id="rule-target"
+                label="Zielkonto"
+                fullWidth
+                value={targetAccountNumber}
+                onChange={(e) => setTargetAccountNumber(e.target.value)}
+                error={accountsError ? 'Konten konnten nicht geladen werden. Ohne sie lässt sich keine Regel anlegen.' : undefined}
+              >
+                <option value="">Bitte wählen ...</option>
+                {accounts.map((acc) => (
+                  <option key={acc.id} value={acc.accountNumber}>
+                    {acc.accountNumber} - {acc.name}
+                  </option>
+                ))}
+              </Select>
+              <Select id="rule-flow" label="Art" fullWidth value={flowType} onChange={(e) => setFlowType(e.target.value as RuleFlow)}>
+                {(Object.entries(FLOW_LABELS) as [RuleFlow, string][]).map(([k, v]) => (
+                  <option key={k} value={k}>{v}</option>
+                ))}
+              </Select>
+              <Input
+                id="rule-priority"
+                label="Priorität"
+                type="number"
+                min={0}
+                fullWidth
+                className="tabular-nums"
+                value={priority}
+                onChange={(e) => setPriority(Number(e.target.value))}
+              />
             </div>
 
             <div className="flex items-center gap-2">
@@ -261,14 +225,16 @@ export const ProAccountRulesModal: React.FC<ProAccountRulesModalProps> = ({
             </div>
           </div>
         ) : (
-          <Button size="sm" variant="secondary" onClick={() => setIsAdding(true)} className="mb-4">
-            <Plus size={14} aria-hidden="true" />
-            Neue Regel
-          </Button>
+          <div>
+            <Button size="sm" variant="secondary" onClick={() => setIsAdding(true)}>
+              <Plus size={14} aria-hidden="true" />
+              Neue Regel
+            </Button>
+          </div>
         )}
 
         {rulesLoading ? (
-          <p className="text-sm text-muted text-center py-8">Lade Regeln...</p>
+          <p className="py-8 text-center text-control text-muted">Lade Regeln...</p>
         ) : rulesError ? (
           <ErrorState
             title="Regeln konnten nicht geladen werden"
@@ -281,50 +247,40 @@ export const ProAccountRulesModal: React.FC<ProAccountRulesModalProps> = ({
             description="Erstellen Sie Regeln für automatische Kontovorschläge."
           />
         ) : (
-          <div className="space-y-2">
+          <div className="divide-y divide-border rounded-card border border-border">
             {rules.map((rule) => (
-              <div key={rule.id} className={`rounded-xl border p-3 ${rule.active ? 'border-border bg-surface' : 'border-border-subtle bg-surface-muted opacity-60'}`}>
-                <div className="flex items-center justify-between gap-3">
-                  <div className="min-w-0 flex-1">
-                    <div className="flex items-center gap-2 text-sm">
-                      <span className="text-xs text-muted tabular-nums">#{rule.priority}</span>
-                      <span className="font-semibold text-foreground">{FIELD_LABELS[rule.field as RuleField]}</span>
-                      <span className="text-muted">{OPERATOR_LABELS[rule.operator as RuleOperator]}</span>
-                      <span className="bg-info-bg px-2 py-0.5 rounded-sm text-xs text-info-text">"{rule.value}"</span>
-                      <span className="text-xs text-muted">[{FLOW_LABELS[rule.flowType as RuleFlow]}]</span>
-                    </div>
-                    <div className="text-xs text-muted mt-1">
-                      -&gt; Konto {rule.targetAccountNumber}
-                      <span data-rule-hits className="ml-2 tabular-nums">
-                        · {rule.hitCount ? `${rule.hitCount} Treffer, zuletzt ${new Date(rule.lastHitAt ?? '').toLocaleDateString('de-DE')}` : 'noch kein Treffer'}
-                      </span>
-                    </div>
+              <div key={rule.id} className={`flex items-center justify-between gap-3 px-3 py-2.25 ${rule.active ? '' : 'bg-surface-muted'}`}>
+                <div className={`min-w-0 flex-1 ${rule.active ? '' : 'opacity-60'}`}>
+                  <div className="flex flex-wrap items-center gap-2 text-control">
+                    <span className="font-mono text-caption text-muted tabular-nums">#{rule.priority}</span>
+                    <span className="font-semibold text-foreground">{FIELD_LABELS[rule.field as RuleField]}</span>
+                    <span className="text-muted">{OPERATOR_LABELS[rule.operator as RuleOperator]}</span>
+                    <Badge tone="info">"{rule.value}"</Badge>
+                    <span className="text-caption text-muted">[{FLOW_LABELS[rule.flowType as RuleFlow]}]</span>
                   </div>
-                  <div className="flex items-center gap-1.5">
-                    <button
-                      type="button"
-                      aria-pressed={rule.active}
-                      onClick={() => toggleActive(rule)}
-                      className={`px-2 py-1 rounded-lg text-xs font-medium border transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring ${rule.active ? 'border-success-border bg-success-bg text-success-text' : 'border-border bg-surface-muted text-muted'}`}
-                    >
-                      {rule.active ? 'Aktiv' : 'Inaktiv'}
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => startEdit(rule)}
-                      className="p-1.5 rounded-lg text-xs text-muted hover:text-foreground hover:bg-surface-muted transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
-                    >
-                      Bearbeiten
-                    </button>
-                    <button
-                      type="button"
-                      aria-label="Regel löschen"
-                      onClick={() => deleteRule.mutate(rule.id)}
-                      className="p-1.5 rounded-lg text-muted hover:text-error-text hover:bg-error-bg transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
-                    >
-                      <Trash2 size={14} aria-hidden="true" />
-                    </button>
+                  <div className="mt-0.5 text-caption text-muted">
+                    -&gt; Konto {rule.targetAccountNumber}
+                    <span data-rule-hits className="ml-2 tabular-nums">
+                      · {rule.hitCount ? `${rule.hitCount} Treffer, zuletzt ${new Date(rule.lastHitAt ?? '').toLocaleDateString('de-DE')}` : 'noch kein Treffer'}
+                    </span>
                   </div>
+                </div>
+                <div className="flex shrink-0 items-center gap-1.5">
+                  <Button
+                    size="sm"
+                    variant="secondary"
+                    aria-pressed={rule.active}
+                    onClick={() => toggleActive(rule)}
+                    className={rule.active ? 'border-success-border bg-success-bg text-success-text' : 'text-muted'}
+                  >
+                    {rule.active ? 'Aktiv' : 'Inaktiv'}
+                  </Button>
+                  <Button size="sm" variant="ghost" onClick={() => startEdit(rule)}>
+                    Bearbeiten
+                  </Button>
+                  <IconButton size="sm" aria-label="Regel löschen" tooltip={false} onClick={() => deleteRule.mutate(rule.id)}>
+                    <Trash2 size={14} aria-hidden="true" />
+                  </IconButton>
                 </div>
               </div>
             ))}
@@ -332,8 +288,8 @@ export const ProAccountRulesModal: React.FC<ProAccountRulesModalProps> = ({
         )}
       </div>
 
-      <div className="border-t border-border p-6 flex justify-end">
-        <Button size="sm" variant="secondary" onClick={onClose}>
+      <div className="flex flex-wrap justify-end gap-2 border-t border-border px-4.5 py-3">
+        <Button variant="secondary" onClick={onClose}>
           Schließen
         </Button>
       </div>

@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { Invoice } from '@billme/desktop-core/types';
 import { withEffectiveInvoiceStatus } from '@billme/server-core/domain';
 import { ipc } from '../runtime-api';
+import type { IpcArgs } from '@billme/desktop-contracts/contract';
 
 const invoicesKey = ['invoices'] as const;
 
@@ -54,6 +55,22 @@ export const useDeleteInvoiceMutation = () => {
         const prevList = Array.isArray(prev) ? prev : [];
         return prevList.filter((i) => i.id !== vars.id);
       });
+    },
+  });
+};
+
+export const useInvoicePaymentMutation = () => {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (vars: { operation: 'save'; args: IpcArgs<'invoices:savePayment'> } | { operation: 'remove'; args: IpcArgs<'invoices:removePayment'> }) =>
+      vars.operation === 'save' ? ipc.invoices.savePayment(vars.args) : ipc.invoices.removePayment(vars.args),
+    onSuccess: (updated) => {
+      queryClient.setQueryData(invoicesKey, (prev: Invoice[] | undefined) => [updated, ...(prev ?? []).filter((invoice) => invoice.id !== updated.id)]);
+      void queryClient.invalidateQueries({ queryKey: ['eur'] });
+      void queryClient.invalidateQueries({ queryKey: ['transactions'] });
+      void queryClient.invalidateQueries({ queryKey: ['lite-vat'] });
+      void queryClient.invalidateQueries({ queryKey: ['dashboard-flows'] });
+      void queryClient.invalidateQueries({ queryKey: ['dashboard-month-result'] });
     },
   });
 };

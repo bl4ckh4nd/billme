@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 import { FileDown, LockKeyhole } from 'lucide-react';
-import { Button, EMPTY_VALUE, Input } from '@billme/ui';
+import { Badge, Button, EMPTY_VALUE, IconTile, Input, Select } from '@billme/ui';
 import type { DatevExportResult, ProAccountingDataAdapter } from '../../services/accountingDataAdapter';
 import { permissionContextForRole } from '../../domain/permissions';
 import type { UserRole } from '../../types';
@@ -159,25 +159,21 @@ export default function DatevExportPanel({ dataAdapter, chartFramework = 'SKR03'
   };
 
   return (
-    <section className="rounded-2xl border border-border bg-surface p-4" aria-labelledby="datev-export-title">
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div className="flex items-start gap-2">
-          <span className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-dark-base text-accent">
-            <FileDown size={16} aria-hidden="true" />
-          </span>
+    <section className="rounded-card border border-border bg-surface" aria-labelledby="datev-export-title">
+      <div className="flex flex-wrap items-start justify-between gap-3 border-b border-border px-3.5 py-3">
+        <div className="flex items-start gap-3">
+          <IconTile icon={<FileDown size={16} />} />
           <div>
-            <h2 id="datev-export-title" className="text-sm font-semibold text-foreground">DATEV Buchungsstapel</h2>
-            <p className="mt-0.5 text-xs text-muted">Unveränderlicher Export aus dem aktiven Journal ({chartFramework}).</p>
+            <h2 id="datev-export-title" className="text-section text-foreground">DATEV Buchungsstapel</h2>
+            <p className="mt-0.5 text-caption text-muted">Unveränderlicher Export aus dem aktiven Journal ({chartFramework}).</p>
           </div>
         </div>
         {!canExport ? (
-          <span className="inline-flex items-center gap-1 rounded-full border border-border bg-surface-muted px-2 py-1 text-xs font-semibold text-muted">
-            <LockKeyhole size={12} aria-hidden="true" /> Nur Lesen
-          </span>
+          <Badge tone="neutral"><LockKeyhole size={12} aria-hidden="true" /> Nur Lesen</Badge>
         ) : null}
       </div>
 
-      <form className="mt-4 space-y-4" onSubmit={handleSubmit} noValidate>
+      <form className="space-y-3 p-3.5" onSubmit={handleSubmit} noValidate>
         <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
           <Input label="Von" type="date" value={values.from} onChange={(event) => update('from', event.target.value)} required fullWidth />
           <Input label="Bis" type="date" value={values.to} onChange={(event) => update('to', event.target.value)} required fullWidth />
@@ -185,55 +181,48 @@ export default function DatevExportPanel({ dataAdapter, chartFramework = 'SKR03'
           <Input label="Kontenlänge" type="number" min={4} max={8} step={1} value={values.accountLength} onChange={(event) => update('accountLength', event.target.value)} required fullWidth />
           <Input label="Beraternummer" inputMode="numeric" type="text" value={values.consultantNumber} onChange={(event) => update('consultantNumber', event.target.value)} required fullWidth />
           <Input label="Mandantennummer" inputMode="numeric" type="text" value={values.clientNumber} onChange={(event) => update('clientNumber', event.target.value)} required fullWidth />
-          <label className="block text-sm font-medium text-foreground">
-            Zeichensatz
-            <select
-              value={values.encoding}
-              onChange={(event) => update('encoding', event.target.value as DatevEncoding)}
-              className="px-3 h-10 hover:border-control-border-hover mt-2 block w-full rounded-control border border-control-border bg-surface text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
-            >
-              <option value="cp1252">CP1252 (DATEV)</option>
-              <option value="utf8-bom">UTF-8 mit BOM</option>
-            </select>
-          </label>
+          <Select label="Zeichensatz" value={values.encoding} onChange={(event) => update('encoding', event.target.value as DatevEncoding)} fullWidth>
+            <option value="cp1252">CP1252 (DATEV)</option>
+            <option value="utf8-bom">UTF-8 mit BOM</option>
+          </Select>
         </div>
 
-        {validationError && canExport ? <p className="text-xs text-muted">{validationError}</p> : null}
-        {error ? <div className="rounded-xl border border-error-border bg-error-bg px-3 py-2 text-sm text-error-text" role="alert" aria-live="assertive">{error}</div> : null}
+        {validationError && canExport ? <p className="text-caption text-muted">{validationError}</p> : null}
+        {error ? <div className="rounded-control border border-error-border bg-error-bg px-3 py-2.5 text-control text-error-text" role="alert" aria-live="assertive">{error}</div> : null}
         {success ? (
-          <div className="rounded-xl border border-success-border bg-success-bg px-3 py-2 text-sm text-success-text" role="status" aria-live="polite">
-            DATEV-Datei heruntergeladen · Serverbeleg <span className="break-all font-mono text-xs">{success.id}</span> · {success.recordCount} {success.recordCount === 1 ? 'Buchung' : 'Buchungen'}.
-            {success.sha256 ? <span className="mt-1 block break-all font-mono text-xs">SHA-256: {success.sha256}</span> : null}
+          <div className="rounded-control border border-success-border bg-success-bg px-3 py-2.5 text-control text-success-text" role="status" aria-live="polite">
+            DATEV-Datei heruntergeladen · Serverbeleg <span className="break-all font-mono text-caption">{success.id}</span> · {success.recordCount} {success.recordCount === 1 ? 'Buchung' : 'Buchungen'}.
+            {success.sha256 ? <span className="mt-1 block break-all font-mono text-caption">SHA-256: {success.sha256}</span> : null}
           </div>
         ) : null}
         <div className="flex flex-wrap items-center justify-between gap-3">
-          {!canExport ? <p className="text-xs text-muted">Der Browserzugriff kann keine Datei schreiben oder exportieren.</p> : <span />}
-          <Button type="submit" size="sm" disabled={exporting || !canExport} aria-busy={exporting}>
+          {!canExport ? <p className="text-caption text-muted">Der Browserzugriff kann keine Datei schreiben oder exportieren.</p> : <span />}
+          <Button type="submit" variant="secondary" disabled={exporting || !canExport} aria-busy={exporting}>
             {exporting ? 'Export läuft…' : 'Buchungsstapel exportieren'}
           </Button>
         </div>
       </form>
 
-      <div className="mt-5 border-t border-border pt-4" aria-label="Unveränderlicher DATEV-Exportverlauf">
+      <div className="border-t border-border p-3.5" aria-label="Unveränderlicher DATEV-Exportverlauf">
         <div className="flex items-center justify-between gap-3">
-          <h3 className="text-xs font-semibold uppercase tracking-wide text-muted">Exportverlauf</h3>
-          {loadingHistory ? <span className="text-xs text-muted" aria-live="polite">Lade Verlauf…</span> : null}
+          <h3 className="text-eyebrow uppercase text-muted">Exportverlauf</h3>
+          {loadingHistory ? <span className="text-caption text-muted" aria-live="polite">Lade Verlauf…</span> : null}
         </div>
         {historyError ? (
-          <div className="mt-2 flex flex-wrap items-center gap-3 rounded-xl border border-error-border bg-error-bg px-3 py-2 text-sm text-error-text" role="alert" aria-live="assertive">
+          <div className="mt-2 flex flex-wrap items-center gap-3 rounded-control border border-error-border bg-error-bg px-3 py-2.5 text-control text-error-text" role="alert" aria-live="assertive">
             <span>{historyError}</span>
             <Button type="button" size="sm" variant="secondary" onClick={() => void loadHistory()} disabled={loadingHistory} aria-busy={loadingHistory}>
               {loadingHistory ? 'Lade Verlauf…' : 'Erneut laden'}
             </Button>
           </div>
         ) : !canListHistory ? (
-          <p className="mt-2 text-xs text-muted">Der unveränderliche Exportverlauf ist nur im Pro Desktop verfügbar.</p>
+          <p className="mt-2 text-caption text-muted">Der unveränderliche Exportverlauf ist nur im Pro Desktop verfügbar.</p>
         ) : history.length === 0 && !loadingHistory ? (
-          <p className="mt-2 text-xs text-muted">Noch keine DATEV-Exporte vorhanden.</p>
+          <p className="mt-2 text-caption text-muted">Noch keine DATEV-Exporte vorhanden.</p>
         ) : (
-          <ul className="mt-2 divide-y divide-border rounded-xl border border-border">
+          <ul className="mt-1 divide-y divide-border">
             {history.map((item) => (
-              <li key={item.id} className="flex flex-wrap items-center justify-between gap-2 px-3 py-2 text-xs">
+              <li key={item.id} className="flex flex-wrap items-center justify-between gap-2 py-2 text-caption">
                 <span><strong>{exportLabel(item)}</strong><span className="ml-2 text-muted">{formatCreatedAt(item.createdAt)}</span></span>
                 <span className="text-muted">Unveränderlich{item.sha256 ? ` · SHA-256 ${item.sha256.slice(0, 12)}…` : ''}</span>
               </li>

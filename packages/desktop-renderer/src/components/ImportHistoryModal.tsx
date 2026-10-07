@@ -4,7 +4,8 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { ipc } from '../runtime-api';
 import { formatCurrency } from '@billme/desktop-utils/formatters';
 import {
-  ConfirmDialog, EmptyState, ErrorState, Modal, Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
+  Badge, Button, ConfirmDialog, EmptyState, ErrorState, IconButton, Modal,
+  Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from '@billme/ui';
 import { Spinner } from '../ui/components/Spinner';
 
@@ -69,42 +70,36 @@ export const ImportHistoryModal = ({ isOpen, onClose, accountId }: ImportHistory
       open={isOpen}
       onClose={onClose}
       titleId={titleId}
-      className="flex h-[85vh] max-w-4xl flex-col overflow-hidden"
+      className="flex h-[84vh] max-w-4xl flex-col overflow-hidden"
     >
-      {/* Header */}
-      <div className="flex items-center justify-between border-b border-border p-6">
-        <div>
-          <h2 id={titleId} className="text-xl font-semibold text-foreground">Import-Historie</h2>
-          <p className="mt-1 text-sm text-muted">
+      <div className="flex items-start gap-3 px-4.5 pt-4 pb-2.5">
+        <div className="min-w-0 flex-1">
+          <h2 id={titleId} className="text-title text-foreground">Import-Historie</h2>
+          <p className="text-caption text-muted">
             Übersicht aller CSV-Importe mit Rollback-Möglichkeit
           </p>
         </div>
-        <button
-          type="button"
-          onClick={onClose}
-          aria-label="Import-Historie schließen"
-          className="rounded-lg p-2 text-muted transition-colors hover:bg-surface-muted focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
-        >
-          <X size={20} />
-        </button>
+        <IconButton aria-label="Import-Historie schließen" tooltip={false} size="sm" onClick={onClose}>
+          <X size={16} aria-hidden="true" />
+        </IconButton>
       </div>
 
-      {/* Content */}
-      <div className="flex flex-1 overflow-hidden">
+      <div className="flex min-h-0 flex-1 overflow-hidden border-t border-border">
         {/* Left: Batch List */}
-        <div className="w-1/3 space-y-2 overflow-y-auto border-r border-border p-4">
+        <div className="w-1/3 overflow-y-auto border-r border-border">
           {batchesQuery.isError && (
             <ErrorState
               title="Importe konnten nicht geladen werden"
               description={queryErrorDetail(batchesQuery.error)}
               onRetry={() => void batchesQuery.refetch()}
+              className="m-3"
             />
           )}
 
           {batchesQuery.isLoading && (
             <div className="flex flex-col items-center gap-3 py-8 text-muted">
               <Spinner size="sm" />
-              <span className="text-sm">Lade Import-Historie …</span>
+              <span className="text-control">Lade Import-Historie …</span>
             </div>
           )}
 
@@ -112,7 +107,6 @@ export const ImportHistoryModal = ({ isOpen, onClose, accountId }: ImportHistory
             <EmptyState
               title="Keine Importe vorhanden"
               description="Sobald du eine CSV-Datei importierst, erscheint der Vorgang hier mit allen importierten Transaktionen."
-              className="border-0 bg-transparent px-2"
             />
           )}
 
@@ -122,28 +116,24 @@ export const ImportHistoryModal = ({ isOpen, onClose, accountId }: ImportHistory
               type="button"
               onClick={() => setSelectedBatchId(batch.id)}
               aria-pressed={selectedBatchId === batch.id}
-              className={`w-full rounded-lg border-2 p-4 text-left transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring ${
+              className={`block w-full border-b border-border px-3 py-2.5 text-left transition-colors motion-reduce:transition-none focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-focus-ring ${
                 selectedBatchId === batch.id
-                  ? 'border-foreground bg-surface-muted'
-                  : 'border-border hover:border-control-border'
+                  ? 'bg-accent-50 shadow-[inset_3px_0_0_var(--color-accent)]'
+                  : 'hover:bg-surface-muted'
               }`}
             >
-              <div className="mb-2 flex items-start justify-between">
+              <div className="flex items-start justify-between gap-2">
                 <div className="min-w-0 flex-1">
-                  <p className="truncate font-medium text-foreground">{batch.fileName}</p>
-                  <p className="mt-1 flex items-center text-xs tabular-nums text-muted">
+                  <p className="truncate text-label font-semibold text-foreground">{batch.fileName}</p>
+                  <p className="mt-0.5 flex items-center text-caption tabular-nums text-muted">
                     <Calendar size={12} className="mr-1" aria-hidden="true" />
                     {new Date(batch.createdAt).toLocaleString('de-DE')}
                   </p>
                 </div>
-                {batch.rolledBackAt && (
-                  <span className="ml-2 whitespace-nowrap rounded-full border border-error-border bg-error-bg px-2 py-1 text-xs text-error-text">
-                    Rückgängig
-                  </span>
-                )}
+                {batch.rolledBackAt && <Badge tone="error">Rückgängig</Badge>}
               </div>
 
-              <div className="mt-2 flex items-center gap-3 text-xs">
+              <div className="mt-1.5 flex items-center gap-3 text-caption">
                 <span className="flex items-center tabular-nums text-success-text">
                   <CheckCircle2 size={12} className="mr-1" aria-hidden="true" />
                   {batch.importedCount} importiert
@@ -156,7 +146,7 @@ export const ImportHistoryModal = ({ isOpen, onClose, accountId }: ImportHistory
                 )}
               </div>
 
-              <div className="mt-2 text-xs text-muted">
+              <div className="mt-1 text-caption text-muted">
                 Profil: <span className="font-medium text-foreground">{batch.profile}</span>
               </div>
             </button>
@@ -164,13 +154,12 @@ export const ImportHistoryModal = ({ isOpen, onClose, accountId }: ImportHistory
         </div>
 
         {/* Right: Batch Details */}
-        <div className="flex-1 overflow-y-auto p-6">
+        <div className="flex-1 overflow-y-auto p-4.5">
           {!selectedBatchId && (
             <div className="flex h-full items-center justify-center">
               <EmptyState
                 title="Kein Import ausgewählt"
                 description="Wähle links einen Vorgang aus, um Details und Rollback-Optionen zu sehen."
-                className="border-0 bg-transparent"
               />
             </div>
           )}
@@ -178,7 +167,7 @@ export const ImportHistoryModal = ({ isOpen, onClose, accountId }: ImportHistory
           {selectedBatchId && detailsQuery.isLoading && (
             <div className="flex flex-col items-center gap-3 py-8 text-muted">
               <Spinner size="sm" />
-              <span className="text-sm">Lade Details …</span>
+              <span className="text-control">Lade Details …</span>
             </div>
           )}
 
@@ -191,11 +180,11 @@ export const ImportHistoryModal = ({ isOpen, onClose, accountId }: ImportHistory
           )}
 
           {details && (
-            <div className="space-y-6">
+            <div className="flex flex-col gap-3.5">
               {/* Batch Info */}
-              <div className="rounded-lg border border-border bg-surface-muted p-4">
-                <h3 className="mb-3 font-semibold text-foreground">Import-Details</h3>
-                <div className="grid grid-cols-2 gap-3 text-sm">
+              <div className="rounded-card border border-border bg-surface p-3.5">
+                <h3 className="mb-2.5 text-section text-foreground">Import-Details</h3>
+                <div className="grid grid-cols-2 gap-3 text-control">
                   <div>
                     <p className="text-muted">Dateiname</p>
                     <p className="font-medium text-foreground">{details.batch.fileName}</p>
@@ -221,17 +210,17 @@ export const ImportHistoryModal = ({ isOpen, onClose, accountId }: ImportHistory
                 </div>
 
                 {details.batch.rolledBackAt && (
-                  <div className="mt-3 border-t border-border-subtle pt-3">
-                    <p className="text-sm text-muted">Grund für Rollback</p>
-                    <p className="text-sm font-medium text-foreground">{details.batch.rollbackReason}</p>
-                    <p className="mt-1 text-xs tabular-nums text-muted">
+                  <div className="mt-3 border-t border-border pt-3">
+                    <p className="text-control text-muted">Grund für Rollback</p>
+                    <p className="text-control font-medium text-foreground">{details.batch.rollbackReason}</p>
+                    <p className="mt-1 text-caption tabular-nums text-muted">
                       Rückgängig gemacht am:{' '}
                       {new Date(details.batch.rolledBackAt).toLocaleString('de-DE')}
                     </p>
                   </div>
                 )}
 
-                <div className="mt-3 flex items-center gap-4 border-t border-border-subtle pt-3 text-sm">
+                <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1 border-t border-border pt-3 text-control">
                   <span className="flex items-center tabular-nums text-success-text">
                     <CheckCircle2 size={14} className="mr-1" aria-hidden="true" />
                     {details.batch.importedCount} importiert
@@ -253,11 +242,11 @@ export const ImportHistoryModal = ({ isOpen, onClose, accountId }: ImportHistory
 
               {/* Transaction Preview */}
               <div>
-                <h3 className="mb-3 font-semibold text-foreground">
+                <h3 className="mb-2.5 text-section text-foreground">
                   Transaktionen (Vorschau)
                 </h3>
                 {details.transactions.length === 0 ? (
-                  <div className="rounded-card border border-border py-4 text-center text-sm text-muted">
+                  <div className="rounded-card border border-border py-4 text-center text-control text-muted">
                     Keine Transaktionen in diesem Import
                   </div>
                 ) : (
@@ -295,40 +284,34 @@ export const ImportHistoryModal = ({ isOpen, onClose, accountId }: ImportHistory
                     </TableBody>
                   </Table>
                 )}
-                <p className="mt-2 text-xs text-muted">
+                <p className="mt-2 text-caption text-muted">
                   Zeigt maximal 50 Transaktionen
                 </p>
               </div>
 
               {/* Rollback Section */}
               {!details.batch.rolledBackAt && (
-                <div className="border-t border-border pt-6">
+                <div className="border-t border-border pt-3.5">
                   {!details.canRollback && (
-                    <div className="rounded-lg border border-warning-border bg-warning-bg p-4">
-                      <div className="flex items-start gap-3">
-                        <AlertTriangle size={20} className="mt-0.5 text-warning-text" aria-hidden="true" />
-                        <div className="flex-1">
-                          <p className="font-medium text-warning-text">
-                            Rollback nicht möglich
-                          </p>
-                          <p className="mt-1 text-sm text-warning-text">
-                            {details.linkedInvoiceCount} Transaktion(en) sind bereits mit
-                            Rechnungen verknüpft. Bitte löse zuerst die Verknüpfungen.
-                          </p>
-                        </div>
+                    <div className="flex items-start gap-2.5 rounded-control border border-warning-border bg-warning-bg px-3 py-2.5 text-control text-warning-text">
+                      <AlertTriangle size={16} className="mt-px shrink-0" aria-hidden="true" />
+                      <div className="min-w-0 flex-1">
+                        <p className="font-semibold">
+                          Rollback nicht möglich
+                        </p>
+                        <p>
+                          {details.linkedInvoiceCount} Transaktion(en) sind bereits mit
+                          Rechnungen verknüpft. Bitte löse zuerst die Verknüpfungen.
+                        </p>
                       </div>
                     </div>
                   )}
 
                   {details.canRollback && !showRollbackConfirm && (
-                    <button
-                      type="button"
-                      onClick={() => setShowRollbackConfirm(true)}
-                      className="flex items-center gap-2 rounded-lg border border-error-border bg-error-bg px-4 py-2 font-medium text-error-text transition-colors hover:bg-error-bg/80 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
-                    >
+                    <Button variant="danger" onClick={() => setShowRollbackConfirm(true)}>
                       <Undo2 size={16} aria-hidden="true" />
                       Import rückgängig machen
-                    </button>
+                    </Button>
                   )}
 
                   {details.canRollback && showRollbackConfirm && (
@@ -354,29 +337,29 @@ export const ImportHistoryModal = ({ isOpen, onClose, accountId }: ImportHistory
                       }}
                       details={(
                         <div className="space-y-2" aria-label="Auswirkungen">
-                          <p className="text-sm font-semibold text-foreground">Auswirkungen:</p>
-                          <div className="flex items-center gap-2 text-sm">
+                          <p className="font-semibold text-foreground">Auswirkungen:</p>
+                          <div className="flex items-center gap-2">
                             <XCircle size={14} className="text-error-text" aria-hidden="true" />
                             <span>
                               <strong className="tabular-nums">{details.batch.importedCount}</strong> Transaktionen werden gelöscht
                             </span>
                           </div>
                           {details.linkedInvoiceCount > 0 && (
-                            <div className="flex items-center gap-2 text-sm">
+                            <div className="flex items-center gap-2">
                               <CheckCircle2 size={14} className="text-success-text" aria-hidden="true" />
                               <span>
                                 <strong className="tabular-nums">{details.linkedInvoiceCount}</strong> verknüpfte Transaktion(en) bleiben geschützt
                               </span>
                             </div>
                           )}
-                          <div className="flex items-center gap-2 text-sm">
+                          <div className="flex items-center gap-2">
                             <AlertTriangle size={14} className="text-warning-text" aria-hidden="true" />
                             <span>Dieser Import wird als rückgängig gemacht markiert</span>
                           </div>
-                          <p className={`text-xs tabular-nums ${rollbackReason.trim() && !isReasonValid ? 'text-warning-text' : 'text-muted'}`}>
+                          <p className={`text-caption tabular-nums ${rollbackReason.trim() && !isReasonValid ? 'text-warning-text' : 'text-muted'}`}>
                             {rollbackReason.trim().length}/10 Zeichen
                           </p>
-                          {rollbackReason.trim() && !isReasonValid ? <p className="text-xs text-warning-text">Bitte gib einen aussagekräftigen Grund an.</p> : null}
+                          {rollbackReason.trim() && !isReasonValid ? <p className="text-caption text-warning-text">Bitte gib einen aussagekräftigen Grund an.</p> : null}
                         </div>
                       )}
                       onConfirm={handleRollback}

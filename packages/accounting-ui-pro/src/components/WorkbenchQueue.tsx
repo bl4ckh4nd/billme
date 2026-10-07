@@ -1,7 +1,9 @@
 import { useEffect, useMemo, useRef } from 'react';
-import { cn } from '@billme/ui';
+import { Badge, Kbd, cn } from '@billme/ui';
 import { Transaction } from '../types';
-import { InboxQueueKey, getFlagLabel, getQueueCounts, getStatusPresentation, inboxQueueLabels, txMatchesQueue } from '../domain/selectors';
+import { InboxQueueKey, getFlagLabel, getQueueCounts, inboxQueueLabels, txMatchesQueue } from '../domain/selectors';
+import InboxQueueTabs from './InboxQueueTabs';
+import { StatusBadge } from './IssueBadges';
 
 const QUEUES: InboxQueueKey[] = ['all', 'incomplete', 'review', 'approval', 'posted', 'errors', 'missing_receipt'];
 
@@ -49,58 +51,45 @@ export default function WorkbenchQueue({ transactions, queue, onQueueChange, sel
   }, [selectedId]);
 
   return (
-    <nav aria-label="Warteschlange" className="flex h-full min-h-0 flex-col border-r border-border bg-surface">
-      <div className="shrink-0 border-b border-border p-3">
-        <label htmlFor="workbench-queue" className="mb-1 block text-caption font-medium text-muted">Warteschlange</label>
-        <select
-          id="workbench-queue"
-          value={queue}
-          onChange={(event) => onQueueChange(event.target.value as InboxQueueKey)}
-          className="h-8 w-full rounded-control border border-control-border bg-surface px-2 text-label text-foreground focus-visible:outline-2 focus-visible:outline-focus-ring"
-        >
-          {QUEUES.map((key) => (
-            <option key={key} value={key}>
-              {inboxQueueLabels[key]} ({counts[key] ?? 0})
-            </option>
-          ))}
-        </select>
-        <p className="mt-1.5 text-caption text-muted">
-          <kbd className="font-mono">j</kbd> / <kbd className="font-mono">k</kbd> wechselt den Vorgang
+    <nav aria-label="Warteschlange" className="flex min-w-0 flex-col overflow-hidden rounded-card border border-border bg-surface">
+      <div className="flex shrink-0 flex-col gap-2 border-b border-border px-3 py-2.5">
+        <h2 className="text-sm font-semibold text-foreground">Warteschlange</h2>
+        <InboxQueueTabs activeQueue={queue} counts={counts} onChange={onQueueChange} queues={QUEUES} />
+        <p className="flex items-center gap-1 text-caption text-muted">
+          <Kbd>j</Kbd> <Kbd>k</Kbd> wechselt den Vorgang
         </p>
       </div>
       {list.length === 0 ? (
-        <p className="p-4 text-caption text-muted">Keine Vorgänge in „{inboxQueueLabels[queue]}“.</p>
+        <p className="px-3 py-5 text-center text-control text-muted">Keine Vorgänge in „{inboxQueueLabels[queue]}“.</p>
       ) : (
-        <ul ref={listRef} className="min-h-0 flex-1 overflow-y-auto">
+        <ul ref={listRef} className="max-h-140 overflow-y-auto">
           {list.map((tx) => {
-            const status = getStatusPresentation(tx.workflowStatus);
             const current = tx.id === selectedId;
             return (
-              <li key={tx.id}>
+              <li key={tx.id} className="border-b border-border last:border-b-0">
                 <button
                   type="button"
                   onClick={() => onSelect(tx.id)}
                   aria-current={current ? 'true' : undefined}
                   className={cn(
-                    'block w-full border-b border-border px-3 py-2.5 text-left focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-focus-ring',
+                    'block w-full px-3 py-2.5 text-left focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-focus-ring',
                     current ? 'bg-accent-50 shadow-[inset_3px_0_0_var(--color-accent)]' : 'hover:bg-surface-muted',
                   )}
                 >
                   <span className="flex items-baseline gap-2">
                     <span className="min-w-0 flex-1 truncate text-label font-semibold text-foreground">{tx.payee}</span>
-                    <span className={cn('shrink-0 text-label font-semibold tabular-nums', tx.amount < 0 ? 'text-foreground' : 'text-success-text')}>
+                    <span className={cn('shrink-0 font-mono text-label font-semibold tabular-nums', tx.amount < 0 ? 'text-foreground' : 'text-success-text')}>
                       {formatAmount(tx.amount, tx.currency)}
                     </span>
                   </span>
-                  <span className="mt-1 flex flex-wrap items-center gap-1.5">
-                    <span className="text-caption text-muted tabular-nums">{new Date(tx.date).toLocaleDateString('de-DE')}</span>
-                    <span className={cn('rounded-full px-1.5 py-px text-[0.6875rem] font-semibold', status.className)}>{status.label}</span>
+                  <span className="mt-0.75 flex flex-wrap items-center gap-1.5">
+                    <span className="font-mono text-caption text-muted tabular-nums">{new Date(tx.date).toLocaleDateString('de-DE')}</span>
+                    <StatusBadge status={tx.workflowStatus} />
                     {tx.flags.map((flag) => (
-                      <span key={flag} className="rounded-full border border-warning-border bg-warning-bg px-1.5 py-px text-[0.6875rem] font-medium text-warning-text">
-                        {getFlagLabel(flag)}
-                      </span>
+                      <Badge key={flag} tone="warning">{getFlagLabel(flag)}</Badge>
                     ))}
                   </span>
+                  <span className="mt-0.75 block truncate text-caption text-muted">{tx.description}</span>
                 </button>
               </li>
             );

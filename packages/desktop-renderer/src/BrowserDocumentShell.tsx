@@ -33,7 +33,7 @@ function RendererHost({ session, mount, onLogout, product }: {
       .catch((cause: unknown) => { if (!controller.signal.aborted) setError(cause instanceof Error ? cause.message : String(cause)); });
     return () => { controller.abort(); dispose?.(); };
   }, [session, mount, onLogout]);
-  return error ? <main className="flex min-h-screen items-center justify-center bg-surface-sunken px-6 py-10">
+  return error ? <main className="flex min-h-screen items-center justify-center bg-ground px-6 py-10">
     <div className="w-full max-w-xl"><ErrorState title={`Billme ${product === 'pro' ? 'Pro' : 'Lite'} konnte im Browser nicht gestartet werden`}
       description={error} onRetry={onLogout} retryLabel="Zur Anmeldung" /></div>
   </main> : <div ref={host} className="min-h-screen" />;

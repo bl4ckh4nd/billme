@@ -5,8 +5,9 @@ import {
     ArrowUpRight, Settings2
 } from 'lucide-react';
 import {
-  Avatar, Badge, BarChart, Button, CardHeader, Donut, EmptyState, ErrorState, HatchedProgress, IconButton, ListRow, Menu, Metric,
-  PageHeader, SegmentedControl, cn, popoverExitClass, useAnchoredPosition, useExitTransition, Sparkline,
+  Badge, BarChart, Button, Card, CardHeader, Donut, EmptyState, ErrorState, HatchedProgress, IconButton, Input, ListRow, Menu, Metric,
+  PageHeader, SegmentedControl, Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
+  cn, initialsOf, popoverExitClass, useAnchoredPosition, useExitTransition, Sparkline,
 } from '@billme/ui';
 import type { AppSettings, Invoice } from '@billme/desktop-core/types';
 import { useInvoicesQuery } from '../../hooks/useInvoices';
@@ -15,12 +16,28 @@ import { useSettingsQuery, useSetSettingsMutation } from '../../hooks/useSetting
 import { useOffersQuery } from '../../hooks/useOffers';
 import { calculateInvoiceTaxSnapshot, resolveInvoiceTaxMode } from '@billme/server-core/services';
 import { estimateMonthVat } from './vatEstimate';
+import { getRendererProduct } from '../../runtime-api';
+import { useLiteVatReport, vatMonthPeriod } from '../../components/eur/LiteVatPanel';
 import { SkeletonLoader } from '../components/SkeletonLoader';
 import { useDashboardFlows, useMonthResult } from './dashboardFlows';
 
 const formatCurrency = (amount: number) => {
   return new Intl.NumberFormat('de-DE', { style: 'currency', currency: 'EUR' }).format(amount);
 };
+
+/** Legend and ring centre: thousands as "Tsd.", millions as "Mio."; the exact sum stays in the card subtitle and the table view. */
+const formatCompact = (amount: number) => {
+  const abs = Math.abs(amount);
+  const num = (value: number, digits: number) => value.toLocaleString('de-DE', { minimumFractionDigits: digits, maximumFractionDigits: digits });
+  if (abs >= 1_000_000) return `${num(amount / 1_000_000, 1)} Mio.`;
+  if (abs >= 1000) return `${num(amount / 1000, 0)} Tsd.`;
+  return num(amount, 0);
+};
+
+const percent = new Intl.NumberFormat('de-DE', { style: 'percent', maximumFractionDigits: 1 });
+
+const insetPanel = 'rounded-card border border-border bg-surface-muted p-3.5';
+const twoColumns = 'grid grid-cols-1 items-start gap-3.5 lg:grid-cols-[minmax(0,1.65fr)_minmax(0,1fr)]';
 
 const formatDate = (dateString: string) => {
   return new Date(dateString).toLocaleDateString('de-DE', { day: '2-digit', month: '2-digit', year: 'numeric' });
@@ -36,8 +53,7 @@ const DashboardSettingsPopover: React.FC<{
   onSave: (values: Record<string, number>) => void;
   fields: Array<{ key: string; label: string; min?: number; max?: number; step?: number }>;
   values: Record<string, number>;
-  dark?: boolean;
-}> = ({ onSave, fields, values, dark }) => {
+}> = ({ onSave, fields, values }) => {
   const [open, setOpen] = useState(false);
   const [draft, setDraft] = useState(values);
   const buttonRef = useRef<HTMLButtonElement>(null);
@@ -72,50 +88,46 @@ const DashboardSettingsPopover: React.FC<{
 
   return (
     <>
-      <button
+      <IconButton
         ref={buttonRef}
-        type="button"
+        size="sm"
         aria-label="Dashboard-Kennzahlen anpassen"
-        title="Kennzahlen anpassen"
+        tooltip="Kennzahlen anpassen"
         aria-expanded={open}
         onClick={(e) => { e.stopPropagation(); setOpen(!open); }}
-        className={`ui-press inline-flex size-8 items-center justify-center rounded-control transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 ${dark ? 'text-inverse-muted hover:bg-surface-inverse-overlay hover:text-inverse-foreground focus-visible:outline-focus-ring-dark' : 'text-muted hover:bg-surface-sunken hover:text-foreground focus-visible:outline-focus-ring'}`}
       >
-        <Settings2 size={14} />
-      </button>
+        <Settings2 size={16} aria-hidden="true" />
+      </IconButton>
       {panel.mounted && createPortal(
         <div
           ref={dropdownRef}
           style={pos.style}
           className={cn(
-            'ui-enter-popover z-[var(--z-dropdown)] bg-surface text-foreground rounded-panel shadow-md p-4 min-w-[260px]',
+            'ui-enter-popover z-[var(--z-dropdown)] min-w-65 rounded-card border border-border bg-surface p-3.5 text-foreground shadow-lift',
             panel.closing && popoverExitClass,
           )}
           onClick={(e) => e.stopPropagation()}
         >
           <div className="space-y-3">
             {fields.map((f) => (
-              <div key={f.key}>
-                <label className="block mb-1 text-label text-foreground" htmlFor={`dashboardviews-field-${f.key}`}>{f.label}</label>
-                <input id={`dashboardviews-field-${f.key}`}
-                  type="number"
-                  min={f.min ?? 1}
-                  max={f.max}
-                  step={f.step ?? 1}
-                  value={draft[f.key] ?? 0}
-                  onChange={(e) => setDraft({ ...draft, [f.key]: Number(e.target.value) })}
-                  className="px-2.5 h-8 hover:border-control-border-hover w-full bg-surface border border-control-border rounded-control text-sm tabular-nums text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
-                />
-              </div>
+              <Input
+                key={f.key}
+                id={`dashboardviews-field-${f.key}`}
+                label={f.label}
+                type="number"
+                min={f.min ?? 1}
+                max={f.max}
+                step={f.step ?? 1}
+                value={draft[f.key] ?? 0}
+                onChange={(e) => setDraft({ ...draft, [f.key]: Number(e.target.value) })}
+                className="tabular-nums"
+                fullWidth
+              />
             ))}
           </div>
-          <button
-            type="button"
-            onClick={() => { onSave(draft); setOpen(false); }}
-            className="mt-3 w-full py-2 bg-dark-base text-inverse-foreground rounded-md text-xs font-semibold hover:bg-dark-2 transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
-          >
+          <Button size="sm" className="mt-3 w-full" onClick={() => { onSave(draft); setOpen(false); }}>
             Speichern
-          </button>
+          </Button>
         </div>,
         document.body,
       )}
@@ -148,19 +160,23 @@ export const DashboardHome: React.FC<ViewProps> = ({ onNavigate }) => {
 };
 
 const DashboardHomeContent: React.FC<ViewProps & { settings: AppSettings }> = ({ onNavigate, settings }) => {
+  const isLite = getRendererProduct() === 'lite';
+  const nowForVat = new Date();
+  const vatQuery = useLiteVatReport(vatMonthPeriod(nowForVat.getFullYear(), nowForVat.getMonth()), isLite && settings.onboardingCompleted === true);
   const invoicesQuery = useInvoicesQuery();
   const { data: invoices = [] } = invoicesQuery;
   const { data: offers = [] } = useOffersQuery();
   const { data: articles = [] } = useArticlesQuery();
   const setSettingsMutation = useSetSettingsMutation();
   const dash = settings.dashboard;
-  const profitDetermination = settings.businessReportingProfile?.profitDetermination;
+  const profitDetermination = settings.onboardingCompleted ? settings.businessReportingProfile?.profitDetermination : undefined;
   const flowsQuery = useDashboardFlows(profitDetermination);
   const flows = flowsQuery.data;
   const monthResultQuery = useMonthResult(profitDetermination, settings.businessReportingProfile?.chart);
-  const monthResult = monthResultQuery.data;
+  const monthResult = monthResultQuery.isError ? undefined : monthResultQuery.data;
   const [chartRange, setChartRange] = useState<'6' | '12'>('12');
   const [chartAsTable, setChartAsTable] = useState(false);
+  const [expensesAsTable, setExpensesAsTable] = useState(false);
 
   const saveDashboardSettings = useCallback((patch: Partial<AppSettings['dashboard']>) => {
     setSettingsMutation.mutate({ ...settings, dashboard: { ...dash, ...patch } });
@@ -202,9 +218,9 @@ const DashboardHomeContent: React.FC<ViewProps & { settings: AppSettings }> = ({
 
     // Aging by due date; a missing due date counts as not yet due.
     const aging = [
-      { key: 'current', label: 'nicht fällig', fill: 'bg-success', amount: 0 },
+      { key: 'current', label: 'nicht fällig', fill: 'bg-muted', amount: 0 },
       { key: 'd30', label: '1–30 Tage', fill: 'bg-warning', amount: 0 },
-      { key: 'd60', label: '31–60 Tage', fill: 'bg-error-inverse', amount: 0 },
+      { key: 'd60', label: '31–60 Tage', fill: 'bg-warning-text', amount: 0 },
       { key: 'd60plus', label: 'über 60 Tage', fill: 'bg-error', amount: 0 },
     ];
     for (const inv of outstanding) {
@@ -374,18 +390,21 @@ const DashboardHomeContent: React.FC<ViewProps & { settings: AppSettings }> = ({
 
   const taxEstimate = useMemo(() => {
     const now = new Date();
-    return estimateMonthVat(invoices, settings, taxMethod, now.getFullYear(), now.getMonth());
-  }, [invoices, settings, taxMethod]);
+    const estimate = estimateMonthVat(invoices, settings, taxMethod, now.getFullYear(), now.getMonth());
+    return isLite ? { ...estimate, vat: (vatQuery.data?.payableCents ?? 0) / 100, net: (vatQuery.data?.outputVatCents ?? 0) / 100, gross: (vatQuery.data?.inputVatCents ?? 0) / 100 } : estimate;
+  }, [invoices, settings, taxMethod, isLite, vatQuery.data]);
 
   const nowMonthLabel = new Date().toLocaleDateString('de-DE', { month: 'long' });
   const taxDueDays = Math.ceil((new Date(new Date().getFullYear(), new Date().getMonth() + 1, 10).getTime() - Date.now()) / 86_400_000);
   const shownMonths = flows ? flows.months.slice(chartRange === '6' ? -6 : -12) : [];
-  const incomeAverage = shownMonths.length > 0 ? shownMonths.reduce((sum, month) => sum + month.income, 0) / shownMonths.length : 0;
+  const incomeShown = shownMonths.reduce((sum, month) => sum + month.income, 0);
+  const expenseShown = shownMonths.reduce((sum, month) => sum + month.expense, 0);
+  const incomeAverage = shownMonths.length > 0 ? incomeShown / shownMonths.length : 0;
   const donutSegments = useMemo(() => {
     const lines = flows?.expenseBreakdown ?? [];
-    const top = lines.slice(0, 4).map((line) => ({ key: line.key, label: line.label, value: line.value, formatted: formatCurrency(line.value) }));
+    const top = lines.slice(0, 4).map((line) => ({ key: line.key, label: line.label, value: line.value, formatted: formatCompact(line.value) }));
     const rest = lines.slice(4).reduce((sum, line) => sum + line.value, 0);
-    return rest > 0 ? [...top, { key: 'rest', label: flows?.breakdownBasis === 'eur-line' ? 'Übrige Kostenarten' : 'Übrige Empfänger', value: rest, formatted: formatCurrency(rest) }] : top;
+    return rest > 0 ? [...top, { key: 'rest', label: flows?.breakdownBasis === 'eur-line' ? 'Übrige Kostenarten' : 'Übrige Empfänger', value: rest, formatted: formatCompact(rest) }] : top;
   }, [flows]);
   const expenseTotal = (flows?.expenseBreakdown ?? []).reduce((sum, line) => sum + line.value, 0);
   const goalShare = dash.monthlyRevenueGoal > 0 ? kpis.monthRevenueNet / dash.monthlyRevenueGoal : 0;
@@ -412,16 +431,15 @@ const DashboardHomeContent: React.FC<ViewProps & { settings: AppSettings }> = ({
   }
 
   return (
-    <div className="pb-4">
+    <div className="flex flex-col gap-3.5 pb-4">
       <PageHeader
         title="Übersicht"
         description={new Date().toLocaleDateString('de-DE', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })}
-        className="px-1 pt-2"
       />
 
       {/* KPI row: the tick carries state, the label carries meaning. */}
-      <section aria-label="Kennzahlen" className="mb-3 grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
-        <div className="rounded-panel bg-surface p-4 shadow-xs">
+      <section aria-label="Kennzahlen" className="grid grid-cols-[repeat(auto-fit,minmax(min(13.25rem,100%),1fr))] gap-3">
+        <div className="rounded-tile border border-border bg-surface px-4 py-3.5">
           <Metric
             marker="tick"
             label="Liquidität"
@@ -430,7 +448,7 @@ const DashboardHomeContent: React.FC<ViewProps & { settings: AppSettings }> = ({
             tone={flows?.liquidity != null && flows.liquidity < 0 ? 'error' : 'neutral'}
           />
         </div>
-        <div className="rounded-panel bg-surface p-4 shadow-xs">
+        <div className="rounded-tile border border-border bg-surface px-4 py-3.5">
           <Metric
             marker="tick"
             label="Offene Forderungen"
@@ -439,47 +457,149 @@ const DashboardHomeContent: React.FC<ViewProps & { settings: AppSettings }> = ({
             tone={kpis.overdueCount > 0 ? 'error' : 'neutral'}
           />
         </div>
-        <div className="rounded-panel bg-surface p-4 shadow-xs">
+        <div className="rounded-tile border border-border bg-surface px-4 py-3.5">
           <Metric
             marker="tick"
             label={`Ergebnis ${nowMonthLabel}`}
             value={monthResult == null ? '–' : formatCurrency(monthResult)}
-            hint={monthResultQuery.isError ? (/REPORT_CHART_MISMATCH/.test(String(monthResultQuery.error)) ? 'Kontenrahmen in Profil und Buchhaltung weichen ab' : 'Auswertung nicht erreichbar') : monthResult == null ? 'Wird geladen' : 'Umsatz minus Aufwand'}
+            hint={monthResultQuery.isError ? (/REPORT_CHART_MISMATCH/.test(String(monthResultQuery.error)) ? 'Kontenrahmen in Profil und Buchhaltung weichen ab' : /REPORT_MAPPING_BLOCKED/.test(String(monthResultQuery.error)) ? 'Berichtskontenzuordnung unvollständig' : 'Auswertung nicht erreichbar') : monthResult == null ? 'Wird geladen' : 'Umsatz minus Aufwand'}
             tone={monthResult == null ? 'neutral' : monthResult >= 0 ? 'success' : 'error'}
           />
         </div>
-        <div className="rounded-panel bg-surface p-4 shadow-xs">
+        <div className="rounded-tile border border-border bg-surface px-4 py-3.5">
           <Metric
             marker="tick"
             label="Umsatzsteuer"
-            value={formatCurrency(taxEstimate.vat)}
-            hint={taxEstimate.vat > 0 ? `fällig am ${taxEstimate.dueLabel}, in ${taxDueDays} Tagen` : `Keine Zahllast für ${taxEstimate.periodLabel}`}
+            value={isLite && !vatQuery.data ? '–' : formatCurrency(taxEstimate.vat)}
+            hint={isLite ? vatQuery.isError ? 'Steuerdaten nicht erreichbar' : vatQuery.data?.preparationComplete ? `Vorbereitung ${taxEstimate.periodLabel}` : 'Vorbereitung enthält offene Prüfpunkte' : taxEstimate.vat > 0 ? `fällig am ${taxEstimate.dueLabel}, in ${taxDueDays} Tagen` : `Keine Zahllast für ${taxEstimate.periodLabel}`}
             tone={taxEstimate.vat > 0 && taxDueDays <= 7 ? 'warning' : 'neutral'}
           />
         </div>
       </section>
 
-      <div className="grid grid-cols-1 gap-3 lg:grid-cols-12">
+      <div className={twoColumns}>
 
       {/* Income against expense, twelve months. */}
-      <section aria-labelledby="dashboard-flows" className="lg:col-span-8 flex flex-col rounded-panel bg-surface p-5 shadow-xs">
-        <CardHeader
-          title={<span id="dashboard-flows">Einnahmen und Ausgaben</span>}
-          subtitle="Brutto nach Buchungstag, aus den Kontoumsätzen"
-          actions={
-            <>
-              <SegmentedControl
-                size="sm"
-                aria-label="Zeitraum"
-                value={chartRange}
-                onChange={setChartRange}
-                options={[{ value: '6', label: '6 Monate' }, { value: '12', label: '12 Monate' }]}
+      <section aria-labelledby="dashboard-flows" className="min-w-0">
+        <Card radius="2xl" padding="lg" className="pt-4">
+          <CardHeader
+            size="lg"
+            title={<span id="dashboard-flows">Einnahmen und Ausgaben</span>}
+            subtitle="Brutto nach Buchungstag, aus den Kontoumsätzen"
+            actions={
+              <>
+                <SegmentedControl
+                  size="sm"
+                  aria-label="Zeitraum"
+                  value={chartRange}
+                  onChange={setChartRange}
+                  options={[{ value: '6', label: '6 Monate' }, { value: '12', label: '12 Monate' }]}
+                />
+                <Menu
+                  aria-label="Aktionen Einnahmen und Ausgaben"
+                  align="end"
+                  items={[
+                    { id: 'table', label: chartAsTable ? 'Als Diagramm anzeigen' : 'Als Tabelle anzeigen', onSelect: () => setChartAsTable((value) => !value) },
+                    { id: 'go', label: 'Zu den Kontoumsätzen', onSelect: () => onNavigate('accounts') },
+                  ]}
+                  trigger={(props) => (
+                    <IconButton size="sm" aria-label="Weitere Aktionen" {...props}>
+                      <MoreVertical size={16} aria-hidden="true" />
+                    </IconButton>
+                  )}
+                />
+              </>
+            }
+          />
+          <div className="mt-3">
+            {flowsQuery.isError ? (
+              <ErrorState
+                title="Zahlungsdaten konnten nicht geladen werden"
+                description="Konten und Kontoumsätze sind gerade nicht erreichbar. Die übrigen Karten rechnen aus den Rechnungen."
+                onRetry={() => void flowsQuery.refetch()}
               />
+            ) : flowsQuery.isPending ? (
+              <SkeletonLoader variant="card" count={1} />
+            ) : shownMonths.every((month) => month.income === 0 && month.expense === 0) ? (
+              <EmptyState title="Noch keine Zahlungen" description="Sobald Kontoumsätze importiert oder Zahlungen erfasst sind, erscheinen sie hier nach Monat." />
+            ) : chartAsTable ? (
+              <Table bare aria-label="Einnahmen und Ausgaben je Monat">
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Monat</TableHead>
+                    <TableHead numeric>Einnahmen</TableHead>
+                    <TableHead numeric>Ausgaben</TableHead>
+                    <TableHead numeric>Ergebnis</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {shownMonths.map((month) => (
+                    <TableRow key={month.key}>
+                      <TableCell>{month.longLabel}</TableCell>
+                      <TableCell numeric>{formatCurrency(month.income)}</TableCell>
+                      <TableCell numeric>{formatCurrency(month.expense)}</TableCell>
+                      <TableCell numeric className={cn('font-medium', month.income - month.expense < 0 && 'text-error-text')}>{formatCurrency(month.income - month.expense)}</TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            ) : (
+              <>
+                <div className={insetPanel}>
+                  <BarChart
+                    aria-label="Einnahmen und Ausgaben je Monat"
+                    valueHeader="Einnahmen"
+                    compareHeader="Ausgaben"
+                    reference={{ value: incomeAverage, label: `Ø Einnahmen ${formatCurrency(incomeAverage)}` }}
+                    formatValue={formatCurrency}
+                    formatAxis={(value) => (value >= 1000 ? `${(value / 1000).toLocaleString('de-DE', { maximumFractionDigits: 1 })}k` : String(Math.round(value)))}
+                    data={shownMonths.map((month, index) => ({
+                      key: month.key,
+                      label: month.label,
+                      longLabel: month.longLabel,
+                      value: month.income,
+                      compare: month.expense,
+                      highlight: index === shownMonths.length - 1,
+                    }))}
+                  />
+                </div>
+                <dl className="mt-3.5 grid grid-cols-[repeat(auto-fit,minmax(9.25rem,1fr))] gap-3.5 border-t border-border pt-3">
+                  <div>
+                    <dt className="text-caption text-muted">Einnahmen, {shownMonths.length} Monate</dt>
+                    <dd className="mt-0.5 text-heading font-bold tabular-nums">{formatCurrency(incomeShown)}</dd>
+                  </div>
+                  <div>
+                    <dt className="text-caption text-muted">Ausgaben, {shownMonths.length} Monate</dt>
+                    <dd className="mt-0.5 text-heading font-bold tabular-nums">{formatCurrency(expenseShown)}</dd>
+                  </div>
+                  <div>
+                    <dt className="text-caption text-muted">Ergebnis</dt>
+                    <dd className={cn('mt-0.5 text-heading font-bold tabular-nums', incomeShown - expenseShown >= 0 ? 'text-success-text' : 'text-error-text')}>{formatCurrency(incomeShown - expenseShown)}</dd>
+                  </div>
+                </dl>
+              </>
+            )}
+          </div>
+        </Card>
+      </section>
+
+      {/* Expense structure */}
+      <section aria-labelledby="dashboard-expenses" className="min-w-0">
+        <Card radius="2xl" padding="lg" className="pt-4">
+          <CardHeader
+            size="lg"
+            title={<span id="dashboard-expenses">Aufwandsstruktur</span>}
+            subtitle={<>
+              {flows?.breakdownBasis === 'eur-line' ? 'Ausgaben der letzten zwölf Monate nach EÜR-Zeile' : 'Ausgaben der letzten zwölf Monate nach Empfänger'}
+              {donutSegments.length > 0 && <>, zusammen <span className="tabular-nums">{formatCurrency(expenseTotal)}</span></>}
+            </>}
+            count={donutSegments.length > 0 ? `${flows?.expenseBreakdown.length ?? 0} ${flows?.breakdownBasis === 'eur-line' ? 'Kostenarten' : 'Empfänger'}` : undefined}
+            actions={
               <Menu
-                aria-label="Aktionen Einnahmen und Ausgaben"
+                aria-label="Aktionen Aufwandsstruktur"
                 align="end"
                 items={[
-                  { id: 'table', label: chartAsTable ? 'Als Diagramm anzeigen' : 'Als Tabelle anzeigen', onSelect: () => setChartAsTable((value) => !value) },
+                  { id: 'table', label: expensesAsTable ? 'Als Diagramm anzeigen' : 'Als Tabelle anzeigen', onSelect: () => setExpensesAsTable((value) => !value) },
                   { id: 'go', label: 'Zu den Kontoumsätzen', onSelect: () => onNavigate('accounts') },
                 ]}
                 trigger={(props) => (
@@ -488,340 +608,316 @@ const DashboardHomeContent: React.FC<ViewProps & { settings: AppSettings }> = ({
                   </IconButton>
                 )}
               />
-            </>
-          }
-        />
-        <div className="mt-4">
-          {flowsQuery.isError ? (
-            <ErrorState
-              title="Zahlungsdaten konnten nicht geladen werden"
-              description="Konten und Kontoumsätze sind gerade nicht erreichbar. Die übrigen Karten rechnen aus den Rechnungen."
-              onRetry={() => void flowsQuery.refetch()}
-            />
-          ) : flowsQuery.isPending ? (
-            <SkeletonLoader variant="card" count={1} />
-          ) : shownMonths.every((month) => month.income === 0 && month.expense === 0) ? (
-            <EmptyState title="Noch keine Zahlungen" description="Sobald Kontoumsätze importiert oder Zahlungen erfasst sind, erscheinen sie hier nach Monat." className="py-8" />
-          ) : chartAsTable ? (
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="border-b border-border text-left text-caption text-muted">
-                  <th className="py-2 font-medium">Monat</th>
-                  <th className="py-2 text-right font-medium">Einnahmen</th>
-                  <th className="py-2 text-right font-medium">Ausgaben</th>
-                  <th className="py-2 text-right font-medium">Ergebnis</th>
-                </tr>
-              </thead>
-              <tbody>
-                {shownMonths.map((month) => (
-                  <tr key={month.key} className="border-b border-border-subtle last:border-0">
-                    <td className="py-2">{month.longLabel}</td>
-                    <td className="py-2 text-right tabular-nums">{formatCurrency(month.income)}</td>
-                    <td className="py-2 text-right tabular-nums">{formatCurrency(month.expense)}</td>
-                    <td className={cn('py-2 text-right font-medium tabular-nums', month.income - month.expense < 0 && 'text-error-text')}>{formatCurrency(month.income - month.expense)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          ) : (
-            <BarChart
-              aria-label="Einnahmen und Ausgaben je Monat"
-              valueHeader="Einnahmen"
-              compareHeader="Ausgaben"
-              reference={{ value: incomeAverage, label: `Ø Einnahmen ${formatCurrency(incomeAverage)}` }}
-              formatValue={formatCurrency}
-              formatAxis={(value) => (value >= 1000 ? `${(value / 1000).toLocaleString('de-DE', { maximumFractionDigits: 1 })}k` : String(Math.round(value)))}
-              data={shownMonths.map((month, index) => ({
-                key: month.key,
-                label: month.label,
-                longLabel: month.longLabel,
-                value: month.income,
-                compare: month.expense,
-                highlight: index === shownMonths.length - 1,
-              }))}
-            />
-          )}
-        </div>
+            }
+          />
+          <div className="mt-3">
+            {donutSegments.length === 0 ? (
+              <EmptyState title="Noch keine Ausgaben" description="Ausgaben erscheinen hier, sobald Kontoumsätze importiert sind." />
+            ) : expensesAsTable ? (
+              <Table bare aria-label={flows?.breakdownBasis === 'eur-line' ? 'Ausgaben nach Kostenart' : 'Ausgaben nach Empfänger'}>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>{flows?.breakdownBasis === 'eur-line' ? 'Kostenart' : 'Empfänger'}</TableHead>
+                    <TableHead numeric>Betrag</TableHead>
+                    <TableHead numeric>Anteil</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {(flows?.expenseBreakdown ?? []).map((line) => (
+                    <TableRow key={line.key}>
+                      <TableCell>{line.label}</TableCell>
+                      <TableCell numeric>{formatCurrency(line.value)}</TableCell>
+                      <TableCell numeric muted>{percent.format(expenseTotal ? line.value / expenseTotal : 0)}</TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            ) : (
+              <Donut label={flows?.breakdownBasis === 'eur-line' ? 'Ausgaben nach Kostenart' : 'Ausgaben nach Empfänger'} segments={donutSegments} total={formatCompact(expenseTotal)} />
+            )}
+          </div>
+        </Card>
       </section>
 
-      {/* Expense structure */}
-      <section aria-labelledby="dashboard-expenses" className="lg:col-span-4 flex flex-col rounded-panel bg-surface p-5 shadow-xs">
-        <CardHeader
-          title={<span id="dashboard-expenses">Aufwandsstruktur</span>}
-          subtitle={flows?.breakdownBasis === 'eur-line' ? 'Ausgaben der letzten zwölf Monate nach EÜR-Zeile' : 'Ausgaben der letzten zwölf Monate nach Empfänger'}
-          count={donutSegments.length > 0 ? `${flows?.expenseBreakdown.length ?? 0} ${flows?.breakdownBasis === 'eur-line' ? 'Kostenarten' : 'Empfänger'}` : undefined}
-        />
-        <div className="mt-4">
-          {donutSegments.length === 0 ? (
-            <EmptyState title="Noch keine Ausgaben" description="Ausgaben erscheinen hier, sobald Kontoumsätze importiert sind." className="py-8" />
-          ) : (
-            <Donut label={flows?.breakdownBasis === 'eur-line' ? 'Ausgaben nach Kostenart' : 'Ausgaben nach Empfänger'} segments={donutSegments} total={formatCurrency(expenseTotal)} />
-          )}
-        </div>
-      </section>
+      </div>
+
+      <div className="grid grid-cols-[repeat(auto-fit,minmax(min(21.25rem,100%),1fr))] items-start gap-3.5">
 
       {/* What needs doing, ordered by consequence. */}
-      <section aria-labelledby="dashboard-tasks" className="lg:col-span-7 flex flex-col rounded-panel bg-surface p-5 shadow-xs">
-        <CardHeader
-          title={<span id="dashboard-tasks">Was jetzt ansteht</span>}
-          subtitle="Reihenfolge nach Fristwirkung"
-          count={tasks.length > 0 ? `${tasks.reduce((sum, task) => sum + task.count, 0)} Vorgänge` : undefined}
-        />
-        <div className="mt-2">
-          {tasks.length === 0 ? (
-            <EmptyState title="Keine offenen Vorgänge" description="Nichts ist überfällig und jeder Kontoumsatz ist zugeordnet." className="py-8" />
-          ) : (
-            tasks.map((task) => (
-              <ListRow key={task.key} icon={task.icon} tone={task.tone} title={task.title} subtitle={task.subtitle} value={task.count} onClick={task.go} />
-            ))
-          )}
-        </div>
+      <section aria-labelledby="dashboard-tasks" className="min-w-0">
+        <Card radius="2xl" padding="lg" className="pt-4">
+          <CardHeader
+            size="lg"
+            title={<span id="dashboard-tasks">Was jetzt ansteht</span>}
+            subtitle="Reihenfolge nach Fristwirkung"
+            count={tasks.length > 0 ? `${tasks.reduce((sum, task) => sum + task.count, 0)} Vorgänge` : undefined}
+          />
+          <div className="mt-1">
+            {tasks.length === 0 ? (
+              <EmptyState title="Keine offenen Vorgänge" description="Nichts ist überfällig und jeder Kontoumsatz ist zugeordnet." />
+            ) : (
+              tasks.map((task) => (
+                <ListRow key={task.key} icon={task.icon} tone={task.tone} title={task.title} subtitle={task.subtitle} value={task.count} onClick={task.go} />
+              ))
+            )}
+          </div>
+        </Card>
       </section>
 
       {/* Expected money of the next days. */}
-      <section aria-labelledby="dashboard-due-soon" className="lg:col-span-5 flex flex-col rounded-panel bg-surface p-5 shadow-xs">
-        <CardHeader
-          title={<span id="dashboard-due-soon">Fällig in {dash.dueSoonDays} Tagen</span>}
-          subtitle="Erwartete Eingänge aus offenen Rechnungen"
-          count={kpis.dueSoonCount > 0 ? `${kpis.dueSoonCount} Posten` : undefined}
-          actions={
-            <DashboardSettingsPopover
-              fields={[{ key: 'dueSoonDays', label: 'Fällig in X Tagen', min: 1, max: 90 }]}
-              values={{ dueSoonDays: dash.dueSoonDays }}
-              onSave={(v) => saveDashboardSettings({ dueSoonDays: v.dueSoonDays })}
-            ><span /></DashboardSettingsPopover>
-          }
-        />
-        {/* ponytail: inflows only; recurring expenses are not loaded on the overview.
-            Add them as outflows once a recurring-expense hook exists here. */}
-        {kpis.dueSoon.length === 0 ? (
-          <EmptyState title="Nichts fällig" description={`In den nächsten ${dash.dueSoonDays} Tagen wird keine offene Rechnung fällig.`} className="py-8" />
-        ) : (
-          <>
-            <div role="list" aria-label={`Fällig in ${dash.dueSoonDays} Tagen`} className="mt-2">
-              {kpis.dueSoon.map(({ inv, amount }) => (
-                <div role="listitem" key={inv.id}>
-                  <ListRow
-                    icon={<ArrowDownLeft size={16} />}
-                    tone="success"
-                    title={inv.client}
-                    subtitle={<><span className="tabular-nums">{formatDate(inv.dueDate)}</span> · {inv.number}</>}
-                    value={formatCurrency(amount)}
-                    valueTone="success"
-                    onClick={() => onNavigate('documents', { kind: 'invoice', id: inv.id })}
-                  />
-                </div>
-              ))}
-            </div>
-            <div className="mt-auto flex items-center justify-between gap-3 rounded-card bg-surface-sunken px-4 py-3">
-              <span className="text-label">Saldo der {dash.dueSoonDays} Tage</span>
-              <span className={cn('text-lg font-bold tabular-nums', kpis.dueSoonTotal >= 0 ? 'text-success-text' : 'text-error-text')}>{formatCurrency(kpis.dueSoonTotal)}</span>
-            </div>
-          </>
-        )}
-      </section>
-
-      {/* Focal card: the one inverse surface on this view (DESIGN.md contrast budget). */}
-      <section aria-labelledby="dashboard-receivables" className="lg:col-span-5 flex flex-col rounded-panel bg-surface-inverse p-6 text-inverse-foreground">
-         <div className="flex items-center justify-between gap-3">
-             <h2 id="dashboard-receivables" className="text-label text-inverse-muted">Offene Forderungen</h2>
-             <div className="flex items-center gap-1">
-                 <button type="button" onClick={() => onNavigate('documents')} className="inline-flex h-8 items-center gap-1.5 rounded-control px-2.5 text-label text-inverse-muted transition-colors hover:bg-surface-inverse-overlay hover:text-inverse-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring-dark">
-                     Alle ansehen <ArrowUpRight size={14} aria-hidden="true" />
-                 </button>
-             </div>
-         </div>
-
-         <p className="mt-3 text-4xl font-semibold tracking-[-0.02em] tabular-nums break-words">{formatCurrency(kpis.outstandingTotal)}</p>
-
-         <p className="mt-1 text-caption text-inverse-muted">
-             {kpis.overdueCount > 0 ? <>davon <span className="tabular-nums">{formatCurrency(kpis.overdueTotal)}</span> überfällig ({kpis.overdueCount})</> : 'Nichts überfällig'}
-         </p>
-
-         <h3 className="mt-6 text-caption text-inverse-muted">Altersstruktur nach Fälligkeit</h3>
-         <ul aria-label="Altersstruktur der Forderungen" className="mt-2 space-y-2.5 rounded-card bg-surface-inverse-raised px-4 py-3">
-             {kpis.aging.map((bucket, index) => (
-                 <li key={bucket.key} className="grid grid-cols-[6.5rem_minmax(0,1fr)_auto] items-center gap-3 text-sm">
-                     <span>{bucket.label}</span>
-                     <span className="h-1.5 overflow-hidden rounded-full bg-surface-inverse-overlay" aria-hidden="true">
-                         <span className={cn('block h-full rounded-full', bucket.fill)} style={{ width: `${bucket.amount > 0 ? Math.max(2, (bucket.amount / (kpis.outstandingTotal || 1)) * 100) : 0}%` }} />
-                     </span>
-                     <span className={cn('text-right font-medium tabular-nums', index > 0 && bucket.amount > 0 && 'text-error-inverse')}>{formatCurrency(bucket.amount)}</span>
-                 </li>
-             ))}
-         </ul>
-
-         <div className="mt-auto flex items-end justify-between gap-4 pt-6">
-            <div>
-                 <p className="text-caption text-inverse-muted">Zahlungseingänge</p>
-                 {paymentTrend !== null ? (
-                   <p className="mt-1 flex items-center gap-1.5 text-sm">
-                      <span className={`inline-flex items-center gap-0.5 font-medium tabular-nums ${paymentTrend >= 0 ? 'text-accent' : 'text-error-inverse'}`}>
-                        {paymentTrend >= 0 ? <TrendingUp size={14} aria-hidden="true" /> : <TrendingDown size={14} aria-hidden="true" />}
-                        {paymentTrend >= 0 ? '+' : ''}{paymentTrend}%
-                      </span>
-                      <span className="text-inverse-muted">zum Vormonat</span>
-                   </p>
-                 ) : (
-                   <p className="mt-1 text-sm text-inverse-muted">Keine Vormonatsdaten</p>
-                 )}
-            </div>
-            <Button onClick={() => onNavigate('documents', { kind: 'invoice', status: 'overdue' })}>
-                Mahnung senden
-            </Button>
-         </div>
-      </section>
-
-      {/* Revenue this month */}
-      <section aria-labelledby="dashboard-revenue" className="lg:col-span-7 flex flex-col rounded-panel bg-surface p-5 shadow-xs">
+      <section aria-labelledby="dashboard-due-soon" className="min-w-0">
+        <Card radius="2xl" padding="lg" className="pt-4">
           <CardHeader
-            title={<span id="dashboard-revenue">Umsatz im laufenden Monat</span>}
-            subtitle={<>Netto, gestellte Rechnungen: <span className="tabular-nums">{kpis.monthIssuedCount}</span></>}
+            size="lg"
+            title={<span id="dashboard-due-soon">Fällig in {dash.dueSoonDays} Tagen</span>}
+            subtitle="Erwartete Eingänge aus offenen Rechnungen"
+            count={kpis.dueSoonCount > 0 ? `${kpis.dueSoonCount} Posten` : undefined}
             actions={
               <DashboardSettingsPopover
-                fields={[
-                  { key: 'monthlyRevenueGoal', label: 'Monatsziel (€)', min: 0, step: 1000 },
-                  { key: 'topCategoriesLimit', label: 'Top Kategorien (Anzahl)', min: 1, max: 20 },
-                ]}
-                values={{ monthlyRevenueGoal: dash.monthlyRevenueGoal, topCategoriesLimit: dash.topCategoriesLimit }}
-                onSave={(v) => saveDashboardSettings({ monthlyRevenueGoal: v.monthlyRevenueGoal, topCategoriesLimit: v.topCategoriesLimit })}
+                fields={[{ key: 'dueSoonDays', label: 'Fällig in X Tagen', min: 1, max: 90 }]}
+                values={{ dueSoonDays: dash.dueSoonDays }}
+                onSave={(v) => saveDashboardSettings({ dueSoonDays: v.dueSoonDays })}
               ><span /></DashboardSettingsPopover>
             }
           />
-
-          <div className="mt-3 flex items-end justify-between gap-4">
-            <p className="text-figure tabular-nums">{formatCurrency(kpis.monthRevenueNet)}</p>
-            {kpis.revenueTrend.some((value) => value > 0) && (
-              <Sparkline values={kpis.revenueTrend} aria-label="Netto-Umsatz der letzten 6 Monate" className="w-32" />
-            )}
-          </div>
-          {/* The goal is a user setting. A workspace that has not set one gets no
-              progress figure instead of a fabricated target. */}
-          {dash.monthlyRevenueGoal > 0 && (
-            <div className="mt-4">
-              <div className="mb-2 flex items-baseline justify-between gap-3">
-                <span className="text-xl font-bold tabular-nums">{Math.round(Math.min(1, goalShare) * 100)} %</span>
-                <span className="text-caption text-muted">
-                  {goalShare >= 1 ? 'Ziel erreicht' : <>noch <span className="tabular-nums">{formatCurrency(dash.monthlyRevenueGoal - kpis.monthRevenueNet)}</span> bis zum Ziel von <span className="tabular-nums">{formatCurrency(dash.monthlyRevenueGoal)}</span></>}
-                </span>
-              </div>
-              <HatchedProgress value={goalShare} label="Umsatzziel dieses Monats" valueText={`${Math.round(Math.min(1, goalShare) * 100)} Prozent von ${formatCurrency(dash.monthlyRevenueGoal)}`} />
-            </div>
-          )}
-
-          <h3 className="mt-6 text-label text-muted">Wichtigste Einnahmequellen</h3>
-          {topCategories.length === 0 ? (
-            <EmptyState
-              title="Noch keine Umsätze in diesem Monat"
-              description="Sobald eine Rechnung dieses Monats als bezahlt erfasst ist, erscheint ihre Kategorie hier."
-              className="mt-2 px-3 py-6"
-            />
+          {/* ponytail: inflows only; recurring expenses are not loaded on the overview.
+              Add them as outflows once a recurring-expense hook exists here. */}
+          {kpis.dueSoon.length === 0 ? (
+            <EmptyState title="Nichts fällig" description={`In den nächsten ${dash.dueSoonDays} Tagen wird keine offene Rechnung fällig.`} />
           ) : (
-            <ul className="mt-1 divide-y divide-border-subtle">
-              {topCategories.map((row) => (
-                <li key={row.category}>
-                  <button
-                    type="button"
-                    onClick={() => onNavigate('articles', { query: row.category })}
-                    className="-mx-2 flex w-[calc(100%+1rem)] items-center justify-between gap-3 rounded-control px-2 py-2.5 text-left transition-colors hover:bg-surface-muted focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
-                  >
-                    <span className="flex min-w-0 items-center gap-3">
-                      <Avatar name={row.category} size="sm" />
-                      <span className="min-w-0">
-                        <span className="block truncate text-sm font-medium">{row.category}</span>
-                        <span className="text-caption text-muted tabular-nums">
-                          {row.invoiceCount} {row.invoiceCount === 1 ? 'Rechnung' : 'Rechnungen'}
-                        </span>
-                      </span>
-                    </span>
-                    <span className="font-medium tabular-nums">{formatCurrency(row.amount)}</span>
-                  </button>
-                </li>
-              ))}
-            </ul>
+            <>
+              <div role="list" aria-label={`Fällig in ${dash.dueSoonDays} Tagen`} className="mt-1">
+                {kpis.dueSoon.map(({ inv, amount }) => (
+                  <div role="listitem" key={inv.id} className="border-b border-dashed border-border last:border-b-0">
+                    <ListRow
+                      className="border-b-0"
+                      icon={<ArrowDownLeft size={16} />}
+                      tone="success"
+                      title={inv.client}
+                      subtitle={<><span className="tabular-nums">{formatDate(inv.dueDate)}</span> · {inv.number}</>}
+                      value={formatCurrency(amount)}
+                      valueTone="success"
+                      onClick={() => onNavigate('documents', { kind: 'invoice', id: inv.id })}
+                    />
+                  </div>
+                ))}
+              </div>
+              <div className={cn(insetPanel, 'mt-3.5 flex items-center justify-between gap-3')}>
+                <span className="text-label">Saldo der {dash.dueSoonDays} Tage</span>
+                <span className={cn('text-heading font-bold tabular-nums', kpis.dueSoonTotal >= 0 ? 'text-success-text' : 'text-error-text')}>{formatCurrency(kpis.dueSoonTotal)}</span>
+              </div>
+            </>
           )}
+        </Card>
+      </section>
 
-          <div className="mt-auto flex items-end justify-between gap-4 border-t border-border-subtle pt-4">
-            <div>
-              <p className="text-label text-muted">Offene Angebote, netto</p>
-              <p className="mt-0.5 text-caption text-muted tabular-nums">
-                Offen {offerPipeline.activeCount} · Angenommen {offerPipeline.acceptedCount} · Abgelehnt {offerPipeline.declinedCount}
-              </p>
+      </div>
+
+      <div className={twoColumns}>
+
+      {/* Revenue this month */}
+      <section aria-labelledby="dashboard-revenue" className="min-w-0">
+        <Card radius="2xl" padding="lg" className="pt-4">
+            <CardHeader
+              size="lg"
+              title={<span id="dashboard-revenue">Umsatz im laufenden Monat</span>}
+              subtitle={<>Netto, gestellte Rechnungen: <span className="tabular-nums">{kpis.monthIssuedCount}</span></>}
+              actions={
+                <DashboardSettingsPopover
+                  fields={[
+                    { key: 'monthlyRevenueGoal', label: 'Monatsziel (€)', min: 0, step: 1000 },
+                    { key: 'topCategoriesLimit', label: 'Top Kategorien (Anzahl)', min: 1, max: 20 },
+                  ]}
+                  values={{ monthlyRevenueGoal: dash.monthlyRevenueGoal, topCategoriesLimit: dash.topCategoriesLimit }}
+                  onSave={(v) => saveDashboardSettings({ monthlyRevenueGoal: v.monthlyRevenueGoal, topCategoriesLimit: v.topCategoriesLimit })}
+                ><span /></DashboardSettingsPopover>
+              }
+            />
+
+            <div className="mt-3 flex items-end justify-between gap-4">
+              <p className="text-figure tabular-nums">{formatCurrency(kpis.monthRevenueNet)}</p>
+              {kpis.revenueTrend.some((value) => value > 0) && (
+                <Sparkline values={kpis.revenueTrend} aria-label="Netto-Umsatz der letzten 6 Monate" className="w-32" />
+              )}
             </div>
-            <p className="text-xl font-semibold tabular-nums">{formatCurrency(offerPipeline.potentialNet)}</p>
-          </div>
+            {/* The goal is a user setting. A workspace that has not set one gets no
+                progress figure instead of a fabricated target. */}
+            {dash.monthlyRevenueGoal > 0 && (
+              <div className={cn(insetPanel, 'mt-3.5')}>
+                <div className="flex flex-wrap items-baseline gap-x-2.5 gap-y-1">
+                  <span className="text-3xl font-bold tracking-tight tabular-nums">{Math.round(Math.min(1, goalShare) * 100)} %</span>
+                  <span className="text-caption text-muted">
+                    {goalShare >= 1 ? 'Ziel erreicht' : <>noch <span className="tabular-nums">{formatCurrency(dash.monthlyRevenueGoal - kpis.monthRevenueNet)}</span> bis zum Ziel von <span className="tabular-nums">{formatCurrency(dash.monthlyRevenueGoal)}</span></>}
+                  </span>
+                </div>
+                <HatchedProgress className="mt-3" value={goalShare} label="Umsatzziel dieses Monats" valueText={`${Math.round(Math.min(1, goalShare) * 100)} Prozent von ${formatCurrency(dash.monthlyRevenueGoal)}`} />
+              </div>
+            )}
+
+            <h3 className="mt-3.5 text-eyebrow uppercase text-muted">Wichtigste Einnahmequellen</h3>
+            {topCategories.length === 0 ? (
+              <EmptyState
+                title="Noch keine Umsätze in diesem Monat"
+                description="Sobald eine Rechnung dieses Monats als bezahlt erfasst ist, erscheint ihre Kategorie hier."
+              />
+            ) : (
+              <div>
+                {topCategories.map((row) => (
+                  <ListRow
+                    key={row.category}
+                    icon={<span className="text-caption font-semibold">{initialsOf(row.category)}</span>}
+                    title={row.category}
+                    subtitle={<span className="tabular-nums">{row.invoiceCount} {row.invoiceCount === 1 ? 'Rechnung' : 'Rechnungen'}</span>}
+                    value={formatCurrency(row.amount)}
+                    onClick={() => onNavigate('articles', { query: row.category })}
+                  />
+                ))}
+              </div>
+            )}
+
+            <div className="mt-3.5 flex flex-wrap items-end justify-between gap-3 border-t border-border pt-3">
+              <div>
+                <p className="text-label text-muted">Offene Angebote, netto</p>
+                <p className="mt-0.5 text-caption text-muted tabular-nums">
+                  Offen {offerPipeline.activeCount} · Angenommen {offerPipeline.acceptedCount} · Abgelehnt {offerPipeline.declinedCount}
+                </p>
+              </div>
+              <p className="text-heading font-bold tabular-nums">{formatCurrency(offerPipeline.potentialNet)}</p>
+            </div>
+        </Card>
+      </section>
+
+      {/* Receivables by age */}
+      <section aria-labelledby="dashboard-receivables" className="min-w-0">
+        <Card radius="2xl" padding="lg" className="pt-4">
+           <CardHeader
+             size="lg"
+             title={<span id="dashboard-receivables">Offene Forderungen</span>}
+             subtitle={kpis.overdueCount > 0 ? <>davon <span className="tabular-nums">{formatCurrency(kpis.overdueTotal)}</span> überfällig ({kpis.overdueCount})</> : 'Nichts überfällig'}
+             actions={
+               <Button variant="ghost" size="sm" onClick={() => onNavigate('documents')}>
+                 Alle ansehen <ArrowUpRight size={14} aria-hidden="true" />
+               </Button>
+             }
+           />
+
+           <p className="mt-3 text-figure tabular-nums break-words">{formatCurrency(kpis.outstandingTotal)}</p>
+
+           <h3 className="mt-3.5 text-eyebrow uppercase text-muted">Altersstruktur nach Fälligkeit</h3>
+           <ul aria-label="Altersstruktur der Forderungen" className="mt-2 flex flex-col gap-2.25">
+               {kpis.aging.map((bucket, index) => (
+                   <li key={bucket.key} className="grid grid-cols-[6.5rem_minmax(0,1fr)_auto] items-center gap-2.5 text-caption">
+                       <span>{bucket.label}</span>
+                       <span className="h-4 overflow-hidden rounded-xs bg-surface-sunken" aria-hidden="true">
+                           <span className={cn('block h-full rounded-xs', bucket.fill)} style={{ width: `${bucket.amount > 0 ? Math.max(2, (bucket.amount / (kpis.outstandingTotal || 1)) * 100) : 0}%` }} />
+                       </span>
+                       <span className={cn('text-right tabular-nums', index > 0 && bucket.amount > 0 && 'text-error-text')}>{formatCurrency(bucket.amount)}</span>
+                   </li>
+               ))}
+           </ul>
+
+           <div className="mt-3.5 flex flex-wrap items-end justify-between gap-3 border-t border-border pt-3">
+              <div>
+                   <p className="text-caption text-muted">Zahlungseingänge</p>
+                   {paymentTrend !== null ? (
+                     <p className="mt-0.5 flex items-center gap-1.5 text-control">
+                        <span className={cn('inline-flex items-center gap-0.5 font-medium tabular-nums', paymentTrend >= 0 ? 'text-success-text' : 'text-error-text')}>
+                          {paymentTrend >= 0 ? <TrendingUp size={14} aria-hidden="true" /> : <TrendingDown size={14} aria-hidden="true" />}
+                          {paymentTrend >= 0 ? '+' : ''}{paymentTrend}%
+                        </span>
+                        <span className="text-muted">zum Vormonat</span>
+                     </p>
+                   ) : (
+                     <p className="mt-0.5 text-control text-muted">Keine Vormonatsdaten</p>
+                   )}
+              </div>
+              <Button variant="secondary" size="sm" onClick={() => onNavigate('documents', { kind: 'invoice', status: 'overdue' })}>
+                  Mahnung senden
+              </Button>
+           </div>
+        </Card>
+      </section>
+
+      </div>
+
+      <div className={twoColumns}>
+
+      {/* Recent payments */}
+      <section aria-labelledby="dashboard-payments" className="min-w-0">
+        <Card radius="2xl" padding="lg" className="pt-4">
+            <CardHeader
+              size="lg"
+              title={<span id="dashboard-payments">Zahlungseingänge</span>}
+              subtitle={<>Dieser Monat <span className="font-medium text-foreground tabular-nums">{formatCurrency(paymentsThisMonthGross)}</span></>}
+              count={payments.length > 0 ? `${Math.min(payments.length, dash.recentPaymentsLimit)} von ${payments.length}` : undefined}
+              actions={
+                <>
+                  <DashboardSettingsPopover
+                    fields={[{ key: 'recentPaymentsLimit', label: 'Angezeigte Zahlungen', min: 1, max: 20 }]}
+                    values={{ recentPaymentsLimit: dash.recentPaymentsLimit }}
+                    onSave={(v) => saveDashboardSettings({ recentPaymentsLimit: v.recentPaymentsLimit })}
+                  ><span /></DashboardSettingsPopover>
+                  <IconButton size="sm" aria-label="Zu den Rechnungen" onClick={() => onNavigate('documents', { kind: 'invoice', status: 'paid' })}>
+                      <ArrowUpRight size={16} aria-hidden="true" />
+                  </IconButton>
+                </>
+              }
+            />
+
+            {payments.length === 0 ? (
+              <EmptyState
+                title="Noch keine Zahlungseingänge"
+                description="Erfasste Zahlungen erscheinen hier, sobald du sie an einer Rechnung einträgst."
+              />
+            ) : (
+              <div className="mt-1">
+                {payments.slice(0, dash.recentPaymentsLimit).map((item) => (
+                  <ListRow
+                    key={`${item.invoiceId}:${item.date}:${item.amount}`}
+                    icon={<ArrowDownLeft size={16} />}
+                    tone="success"
+                    title={item.client}
+                    subtitle={<><span className="tabular-nums">{formatDate(item.date)}</span> · {item.invoiceNumber} · {item.method}</>}
+                    value={formatCurrency(item.amount)}
+                    valueTone="success"
+                    onClick={() => onNavigate('documents', { kind: 'invoice', id: item.invoiceId })}
+                  />
+                ))}
+              </div>
+            )}
+        </Card>
       </section>
 
       {/* VAT estimate */}
-      <section aria-labelledby="dashboard-tax" className="lg:col-span-5 flex flex-col rounded-panel bg-surface p-5 shadow-xs">
-          <CardHeader
-            title={<span id="dashboard-tax">Steuerschätzung</span>}
-            subtitle={`Voranmeldung ${taxEstimate.periodLabel}, ${taxMethod === 'ist' ? 'Ist' : 'Soll'}-Versteuerung`}
-            actions={<Badge tone={taxEstimate.vat > 0 && taxDueDays <= 7 ? 'warning' : 'info'}>{taxEstimate.vat > 0 ? `in ${taxDueDays} Tagen` : taxEstimate.periodLabel}</Badge>}
-          />
-
-          <p className="mt-3 text-label text-muted">
-            {taxEstimate.vat <= 0 ? 'Keine voraussichtliche Umsatzsteuer' : 'Voraussichtliche Umsatzsteuer'}
-          </p>
-          <p className="mt-1 text-figure tabular-nums">{formatCurrency(taxEstimate.vat)}</p>
-          {taxEstimate.vat > 0 && (
-            <p className="mt-1 text-caption text-muted">Fällig am <span className="tabular-nums">{taxEstimate.dueLabel}</span></p>
-          )}
-
-          <dl className="mt-auto grid grid-cols-2 gap-4 border-t border-border-subtle pt-4">
-              <div>
-                  <dt className="text-caption text-muted">Netto-Basis ({taxMethod === 'ist' ? 'Ist' : 'Soll'})</dt>
-                  <dd className="mt-0.5 font-medium tabular-nums">{formatCurrency(taxEstimate.net)}</dd>
-              </div>
-              <div>
-                  <dt className="text-caption text-muted">Brutto</dt>
-                  <dd className="mt-0.5 font-medium tabular-nums">{formatCurrency(taxEstimate.gross)}</dd>
-              </div>
-          </dl>
-      </section>
-
-      {/* Recent payments */}
-      <section aria-labelledby="dashboard-payments" className="lg:col-span-7 flex flex-col rounded-panel bg-surface p-5 shadow-xs">
-          <CardHeader
-            title={<span id="dashboard-payments">Zahlungseingänge</span>}
-            subtitle={<>Dieser Monat <span className="font-medium text-foreground tabular-nums">{formatCurrency(paymentsThisMonthGross)}</span></>}
-            count={payments.length > 0 ? `${Math.min(payments.length, dash.recentPaymentsLimit)} von ${payments.length}` : undefined}
-            actions={
-              <>
-                <DashboardSettingsPopover
-                  fields={[{ key: 'recentPaymentsLimit', label: 'Angezeigte Zahlungen', min: 1, max: 20 }]}
-                  values={{ recentPaymentsLimit: dash.recentPaymentsLimit }}
-                  onSave={(v) => saveDashboardSettings({ recentPaymentsLimit: v.recentPaymentsLimit })}
-                ><span /></DashboardSettingsPopover>
-                <IconButton size="sm" aria-label="Zu den Rechnungen" onClick={() => onNavigate('documents', { kind: 'invoice', status: 'paid' })}>
-                    <ArrowUpRight size={16} aria-hidden="true" />
-                </IconButton>
-              </>
-            }
-          />
-
-          {payments.length === 0 ? (
-            <EmptyState
-              title="Noch keine Zahlungseingänge"
-              description="Erfasste Zahlungen erscheinen hier, sobald du sie an einer Rechnung einträgst."
-              className="mt-4 py-6"
+      <section aria-labelledby="dashboard-tax" className="min-w-0">
+        <Card radius="2xl" padding="lg" className="pt-4">
+            <CardHeader
+              size="lg"
+              title={<span id="dashboard-tax">{isLite ? 'Umsatzsteuer-Vorbereitung' : 'Steuerschätzung'}</span>}
+              subtitle={`Voranmeldung ${taxEstimate.periodLabel}, ${taxMethod === 'ist' ? 'Ist' : 'Soll'}-Versteuerung`}
+              actions={<Badge tone={taxEstimate.vat > 0 && taxDueDays <= 7 ? 'warning' : 'info'}>{taxEstimate.vat > 0 ? `in ${taxDueDays} Tagen` : taxEstimate.periodLabel}</Badge>}
             />
-          ) : (
-            <div className="mt-2">
-              {payments.slice(0, dash.recentPaymentsLimit).map((item) => (
-                <ListRow
-                  key={`${item.invoiceId}:${item.date}:${item.amount}`}
-                  icon={<ArrowDownLeft size={16} />}
-                  tone="success"
-                  title={item.client}
-                  subtitle={<><span className="tabular-nums">{formatDate(item.date)}</span> · {item.invoiceNumber} · {item.method}</>}
-                  value={formatCurrency(item.amount)}
-                  valueTone="success"
-                  onClick={() => onNavigate('documents', { kind: 'invoice', id: item.invoiceId })}
-                />
-              ))}
-            </div>
-          )}
+
+            <p className="mt-3 text-label text-muted">
+              {isLite ? 'Voraussichtliche Zahllast / Erstattung' : taxEstimate.vat <= 0 ? 'Keine voraussichtliche Umsatzsteuer' : 'Voraussichtliche Umsatzsteuer'}
+            </p>
+            <p className="mt-1 text-figure tabular-nums">{isLite && !vatQuery.data ? '–' : formatCurrency(taxEstimate.vat)}</p>
+            {isLite && <Button variant="secondary" className="mt-3" onClick={() => onNavigate('statistics', { view: 'ust' })}>{vatQuery.data?.preparationComplete ? 'Steuervorbereitung öffnen' : 'Steuerdaten und Prüfpunkte öffnen'}</Button>}
+            {!isLite && taxEstimate.vat > 0 && (
+              <p className="mt-1 text-caption text-muted">Fällig am <span className="tabular-nums">{taxEstimate.dueLabel}</span></p>
+            )}
+
+            <dl className="mt-3.5 grid grid-cols-2 gap-3.5 border-t border-border pt-3">
+                <div>
+                    <dt className="text-caption text-muted">{isLite ? 'Umsatzsteuer' : `Netto-Basis (${taxMethod === 'ist' ? 'Ist' : 'Soll'})`}</dt>
+                    <dd className="mt-0.5 text-heading font-bold tabular-nums">{formatCurrency(taxEstimate.net)}</dd>
+                </div>
+                <div>
+                    <dt className="text-caption text-muted">{isLite ? 'Abziehbare Vorsteuer' : 'Brutto'}</dt>
+                    <dd className="mt-0.5 text-heading font-bold tabular-nums">{formatCurrency(taxEstimate.gross)}</dd>
+                </div>
+            </dl>
+        </Card>
       </section>
 
       </div>

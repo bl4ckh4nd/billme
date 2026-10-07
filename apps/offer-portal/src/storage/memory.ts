@@ -51,7 +51,8 @@ export const createMemoryOfferStore = (): OfferStore => {
   return {
     upsertOffer: async (offer) => {
       const documentId = resolveDocumentId(offer.tokenHash, offer.documentId);
-      offersByTokenHash.set(offer.tokenHash, structuredClone(offer));
+      const decision = offersByTokenHash.get(offer.tokenHash)?.decision ?? offer.decision ?? null;
+      offersByTokenHash.set(offer.tokenHash, structuredClone({ ...offer, decision }));
       const customerRef = offer.customerRef ?? `anon:${offer.tokenHash.slice(0, 16)}`;
       portalDocumentsByTokenHash.set(offer.tokenHash, {
         documentId,
@@ -63,7 +64,7 @@ export const createMemoryOfferStore = (): OfferStore => {
         customerLabel: offer.customerLabel ?? null,
         snapshotJson: offer.snapshotJson,
         pdfKey: offer.pdfKey ?? null,
-        decision: offer.decision ?? null,
+        decision,
       });
       updateDocumentIndex(offer.tokenHash, documentId);
     },

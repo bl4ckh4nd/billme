@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useState } from 'react';
 import { AlertTriangle, FileSearch, RefreshCw } from 'lucide-react';
-import { formatEmptyValue } from '@billme/ui';
-import { getFlagLabel, getStatusPresentation } from '../domain/selectors';
+import { Badge, Button, Card, CardHeader, EmptyState, Input, Textarea, cn, formatEmptyValue } from '@billme/ui';
+import { getFlagLabel } from '../domain/selectors';
 import { useAccountingWorkspace } from '../AccountingWorkspaceContext';
 import { Transaction, UserRole } from '../types';
+import { StatusBadge } from './IssueBadges';
 
 type ExceptionFilter = 'all' | 'open' | 'snoozed' | 'resolved' | 'errors' | 'warnings' | 'missing_receipt' | 'duplicates' | 'period_locked';
 
@@ -90,241 +91,208 @@ export default function ExceptionCenter({ role, canMutateExceptions = true, tran
       ].filter((marker): marker is string => Boolean(marker))
     : [];
 
+  const cardHead = 'border-b border-border px-3.5 py-3';
+
   return (
-    <div className="flex h-full min-w-0 flex-col lg:flex-row">
-      <div className="flex w-full max-h-80 shrink-0 flex-col border-b border-border lg:max-h-none lg:w-96 lg:border-b-0 lg:border-r">
-        <div className="px-4 py-3 border-b border-border">
-          <div className="sr-only">
-            <div>
-              <AlertTriangle size={16} aria-hidden="true" />
+    <div>
+      <div className="grid items-start gap-3.5 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.15fr)]">
+        <Card padding="none" className="overflow-hidden">
+          <div className={cardHead}>
+            <div className="sr-only">
+              <div>
+                <AlertTriangle size={16} aria-hidden="true" />
+              </div>
+              <div className="min-w-0">
+                <h2>Ausnahmen</h2>
+                <p>Fehler, Warnungen und blockierte Buchungen.</p>
+              </div>
             </div>
-            <div className="min-w-0">
-              <h2>Ausnahmen</h2>
-              <p className="text-xs text-muted font-medium leading-tight">Fehler, Warnungen und blockierte Buchungen.</p>
+            <div className="flex flex-wrap gap-1.25">
+              {(Object.keys(filterLabels) as ExceptionFilter[]).map((key) => (
+                // Raw button: the filter chip of InboxQueueTabs; @billme/ui has no chip button.
+                <button
+                  key={key}
+                  type="button"
+                  onClick={() => setFilter(key)}
+                  aria-pressed={filter === key}
+                  className={cn(
+                    'inline-flex items-center whitespace-nowrap rounded-full border px-1.75 py-0.5 text-micro transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring',
+                    filter === key
+                      ? 'border-foreground bg-foreground font-semibold text-ground'
+                      : 'border-border bg-surface-sunken font-medium text-foreground-secondary hover:border-border-strong',
+                  )}
+                >
+                  {filterLabels[key]}
+                </button>
+              ))}
             </div>
           </div>
-          <div className="flex flex-wrap gap-1.5">
-            {(Object.keys(filterLabels) as ExceptionFilter[]).map((key) => (
-              <button
-                key={key}
-                onClick={() => setFilter(key)}
-                className={`h-7 px-2.5 rounded-lg text-xs font-semibold border ${
-                  filter === key ? 'bg-surface-inverse text-inverse-foreground border-surface-inverse' : 'bg-surface text-muted border-border'
-                }`}
-              >
-                {filterLabels[key]}
-              </button>
-            ))}
-          </div>
-        </div>
-        <div className="flex-1 overflow-auto p-4 space-y-3">
-          {items.map((tx) => (
-            <button
-              key={tx.id}
-              onClick={() => setSelectedId(tx.id)}
-              className={`w-full text-left border rounded-xl p-4 ${
-                selectedTx?.id === tx.id ? 'border-dark-base bg-surface-muted' : 'border-border bg-surface hover:bg-surface-muted'
-              }`}
-            >
-              <div className="flex items-center justify-between gap-2">
-                <div className="font-semibold text-foreground truncate">{tx.payee}</div>
-                <span className={`px-2 py-1 rounded-full text-xs font-semibold ${getStatusPresentation(tx.workflowStatus).className}`}>
-                  {getStatusPresentation(tx.workflowStatus).label}
-                </span>
-              </div>
-              <div className="text-xs text-muted mt-1 truncate">{tx.description}</div>
-              <div className="mt-2 flex flex-wrap gap-1">
-                {tx.issueCounts.errors > 0 && (
-                  <span className="px-2 py-0.5 rounded-full border border-error-text bg-error-bg text-error-text text-xs font-semibold">
-                    {tx.issueCounts.errors} Fehler
-                  </span>
-                )}
-                {tx.issueCounts.warnings > 0 && (
-                  <span className="px-2 py-0.5 rounded-full border border-warning-text bg-warning-bg text-warning-text text-xs font-semibold">
-                    {tx.issueCounts.warnings} {tx.issueCounts.warnings === 1 ? 'Warnung' : 'Warnungen'}
-                  </span>
-                )}
-                {tx.flags.map((flag) => (
-                  <span key={flag} className="px-2 py-0.5 rounded-full border border-border bg-border-subtle text-foreground text-xs font-semibold">
-                    {getFlagLabel(flag)}
-                  </span>
-                ))}
-                {tx.exceptionCase?.state && (
-                  <span className={`px-2 py-0.5 rounded-full border text-xs font-semibold ${
-                    tx.exceptionCase.state === 'resolved'
-                      ? 'border-success-text bg-success-bg text-success-text'
-                      : tx.exceptionCase.state === 'snoozed'
-                        ? 'border-info-text bg-info-bg text-info-text'
-                        : 'border-border bg-border-subtle text-foreground'
-                  }`}>
-                    {exceptionStateLabels[tx.exceptionCase.state]}
-                  </span>
-                )}
-              </div>
-            </button>
-          ))}
-          {items.length === 0 && (
-            <div className="border border-border rounded-xl p-6 text-sm text-muted bg-surface">
-              Keine Einträge für den Filter.
-            </div>
+          {items.length === 0 ? (
+            <EmptyState title="Keine Einträge für den Filter." />
+          ) : (
+            <ul className="max-h-140 overflow-y-auto">
+              {items.map((tx) => {
+                const current = selectedTx?.id === tx.id;
+                return (
+                  <li key={tx.id} className="border-b border-border last:border-b-0">
+                    {/* Raw button: a list row with three lines of content, not a labelled action. */}
+                    <button
+                      type="button"
+                      onClick={() => setSelectedId(tx.id)}
+                      aria-current={current ? 'true' : undefined}
+                      className={cn(
+                        'block w-full px-3 py-2.5 text-left focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-focus-ring',
+                        current ? 'bg-accent-50 shadow-[inset_3px_0_0_var(--color-accent)]' : 'hover:bg-surface-muted',
+                      )}
+                    >
+                      <span className="flex items-baseline gap-2">
+                        <span className="min-w-0 flex-1 truncate text-label font-semibold text-foreground">{tx.payee}</span>
+                        <StatusBadge status={tx.workflowStatus} />
+                      </span>
+                      <span className="mt-0.75 block truncate text-caption text-muted">{tx.description}</span>
+                      <span className="mt-0.75 flex flex-wrap gap-1.5">
+                        {tx.issueCounts.errors > 0 && <Badge tone="error">{tx.issueCounts.errors} Fehler</Badge>}
+                        {tx.issueCounts.warnings > 0 && (
+                          <Badge tone="warning">{tx.issueCounts.warnings} {tx.issueCounts.warnings === 1 ? 'Warnung' : 'Warnungen'}</Badge>
+                        )}
+                        {tx.flags.map((flag) => (
+                          <Badge key={flag} tone="neutral">{getFlagLabel(flag)}</Badge>
+                        ))}
+                        {tx.exceptionCase?.state && (
+                          <Badge tone={tx.exceptionCase.state === 'resolved' ? 'success' : tx.exceptionCase.state === 'snoozed' ? 'info' : 'neutral'}>
+                            {exceptionStateLabels[tx.exceptionCase.state]}
+                          </Badge>
+                        )}
+                      </span>
+                    </button>
+                  </li>
+                );
+              })}
+            </ul>
           )}
-        </div>
-      </div>
+        </Card>
 
-      <div className="min-w-0 flex-1 overflow-auto p-6">
-        {!selectedTx || !selectedDraft ? (
-          <div className="text-muted">Keine Ausnahme ausgewählt.</div>
-        ) : (
-          <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
-            <div className="space-y-4">
-              <div className="border border-border rounded-2xl bg-surface p-5">
-                <div className="flex items-center justify-between">
-                  <div>
-                    <div className="text-xs uppercase tracking-wider text-muted font-semibold">Vorgang</div>
-                    <div className="font-semibold text-lg text-foreground mt-1">{selectedTx.payee}</div>
-                    <div className="text-sm text-muted">{selectedTx.description}</div>
+        <div className="flex min-w-0 flex-col gap-3.5">
+          {!selectedTx || !selectedDraft ? (
+            <Card padding="none">
+              <EmptyState title="Keine Ausnahme ausgewählt." />
+            </Card>
+          ) : (
+            <>
+              <Card padding="none">
+                <div className={cn('flex flex-wrap items-start gap-x-3 gap-y-2', cardHead)}>
+                  <div className="min-w-0 flex-1">
+                    <div className="text-eyebrow uppercase text-muted">Vorgang</div>
+                    <h3 className="text-section text-foreground">{selectedTx.payee}</h3>
+                    <p className="text-caption text-muted">{selectedTx.description}</p>
                   </div>
-                  <button
-                    onClick={() => onOpenTransaction(selectedTx.id)}
-                    className="shrink-0 whitespace-nowrap px-4 py-2 rounded-control bg-surface-inverse text-inverse-foreground text-sm font-semibold hover:bg-surface-inverse-raised"
-                  >
+                  <Button variant="secondary" size="sm" onClick={() => onOpenTransaction(selectedTx.id)}>
                     Im Editor öffnen
-                  </button>
+                  </Button>
                 </div>
-              </div>
+                <div className="flex flex-col gap-2.5 p-3.5">
+                  <div className="text-label text-foreground">Validierungsdetails</div>
+                  {selectedDraft.validationIssues.length === 0 && !hasActiveExceptionMarkers ? (
+                    <div className="text-control text-success-text">Keine aktiven Validierungsprobleme.</div>
+                  ) : selectedDraft.validationIssues.length === 0 ? (
+                    <div className="rounded-control border border-warning-border bg-warning-bg px-3 py-2.5 text-control text-warning-text" role="status">
+                      Aktive Hinweise: {exceptionMarkers.join(', ')}
+                    </div>
+                  ) : (
+                    <ul className="flex flex-col gap-2.5">
+                      {selectedDraft.validationIssues.map((issue) => (
+                        <li key={issue.id}>
+                          <Card padding="sm">
+                            <div className="flex flex-wrap items-center gap-1.5">
+                              <Badge tone={issue.severity === 'error' ? 'error' : issue.severity === 'warning' ? 'warning' : 'neutral'}>
+                                {issue.severity === 'error' ? 'Fehler' : issue.severity === 'warning' ? 'Warnung' : 'Hinweis'}
+                              </Badge>
+                              {issue.blocking && <Badge tone="error">Blocker</Badge>}
+                            </div>
+                            <div className="mt-1.5 text-label text-foreground">{issue.message}</div>
+                            {/* Code und Feldpfad sind technische Details für den Support, nicht die Überschrift. */}
+                            <div className="mt-1 text-caption text-muted">
+                              Code {issue.code}{issue.fieldPath ? ` · Feld ${issue.fieldPath}` : ''}
+                            </div>
+                          </Card>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
+              </Card>
 
-              <div className="border border-border rounded-2xl bg-surface p-5">
-                <div className="text-sm font-semibold text-foreground mb-2">Validierungsdetails</div>
-                {selectedDraft.validationIssues.length === 0 && !hasActiveExceptionMarkers ? (
-                  <div className="text-sm text-success-text">Keine aktiven Validierungsprobleme.</div>
-                ) : selectedDraft.validationIssues.length === 0 ? (
-                  <div className="text-sm text-warning-text" role="status">
-                    Aktive Hinweise: {exceptionMarkers.join(', ')}
-                  </div>
-                ) : (
-                  <ul className="space-y-2">
-                    {selectedDraft.validationIssues.map((issue) => (
-                      <li key={issue.id} className="border border-border rounded-lg p-3">
-                        <div className="flex items-center gap-2">
-                          <span
-                            aria-hidden="true"
-                            className={`inline-block h-2 w-2 rounded-full ${
-                              issue.severity === 'error'
-                                ? 'bg-error'
-                                : issue.severity === 'warning'
-                                  ? 'bg-warning'
-                                  : 'bg-muted'
-                            }`}
-                          />
-                          <span className={`text-xs font-semibold ${
-                            issue.severity === 'error'
-                              ? 'text-error-text'
-                              : issue.severity === 'warning'
-                                ? 'text-warning-text'
-                                : 'text-muted'
-                          }`}>
-                            {issue.severity === 'error' ? 'Fehler' : issue.severity === 'warning' ? 'Warnung' : 'Hinweis'}
-                          </span>
-                          {issue.blocking && (
-                            <span className="px-2 py-0.5 rounded-full text-xs font-semibold bg-error-bg text-error-text">
-                              Blocker
-                            </span>
-                          )}
-                        </div>
-                        <div className="text-sm font-medium text-foreground mt-1">{issue.message}</div>
-                        {/* Code und Feldpfad sind technische Details für den Support, nicht die Überschrift. */}
-                        <div className="text-caption text-muted mt-1">
-                          Code {issue.code}{issue.fieldPath ? ` · Feld ${issue.fieldPath}` : ''}
-                        </div>
-                      </li>
-                    ))}
-                  </ul>
-                )}
-              </div>
-            </div>
-
-            <div className="space-y-4">
-              <div className="border border-border rounded-2xl bg-surface p-5">
-                <div className="text-sm font-semibold text-foreground mb-3">Schnellmaßnahmen</div>
-                <div className="flex flex-wrap gap-2">
-                  <button
-                    onClick={() => onOpenTransaction(selectedTx.id)}
-                    className="px-4 py-2 rounded-lg border border-control-border bg-surface text-sm font-semibold text-foreground hover:bg-surface-muted inline-flex items-center gap-1"
-                  >
-                    <FileSearch size={14} /> Prüfen
-                  </button>
-                  <button
-                    onClick={() => {
-                      void (async () => {
-                        setMutationError(null);
-                        try {
-                          await dispatchBookingAction(selectedTx.id, 'request_receipt', { role, actorName: role });
-                          onRefresh();
-                        } catch (error) {
-                          setMutationError(error instanceof Error ? error.message : 'Aktion konnte nicht gespeichert werden.');
-                        }
-                      })();
-                    }}
-                    className="px-4 py-2 rounded-lg border border-control-border bg-surface text-sm font-semibold text-foreground hover:bg-surface-muted"
+              <Card padding="none">
+                <CardHeader as="h3" title="Schnellmaßnahmen" className={cardHead} />
+                <div className="flex flex-wrap gap-2 p-3.5">
+                  <Button variant="secondary" size="sm" onClick={() => onOpenTransaction(selectedTx.id)}>
+                    <FileSearch size={14} aria-hidden="true" /> Prüfen
+                  </Button>
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    onClick={() => void (async () => {
+                      setMutationError(null);
+                      try {
+                        await dispatchBookingAction(selectedTx.id, 'request_receipt', { role, actorName: role });
+                        onRefresh();
+                      } catch (error) {
+                        setMutationError(error instanceof Error ? error.message : 'Aktion konnte nicht gespeichert werden.');
+                      }
+                    })()}
                   >
                     Beleg anfordern
-                  </button>
-                  <button
-                    onClick={() => onRefresh()}
-                    className="px-4 py-2 rounded-lg border border-control-border bg-surface text-sm font-semibold text-foreground hover:bg-surface-muted inline-flex items-center gap-1"
-                  >
-                    <RefreshCw size={14} /> Neu bewerten
-                  </button>
+                  </Button>
+                  <Button variant="secondary" size="sm" onClick={() => onRefresh()}>
+                    <RefreshCw size={14} aria-hidden="true" /> Neu bewerten
+                  </Button>
                 </div>
-              </div>
+              </Card>
 
-              <div className="border border-border rounded-2xl bg-surface p-5">
-                <div className="text-sm font-semibold text-foreground mb-3">Ausnahme bearbeiten</div>
-                {!canMutateExceptions && <div className="mb-3 text-sm text-muted" role="status">Änderungen an Ausnahmen sind in dieser Oberfläche nicht verfügbar.</div>}
-                {mutationError && <div className="mb-3 text-sm text-error-text" role="alert" aria-live="assertive">{mutationError}</div>}
-                <fieldset disabled={!canMutateExceptions} className="space-y-3">
-                <div className="space-y-3">
-                  <div>
-                    <label className="block mb-1 text-label text-foreground">
-                      Verantwortliche Person
-                    </label>
-                    <div className="flex gap-2">
-                      <input
-                        type="text"
-                        value={ownerDraft}
-                        onChange={(e) => setOwnerDraft(e.target.value)}
-                        className="px-2.5 h-8 hover:border-control-border-hover flex-1 border border-control-border rounded-control text-sm"
-                        placeholder="Name"
-                      />
-                      <button
-                        onClick={() => void (async () => {
-                          setMutationError(null);
-                          try {
-                            await assignExceptionOwner(selectedTx.id, ownerDraft || role, role);
-                            onRefresh();
-                          } catch (error) {
-                            setMutationError(error instanceof Error ? error.message : 'Änderung konnte nicht gespeichert werden.');
-                          }
-                        })()}
-                        className="px-3 py-2 rounded-xl border border-border text-sm font-semibold text-foreground hover:bg-surface-muted"
-                      >
+              <Card padding="none">
+                <CardHeader as="h3" title="Ausnahme bearbeiten" className={cardHead} />
+                <div className="flex flex-col gap-3 p-3.5">
+                  {!canMutateExceptions && <div className="text-control text-muted" role="status">Änderungen an Ausnahmen sind in dieser Oberfläche nicht verfügbar.</div>}
+                  {mutationError && (
+                    <div className="rounded-control border border-error-border bg-error-bg px-3 py-2.5 text-control text-error-text" role="alert" aria-live="assertive">{mutationError}</div>
+                  )}
+                  <fieldset disabled={!canMutateExceptions} className="flex min-w-0 flex-col gap-3">
+                    <div className="flex items-end gap-2">
+                      <div className="min-w-0 flex-1">
+                        <Input
+                          fullWidth
+                          type="text"
+                          label="Verantwortliche Person"
+                          value={ownerDraft}
+                          onChange={(e) => setOwnerDraft(e.target.value)}
+                          placeholder="Name"
+                        />
+                      </div>
+                      <Button variant="secondary" onClick={() => void (async () => {
+                        setMutationError(null);
+                        try {
+                          await assignExceptionOwner(selectedTx.id, ownerDraft || role, role);
+                          onRefresh();
+                        } catch (error) {
+                          setMutationError(error instanceof Error ? error.message : 'Änderung konnte nicht gespeichert werden.');
+                        }
+                      })()}>
                         Zuweisen
-                      </button>
+                      </Button>
                     </div>
-                  </div>
 
-                  <div>
-                    <label className="block mb-1 text-label text-foreground">
-                      Pausiert bis
-                    </label>
-                    <div className="flex gap-2">
-                      <input
-                        type="date"
-                        value={snoozeUntil}
-                        onChange={(e) => setSnoozeUntil(e.target.value)}
-                        className="px-2.5 h-8 hover:border-control-border-hover flex-1 border border-control-border rounded-control text-sm"
-                      />
-                      <button
+                    <div className="flex items-end gap-2">
+                      <div className="min-w-0 flex-1">
+                        <Input
+                          fullWidth
+                          type="date"
+                          label="Pausiert bis"
+                          value={snoozeUntil}
+                          onChange={(e) => setSnoozeUntil(e.target.value)}
+                        />
+                      </div>
+                      <Button
+                        variant="secondary"
                         onClick={() => void (async () => {
                           if (!snoozeUntil) return;
                           setMutationError(null);
@@ -335,28 +303,21 @@ export default function ExceptionCenter({ role, canMutateExceptions = true, tran
                             setMutationError(error instanceof Error ? error.message : 'Änderung konnte nicht gespeichert werden.');
                           }
                         })()}
-                        className="px-3 py-2 rounded-xl border border-border text-sm font-semibold text-foreground hover:bg-surface-muted"
                       >
-                      Pausieren
-                      </button>
+                        Pausieren
+                      </Button>
                     </div>
-                  </div>
 
-                  <div>
-                    <label className="block mb-1 text-label text-foreground">
-                      Lösungsnotiz
-                    </label>
-                    <textarea
+                    <Textarea
+                      fullWidth
+                      label="Lösungsnotiz"
                       value={resolutionNote}
                       onChange={(e) => setResolutionNote(e.target.value)}
-                      className="px-2.5 py-2 hover:border-control-border-hover w-full border border-control-border rounded-control text-sm min-h-20"
                       placeholder="Was wurde geprüft/gelöst?"
                     />
-                  </div>
 
-                  <div className="flex flex-wrap gap-2">
-                    <button
-                      onClick={() => void (async () => {
+                    <div className="flex flex-wrap gap-2">
+                      <Button onClick={() => void (async () => {
                         setMutationError(null);
                         try {
                           await resolveException(selectedTx.id, resolutionNote || 'Manuell als gelöst markiert', role);
@@ -364,13 +325,10 @@ export default function ExceptionCenter({ role, canMutateExceptions = true, tran
                         } catch (error) {
                           setMutationError(error instanceof Error ? error.message : 'Änderung konnte nicht gespeichert werden.');
                         }
-                      })()}
-                      className="px-4 py-2 rounded-control bg-surface-inverse text-inverse-foreground text-sm font-semibold hover:bg-surface-inverse-raised"
-                    >
-                      Als gelöst markieren
-                    </button>
-                    <button
-                      onClick={() => void (async () => {
+                      })()}>
+                        Als gelöst markieren
+                      </Button>
+                      <Button variant="secondary" onClick={() => void (async () => {
                         setMutationError(null);
                         try {
                           await reopenException(selectedTx.id, role);
@@ -378,54 +336,52 @@ export default function ExceptionCenter({ role, canMutateExceptions = true, tran
                         } catch (error) {
                           setMutationError(error instanceof Error ? error.message : 'Änderung konnte nicht gespeichert werden.');
                         }
-                      })()}
-                      className="px-4 py-2 rounded-lg border border-control-border bg-surface text-sm font-semibold text-foreground hover:bg-surface-muted"
-                    >
-                      Wieder öffnen
-                    </button>
-                  </div>
+                      })()}>
+                        Wieder öffnen
+                      </Button>
+                    </div>
+                  </fieldset>
                 </div>
-                </fieldset>
-              </div>
+              </Card>
 
-              <div className="border border-border rounded-2xl bg-surface p-5">
-                <div className="text-sm font-semibold text-foreground mb-2">Workflow-Status</div>
-                <div className="space-y-2 text-sm">
-                  <div className="flex justify-between">
+              <Card padding="none">
+                <CardHeader as="h3" title="Workflow-Status" className={cardHead} />
+                <div className="flex flex-col gap-2 p-3.5 text-control">
+                  <div className="flex justify-between gap-3">
                     <span className="text-muted">Status</span>
-                    <span className="font-semibold text-foreground">{getStatusPresentation(selectedTx.workflowStatus).label}</span>
+                    <StatusBadge status={selectedTx.workflowStatus} />
                   </div>
-                  <div className="flex justify-between">
+                  <div className="flex justify-between gap-3">
                     <span className="text-muted">Fehler</span>
                     <span className="font-semibold tabular-nums text-error-text">{selectedTx.issueCounts.errors}</span>
                   </div>
-                  <div className="flex justify-between">
+                  <div className="flex justify-between gap-3">
                     <span className="text-muted">Warnungen</span>
                     <span className="font-semibold tabular-nums text-warning-text">{selectedTx.issueCounts.warnings}</span>
                   </div>
-                  <div className="flex justify-between">
+                  <div className="flex justify-between gap-3">
                     <span className="text-muted">Freigabe</span>
-                    <span className="font-semibold text-foreground">{selectedDraft.approval.status}</span>
+                    <span className="font-medium text-foreground">{selectedDraft.approval.status}</span>
                   </div>
-                  <div className="flex justify-between">
+                  <div className="flex justify-between gap-3">
                     <span className="text-muted">Ausnahmestatus</span>
-                    <span className="font-semibold text-foreground">{exceptionState === 'snoozed' ? 'Pausiert' : exceptionState === 'resolved' ? 'Erledigt' : 'Offen'}</span>
+                    <span className="font-medium text-foreground">{exceptionState === 'snoozed' ? 'Pausiert' : exceptionState === 'resolved' ? 'Erledigt' : 'Offen'}</span>
                   </div>
-                  <div className="flex justify-between">
+                  <div className="flex justify-between gap-3">
                     <span className="text-muted">Verantwortliche Person</span>
-                    <span className="font-semibold text-foreground">{formatEmptyValue(selectedTx.exceptionCase?.owner)}</span>
+                    <span className="font-medium text-foreground">{formatEmptyValue(selectedTx.exceptionCase?.owner)}</span>
                   </div>
                   {selectedTx.exceptionCase?.snoozedUntil && (
-                    <div className="flex justify-between">
+                    <div className="flex justify-between gap-3">
                       <span className="text-muted">Pausiert bis</span>
-                      <span className="font-semibold text-foreground">{selectedTx.exceptionCase.snoozedUntil}</span>
+                      <span className="font-medium text-foreground">{selectedTx.exceptionCase.snoozedUntil}</span>
                     </div>
                   )}
                 </div>
-              </div>
-            </div>
-          </div>
-        )}
+              </Card>
+            </>
+          )}
+        </div>
       </div>
     </div>
   );

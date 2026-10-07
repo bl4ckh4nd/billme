@@ -2013,7 +2013,7 @@ const validateMockTaxComplianceIssues = (draft: MockDraft) => {
     if (taxCase.requiresCountry && !line.countryCode) {
       issues.push({
         id: `tax-country-${idx}`,
-        code: 'MISSING_COUNTRY_CODE',
+        code: 'MISSING_TAX_COUNTRY',
         severity: 'error',
         message: `Ländercode fehlt für Steuerfall ${taxCase.key}.`,
         fieldPath: `lines[${idx}].countryCode`,
@@ -2380,9 +2380,25 @@ const invoke = async <K extends IpcRouteKey>(key: K, args: IpcArgs<K>): Promise<
       const normalized = normalizeInvoiceTaxData(structuredClone(invoice) as Invoice);
       delete normalized.numberReservationId;
       const idx = invoices.findIndex((i) => i.id === normalized.id);
-      if (idx >= 0) invoices[idx] = normalized;
+      if (idx >= 0) { normalized.payments = invoices[idx]!.payments; invoices[idx] = normalized; }
       else invoices.unshift(normalized);
       return structuredClone(normalized) as IpcResult<K>;
+    }
+    case 'invoices:savePayment':
+    case 'invoices:removePayment': {
+      const parsed = args as IpcArgs<'invoices:savePayment'> | IpcArgs<'invoices:removePayment'>;
+      const invoice = invoices.find((candidate) => candidate.id === parsed.invoiceId);
+      if (!invoice) throw new Error('Rechnung nicht gefunden.');
+      const payment = 'payment' in parsed ? parsed.payment : undefined;
+      const id = payment?.id ?? parsed.expectedPayment!.id;
+      if (id.startsWith('transaction-payment:') || id.startsWith('tx:')) throw new Error('Bankzahlungen bitte im Bankabgleich ändern.');
+      const current = invoice.payments.find((candidate) => candidate.id === id);
+      const same = (a: typeof current, b: typeof current) => a?.id === b?.id && a?.date === b?.date && a?.amount === b?.amount && a?.method === b?.method;
+      if (current && !same(current, payment) && !same(current, parsed.expectedPayment)) throw new Error('Zahlung wurde inzwischen geändert. Bitte Rechnung neu laden.');
+      if (!current && payment && parsed.expectedPayment) throw new Error('Zahlung wurde inzwischen entfernt. Bitte Rechnung neu laden.');
+      invoice.payments = invoice.payments.filter((candidate) => candidate.id !== id);
+      if (payment) invoice.payments.push(payment);
+      return structuredClone(invoice) as IpcResult<K>;
     }
     case 'invoices:delete': {
       const { id } = args as IpcArgs<'invoices:delete'>;
@@ -4753,6 +4769,15 @@ const invoke = async <K extends IpcRouteKey>(key: K, args: IpcArgs<K>): Promise<
     case 'updater:quitAndInstall':
       return { ok: true } as IpcResult<K>;
 
+    // The mock backend has no API a CLI could log in to: no request is ever pending, no token exists.
+    case 'cliAccess:pending':
+      return null as IpcResult<K>;
+    case 'cliAccess:list':
+      return [] as IpcResult<K>;
+    case 'cliAccess:decide':
+      throw new Error('Unbekannter oder abgelaufener Code.');
+    case 'cliAccess:revoke':
+      throw new Error('Unbekanntes CLI-Token.');
     default:
       throw new Error(`Unsupported IPC route in mock backend: ${String(key)}`);
   }

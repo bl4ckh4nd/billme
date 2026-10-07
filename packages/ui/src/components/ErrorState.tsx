@@ -28,15 +28,15 @@ export const ErrorState: React.FC<ErrorStateProps> = ({
   <div
     role="alert"
     className={cn(
-      'flex flex-col items-center justify-center gap-2 rounded-xl border border-error-border bg-error-bg px-6 py-10 text-center',
+      'flex flex-col items-center justify-center gap-2 rounded-card border border-error-border bg-error-bg px-5 py-10 text-center',
       className,
     )}
   >
     <AlertCircle size={20} className="text-error-text" aria-hidden="true" />
-    <p className="text-sm font-semibold text-error-text">{title}</p>
-    {description && <p className="max-w-md text-xs text-error-text">{description}</p>}
+    <p className="text-section text-error-text">{title}</p>
+    {description && <p className="max-w-[40ch] text-control text-error-text">{description}</p>}
     {onRetry && (
-      <Button variant="secondary" size="sm" className="mt-2" onClick={onRetry}>
+      <Button variant="secondary" size="sm" className="mt-1" onClick={onRetry}>
         {retryLabel}
       </Button>
     )}

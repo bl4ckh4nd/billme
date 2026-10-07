@@ -1,4 +1,5 @@
 import { useId } from 'react';
+import { Button } from '@billme/ui';
 import { BookingAction, BookingDraft, UiPermissionContext } from '../types';
 import { bookingActionLabels } from '../domain/selectors';
 
@@ -30,33 +31,30 @@ export default function WorkflowActionBar({
     'save_draft';
 
   return (
-    <div className="flex flex-col items-end gap-1">
+    <div className="flex flex-col items-end gap-1 border-t border-border pt-3">
       <div className="flex flex-wrap items-center justify-end gap-2">
         {allowedActions
           .filter((action) => action !== primary)
           .map((action) => (
-            <button
+            <Button
               key={action}
-              type="button"
+              variant={action === 'save_draft' ? 'ghost' : 'secondary'}
               onClick={() => onAction(action)}
               disabled={isBusy}
-              className="px-4 py-2 rounded-lg border border-control-border bg-surface text-foreground text-sm font-semibold hover:bg-surface-muted disabled:opacity-50"
             >
               {bookingActionLabels[action]}
-            </button>
+            </Button>
           ))}
-        <button
-          type="button"
+        <Button
           onClick={() => onAction(primary)}
           disabled={isBusy || blocked}
           aria-describedby={blocked ? reasonId : undefined}
-          className="min-h-11 px-5 py-2 rounded-control bg-surface-inverse text-inverse-foreground text-sm font-semibold hover:bg-surface-inverse-raised disabled:cursor-not-allowed disabled:opacity-50"
         >
           {isBusy ? 'Speichert...' : bookingActionLabels[primary]}
-        </button>
+        </Button>
       </div>
       {blocked ? (
-        <p id={reasonId} role="status" className="max-w-sm text-right text-caption font-medium text-error-text">
+        <p id={reasonId} role="status" className="text-right text-caption text-error-text">
           {bookingActionLabels[primary]} gesperrt: {blockedReason}
         </p>
       ) : null}

@@ -16,13 +16,13 @@ import { useProjectsQuery } from '../hooks/useProjects';
 import { useSettingsQuery } from '../hooks/useSettings';
 import { useDocumentTemplateDefaultsQuery, useDocumentTemplatesQuery } from '../hooks/useDocumentTemplates';
 import { getRendererRuntime } from '../runtime-api';
-import type { Invoice } from '@billme/desktop-core/types';
+import type { Invoice, Offer } from '@billme/desktop-core/types';
 
 interface InvoiceDocumentEditorProps {
-  invoice: Invoice;
+  invoice: Invoice | Offer;
   templateType?: 'invoice' | 'offer';
   mode?: 'create' | 'edit';
-  onSave: (invoice: Invoice, meta?: { numberChangeReason?: string }) => void;
+  onSave: (invoice: Invoice | Offer, meta?: { numberChangeReason?: string }) => void;
   onCancel: () => void;
 }
 
@@ -66,7 +66,7 @@ export const InvoiceDocumentEditor: React.FC<InvoiceDocumentEditorProps> = ({
   // {{my.*}} placeholders, so it must never be built from stand-in data.
   if (settingsIsError) {
     return (
-      <div className="flex min-h-full items-center justify-center bg-background p-8">
+      <div className="flex min-h-full items-center justify-center bg-ground p-5">
         <ErrorState
           title="Firmendaten konnten nicht geladen werden"
           description="Absender, Bankverbindung und Steuernummer stammen aus den Einstellungen. Ohne sie wird das Dokument nicht geöffnet."
@@ -78,9 +78,9 @@ export const InvoiceDocumentEditor: React.FC<InvoiceDocumentEditorProps> = ({
 
   if (!settings) {
     return (
-      <div className="flex min-h-full flex-col items-center justify-center gap-3 bg-background text-muted">
+      <div className="flex min-h-full flex-col items-center justify-center gap-3 bg-ground text-muted">
         <Spinner size="md" />
-        <p role="status" className="text-sm font-medium">Firmendaten werden geladen …</p>
+        <p role="status" className="text-control">Firmendaten werden geladen …</p>
       </div>
     );
   }
@@ -90,6 +90,7 @@ export const InvoiceDocumentEditor: React.FC<InvoiceDocumentEditorProps> = ({
       document={invoice as unknown as DocumentDraft}
       templateType={templateType}
       mode={mode}
+      accountingEvidenceRequired={runtime.product === 'pro'}
       clients={clients as unknown as ClientLike[]}
       articles={articles as unknown as ArticleLike[]}
       projects={projects as unknown as ProjectLike[]}
@@ -100,7 +101,7 @@ export const InvoiceDocumentEditor: React.FC<InvoiceDocumentEditorProps> = ({
       resolveTemplateBody={resolveTemplateBody}
       onValidateVatId={runtime.validateVatId}
       onSelectedClientChange={setSelectedClientId}
-      onSave={(document, meta) => onSave(document as unknown as Invoice, meta)}
+      onSave={(document, meta) => onSave(document as unknown as Invoice | Offer, meta)}
       onCancel={onCancel}
     />
   );

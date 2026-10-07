@@ -73,8 +73,8 @@ export type DocumentViewModel = {
 const formatCurrency = (amount: number) =>
   new Intl.NumberFormat('de-DE', { style: 'currency', currency: 'EUR' }).format(amount).replace('-', '\u2212');
 
-const formatNumber = (value: number) =>
-  new Intl.NumberFormat('de-DE', { maximumFractionDigits: 3 }).format(value);
+const formatNumber = (value: number, maximumFractionDigits = 3) =>
+  new Intl.NumberFormat('de-DE', { maximumFractionDigits }).format(value);
 
 const formatDate = (value?: string) =>
   value ? new Date(value).toLocaleDateString('de-DE', { day: '2-digit', month: '2-digit', year: 'numeric' }) : '';
@@ -121,7 +121,7 @@ const buildItemRows = (input: DocumentRenderInput, unitColumnVisible: boolean): 
     }
     position += 1;
     const unit = item.unit ?? '';
-    const quantity = formatNumber(item.quantity);
+    const quantity = formatNumber(item.quantity, 6);
     const lineAmount = item.quantity * item.price * (1 - (item.discountPercent ?? 0) / 100);
     const optional = item.kind === 'optional';
     return {
@@ -221,7 +221,7 @@ export const buildDocumentViewModel = (input: DocumentRenderInput): DocumentView
   const recipient = trimBlankEdges([document.client, ...(document.clientAddress ?? '').split('\n')])
     .filter((line, index, all) => index === 0 || line !== all[0]);
 
-  const title = text(template.texts.title);
+  const title = `${document.status === 'draft' && !input.dunning ? 'ENTWURF · ' : ''}${text(template.texts.title)}`;
   return {
     kind,
     presetId: template.presetId,
@@ -237,7 +237,7 @@ export const buildDocumentViewModel = (input: DocumentRenderInput): DocumentView
           .filter((entry) => entry.value.trim() !== '')
       : [],
     runningTitle: title,
-    title: visible('title') ? title : '',
+    title: visible('title') || document.status === 'draft' ? title : '',
     intro: visible('intro') ? text(input.texts?.intro ?? template.texts.intro) : '',
     columns,
     rows: visible('items') ? rows : [],

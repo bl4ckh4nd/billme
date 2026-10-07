@@ -48,19 +48,19 @@ export const Field: React.FC<FieldProps> = ({
   });
 
   return (
-    <div className={cn('text-sm text-foreground', className)}>
+    <div className={cn('text-foreground', className)}>
       {label !== undefined && label !== null && (
-        <div className="mb-1.5 flex items-baseline">
-          <label htmlFor={id} className="block text-label text-foreground">
+        <div className="mb-1 flex items-baseline">
+          <label htmlFor={id} className="block text-caption font-medium text-foreground-secondary">
             {label}
           </label>
           {/* outside the <label> so the accessible name stays exactly `label` */}
-          {required && <span aria-hidden="true" className="ml-1 text-error">*</span>}
+          {required && <span aria-hidden="true" className="ml-0.5 text-caption text-error-text">*</span>}
         </div>
       )}
       {control}
-      {hasHint && <span id={hintId} className="mt-1 block text-xs text-muted">{hint}</span>}
-      {hasError && <p id={errorId} className="mt-1 text-xs text-error-text">{error}</p>}
+      {hasHint && <span id={hintId} className="mt-1 block text-micro text-muted">{hint}</span>}
+      {hasError && <p id={errorId} className="mt-1 text-caption text-error-text">{error}</p>}
     </div>
   );
 };

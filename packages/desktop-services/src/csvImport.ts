@@ -197,10 +197,17 @@ const parseDateToIso = (input: string): string | null => {
   const s = input.trim();
   if (!s) return null;
   // ISO date
-  if (/^\d{4}-\d{2}-\d{2}/.test(s)) {
-    const d = new Date(s);
-    if (Number.isNaN(d.getTime())) return null;
-    return d.toISOString().slice(0, 10);
+  const iso = /^(\d{4})-(\d{2})-(\d{2})(?:$|[T ])/.exec(s);
+  if (iso) {
+    const year = Number(iso[1]);
+    const month = Number(iso[2]);
+    const day = Number(iso[3]);
+    const calendarDate = new Date(`${iso[1]}-${iso[2]}-${iso[3]}T00:00:00Z`);
+    if (calendarDate.getUTCFullYear() !== year || calendarDate.getUTCMonth() !== month - 1 || calendarDate.getUTCDate() !== day) return null;
+    if (Number.isNaN(new Date(s).getTime())) return null;
+    // The booking day is the calendar day the export shows; converting the time through
+    // the machine's zone would move rows after midnight to the previous day.
+    return `${iso[1]}-${iso[2]}-${iso[3]}`;
   }
   // DE: DD.MM.YYYY
   const m = /^(\d{2})\.(\d{2})\.(\d{4})$/.exec(s);

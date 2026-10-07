@@ -1,22 +1,10 @@
-import { Button, EmptyState, ErrorState, Modal, useActionFeedback } from '@billme/ui';
+import {
+  Badge, Button, Card, CardHeader, Checkbox, ConfirmDialog, EmptyState, ErrorState, IconButton, Input,
+  SegmentedControl, Select, useActionFeedback,
+} from '@billme/ui';
 import { isSupportedEurTaxYear, LATEST_SUPPORTED_EUR_TAX_YEAR, SUPPORTED_EUR_TAX_YEARS } from '@billme/accounting-shared';
 import React, { useEffect, useMemo, useState } from 'react';
-import {
-  ArrowLeft,
-  Link2,
-  Unlink,
-  CheckCircle2,
-  AlertCircle,
-  Calendar,
-  User,
-  Search,
-  X,
-  Layers,
-  Check,
-  Ban,
-  XCircle,
-  TriangleAlert,
-} from 'lucide-react';
+import { Link2, Unlink, CheckCircle2, Search, X, Layers, Check, Ban, TriangleAlert } from 'lucide-react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { getRendererProduct, ipc } from '../runtime-api';
 import { Spinner } from '../ui/components/Spinner';
@@ -38,7 +26,7 @@ type MatchingTab = 'matching' | 'eur';
 type EurStatus = 'all' | 'unclassified' | 'classified' | 'excluded';
 
 type EurTxItem = {
-  sourceType: 'transaction' | 'invoice';
+  sourceType: 'transaction' | 'invoice' | 'manual';
   sourceId: string;
   date: string;
   amountGross: number;
@@ -61,7 +49,7 @@ type EurTxItem = {
 };
 
 type EurUndo = {
-  sourceType: 'transaction' | 'invoice';
+  sourceType: 'transaction' | 'invoice' | 'manual';
   sourceId: string;
   taxYear: number;
   prevLineId?: string;
@@ -70,7 +58,7 @@ type EurUndo = {
   prevVatRate?: number;
 };
 
-const keyOf = (item: { sourceType: 'transaction' | 'invoice'; sourceId: string }): string =>
+const keyOf = (item: { sourceType: 'transaction' | 'invoice' | 'manual'; sourceId: string }): string =>
   `${item.sourceType}:${item.sourceId}`;
 
 const queryErrorDetail = (error: unknown): string =>
@@ -78,26 +66,29 @@ const queryErrorDetail = (error: unknown): string =>
     ? error.message
     : 'Unbekannter Fehler beim Laden.';
 
-const selectClass = 'rounded-xl border border-control-border bg-surface px-3 py-2 text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring';
+const queueRow = 'border-b border-border px-3 py-2.5 transition-colors motion-reduce:transition-none';
+const queueRowCurrent = 'bg-accent-50 shadow-[inset_3px_0_0_var(--color-accent)]';
+const cardHead = 'border-b border-border px-3.5 py-3';
+const banner = 'flex items-start gap-2.5 rounded-control border px-3 py-2.5 text-control';
 
 /** The running year when a bundled EÜR catalog exists for it, else the latest one. */
 export const DEFAULT_EUR_TAX_YEAR: number = isSupportedEurTaxYear(new Date().getFullYear())
   ? new Date().getFullYear()
   : LATEST_SUPPORTED_EUR_TAX_YEAR;
 
-export const TransactionMatchingView: React.FC<{ onBack: () => void; initialTab?: MatchingTab }> = ({
-  onBack,
+/** Invoice matching and EÜR classification of bank transactions: a queue next to its detail. */
+export const TransactionMatchingView: React.FC<{ initialTab?: MatchingTab }> = ({
   initialTab = 'matching',
 }) => {
   const isProProduct = getRendererProduct() === 'pro';
   const [activeTab, setActiveTab] = useState<MatchingTab>(initialTab);
-  const unlinkTitleId = React.useId();
 
   useEffect(() => {
     setActiveTab(initialTab);
   }, [initialTab]);
 
   const [selectedTransaction, setSelectedTransaction] = useState<Transaction | null>(null);
+  const [allocationInputs, setAllocationInputs] = useState<Record<string, string>>({});
   const [searchQuery, setSearchQuery] = useState('');
   const [showLinked, setShowLinked] = useState(false);
   const [showUnlinkConfirm, setShowUnlinkConfirm] = useState(false);
@@ -120,7 +111,7 @@ export const TransactionMatchingView: React.FC<{ onBack: () => void; initialTab?
       });
     },
   });
-  const transactions = transactionsQuery.data ?? [];
+  const transactions = (transactionsQuery.data ?? []).filter((transaction) => !transaction.matchedManualEntryId);
 
   const matchesQuery = useQuery({
     queryKey: ['transaction-matches', selectedTransaction?.id],
@@ -133,18 +124,20 @@ export const TransactionMatchingView: React.FC<{ onBack: () => void; initialTab?
   const matchData = matchesQuery.data;
 
   const linkMutation = useMutation({
-    mutationFn: async ({ transactionId, invoiceId }: { transactionId: string; invoiceId: string }) => {
-      return await ipc.transactions.link({ transactionId, invoiceId });
+    mutationFn: async ({ transactionId, invoiceId, appliedAmountCents }: { transactionId: string; invoiceId: string; appliedAmountCents: number }) => {
+      return await ipc.transactions.link({ transactionId, invoiceId, appliedAmountCents });
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['transactions'] });
       queryClient.invalidateQueries({ queryKey: ['invoices'] });
       queryClient.invalidateQueries({ queryKey: ['transaction-matches'] });
       setSelectedTransaction(null);
-      showNotification('Transaktion zugeordnet und Rechnung als bezahlt markiert', 'success');
+      void queryClient.invalidateQueries({ queryKey: ['eur'] });
+      void queryClient.invalidateQueries({ queryKey: ['lite-vat'] });
+      showNotification('Zahlung zugeordnet. Ein Restbetrag bleibt in den Buchungen sichtbar.', 'success');
     },
     onError: (error) => {
-      showNotification(`Fehler beim Zuordnen: ${String(error)}`, 'error');
+      showNotification(`Fehler beim Zuordnen: ${error instanceof Error ? error.message : String(error)}`, 'error');
     },
   });
 
@@ -155,13 +148,14 @@ export const TransactionMatchingView: React.FC<{ onBack: () => void; initialTab?
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['transactions'] });
       queryClient.invalidateQueries({ queryKey: ['invoices'] });
+      queryClient.invalidateQueries({ queryKey: ['transaction-matches'] });
       setSelectedTransaction(null);
       setShowUnlinkConfirm(false);
       setInvoiceToUnlink(null);
       showNotification('Zuordnung erfolgreich aufgehoben', 'info');
     },
     onError: (error) => {
-      showNotification(`Fehler beim Aufheben: ${String(error)}`, 'error');
+      showNotification(`Fehler beim Aufheben: ${error instanceof Error ? error.message : String(error)}`, 'error');
     },
   });
 
@@ -183,7 +177,6 @@ export const TransactionMatchingView: React.FC<{ onBack: () => void; initialTab?
   );
 
   const unmatchedCount = transactions.filter((t) => !t.linkedInvoiceId).length;
-  const toggleVisibilityClass = showLinked ? 'bg-surface-muted text-muted' : 'bg-info-bg text-info-text border border-info-border';
   const toggleVisibilityLabel = showLinked ? 'Nur unzugeordnete' : 'Alle anzeigen';
 
   // New inline EÜR classification flow
@@ -223,7 +216,7 @@ export const TransactionMatchingView: React.FC<{ onBack: () => void; initialTab?
 
   const eurUpsert = useMutation({
     mutationFn: (payload: {
-      sourceType: 'transaction' | 'invoice';
+      sourceType: 'transaction' | 'invoice' | 'manual';
       sourceId: string;
       taxYear: number;
       eurLineId?: string;
@@ -239,6 +232,8 @@ export const TransactionMatchingView: React.FC<{ onBack: () => void; initialTab?
       queryClient.invalidateQueries({ queryKey: ['eur', 'items', 'transaction', taxYear] }),
       queryClient.invalidateQueries({ queryKey: ['eur', 'report', taxYear] }),
       queryClient.invalidateQueries({ queryKey: ['eur', 'items', taxYear] }),
+      // The open count in the progress card above the queue (AccountsView).
+      queryClient.invalidateQueries({ queryKey: ['eur', 'accounts-unclassified-transactions'] }),
     ]);
   };
 
@@ -410,21 +405,13 @@ export const TransactionMatchingView: React.FC<{ onBack: () => void; initialTab?
   };
 
   const getConfidenceBadge = (confidence: 'high' | 'medium' | 'low') => {
-    const styles: Record<'high' | 'medium' | 'low', string> = {
-      high: 'bg-success-bg text-success-text border-success-border',
-      medium: 'bg-warning-bg text-warning-text border-warning-border',
-      low: 'bg-surface-muted text-muted border-border',
-    };
+    const tones = { high: 'success', medium: 'warning', low: 'neutral' } as const;
     const labels: Record<'high' | 'medium' | 'low', string> = {
       high: 'Hohe Übereinstimmung',
       medium: 'Mittlere Übereinstimmung',
       low: 'Geringe Übereinstimmung',
     };
-    return (
-      <span className={`px-2 py-1 rounded-full text-xs font-medium border ${styles[confidence]}`}>
-        {labels[confidence]}
-      </span>
-    );
+    return <Badge tone={tones[confidence]}>{labels[confidence]}</Badge>;
   };
 
   const formatCurrency = (amount: number) => {
@@ -454,373 +441,319 @@ export const TransactionMatchingView: React.FC<{ onBack: () => void; initialTab?
         ? 'EÜR-Klassifizierungen werden geladen'
         : `${eurCounts.unclassified} offene EÜR-Klassifizierungen`;
 
+
+  const reasonInput = (
+    <Input
+      label="Begründung (Audit)"
+      required
+      aria-label="Begründung für EÜR-Änderung"
+      value={eurReason}
+      onChange={(event) => setEurReason(event.target.value)}
+      placeholder="z. B. Beleg geprüft und Kontierung bestätigt"
+      fullWidth
+    />
+  );
+
   return (
-    <div className="h-full flex flex-col bg-surface">
-      <div className="border-b border-border p-6">
-        <div className="flex items-center justify-between mb-4">
-          <div className="flex items-center gap-3">
-            <button
-              type="button"
-              onClick={onBack}
-              aria-label="Zurück zur Übersicht"
-              className="p-2 rounded-lg text-muted transition-colors hover:bg-surface-muted focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
-            >
-              <ArrowLeft size={20} aria-hidden="true" />
-            </button>
-            <div>
-              <h1 className="text-title text-foreground">Transaktionen bearbeiten</h1>
-              <p className="text-sm text-muted mt-1 tabular-nums">{listSummary}</p>
-            </div>
-          </div>
-
-          <div className="flex items-center gap-2 rounded-lg border border-border p-1 bg-surface-muted">
-            <button
-              type="button"
-              onClick={() => setActiveTab('matching')}
-              aria-pressed={activeTab === 'matching'}
-              className={`px-3 py-1.5 text-sm rounded-md focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring ${activeTab === 'matching' ? 'bg-surface shadow-sm font-semibold text-foreground' : 'text-muted'}`}
-            >
-              Rechnungen zuordnen
-            </button>
-            <button
-              type="button"
-              onClick={() => setActiveTab('eur')}
-              aria-pressed={activeTab === 'eur'}
-              className={`px-3 py-1.5 text-sm rounded-md focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring ${activeTab === 'eur' ? 'bg-surface shadow-sm font-semibold text-foreground' : 'text-muted'}`}
-            >
-              EÜR klassifizieren
-            </button>
-          </div>
-        </div>
-
+    <div className="flex flex-col gap-3.5">
+      <div className="flex flex-wrap items-center gap-2">
+        <SegmentedControl
+          aria-label="Bearbeitungsart"
+          value={activeTab}
+          onChange={setActiveTab}
+          options={[
+            { value: 'matching', label: 'Rechnungen zuordnen' },
+            { value: 'eur', label: 'EÜR klassifizieren' },
+          ]}
+        />
         {activeTab === 'matching' ? (
-          <div className="relative">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-muted" size={16} aria-hidden="true" />
-            <input
+          <div className="relative min-w-56 flex-1">
+            <Input
               type="text"
               placeholder="Transaktion suchen"
               aria-label="Transaktion suchen"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              className="px-2.5 h-8 hover:border-control-border-hover w-full pl-10 pr-4 border border-control-border bg-surface rounded-control text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+              prefix={<Search size={14} />}
+              className="pr-8"
+              fullWidth
             />
             {searchQuery && (
-              <button
-                type="button"
-                onClick={() => setSearchQuery('')}
+              <IconButton
+                size="sm"
+                tooltip={false}
                 aria-label="Suche zurücksetzen"
-                className="absolute right-3 top-1/2 -translate-y-1/2 rounded-sm p-1 text-muted hover:text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                onClick={() => setSearchQuery('')}
+                className="absolute right-0.5 top-0.5"
               >
-                <X size={16} aria-hidden="true" />
-              </button>
+                <X size={14} aria-hidden="true" />
+              </IconButton>
             )}
           </div>
         ) : (
-          <div className="flex flex-wrap items-center gap-2">
-            <select
-              value={taxYear}
-              aria-label="Steuerjahr"
-              onChange={(e) => setTaxYear(Number(e.target.value))}
-              className={selectClass}
-            >
+          <>
+            <Select value={taxYear} aria-label="Steuerjahr" onChange={(e) => setTaxYear(Number(e.target.value))}>
               {SUPPORTED_EUR_TAX_YEARS.map((year) => <option key={year} value={year}>{year}</option>)}
-            </select>
-            <input
+            </Select>
+            <Input
               value={eurQuery}
               onChange={(e) => setEurQuery(e.target.value)}
               placeholder="Suche Gegenpartei/Zweck"
               aria-label="EÜR-Einträge durchsuchen"
-              className="px-2.5 h-8 hover:border-control-border-hover rounded-control border border-control-border bg-surface text-sm min-w-[220px] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+              className="min-w-56"
             />
-            <select
-              value={eurStatus}
-              aria-label="EÜR-Status filtern"
-              onChange={(e) => setEurStatus(e.target.value as EurStatus)}
-              className={selectClass}
-            >
+            <Select value={eurStatus} aria-label="EÜR-Status filtern" onChange={(e) => setEurStatus(e.target.value as EurStatus)}>
               <option value="unclassified">Unklassifiziert</option>
               <option value="classified">Klassifiziert</option>
               <option value="excluded">Ausgeschlossen</option>
               <option value="all">Alle</option>
-            </select>
-            <select
+            </Select>
+            <Select
               value={eurFlow}
               aria-label="Zahlungsrichtung filtern"
               onChange={(e) => setEurFlow(e.target.value as 'all' | 'income' | 'expense')}
-              className={selectClass}
             >
               <option value="all">Alle Typen</option>
               <option value="income">Einnahmen</option>
               <option value="expense">Ausgaben</option>
-            </select>
-            <select
+            </Select>
+            <Select
               value={eurSort}
               aria-label="EÜR-Einträge sortieren"
               onChange={(e) => setEurSort(e.target.value as 'date_desc' | 'amount_desc' | 'counterparty_asc')}
-              className={selectClass}
             >
               <option value="date_desc">Neueste zuerst</option>
               <option value="amount_desc">Betrag absteigend</option>
               <option value="counterparty_asc">Name A-Z</option>
-            </select>
-            <Button
-              size="sm"
-              variant="secondary"
-              onClick={() => {
-                if (eurItems.length === 0) return;
-                setEurSelected(new Set(eurItems.map((item) => keyOf(item))));
-              }}
-            >
-              Alle wählen
-            </Button>
-            <Button size="sm" variant="secondary" onClick={() => setEurSelected(new Set())}>
-              Auswahl löschen
-            </Button>
-          </div>
+            </Select>
+          </>
         )}
       </div>
 
-      <div className="flex-1 flex overflow-hidden">
+      <div className="grid gap-3.5 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.15fr)]">
         {activeTab === 'matching' ? (
           <>
-            <div className="w-1/2 border-r border-border overflow-y-auto">
-              <div className="p-4">
-                <button
-                  type="button"
-                  onClick={() => setShowLinked(!showLinked)}
-                  aria-pressed={showLinked}
-                  className={`px-4 py-2 rounded-lg font-medium text-sm transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring ${toggleVisibilityClass}`}
-                >
-                  {toggleVisibilityLabel}
-                </button>
-              </div>
+            <Card padding="none" className="overflow-hidden">
+              <CardHeader
+                title={listSummary}
+                actions={
+                  <Button variant="secondary" size="sm" onClick={() => setShowLinked(!showLinked)} aria-pressed={showLinked}>
+                    {toggleVisibilityLabel}
+                  </Button>
+                }
+                className={cardHead}
+              />
               {transactionsQuery.isError ? (
-                <div className="p-4">
-                  <ErrorState
-                    title="Transaktionen konnten nicht geladen werden"
-                    description={queryErrorDetail(transactionsQuery.error)}
-                    onRetry={() => void transactionsQuery.refetch()}
-                  />
-                </div>
+                <ErrorState
+                  title="Transaktionen konnten nicht geladen werden"
+                  description={queryErrorDetail(transactionsQuery.error)}
+                  onRetry={() => void transactionsQuery.refetch()}
+                  className="m-3.5"
+                />
               ) : transactionsQuery.isLoading ? (
-                <div className="flex flex-col items-center justify-center gap-3 py-16 text-muted">
+                <div className="flex flex-col items-center justify-center gap-3 py-10 text-muted">
                   <Spinner size="md" />
-                  <p role="status" className="text-sm font-medium">Transaktionen werden geladen …</p>
+                  <p role="status" className="text-control">Transaktionen werden geladen …</p>
                 </div>
               ) : filteredTransactions.length === 0 ? (
-                <div className="p-4">
-                  <EmptyState
-                    title={searchQuery ? 'Keine Transaktion passt zur Suche' : 'Keine offenen Transaktionen'}
-                    description={searchQuery
-                      ? 'Prüfe den Suchbegriff oder setze die Suche zurück, um alle Transaktionen zu sehen.'
-                      : 'Importiere einen Kontoauszug als CSV, danach kannst du hier Rechnungen zuordnen.'}
-                  />
-                </div>
+                <EmptyState
+                  title={searchQuery ? 'Keine Transaktion passt zur Suche' : 'Keine offenen Transaktionen'}
+                  description={searchQuery
+                    ? 'Prüfe den Suchbegriff oder setze die Suche zurück, um alle Transaktionen zu sehen.'
+                    : 'Importiere einen Kontoauszug als CSV, danach kannst du hier Rechnungen zuordnen.'}
+                />
               ) : (
-                <div className="p-4 space-y-2">
+                <div className="max-h-128 overflow-y-auto">
                   {filteredTransactions.map((transaction) => {
                     const isSelected = selectedTransaction?.id === transaction.id;
-                    const isLinked = Boolean(transaction.linkedInvoiceId);
-
-                    let rowClass = 'border-border hover:border-control-border';
-                    if (isSelected) {
-                      rowClass = 'border-info bg-info-bg';
-                    } else if (isLinked) {
-                      rowClass = 'border-success-border bg-success-bg hover:border-success';
-                    }
-
                     return (
                       <button
                         type="button"
                         key={transaction.id}
                         onClick={() => setSelectedTransaction(transaction)}
                         aria-pressed={isSelected}
-                        className={`w-full text-left p-4 rounded-lg border-2 transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring ${rowClass}`}
+                        className={`block w-full text-left focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-focus-ring ${queueRow} ${isSelected ? queueRowCurrent : 'hover:bg-surface-muted'}`}
                       >
-                        <div className="flex items-start justify-between mb-2">
-                          <div className="flex-1">
-                            <div className="flex items-center gap-2 mb-1">
-                              {isLinked ? (
-                                <CheckCircle2 size={16} className="text-success-text flex-shrink-0" aria-hidden="true" />
-                              ) : (
-                                <AlertCircle size={16} className="text-warning-text flex-shrink-0" aria-hidden="true" />
-                              )}
-                              <span className="font-semibold text-foreground truncate">
-                                {transaction.counterparty}
-                              </span>
-                            </div>
-                            <p className="text-sm text-muted line-clamp-2">{transaction.purpose}</p>
-                          </div>
-                          <div className="text-right ml-4 flex-shrink-0">
-                            <div className="text-lg font-semibold tabular-nums text-success-text">
-                              {formatCurrency(transaction.amount)}
-                            </div>
-                            <div className="text-xs text-muted tabular-nums">{formatDate(transaction.date)}</div>
-                          </div>
-                        </div>
-                        {isLinked && (
-                          <div className="flex items-center gap-2 mt-2 pt-2 border-t border-success-border">
-                            <Link2 size={14} className="text-success-text" aria-hidden="true" />
-                            <span className="text-xs text-success-text font-medium">Zugeordnet</span>
-                          </div>
-                        )}
+                        <span className="flex items-baseline gap-2">
+                          <span className="min-w-0 flex-1 truncate text-label font-semibold text-foreground">{transaction.counterparty}</span>
+                          <span className="shrink-0 text-label font-semibold tabular-nums text-foreground">{formatCurrency(transaction.amount)}</span>
+                        </span>
+                        <span className="mt-1 flex flex-wrap items-center gap-1.5">
+                          <span className="text-caption tabular-nums text-muted">{formatDate(transaction.date)}</span>
+                          {transaction.linkedInvoiceId && (
+                            <Badge tone="success"><Link2 size={12} aria-hidden="true" />Zugeordnet</Badge>
+                          )}
+                        </span>
+                        <span className="mt-1 block truncate text-caption text-muted">{transaction.purpose}</span>
                       </button>
                     );
                   })}
                 </div>
               )}
-            </div>
+            </Card>
 
-            <div className="w-1/2 overflow-y-auto bg-surface-muted">
+            <Card padding="none">
               {!selectedTransaction ? (
-                <div className="flex flex-col items-center justify-center h-full p-8">
-                  <EmptyState
-                    title="Keine Transaktion ausgewählt"
-                    description="Wähle links eine Transaktion aus, um passende offene Rechnungen zu sehen."
-                    className="border-0 bg-transparent"
-                  />
-                </div>
-              ) : selectedTransaction.linkedInvoiceId ? (
-                <div className="p-6">
-                  <div className="bg-surface rounded-lg border border-success-border p-6">
-                    <div className="flex items-center gap-3 mb-4">
-                      <CheckCircle2 size={24} className="text-success-text" aria-hidden="true" />
-                      <h2 className="text-xl font-semibold text-foreground">Bereits zugeordnet</h2>
-                    </div>
-                    <p className="text-muted mb-6">
-                      Diese Transaktion ist bereits einer Rechnung zugeordnet.
-                    </p>
-                    <button
-                      type="button"
-                      onClick={() => handleUnlinkClick(selectedTransaction.id)}
-                      disabled={unlinkMutation.isPending}
-                      className="px-4 py-2 rounded-lg font-medium text-sm transition-colors flex items-center gap-2 border border-error-border bg-error-bg text-error-text hover:bg-error-bg/80 disabled:opacity-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
-                    >
-                      <Unlink size={16} aria-hidden="true" />
-                      Zuordnung aufheben
-                    </button>
-                  </div>
-                </div>
+                <EmptyState
+                  title="Keine Transaktion ausgewählt"
+                  description="Wähle links eine Transaktion aus, um passende offene Rechnungen zu sehen."
+                />
               ) : (
-                <div className="p-6">
-                  <h2 className="text-lg font-semibold text-foreground mb-4">Passende Rechnungen</h2>
-
-                  {matchesQuery.isError ? (
-                    <ErrorState
-                      title="Rechnungsvorschläge konnten nicht geladen werden"
-                      description={queryErrorDetail(matchesQuery.error)}
-                      onRetry={() => void matchesQuery.refetch()}
-                    />
-                  ) : matchesQuery.isLoading ? (
-                    <div className="flex items-center justify-center h-64">
-                      <Spinner size="md" />
-                    </div>
-                  ) : !matchData || matchData.suggestions.length === 0 ? (
-                    <div className="bg-surface rounded-lg border border-border p-8">
-                      <EmptyState
-                        title="Keine passende Rechnung gefunden"
-                        description="Es gibt keine offenen Rechnungen mit passendem Betrag oder Verwendungszweck zu dieser Transaktion."
-                        className="border-0 bg-transparent px-0 py-0"
-                      />
-                    </div>
-                  ) : (
-                    <div className="space-y-3">
-                      {matchData.suggestions.map((suggestion) => {
-                        const alreadyPaid = suggestion.invoice.payments?.reduce(
-                          (sum, p) => sum + p.amount,
-                          0,
-                        ) || 0;
-                        const remaining = suggestion.invoice.amount - alreadyPaid;
-
-                        return (
-                          <div
-                            key={suggestion.invoice.id}
-                            className="bg-surface rounded-lg border-2 border-border hover:border-info-border transition-colors p-4"
+                <>
+                  <CardHeader
+                    title={selectedTransaction.counterparty}
+                    count={<span className="font-bold tabular-nums text-foreground">{formatCurrency(selectedTransaction.amount)}</span>}
+                    className={cardHead}
+                  />
+                  <div className="flex flex-col gap-2.5 p-3.5">
+                    <p className="text-caption text-muted">
+                      <span className="tabular-nums">{formatDate(selectedTransaction.date)}</span> · {selectedTransaction.purpose}
+                    </p>
+                    {selectedTransaction.linkedInvoiceId ? (
+                      <>
+                        <div className={`${banner} border-success-border bg-success-bg text-success-text`}>
+                          <CheckCircle2 size={16} className="mt-px shrink-0" aria-hidden="true" />
+                          <span className="min-w-0 flex-1">
+                            <strong className="font-semibold">Bereits zugeordnet.</strong> {formatCurrency((selectedTransaction.appliedAmountCents ?? Math.round(selectedTransaction.amount * 100)) / 100)} für die Rechnung; Rest {formatCurrency((selectedTransaction.unallocatedAmountCents ?? 0) / 100)}.
+                          </span>
+                        </div>
+                        <div>
+                          <Button
+                            variant="danger"
+                            size="sm"
+                            onClick={() => handleUnlinkClick(selectedTransaction.id)}
+                            disabled={unlinkMutation.isPending}
                           >
-                            <div className="flex items-start justify-between mb-3">
-                              <div className="flex-1">
-                                <div className="flex items-center gap-2 mb-2">
-                                  <span className="font-semibold text-foreground">{suggestion.invoice.number}</span>
-                                  {getConfidenceBadge(suggestion.confidence)}
-                                </div>
-                                <p className="text-sm text-muted mb-1">
-                                  <User size={14} className="inline mr-1" aria-hidden="true" />
-                                  {suggestion.invoice.client}
-                                </p>
-                                <p className="text-sm text-muted">
-                                  <Calendar size={14} className="inline mr-1" aria-hidden="true" />
-                                  Fällig: <span className="tabular-nums">{formatDate(suggestion.invoice.dueDate)}</span>
-                                </p>
-                              </div>
-                              <div className="text-right ml-4">
-                                <div className="text-lg font-semibold tabular-nums text-foreground">
-                                  {formatCurrency(remaining)}
-                                </div>
-                                <div className="text-xs text-muted">offen</div>
-                              </div>
-                            </div>
-
-                            <div className="space-y-1 mb-4 pb-4 border-b border-border-subtle">
-                              {suggestion.matchReasons.map((reason, reasonIdx) => (
-                                <div key={reasonIdx} className="flex items-center gap-2 text-sm text-muted">
-                                  <CheckCircle2 size={14} className="text-success-text flex-shrink-0" aria-hidden="true" />
-                                  <span>{reason}</span>
-                                </div>
-                              ))}
-                            </div>
-
-                            <Button
-                              fullWidth
-                              onClick={() => linkMutation.mutate({
-                                transactionId: selectedTransaction.id,
-                                invoiceId: suggestion.invoice.id,
-                              })}
-                              disabled={linkMutation.isPending}
-                            >
-                              <Link2 size={16} aria-hidden="true" />
-                              Zuordnen und als bezahlt markieren
-                            </Button>
+                            <Unlink size={14} aria-hidden="true" />
+                            Zuordnung aufheben
+                          </Button>
+                        </div>
+                      </>
+                    ) : (
+                      <>
+                        <h3 className="text-caption font-medium text-foreground-secondary">Passende Rechnungen</h3>
+                        {matchesQuery.isError ? (
+                          <ErrorState
+                            title="Rechnungsvorschläge konnten nicht geladen werden"
+                            description={queryErrorDetail(matchesQuery.error)}
+                            onRetry={() => void matchesQuery.refetch()}
+                          />
+                        ) : matchesQuery.isLoading ? (
+                          <div className="flex items-center justify-center py-10">
+                            <Spinner size="md" />
                           </div>
-                        );
-                      })}
-                    </div>
-                  )}
-                </div>
+                        ) : !matchData || matchData.suggestions.length === 0 ? (
+                          <EmptyState
+                            title="Keine passende Rechnung gefunden"
+                            description="Es gibt keine offenen Rechnungen mit passendem Betrag oder Verwendungszweck zu dieser Transaktion."
+                          />
+                        ) : (
+                          matchData.suggestions.map((suggestion, index) => {
+                            const alreadyPaid = suggestion.invoice.payments?.reduce(
+                              (sum, p) => sum + p.amount,
+                              0,
+                            ) || 0;
+                            const remaining = suggestion.invoice.amount - alreadyPaid;
+                            const maximum = Math.min(remaining, selectedTransaction.amount);
+                            const allocationValue = allocationInputs[suggestion.invoice.id] ?? String(maximum);
+                            const allocationAmount = Number(allocationValue.replace(',', '.'));
+                            const appliedAmountCents = Math.round(allocationAmount * 100);
+
+                            return (
+                              <Card
+                                key={suggestion.invoice.id}
+                                padding="sm"
+                                className={index === 0 && suggestion.confidence === 'high' ? 'border-foreground' : undefined}
+                              >
+                                <div className="flex items-start justify-between gap-3">
+                                  <div className="min-w-0">
+                                    <div className="text-label text-foreground">{suggestion.invoice.number}</div>
+                                    <div className="text-caption text-muted">
+                                      {suggestion.invoice.client} · Fällig: <span className="tabular-nums">{formatDate(suggestion.invoice.dueDate)}</span>
+                                    </div>
+                                  </div>
+                                  <div className="shrink-0 text-right">
+                                    <div className="text-label tabular-nums text-foreground">
+                                      {formatCurrency(remaining)} <span className="text-caption font-normal text-muted">offen</span>
+                                    </div>
+                                    {getConfidenceBadge(suggestion.confidence)}
+                                  </div>
+                                </div>
+                                <ul className="mt-1.5 text-caption text-muted">
+                                  {suggestion.matchReasons.map((reason, reasonIdx) => (
+                                    <li key={reasonIdx} className="flex items-center gap-1.5">
+                                      <Check size={12} className="shrink-0 text-success-text" aria-hidden="true" />
+                                      <span>{reason}</span>
+                                    </li>
+                                  ))}
+                                </ul>
+                                <div className="mt-2.25">
+                                  <Input label={`Zuordnungsbetrag ${suggestion.invoice.number} in EUR`} inputMode="decimal" value={allocationValue} onChange={(event) => setAllocationInputs({ ...allocationInputs, [suggestion.invoice.id]: event.target.value })} />
+                                  <p className="my-2 text-caption text-muted">Rest aus dieser Bankzahlung: {formatCurrency(selectedTransaction.amount - allocationAmount)}</p>
+                                  <Button
+                                    size="sm"
+                                    onClick={() => linkMutation.mutate({
+                                      transactionId: selectedTransaction.id,
+                                      invoiceId: suggestion.invoice.id,
+                                      appliedAmountCents: appliedAmountCents,
+                                    })}
+                                    disabled={linkMutation.isPending || !Number.isFinite(allocationAmount) || allocationAmount <= 0 || allocationAmount > maximum}
+                                  >
+                                    <Link2 size={14} aria-hidden="true" />
+                                    Zahlung zuordnen
+                                  </Button>
+                                </div>
+                              </Card>
+                            );
+                          })
+                        )}
+                      </>
+                    )}
+                  </div>
+                </>
               )}
-            </div>
+            </Card>
           </>
         ) : (
           <>
-            <div className="w-1/2 border-r border-border overflow-y-auto">
-              {eurUndo && (
-                <div className="m-4 rounded-xl border border-warning-border bg-warning-bg p-3 flex items-center justify-between gap-2">
-                  <span className="text-xs text-warning-text">{eurUndo.label}</span>
-                  <button
-                    type="button"
-                    onClick={() => void undoEur()}
-                    disabled={eurPending}
-                    className="px-2 py-1 rounded-md border border-warning-border bg-surface text-xs font-semibold text-warning-text hover:bg-warning-bg disabled:opacity-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
-                  >
-                    Rückgängig
-                  </button>
-                </div>
-              )}
+            <Card padding="none" className="overflow-hidden">
+              <CardHeader
+                title={listSummary}
+                actions={
+                  <>
+                    <Button
+                      size="sm"
+                      variant="secondary"
+                      onClick={() => {
+                        if (eurItems.length === 0) return;
+                        setEurSelected(new Set(eurItems.map((item) => keyOf(item))));
+                      }}
+                    >
+                      Alle wählen
+                    </Button>
+                    <Button size="sm" variant="secondary" onClick={() => setEurSelected(new Set())}>
+                      Auswahl löschen
+                    </Button>
+                  </>
+                }
+                className={cardHead}
+              />
 
-              <div className="m-4 rounded-xl border border-border p-3">
-                <div className="text-xs text-muted mb-2 tabular-nums">Bulk-Aktionen ({eurSelected.size} ausgewählt)</div>
-                <div className="grid grid-cols-1 gap-2">
-                  <label className="text-xs font-semibold text-foreground">
-                    Begründung (Audit) <span className="text-error-text">*</span>
-                    <input
-                      aria-label="Begründung für EÜR-Änderung"
-                      value={eurReason}
-                      onChange={(event) => setEurReason(event.target.value)}
-                      className="px-2.5 h-8 hover:border-control-border-hover mt-1 w-full rounded-control border border-control-border bg-surface text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
-                      placeholder="z. B. Beleg geprüft und Kontierung bestätigt"
-                    />
-                  </label>
-                  <button
-                    type="button"
+              <div className="flex flex-col gap-2.5 border-b border-border p-3.5">
+                {eurUndo && (
+                  <div className={`${banner} items-center border-warning-border bg-warning-bg text-warning-text`}>
+                    <span className="min-w-0 flex-1">{eurUndo.label}</span>
+                    <Button variant="secondary" size="sm" onClick={() => void undoEur()} disabled={eurPending}>
+                      Rückgängig
+                    </Button>
+                  </div>
+                )}
+                <div className="text-caption text-muted tabular-nums">Bulk-Aktionen ({eurSelected.size} ausgewählt)</div>
+                {reasonInput}
+                <div className="flex flex-wrap gap-2">
+                  <Button
+                    variant="secondary"
+                    size="sm"
                     onClick={() =>
                       void applyEurBulk('Bulk: Vorschlag anwenden', (item) => ({
                         eurLineId: item.suggestedLineId,
@@ -830,13 +763,13 @@ export const TransactionMatchingView: React.FC<{ onBack: () => void; initialTab?
                       }))
                     }
                     disabled={eurSelected.size === 0 || eurPending || eurReason.trim().length === 0}
-                    className="flex items-center gap-2 rounded-lg border border-border bg-surface px-3 py-2 text-xs text-left text-foreground hover:bg-surface-muted transition-colors disabled:opacity-60 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
                   >
-                    <Check size={14} className="text-info-text flex-shrink-0" aria-hidden="true" />
+                    <Check size={14} aria-hidden="true" />
                     Vorschlag anwenden
-                  </button>
-                  <button
-                    type="button"
+                  </Button>
+                  <Button
+                    variant="secondary"
+                    size="sm"
                     onClick={() =>
                       void applyEurBulk('Bulk: Als privat/Transfer markieren', () => ({
                         eurLineId: undefined,
@@ -846,49 +779,39 @@ export const TransactionMatchingView: React.FC<{ onBack: () => void; initialTab?
                       }))
                     }
                     disabled={eurSelected.size === 0 || eurPending || eurReason.trim().length === 0}
-                    className="flex items-center gap-2 rounded-lg border border-border bg-surface px-3 py-2 text-xs text-left text-foreground hover:bg-surface-muted transition-colors disabled:opacity-60 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
                   >
-                    <Ban size={14} className="text-error-text flex-shrink-0" aria-hidden="true" />
+                    <Ban size={14} aria-hidden="true" />
                     Als privat/Transfer markieren
-                  </button>
+                  </Button>
                 </div>
               </div>
 
               {eurItemsQuery.isError ? (
-                <div className="p-4">
-                  <ErrorState
-                    title="EÜR-Einträge konnten nicht geladen werden"
-                    description={queryErrorDetail(eurItemsQuery.error)}
-                    onRetry={() => void eurItemsQuery.refetch()}
-                  />
-                </div>
+                <ErrorState
+                  title="EÜR-Einträge konnten nicht geladen werden"
+                  description={queryErrorDetail(eurItemsQuery.error)}
+                  onRetry={() => void eurItemsQuery.refetch()}
+                  className="m-3.5"
+                />
               ) : eurItemsQuery.isLoading ? (
-                <div className="flex flex-col items-center justify-center gap-3 py-16 text-muted">
+                <div className="flex flex-col items-center justify-center gap-3 py-10 text-muted">
                   <Spinner size="md" />
-                  <p role="status" className="text-sm font-medium">EÜR-Einträge werden geladen …</p>
+                  <p role="status" className="text-control">EÜR-Einträge werden geladen …</p>
                 </div>
               ) : eurItems.length === 0 ? (
-                <div className="p-4">
-                  <EmptyState
-                    title="Keine EÜR-Einträge für diesen Filter"
-                    description="Alle Transaktionen dieses Filters sind bereits bearbeitet. Wähle oben einen anderen Status."
-                    className="border-0 bg-transparent"
-                  />
-                </div>
+                <EmptyState
+                  title="Keine EÜR-Einträge für diesen Filter"
+                  description="Alle Transaktionen dieses Filters sind bereits bearbeitet. Wähle oben einen anderen Status."
+                />
               ) : (
-                <div className="p-4 space-y-2">
+                <div className="max-h-128 overflow-y-auto">
                   {eurItems.map((item) => {
                     const key = keyOf(item);
                     const isActive = eurActive?.sourceType === item.sourceType && eurActive.sourceId === item.sourceId;
                     return (
-                      <div
-                        key={key}
-                        className={`p-3 rounded-xl border ${isActive ? 'border-foreground bg-surface-muted' : 'border-border hover:border-control-border'}`}
-                      >
-                        <div className="flex items-start gap-2">
-                          <input
-                            type="checkbox"
-                            className="mt-1"
+                      <div key={key} className={`flex items-start gap-2.5 ${queueRow} ${isActive ? queueRowCurrent : 'hover:bg-surface-muted'}`}>
+                        <span className="mt-0.5">
+                          <Checkbox
                             aria-label={`${item.counterparty} auswählen`}
                             checked={eurSelected.has(key)}
                             onChange={(e) => {
@@ -898,116 +821,94 @@ export const TransactionMatchingView: React.FC<{ onBack: () => void; initialTab?
                               setEurSelected(next);
                             }}
                           />
-                          <button
-                            type="button"
-                            onClick={() => setEurActive(item)}
-                            aria-pressed={isActive}
-                            className="flex-1 text-left rounded-md focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
-                          >
-                            <div className="flex items-center gap-1.5 text-xs text-muted">
-                              {item.classification?.excluded ? (
-                                <XCircle size={14} className="text-error-text" aria-hidden="true" />
-                              ) : item.classification?.eurLineId ? (
-                                <CheckCircle2 size={14} className="text-success-text" aria-hidden="true" />
-                              ) : (
-                                <AlertCircle size={14} className="text-warning-text" aria-hidden="true" />
-                              )}
-                              <span className="tabular-nums">{item.date}</span>
-                              <span aria-hidden="true">·</span>
-                              <span>{item.flowType === 'income' ? 'Einnahme' : 'Ausgabe'}</span>
-                            </div>
-                            <div className="text-sm font-semibold text-foreground truncate">{item.counterparty}</div>
-                            <div className="text-xs text-muted truncate">{item.purpose}</div>
-                            <div className={`text-sm font-semibold mt-1 tabular-nums ${
-                              item.flowType === 'income' ? 'text-success-text' : 'text-error-text'
-                            }`}>
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => setEurActive(item)}
+                          aria-pressed={isActive}
+                          className="min-w-0 flex-1 rounded-xs text-left focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                        >
+                          <span className="flex items-baseline gap-2">
+                            <span className="min-w-0 flex-1 truncate text-label font-semibold text-foreground">{item.counterparty}</span>
+                            <span className="shrink-0 text-label font-semibold tabular-nums text-foreground">
                               {item.flowType === 'income' ? '+' : '-'}{formatCurrency(item.amountGross)}
-                            </div>
-                            <div className="flex flex-wrap gap-1 mt-2">
-                              {item.classification?.excluded ? (
-                                <span className="text-xs px-2 py-0.5 rounded-full border border-error-border bg-error-bg text-error-text">Ausgeschlossen</span>
-                              ) : item.classification?.eurLineId ? (
-                                <span className="text-xs px-2 py-0.5 rounded-full border border-success-border bg-success-bg text-success-text">Klassifiziert</span>
-                              ) : (
-                                <span className="text-xs px-2 py-0.5 rounded-full border border-warning-border bg-warning-bg text-warning-text">Offen</span>
-                              )}
-                              {item.suggestedLineId && !item.classification?.eurLineId && !item.classification?.excluded && (
-                                <span className="text-xs px-2 py-0.5 rounded-full border border-info-border bg-info-bg text-info-text">Vorschlag</span>
-                              )}
-                            </div>
-                          </button>
-                        </div>
+                            </span>
+                          </span>
+                          <span className="mt-1 flex flex-wrap items-center gap-1.5">
+                            <span className="text-caption tabular-nums text-muted">{item.date}</span>
+                            <span className="text-caption text-muted">{item.flowType === 'income' ? 'Einnahme' : 'Ausgabe'}</span>
+                            {item.classification?.excluded ? (
+                              <Badge tone="error">Ausgeschlossen</Badge>
+                            ) : item.classification?.eurLineId ? (
+                              <Badge tone="success">Klassifiziert</Badge>
+                            ) : (
+                              <Badge tone="warning">Offen</Badge>
+                            )}
+                            {item.suggestedLineId && !item.classification?.eurLineId && !item.classification?.excluded && (
+                              <Badge tone="info">Vorschlag</Badge>
+                            )}
+                          </span>
+                          <span className="mt-1 block truncate text-caption text-muted">{item.purpose}</span>
+                        </button>
                       </div>
                     );
                   })}
                 </div>
               )}
-            </div>
+            </Card>
 
-            <div className="w-1/2 overflow-y-auto bg-surface-muted p-6">
+            <Card padding="none">
               {!eurActive ? (
-                <div className="h-full flex items-center justify-center">
-                  <EmptyState
-                    title="Kein Eintrag ausgewählt"
-                    description="Wähle links eine Transaktion aus, um sie einer EÜR-Kennziffer zuzuordnen."
-                    className="border-0 bg-transparent"
-                  />
-                </div>
+                <EmptyState
+                  title="Kein Eintrag ausgewählt"
+                  description="Wähle links eine Transaktion aus, um sie einer EÜR-Kennziffer zuzuordnen."
+                />
               ) : (
-                <div className="bg-surface rounded-xl border border-border p-5 space-y-4">
-                  <div>
-                    <label className="text-xs font-semibold text-foreground">
-                      Begründung (Audit) <span className="text-error-text">*</span>
-                      <input
-                        aria-label="Begründung für EÜR-Änderung"
-                        value={eurReason}
-                        onChange={(event) => setEurReason(event.target.value)}
-                        className="px-2.5 h-8 hover:border-control-border-hover mt-1 w-full rounded-control border border-control-border bg-surface text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
-                        placeholder="z. B. Beleg geprüft und Kontierung bestätigt"
-                      />
-                    </label>
-                  </div>
-
-                  <div>
-                    <h2 className="text-lg font-semibold text-foreground">EÜR-Klassifizierung</h2>
-                    <p className="text-sm text-muted">Direkt in der Bank-Ansicht klassifizieren.</p>
-                  </div>
-
-                  <div className="text-sm text-muted">
-                    <div className="font-semibold text-foreground">{eurActive.counterparty}</div>
-                    <div>{eurActive.purpose}</div>
-                    <div className="font-semibold mt-1 tabular-nums text-foreground">{formatCurrency(eurActive.amountGross)}</div>
-                  </div>
-
-                  {eurReportQuery.isError && (
-                    <div className="flex items-start gap-2 rounded-lg border border-warning-border bg-warning-bg p-3 text-xs text-warning-text">
-                      <TriangleAlert size={14} className="mt-0.5 flex-shrink-0" aria-hidden="true" />
-                      Kennziffern konnten nicht geladen werden. Die Auswahl ist deshalb leer.
+                <>
+                  <CardHeader
+                    title="EÜR-Klassifizierung"
+                    subtitle="Direkt in der Bank-Ansicht klassifizieren."
+                    className={cardHead}
+                  />
+                  <div className="flex flex-col gap-3 p-3.5">
+                    <div>
+                      <div className="flex items-baseline gap-2">
+                        <span className="min-w-0 flex-1 text-label font-semibold text-foreground">{eurActive.counterparty}</span>
+                        <span className="shrink-0 text-label font-bold tabular-nums text-foreground">{formatCurrency(eurActive.amountGross)}</span>
+                      </div>
+                      <p className="text-caption text-muted">{eurActive.purpose}</p>
                     </div>
-                  )}
 
-                  {eurActive.suggestedLineId && (
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setEurLineId(eurActive.suggestedLineId ?? '');
-                        setEurExcluded(false);
-                      }}
-                      className="w-full rounded-lg border border-info-border bg-info-bg px-3 py-2 text-left focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
-                    >
-                      <div className="text-xs text-info-text font-semibold">Vorschlag übernehmen</div>
-                      <div className="text-xs text-info-text">{eurActive.suggestionReason ?? 'Automatischer Vorschlag'}</div>
-                    </button>
-                  )}
+                    {eurReportQuery.isError && (
+                      <div className={`${banner} border-warning-border bg-warning-bg text-warning-text`}>
+                        <TriangleAlert size={16} className="mt-px shrink-0" aria-hidden="true" />
+                        <span className="min-w-0 flex-1">Kennziffern konnten nicht geladen werden. Die Auswahl ist deshalb leer.</span>
+                      </div>
+                    )}
 
-                  <div>
-                    <label className="text-xs font-semibold text-foreground" htmlFor="tm-eur-line">Kennziffer</label>
-                    <select
+                    {eurActive.suggestedLineId && (
+                      <div className={`${banner} items-center border-info-border bg-info-bg text-info-text`}>
+                        <span className="min-w-0 flex-1">{eurActive.suggestionReason ?? 'Automatischer Vorschlag'}</span>
+                        <Button
+                          variant="secondary"
+                          size="sm"
+                          onClick={() => {
+                            setEurLineId(eurActive.suggestedLineId ?? '');
+                            setEurExcluded(false);
+                          }}
+                        >
+                          Vorschlag übernehmen
+                        </Button>
+                      </div>
+                    )}
+
+                    <Select
                       id="tm-eur-line"
+                      label="Kennziffer"
                       value={eurLineId}
                       onChange={(e) => setEurLineId(e.target.value)}
                       disabled={eurExcluded}
-                      className="px-2.5 h-8 hover:border-control-border-hover mt-1 w-full rounded-control border border-control-border bg-surface text-sm disabled:bg-surface-muted disabled:text-muted focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                      fullWidth
                     >
                       <option value="">Nicht zugeordnet</option>
                       {eurActiveLineOptions.map((line) => (
@@ -1015,129 +916,96 @@ export const TransactionMatchingView: React.FC<{ onBack: () => void; initialTab?
                           {line.kennziffer ? `${line.kennziffer} - ` : ''}{line.label}
                         </option>
                       ))}
-                    </select>
-                  </div>
+                    </Select>
 
-                  <div>
-                    <label className="text-xs font-semibold text-foreground" htmlFor="tm-eur-vat-mode">USt. Modus</label>
-                    <select
+                    <Select
                       id="tm-eur-vat-mode"
+                      label="USt. Modus"
                       value={eurVatMode}
                       onChange={(e) => setEurVatMode(e.target.value as 'none' | 'default')}
-                      className="px-2.5 h-8 hover:border-control-border-hover mt-1 w-full rounded-control border border-control-border bg-surface text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                      fullWidth
                     >
                       <option value="none">Keine USt. Umrechnung</option>
                       <option value="default">Default USt. (Netto)</option>
-                    </select>
-                  </div>
+                    </Select>
 
-                  {isProProduct && eurVatMode === 'default' && (
-                    <div>
-                      <label className="text-xs font-semibold text-foreground" htmlFor="tm-eur-vat-rate">USt.-Satz (%)</label>
-                      <input
-                        id="tm-eur-vat-rate"
-                        type="number"
-                        min="0"
-                        max="100"
-                        step="0.01"
-                        value={eurVatRate ?? ''}
-                        onChange={(e) => setEurVatRate(e.target.value === '' ? undefined : Number(e.target.value))}
-                        className="px-2.5 h-8 hover:border-control-border-hover mt-1 w-full rounded-control border border-control-border bg-surface text-sm tabular-nums focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
-                        placeholder="z. B. 19"
-                      />
-                      {eurActive.vatWarning && <p className="mt-1 text-xs text-warning-text">{eurActive.vatWarning}</p>}
-                    </div>
-                  )}
+                    {isProProduct && eurVatMode === 'default' && (
+                      <div>
+                        <Input
+                          id="tm-eur-vat-rate"
+                          label="USt.-Satz (%)"
+                          type="number"
+                          min="0"
+                          max="100"
+                          step="0.01"
+                          value={eurVatRate ?? ''}
+                          onChange={(e) => setEurVatRate(e.target.value === '' ? undefined : Number(e.target.value))}
+                          className="tabular-nums"
+                          placeholder="z. B. 19"
+                          fullWidth
+                        />
+                        {eurActive.vatWarning && <p className="mt-1 text-caption text-warning-text">{eurActive.vatWarning}</p>}
+                      </div>
+                    )}
 
-                  <label className="flex items-center gap-2 text-sm text-foreground">
-                    <input
-                      type="checkbox"
+                    <Checkbox
+                      label="Privat/Transfer ausschließen"
                       checked={eurExcluded}
                       onChange={(e) => setEurExcluded(e.target.checked)}
                     />
-                    Privat/Transfer ausschließen
-                  </label>
 
-                  <div className="flex items-center gap-2">
-                    <Button onClick={() => void applyEurSingle()} disabled={eurPending || eurReason.trim().length === 0}>
-                      {eurPending ? 'Speichern...' : 'Klassifizierung speichern'}
-                    </Button>
-                    <Button
-                      variant="secondary"
-                      onClick={() => {
-                        setEurLineId('');
-                        setEurExcluded(false);
-                        setEurVatMode('none');
-                        setEurVatRate(undefined);
-                      }}
-                    >
-                      Zurücksetzen
-                    </Button>
-                  </div>
+                    {reasonInput}
 
-                  <div className="pt-3 border-t border-border-subtle text-xs text-muted flex items-center gap-1">
-                    <Layers size={14} aria-hidden="true" />
-                    Änderungen sind sofort in EÜR-Report und Export sichtbar.
+                    <div className="flex flex-wrap items-center gap-2">
+                      <Button onClick={() => void applyEurSingle()} disabled={eurPending || eurReason.trim().length === 0}>
+                        {eurPending ? 'Speichern...' : 'Klassifizierung speichern'}
+                      </Button>
+                      <Button
+                        variant="secondary"
+                        onClick={() => {
+                          setEurLineId('');
+                          setEurExcluded(false);
+                          setEurVatMode('none');
+                          setEurVatRate(undefined);
+                        }}
+                      >
+                        Zurücksetzen
+                      </Button>
+                    </div>
+
+                    <div className="flex items-center gap-1.5 border-t border-border pt-2.5 text-caption text-muted">
+                      <Layers size={14} aria-hidden="true" />
+                      Änderungen sind sofort in EÜR-Report und Export sichtbar.
+                    </div>
                   </div>
-                </div>
+                </>
               )}
-            </div>
+            </Card>
           </>
         )}
       </div>
 
-      <Modal
+      <ConfirmDialog
         open={showUnlinkConfirm}
-        onClose={() => {
+        title="Zuordnung wirklich aufheben?"
+        description="Diese Rechnung wird wieder als unbezahlt markiert."
+        details={invoiceToUnlink?.invoiceWillBeOverdue ? (
+          <p className="flex items-start gap-2 text-warning-text">
+            <TriangleAlert size={16} className="mt-px shrink-0" aria-hidden="true" />
+            Die Rechnung könnte dadurch wieder überfällig werden.
+          </p>
+        ) : undefined}
+        confirmLabel="Ja, aufheben"
+        cancelLabel="Abbrechen"
+        destructive
+        busy={unlinkMutation.isPending}
+        onConfirm={confirmUnlink}
+        onCancel={() => {
+          if (unlinkMutation.isPending) return;
           setShowUnlinkConfirm(false);
           setInvoiceToUnlink(null);
         }}
-        titleId={unlinkTitleId}
-        className="max-w-md p-6"
-      >
-        <div className="flex items-start gap-3 mb-4">
-          <div className="w-10 h-10 rounded-full bg-warning-bg flex items-center justify-center flex-shrink-0">
-            <TriangleAlert size={20} className="text-warning-text" aria-hidden="true" />
-          </div>
-          <div className="flex-1">
-            <h3 id={unlinkTitleId} className="text-lg font-semibold text-foreground mb-2">
-              Zuordnung wirklich aufheben?
-            </h3>
-            <p className="text-sm text-muted mb-2">
-              Diese Rechnung wird wieder als unbezahlt markiert.
-            </p>
-            {invoiceToUnlink?.invoiceWillBeOverdue && (
-              <p className="flex items-start gap-2 text-sm text-warning-text font-medium">
-                <TriangleAlert size={16} className="mt-0.5 flex-shrink-0" aria-hidden="true" />
-                Die Rechnung könnte dadurch wieder überfällig werden.
-              </p>
-            )}
-          </div>
-        </div>
-
-        <div className="flex gap-3 mt-6">
-          <Button
-            variant="danger"
-            fullWidth
-            onClick={confirmUnlink}
-            loading={unlinkMutation.isPending}
-          >
-            Ja, aufheben
-          </Button>
-          <Button
-            variant="ghost"
-            fullWidth
-            onClick={() => {
-              setShowUnlinkConfirm(false);
-              setInvoiceToUnlink(null);
-            }}
-            disabled={unlinkMutation.isPending}
-          >
-            Abbrechen
-          </Button>
-        </div>
-      </Modal>
-
+      />
     </div>
   );
 };

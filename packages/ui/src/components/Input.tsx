@@ -87,6 +87,7 @@ export const Input = React.forwardRef<HTMLInputElement, InputProps>(
     type,
     inputMode,
     required,
+    readOnly,
     'aria-describedby': ariaDescribedBy,
     ...props
   }, ref) => {
@@ -147,20 +148,22 @@ export const Input = React.forwardRef<HTMLInputElement, InputProps>(
         onFocus={handleFocus}
         onBlur={handleBlur}
         className={cn(
-          'h-10 bg-surface border rounded-control px-3 text-sm text-foreground',
+          'min-h-8.5 bg-surface border rounded-control px-2.25 py-1.5 text-foreground text-control',
           'transition-[border-color,box-shadow,outline-color] motion-reduce:transition-none hover:border-control-border-hover',
           'placeholder:text-muted',
-          'focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring',
+          'focus-visible:outline-2 focus-visible:outline-offset-0 focus-visible:outline-focus-ring focus-visible:border-transparent',
           'disabled:border-disabled-foreground disabled:bg-disabled-surface disabled:text-disabled-foreground disabled:placeholder:text-disabled-foreground disabled:cursor-not-allowed disabled:opacity-100',
-          isNumeric && 'text-right tabular-nums',
-          (prefix !== undefined && prefix !== null) && 'pl-9',
-          (suffix !== undefined && suffix !== null) && 'pr-9',
+          isNumeric && 'text-right font-mono tabular-nums',
+          readOnly && 'bg-surface-sunken read-only:text-muted',
+          (prefix !== undefined && prefix !== null) && 'pl-8',
+          (suffix !== undefined && suffix !== null) && 'pr-8',
           error ? 'border-error' : 'border-control-border',
           fullWidth && 'w-full',
           className,
         )}
         {...props}
         required={required}
+        readOnly={readOnly}
         aria-invalid={error ? true : props['aria-invalid']}
         aria-describedby={describedBy}
         aria-required={required ? true : props['aria-required']}
@@ -168,36 +171,36 @@ export const Input = React.forwardRef<HTMLInputElement, InputProps>(
     );
 
     return (
-      <div className={cn(fullWidth && 'w-full')}>
+      <div className={cn('text-foreground', fullWidth && 'w-full')}>
         {label && (
-          <div className="mb-1.5 flex items-baseline">
-            <label htmlFor={inputId} className="block text-label text-foreground">
+          <div className="mb-1 flex items-baseline">
+            <label htmlFor={inputId} className="block text-caption font-medium text-foreground-secondary">
               {label}
             </label>
             {/* outside the <label> so the accessible name stays exactly `label` */}
             {required && (
-              <span aria-hidden="true" className="ml-1 text-error">*</span>
+              <span aria-hidden="true" className="ml-0.5 text-caption text-error-text">*</span>
             )}
           </div>
         )}
         {(prefix !== undefined && prefix !== null) || (suffix !== undefined && suffix !== null) ? (
           <div className="relative">
             {prefix !== undefined && prefix !== null ? (
-              <span className="pointer-events-none absolute inset-y-0 left-3 flex items-center text-sm text-muted" aria-hidden="true">
+              <span className="pointer-events-none absolute inset-y-0 left-2.25 flex items-center text-control text-muted" aria-hidden="true">
                 {prefix}
               </span>
             ) : null}
             {input}
             {suffix !== undefined && suffix !== null ? (
-              <span className="pointer-events-none absolute inset-y-0 right-3 flex items-center text-sm text-muted" aria-hidden="true">
+              <span className="pointer-events-none absolute inset-y-0 right-2.25 flex items-center text-control text-muted" aria-hidden="true">
                 {suffix}
               </span>
             ) : null}
           </div>
         ) : input}
-        {hasHint && <span id={hintId} className="mt-1 block text-xs text-muted">{hint}</span>}
+        {hasHint && <span id={hintId} className="mt-1 block text-micro text-muted">{hint}</span>}
         {error && (
-          <p id={errorId} className="mt-1 text-xs text-error-text">{error}</p>
+          <p id={errorId} className="mt-1 text-caption text-error-text">{error}</p>
         )}
       </div>
     );

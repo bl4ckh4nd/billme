@@ -1,5 +1,5 @@
 import React from 'react';
-import { Button, EMPTY_VALUE, Input, Select, ValidationSummary } from '@billme/ui';
+import { Button, Checkbox, EMPTY_VALUE, Input, Select, ValidationSummary } from '@billme/ui';
 import { Check } from 'lucide-react';
 
 export type BusinessReportingProfile = {
@@ -518,7 +518,7 @@ export const BusinessOnboarding: React.FC<BusinessOnboardingProps> = ({
   // Intentionally stays in this tree: onboarding owns its shell-relative layout and mounts outside transformed shells.
   return (
     <div
-      className="fixed inset-0 z-[var(--z-overlay)] overflow-y-auto bg-surface-muted px-4 py-4 sm:px-6 sm:py-6"
+      className="fixed inset-0 z-[var(--z-overlay)] overflow-y-auto bg-ink-950/45 px-4 pb-4 pt-[8vh]"
       role="dialog"
       aria-modal="true"
       aria-labelledby="onboarding-title"
@@ -529,9 +529,9 @@ export const BusinessOnboarding: React.FC<BusinessOnboardingProps> = ({
         }
       }}
     >
-      <div className="mx-auto grid min-h-full w-full max-w-6xl overflow-hidden rounded-2xl bg-surface shadow-2xl lg:grid-cols-[18rem_minmax(0,1fr)]">
-        <aside className="relative overflow-hidden bg-dark-1 px-6 py-7 text-inverse-foreground sm:px-8 lg:px-7">
-          <div className="absolute inset-x-0 top-0 h-1 bg-dark-border">
+      <div className="mx-auto grid w-full max-w-6xl overflow-hidden rounded-modal border border-border bg-surface shadow-lift lg:grid-cols-[18rem_minmax(0,1fr)]">
+        <aside className="relative overflow-hidden border-b border-border bg-surface-muted px-4.5 py-5 lg:border-b-0 lg:border-r">
+          <div className="absolute inset-x-0 top-0 h-1 bg-border">
             <div
               className="h-full origin-left bg-accent motion-safe:transition-transform motion-safe:duration-300 motion-safe:ease-out motion-reduce:transition-none"
               style={{ transform: `scaleX(${progress / 100})` }}
@@ -540,26 +540,26 @@ export const BusinessOnboarding: React.FC<BusinessOnboardingProps> = ({
 
           <div className="flex h-full flex-col">
             <div>
-              <h1 id="onboarding-title" className="max-w-[12rem] text-balance text-2xl font-semibold leading-tight">
+              <h1 id="onboarding-title" className="text-balance text-title text-foreground">
                 {productName} einrichten
               </h1>
-              <p className="mt-4 max-w-[15rem] text-pretty text-sm leading-6 text-dark-muted">
+              <p className="mt-1.5 text-pretty text-control text-muted">
                 Trage die Daten ein, die auf deinen Angeboten und Rechnungen erscheinen sollen.
               </p>
             </div>
 
-            <div className="mt-8 border-y border-dark-border py-4">
-              <p className="text-label text-dark-muted">Pflichtfelder</p>
-              <div className="mt-3 flex items-end gap-3">
-                <strong className="text-3xl font-semibold">{essentialsCompleted}/9</strong>
-                <span className="pb-1 text-sm text-dark-muted">eingetragen</span>
+            <div className="mt-5 border-y border-border py-3.5">
+              <p className="text-label text-muted">Pflichtfelder</p>
+              <div className="mt-1 flex items-baseline gap-2">
+                <strong className="text-figure tabular-nums text-foreground">{essentialsCompleted}/9</strong>
+                <span className="text-control text-muted">eingetragen</span>
               </div>
-              <p className="mt-3 text-pretty text-sm leading-6 text-dark-muted">
+              <p className="mt-2 text-pretty text-caption text-muted">
                 Sobald Firmenkopf, Steuerdaten und Dokumentvorgaben ausgefüllt sind, kannst du Dokumente erstellen.
               </p>
             </div>
 
-            <ol className="mt-8 space-y-3">
+            <ol className="mt-5 flex flex-col gap-2">
               {STEPS.map((step, index) => {
                 const state =
                   index < stepIndex ? 'done' : index === stepIndex ? 'current' : 'upcoming';
@@ -567,29 +567,29 @@ export const BusinessOnboarding: React.FC<BusinessOnboardingProps> = ({
                 return (
                   <li
                     key={step.id}
-                    className={`rounded-lg border px-4 py-3 transition-colors ${
+                    className={`rounded-card border px-3 py-2.5 transition-colors motion-reduce:transition-none ${
                       state === 'current'
-                        ? 'border-dark-border-subtle bg-dark-2'
+                        ? 'border-foreground bg-surface'
                         : state === 'done'
-                          ? 'border-dark-border bg-dark-2'
-                          : 'border-dark-border bg-transparent'
+                          ? 'border-border bg-surface'
+                          : 'border-border'
                     }`}
                   >
-                    <div className="flex items-start gap-3">
+                    <div className="flex items-start gap-2.5">
                       <span
-                        className={`mt-0.5 flex size-7 shrink-0 items-center justify-center rounded-full text-xs font-semibold ${
+                        className={`flex size-6 shrink-0 items-center justify-center rounded-full text-caption font-semibold ${
                           state === 'current'
                             ? 'bg-accent text-accent-foreground'
                             : state === 'done'
-                              ? 'bg-dark-border-subtle text-inverse-foreground'
-                              : 'bg-dark-2 text-dark-muted'
+                              ? 'bg-foreground text-ground'
+                              : 'bg-surface-sunken text-muted'
                         }`}
                       >
                         {state === 'done' ? <Check size={14} aria-label="erledigt" /> : index + 1}
                       </span>
                       <div>
-                        <p className="text-sm font-semibold">{step.label}</p>
-                        <p className="mt-1 text-pretty text-xs leading-5 text-dark-muted">{step.description}</p>
+                        <p className="text-label text-foreground">{step.label}</p>
+                        <p className="mt-0.5 text-pretty text-caption text-muted">{step.description}</p>
                       </div>
                     </div>
                   </li>
@@ -597,9 +597,9 @@ export const BusinessOnboarding: React.FC<BusinessOnboardingProps> = ({
               })}
             </ol>
 
-            <div className="mt-auto hidden border-t border-dark-border pt-4 lg:block">
-              <p className="text-label text-dark-muted">Danach kannst du</p>
-              <ul className="mt-4 space-y-2 text-sm text-dark-muted">
+            <div className="mt-auto hidden border-t border-border pt-3.5 lg:block">
+              <p className="text-label text-muted">Danach kannst du</p>
+              <ul className="mt-2 space-y-1 text-control text-foreground-secondary">
                 <li>Angebote mit deinen Firmendaten erstellen</li>
                 <li>Rechnungsnummern vergeben</li>
                 <li>Zahlungsziele verwenden</li>
@@ -608,26 +608,24 @@ export const BusinessOnboarding: React.FC<BusinessOnboardingProps> = ({
           </div>
         </aside>
 
-        <main className="flex min-h-full flex-col bg-surface-muted">
-          <div className="border-b border-border px-6 py-5 sm:px-8">
-            <div className="flex flex-col gap-2 lg:flex-row lg:items-end lg:justify-between">
-              <div>
-                <h2 className="text-balance text-xl font-semibold tracking-[-0.02em] text-foreground">
-                  {currentStep.title}
-                </h2>
-                <p className="mt-2 max-w-2xl text-pretty text-sm leading-6 text-muted">
-                  {currentStep.description}
-                </p>
-              </div>
-              <p className="text-sm text-muted">Schritt {stepIndex + 1} von {STEPS.length}</p>
+        <main className="flex min-w-0 flex-col">
+          <div className="flex flex-wrap items-start justify-between gap-x-3 gap-y-1 px-4.5 pt-4 pb-2.5">
+            <div className="min-w-0">
+              <h2 className="text-balance text-title text-foreground">
+                {currentStep.title}
+              </h2>
+              <p className="mt-0.5 max-w-2xl text-pretty text-control text-muted">
+                {currentStep.description}
+              </p>
             </div>
+            <p className="shrink-0 text-caption text-muted">Schritt {stepIndex + 1} von {STEPS.length}</p>
           </div>
 
-          <div className="flex-1 px-6 py-6 sm:px-8 sm:py-8">
+          <div className="flex-1 px-4.5 pt-1 pb-4">
             <ValidationSummary errors={currentStepErrors} onJump={focusField} />
             {currentStep.id === 'identity' && (
-              <div className="space-y-8">
-                <section className="grid gap-4 md:grid-cols-2">
+              <div className="flex flex-col gap-5">
+                <section className="grid gap-3 md:grid-cols-2">
                   <Input
                     id={FIELD_IDS['company.name']}
                     label="Firmenname"
@@ -695,9 +693,9 @@ export const BusinessOnboarding: React.FC<BusinessOnboardingProps> = ({
                   </div>
                 </section>
 
-                <div className="border-t border-border pt-6">
-                  <p className="text-base font-semibold text-foreground">Warum wir das jetzt abfragen</p>
-                  <p className="mt-2 max-w-2xl text-pretty text-sm leading-6 text-muted">
+                <div className="border-t border-border pt-4">
+                  <p className="text-section text-foreground">Warum wir das jetzt abfragen</p>
+                  <p className="mt-1 max-w-2xl text-pretty text-control text-muted">
                     Diese Angaben bilden den Firmenkopf deiner Dokumente. Ohne sie fehlen wichtige Absenderdaten.
                   </p>
                 </div>
@@ -705,13 +703,13 @@ export const BusinessOnboarding: React.FC<BusinessOnboardingProps> = ({
             )}
 
             {currentStep.id === 'billing' && (
-              <div className="space-y-8">
-                <section className="border-t border-border pt-6">
-                  <h3 className="text-base font-semibold text-foreground">Dokumente vorbereiten</h3>
-                  <p className="mt-2 max-w-2xl text-pretty text-sm leading-6 text-muted">
+              <div className="flex flex-col gap-5">
+                <section>
+                  <h3 className="text-section text-foreground">Dokumente vorbereiten</h3>
+                  <p className="mt-1 max-w-2xl text-pretty text-control text-muted">
                     Diese Angaben brauchst du für korrekte Nummern und Zahlungshinweise auf deinen Dokumenten.
                   </p>
-                  <div className="mt-5 grid gap-4 md:grid-cols-2">
+                  <div className="mt-3 grid gap-3 md:grid-cols-2">
                     <Input
                       id={FIELD_IDS['finance.taxId']}
                       label="Steuernummer"
@@ -758,27 +756,24 @@ export const BusinessOnboarding: React.FC<BusinessOnboardingProps> = ({
                   </div>
                 </section>
 
-                <section className="border-t border-border pt-6">
-                  <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+                <section className="border-t border-border pt-4">
+                  <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
                     <div className="max-w-xl">
-                      <h3 className="text-base font-semibold text-foreground">Steuerprofil</h3>
-                      <p className="mt-2 text-pretty text-sm leading-6 text-muted">
+                      <h3 className="text-section text-foreground">Steuerprofil</h3>
+                      <p className="mt-1 text-pretty text-control text-muted">
                         Wähle die Steuerlogik für deine Dokumente. Du kannst diese Angaben später in den Einstellungen anpassen.
                       </p>
                     </div>
-                    <label className="inline-flex min-h-11 items-center gap-3 border border-border bg-surface px-4 py-2 text-sm font-medium text-foreground">
-                      <input
-                        type="checkbox"
-                        className="h-4 w-4 accent-accent focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
-                        checked={draft.legal.smallBusinessRule}
-                        onChange={(event) => updateLegal('smallBusinessRule', event.target.checked)}
-                      />
-                      Kleinunternehmerregelung §19 UStG
-                    </label>
+                    <Checkbox
+                      label="Kleinunternehmerregelung §19 UStG"
+                      className="shrink-0"
+                      checked={draft.legal.smallBusinessRule}
+                      onChange={(event) => updateLegal('smallBusinessRule', event.target.checked)}
+                    />
                   </div>
 
                   {!draft.legal.smallBusinessRule && (
-                    <div className="mt-5 max-w-xs">
+                    <div className="mt-3 max-w-xs">
                       <Input
                         id={FIELD_IDS['legal.defaultVatRate']}
                         label="Standard-MwSt. in Prozent"
@@ -795,11 +790,11 @@ export const BusinessOnboarding: React.FC<BusinessOnboardingProps> = ({
                   )}
                 </section>
 
-                <section className="border-t border-foreground/30 pt-7">
+                <section className="border-t border-border pt-4">
                   <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                     <div className="max-w-2xl">
-                      <h3 className="text-base font-semibold text-foreground">Berichtswesen</h3>
-                      <p className="mt-2 text-pretty text-sm leading-6 text-muted">
+                      <h3 className="text-section text-foreground">Berichtswesen</h3>
+                      <p className="mt-1 text-pretty text-control text-muted">
                         Wähle zuerst deine Rechtsform. Die übrigen Angaben werden danach eingeblendet. Der Kontenrahmen prägt deine Buchungen dauerhaft – entscheide dich deshalb sorgfältig.
                       </p>
                     </div>
@@ -810,7 +805,7 @@ export const BusinessOnboarding: React.FC<BusinessOnboardingProps> = ({
                     )}
                   </div>
 
-                  <div className="mt-5 grid gap-4 md:grid-cols-2">
+                  <div className="mt-3 grid gap-3 md:grid-cols-2">
                     <Select
                       id={FIELD_IDS['businessReportingProfile.legalForm']}
                       label="Rechtsform"
@@ -910,8 +905,8 @@ export const BusinessOnboarding: React.FC<BusinessOnboardingProps> = ({
             )}
 
             {currentStep.id === 'details' && (
-              <div className="space-y-8">
-                <section className="grid gap-4 md:grid-cols-2">
+              <div className="flex flex-col gap-5">
+                <section className="grid gap-3 md:grid-cols-2">
                   <Input
                     id="onboarding-company-phone"
                     label="Telefon"
@@ -976,32 +971,32 @@ export const BusinessOnboarding: React.FC<BusinessOnboardingProps> = ({
                   </div>
                 </section>
 
-                <section className="border-t border-border pt-6">
-                  <p className="text-base font-semibold text-foreground">Zusammenfassung</p>
-                  <div className="mt-4 grid gap-3 md:grid-cols-2">
-                    <div className="border-b border-border px-1 py-3">
-                      <p className="text-label text-muted">Firmenkopf</p>
-                      <p className="mt-2 text-sm font-medium text-foreground">
+                <section className="border-t border-border pt-4">
+                  <p className="text-section text-foreground">Zusammenfassung</p>
+                  <div className="mt-1 grid gap-x-3 md:grid-cols-2">
+                    <div className="border-b border-dashed border-border py-2.5">
+                      <p className="text-caption text-muted">Firmenkopf</p>
+                      <p className="mt-0.5 text-control text-foreground">
                         {trim(draft.company.name) || 'Noch offen'}
                       </p>
                     </div>
-                    <div className="border-b border-border px-1 py-3">
-                      <p className="text-label text-muted">Steuer</p>
-                      <p className="mt-2 text-sm font-medium text-foreground">
+                    <div className="border-b border-dashed border-border py-2.5">
+                      <p className="text-caption text-muted">Steuer</p>
+                      <p className="mt-0.5 text-control text-foreground">
                         {draft.legal.smallBusinessRule
                           ? 'Kleinunternehmerregelung aktiv'
                           : `${draft.legal.defaultVatRate ?? EMPTY_VALUE}% Standard-MwSt.`}
                       </p>
                     </div>
-                    <div className="border-b border-border px-1 py-3">
-                      <p className="text-label text-muted">Zahlungsziel</p>
-                      <p className="mt-2 text-sm font-medium text-foreground">
+                    <div className="border-b border-dashed border-border py-2.5">
+                      <p className="text-caption text-muted">Zahlungsziel</p>
+                      <p className="mt-0.5 text-control text-foreground">
                         {draft.legal.paymentTermsDays ?? EMPTY_VALUE} Tage
                       </p>
                     </div>
-                    <div className="border-b border-border px-1 py-3">
-                      <p className="text-label text-muted">Nummernkreis</p>
-                      <p className="mt-2 text-sm font-medium text-foreground">
+                    <div className="border-b border-dashed border-border py-2.5">
+                      <p className="text-caption text-muted">Nummernkreis</p>
+                      <p className="mt-0.5 text-control text-foreground">
                         {trim(draft.numbers.invoicePrefix) || 'RE-'} / {trim(draft.numbers.offerPrefix) || 'ANG-'}
                       </p>
                     </div>
@@ -1011,15 +1006,15 @@ export const BusinessOnboarding: React.FC<BusinessOnboardingProps> = ({
             )}
           </div>
 
-          <div className="border-t border-border px-6 py-4 sm:px-8">
+          <div className="border-t border-border px-4.5 py-3">
             <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-              <p className="text-sm text-muted">
+              <p className="text-caption text-muted">
                 {stepIndex === STEPS.length - 1
                   ? 'Weitere Einstellungen findest du später im Bereich Einstellungen.'
                   : 'Die Pflichtfelder werden für deine Dokumente benötigt.'}
               </p>
-              <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
-                {firstStepError && <p id="onboarding-action-error" className="max-w-sm text-xs text-error-text" role="status" aria-live="assertive">{firstStepError}</p>}
+              <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+                {firstStepError && <p id="onboarding-action-error" className="max-w-sm text-caption text-error-text" role="status" aria-live="assertive">{firstStepError}</p>}
                 <Button
                   variant="ghost"
                   onClick={() => void handleSaveAndExit()}

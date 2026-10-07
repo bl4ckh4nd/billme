@@ -4,7 +4,7 @@ import { cn } from '../utils/cn';
 export type IconTileTone = 'neutral' | 'success' | 'warning' | 'error' | 'info';
 
 const tileTone: Record<IconTileTone, string> = {
-  neutral: 'bg-surface-sunken text-muted',
+  neutral: 'bg-surface-sunken text-foreground-secondary',
   success: 'bg-success-bg text-success-text',
   warning: 'bg-warning-bg text-warning-text',
   error: 'bg-error-bg text-error-text',
@@ -19,7 +19,7 @@ export interface IconTileProps {
 }
 
 export const IconTile: React.FC<IconTileProps> = ({ icon, tone = 'neutral', className }) => (
-  <span aria-hidden="true" className={cn('grid size-9 shrink-0 place-items-center rounded-lg', tileTone[tone], className)}>
+  <span aria-hidden="true" className={cn('grid size-9 shrink-0 place-items-center rounded-card', tileTone[tone], className)}>
     {icon}
   </span>
 );
@@ -48,7 +48,7 @@ export const ListRow: React.FC<ListRowProps> = ({ icon, tone, title, subtitle, v
         {subtitle && <span className="mt-0.5 block truncate text-caption text-muted">{subtitle}</span>}
       </span>
       {value !== undefined && (
-        <span className={cn('shrink-0 whitespace-nowrap text-right text-sm font-bold tabular-nums', valueToneClass[valueTone])}>{value}</span>
+        <span className={cn('shrink-0 whitespace-nowrap text-right text-section font-bold tabular-nums', valueToneClass[valueTone])}>{value}</span>
       )}
       {onClick && (
         <svg aria-hidden="true" width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" className="shrink-0 text-muted">
@@ -57,7 +57,7 @@ export const ListRow: React.FC<ListRowProps> = ({ icon, tone, title, subtitle, v
       )}
     </>
   );
-  const base = 'flex w-full items-center gap-3 border-b border-dashed border-border py-3 text-left last:border-b-0';
+  const base = 'flex w-full items-center gap-3.25 border-b border-dashed border-border py-3.25 text-left last:border-b-0';
   return onClick ? (
     <button
       type="button"

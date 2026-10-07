@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react';
 import {
-  Badge, Button, EmptyState, EMPTY_VALUE, Table, TableBody, TableCell, TableFooter, TableHead, TableHeader, TableRow,
+  Badge, Button, Card, CardHeader, EmptyState, EMPTY_VALUE, Table, TableBody, TableCell, TableFooter, TableHead, TableHeader, TableRow,
 } from '@billme/ui';
 import { SusaReport, SusaRow } from '../../domain/reportTypes';
 import ReportSummaryCards from './ReportSummaryCards';
@@ -67,21 +67,22 @@ export default function SusaTable({ report, onSelectRow, onRetry }: SusaTablePro
   };
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-3.5">
       <ReportSummaryCards
         cards={[
-          { label: 'Umgemappte Konten', value: String(report.quality.unmappedAccounts), tone: report.quality.unmappedAccounts ? 'warning' : 'ok', emphasis: true },
+          { label: 'Umgemappte Konten', value: String(report.quality.unmappedAccounts), tone: report.quality.unmappedAccounts ? 'warning' : 'ok' },
           { label: 'Konten', value: String(report.rows.length) },
           { label: 'Warnungen', value: String(report.quality.warnings), tone: report.quality.warnings ? 'warning' : 'ok' },
-          { label: 'Stand', value: new Date(report.quality.generatedAt).toLocaleString('de-DE') },
         ]}
         note={report.quality.source === 'live' ? undefined : 'Beispieldaten: Die Salden und Umsätze dieses Reports stammen aus dem Demo-Datensatz.'}
       />
 
-      <div className="overflow-hidden rounded-card bg-surface shadow-xs">
-        <div className="px-4 h-12 border-b border-border-subtle text-sm font-semibold text-foreground flex items-center">
-          Summen- und Saldenliste
-        </div>
+      <Card padding="none" className="overflow-hidden">
+        <CardHeader
+          className="border-b border-border px-3.5 py-3"
+          title="Summen- und Saldenliste"
+          count={`Stand: ${new Date(report.quality.generatedAt).toLocaleString('de-DE')}`}
+        />
         <Table aria-label="Summen- und Saldenliste" bare containerClassName="max-h-[32rem]">
           <TableHeader>
             <TableRow>
@@ -149,7 +150,7 @@ export default function SusaTable({ report, onSelectRow, onRetry }: SusaTablePro
             </TableRow>
           </TableFooter>
         </Table>
-      </div>
+      </Card>
     </div>
   );
 }

@@ -21,110 +21,47 @@ export type BadgeProps =
   | { status: BadgeStatus; tone?: never; children?: never; className?: string }
   | { tone: BadgeTone; status?: never; children: React.ReactNode; className?: string };
 
-type BadgeConfig = {
-  bg: string;
-  text: string;
-  border: string;
-  label: string;
-};
+type ToneConfig = { bg: string; text: string; border: string };
 
-const statusConfig: Record<BadgeStatus, BadgeConfig> = {
-  paid: {
-    bg: 'bg-status-paid',
-    text: 'text-status-paid-text',
-    border: 'border-status-paid-text',
-    label: 'Bezahlt',
-  },
-  open: {
-    bg: 'bg-status-open',
-    text: 'text-status-open-text',
-    border: 'border-status-open-border',
-    label: 'Offen',
-  },
-  overdue: {
-    bg: 'bg-status-overdue',
-    text: 'text-status-overdue-text',
-    border: 'border-error',
-    label: 'Überfällig',
-  },
-  draft: {
-    bg: 'bg-status-draft',
-    text: 'text-status-draft-text',
-    border: 'border-status-draft-border',
-    label: 'Entwurf',
-  },
-  cancelled: {
-    bg: 'bg-surface-muted',
-    text: 'text-muted',
-    border: 'border-status-cancelled-border',
-    label: 'Storniert',
-  },
-  partially_paid: {
-    bg: 'bg-success-bg',
-    text: 'text-success-text',
-    border: 'border-success-text',
-    label: 'Teilweise bezahlt',
-  },
-  dunning_1: {
-    bg: 'bg-warning-bg',
-    text: 'text-warning-text',
-    border: 'border-warning-text',
-    label: '1. Mahnung',
-  },
-  dunning_2: {
-    bg: 'bg-error-bg',
-    text: 'text-error-text',
-    border: 'border-error-text',
-    label: '2. Mahnung',
-  },
-  dunning_3: {
-    bg: 'bg-dark-base',
-    text: 'text-background',
-    border: 'border-dark-base',
-    label: '3. Mahnung',
-  },
-  accepted: {
-    bg: 'bg-success-bg',
-    text: 'text-success-text',
-    border: 'border-success-text',
-    label: 'Angenommen',
-  },
-  declined: {
-    bg: 'bg-error-bg',
-    text: 'text-error-text',
-    border: 'border-error-text',
-    label: 'Abgelehnt',
-  },
-  expired: {
-    bg: 'bg-warning-bg',
-    text: 'text-warning-text',
-    border: 'border-warning-text',
-    label: 'Abgelaufen',
-  },
-};
-
-type ToneConfig = Omit<BadgeConfig, 'label'>;
-
-// Every pill keeps a >=3:1 boundary: the shape is what makes status scannable.
+// The prototype's chip: a soft tint with a border of the same hue. The border
+// is decorative; the label on its tint is what identifies the status.
 const toneConfig: Record<BadgeTone, ToneConfig> = {
-  neutral: { bg: 'bg-surface-muted', text: 'text-foreground', border: 'border-control-border-hover' },
-  info: { bg: 'bg-info-bg', text: 'text-info-text', border: 'border-info-text' },
-  success: { bg: 'bg-success-bg', text: 'text-success-text', border: 'border-success-text' },
-  warning: { bg: 'bg-warning-bg', text: 'text-warning-text', border: 'border-warning-text' },
-  error: { bg: 'bg-error-bg', text: 'text-error-text', border: 'border-error-text' },
-  accent: { bg: 'bg-accent', text: 'text-accent-foreground', border: 'border-accent-700' },
-  inverse: { bg: 'bg-surface-inverse', text: 'text-inverse-foreground', border: 'border-surface-inverse' },
+  neutral: { bg: 'bg-surface-sunken', text: 'text-foreground-secondary', border: 'border-border' },
+  info: { bg: 'bg-info-bg', text: 'text-info-text', border: 'border-info-border' },
+  success: { bg: 'bg-success-bg', text: 'text-success-text', border: 'border-success-border' },
+  warning: { bg: 'bg-warning-bg', text: 'text-warning-text', border: 'border-warning-border' },
+  error: { bg: 'bg-error-bg', text: 'text-error-text', border: 'border-error-border' },
+  // accent-700 measures 4.38:1 on accent-50, so the label uses accent-800.
+  accent: { bg: 'bg-accent-50', text: 'text-accent-800', border: 'border-accent-200' },
+  inverse: { bg: 'bg-foreground', text: 'text-ground', border: 'border-foreground' },
+};
+
+const statusConfig: Record<BadgeStatus, { tone: BadgeTone; label: string }> = {
+  paid: { tone: 'accent', label: 'Bezahlt' },
+  open: { tone: 'info', label: 'Offen' },
+  overdue: { tone: 'error', label: 'Überfällig' },
+  draft: { tone: 'neutral', label: 'Entwurf' },
+  cancelled: { tone: 'neutral', label: 'Storniert' },
+  partially_paid: { tone: 'success', label: 'Teilweise bezahlt' },
+  dunning_1: { tone: 'warning', label: '1. Mahnung' },
+  dunning_2: { tone: 'error', label: '2. Mahnung' },
+  dunning_3: { tone: 'inverse', label: '3. Mahnung' },
+  accepted: { tone: 'success', label: 'Angenommen' },
+  declined: { tone: 'error', label: 'Abgelehnt' },
+  expired: { tone: 'warning', label: 'Abgelaufen' },
 };
 
 export const Badge: React.FC<BadgeProps> = (props) => {
-  const config = props.status !== undefined ? statusConfig[props.status] : toneConfig[props.tone];
+  const tone = props.status !== undefined ? statusConfig[props.status].tone : props.tone;
+  const config = toneConfig[tone];
   const label = props.status !== undefined ? statusConfig[props.status].label : props.children;
 
   return (
     <span
       className={cn(
         // ponytail: wrapping preserves complete labels on narrow layouts; replace with truncation plus an accessible description only if badges must become single-line.
-        'inline-flex max-w-full items-center gap-1 whitespace-normal rounded-full border px-2 py-0.5 text-xs font-medium leading-4',
+        'inline-flex max-w-full items-center whitespace-normal rounded-full border px-1.75 py-0.5 text-micro',
+        tone === 'inverse' ? 'font-semibold' : 'font-medium',
         config.bg,
         config.text,
         config.border,
@@ -132,7 +69,7 @@ export const Badge: React.FC<BadgeProps> = (props) => {
       )}
     >
       {/* inline-flex keeps a leading icon (svg is display:block) on the label's line. */}
-      <span className="inline-flex min-w-0 items-center gap-1">{label}</span>
+      <span className="inline-flex min-w-0 items-center gap-1.25">{label}</span>
     </span>
   );
 };

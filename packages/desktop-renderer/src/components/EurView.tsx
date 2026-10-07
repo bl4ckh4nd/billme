@@ -1,32 +1,38 @@
 import React from 'react';
-import { Button, EmptyState, ErrorState, PageHeader, Select, useActionFeedback } from '@billme/ui';
+import {
+  Badge,
+  Button,
+  Card,
+  Checkbox,
+  EmptyState,
+  ErrorState,
+  Input,
+  Kbd,
+  PageHeader,
+  SegmentedControl,
+  Select,
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+  useActionFeedback,
+  type BadgeTone,
+} from '@billme/ui';
 import { LATEST_SUPPORTED_EUR_TAX_YEAR, SUPPORTED_EUR_TAX_YEARS, eurBookingPreview, type LedgerChart } from '@billme/accounting-shared';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import {
-  ArrowLeft,
-  ReceiptText,
-  CheckCircle2,
-  AlertCircle,
-  XCircle,
-  Search,
-  Check,
-  RotateCcw,
-  Save,
-  Ban,
-  TrendingUp,
-  TrendingDown,
-  ClipboardList,
-  Tags,
-  Settings2,
-} from 'lucide-react';
+import { AlertCircle, Search, Check, Info, RotateCcw, Save, Ban, Settings2 } from 'lucide-react';
 import { getRendererProduct, getRendererRuntime, ipc } from '../runtime-api';
 import { Spinner } from '../ui/components/Spinner';
 import { EurRulesModal } from './EurRulesModal';
 import { useSettingsQuery } from '../hooks/useSettings';
+import { LiteCashPanel } from './eur/LiteCashPanel';
+import { isSimpleEurCategory, simpleEurCategoryLabel } from './eur/categories';
 
 const DEFAULT_YEAR = LATEST_SUPPORTED_EUR_TAX_YEAR;
 
-type SourceType = 'transaction' | 'invoice';
+type SourceType = 'transaction' | 'invoice' | 'manual';
 type VatMode = 'none' | 'default';
 type QueueStatus = 'all' | 'unclassified' | 'classified' | 'excluded';
 type QueueSort = 'date_desc' | 'amount_desc' | 'counterparty_asc';
@@ -69,12 +75,17 @@ const LAYER_LABELS: Record<SuggestionLayer, string> = {
   keyword: 'Stichwort',
 };
 
-const LAYER_COLORS: Record<SuggestionLayer, string> = {
-  rule: 'border border-border bg-surface-muted text-foreground',
-  counterparty: 'border border-success-border bg-success-bg text-success-text',
-  bayes: 'border border-info-border bg-info-bg text-info-text',
-  keyword: 'border border-warning-border bg-warning-bg text-warning-text',
+const LAYER_TONES: Record<SuggestionLayer, BadgeTone> = {
+  rule: 'neutral',
+  counterparty: 'success',
+  bayes: 'info',
+  keyword: 'warning',
 };
+
+const chipButtonClass = 'rounded-full focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring';
+
+const formatDate = (isoDate: string): string =>
+  new Date(isoDate).toLocaleDateString('de-DE', { day: '2-digit', month: '2-digit', year: 'numeric' });
 
 type UndoChange = {
   sourceType: SourceType;
@@ -118,65 +129,78 @@ const EurEntryPreview: React.FC<{
   vatMode: VatMode;
   vatRate?: number;
   chart: LedgerChart;
-}> = ({ item, line, excluded, vatMode, vatRate, chart }) => {
+  showLedger: boolean;
+}> = ({ item, line, excluded, vatMode, vatRate, chart, showLedger }) => {
   const flow = item.flowType === 'income' ? 'Zufluss' : 'Abfluss';
-  const gross = Math.abs(item.amountGross);
+  const gross = item.amountGross;
   const rate = vatMode === 'default' ? vatRate : 0;
   const net = rate === undefined ? undefined : gross / (1 + rate / 100);
   const booking = !excluded && line && rate !== undefined
     ? eurBookingPreview({ kennziffer: line.kennziffer, flow: item.flowType === 'income' ? 'income' : 'expense', gross, vatRate: rate, chart })
     : null;
   return (
-    <section aria-label="Erfassung vor dem Speichern" className="rounded-xl border border-border p-3">
-      <div className="text-caption font-semibold uppercase tracking-[0.04em] text-muted">Wird erfasst als</div>
+    <section aria-label="Erfassung vor dem Speichern">
+      <div className="text-eyebrow uppercase text-muted">Wird erfasst als</div>
       {excluded ? (
-        <p className="mt-1.5 text-sm text-foreground">Nicht in der EÜR: privat oder Transfer.</p>
+        <p className="mt-1 text-control text-foreground">Nicht in der EÜR: privat oder Transfer.</p>
       ) : (
         <>
-          <p className="mt-1.5 text-sm text-foreground">
-            {line ? <>{line.kennziffer ? <span className="tabular-nums">Kz {line.kennziffer} · </span> : null}{line.label}</> : <span className="text-warning-text">Noch keine Kennziffer gewählt</span>}
+          <p className="mt-1 text-control text-foreground">
+            {line ? <>{showLedger && line.kennziffer ? <span className="tabular-nums">Kz {line.kennziffer} · </span> : null}{showLedger ? line.label : simpleEurCategoryLabel(line)}</> : <span className="text-warning-text">Noch keine Kategorie gewählt</span>}
           </p>
           <p className="mt-0.5 text-caption text-muted">
-            {flow} am <span className="tabular-nums">{new Date(item.date).toLocaleDateString('de-DE', { day: '2-digit', month: '2-digit', year: 'numeric' })}</span>, zählt damit zum Steuerjahr <span className="tabular-nums">{item.date.slice(0, 4)}</span>
+            {flow} am <span className="tabular-nums">{formatDate(item.date)}</span>, zählt damit zum Steuerjahr <span className="tabular-nums">{item.date.slice(0, 4)}</span>
           </p>
-          <div className="mt-3 grid grid-cols-[1fr_1px_1fr] border-t border-control-border pt-2">
-            <div className="pr-3">
-              <div className="text-caption text-muted">Netto</div>
-              <div className="text-sm font-semibold tabular-nums text-foreground">{net === undefined ? '–' : formatCurrency(net)}</div>
+          <div className="mt-3 grid grid-cols-[1fr_1px_1fr] border-t border-border-strong pt-2.5">
+            <div className="min-w-0 pr-3.5">
+              <div className="text-eyebrow uppercase text-muted">Netto</div>
+              <div className="text-heading font-bold tabular-nums text-foreground">{net === undefined ? '–' : formatCurrency(net)}</div>
+              <div className="text-caption text-muted">
+                USt{rate ? ` ${rate} %` : ''} <span className="tabular-nums">{net === undefined ? '–' : formatCurrency(gross - net)}</span>
+              </div>
             </div>
-            <div className="bg-control-border" aria-hidden="true" />
-            <div className="pl-3 text-right">
-              <div className="text-caption text-muted">USt{rate ? ` ${rate} %` : ''}</div>
-              <div className="text-sm font-semibold tabular-nums text-foreground">{net === undefined ? '–' : formatCurrency(gross - net)}</div>
+            <div className="bg-border-strong" aria-hidden="true" />
+            <div className="min-w-0 pl-3.5 text-right">
+              <div className="text-eyebrow uppercase text-muted">Brutto</div>
+              <div className="text-heading font-bold tabular-nums text-foreground">{formatCurrency(gross)}</div>
+              <div className="truncate text-caption text-muted">{line?.label ?? flow}</div>
             </div>
           </div>
           {net === undefined && <p className="mt-1.5 text-caption text-muted">Ohne Steuersatz lässt sich Netto hier nicht berechnen; gespeichert wird dann der Bruttobetrag mit einem Prüfhinweis.</p>}
-          {line && net !== undefined && (
-            <details className="mt-2 border-t border-border pt-2" data-eur-booking-preview>
-              <summary className="cursor-pointer text-caption font-medium text-muted hover:text-foreground">Entspricht dem Buchungssatz ({chart})</summary>
-              {booking ? (
-                <table className="mt-1.5 w-full text-caption">
-                  <tbody>
-                    {booking.map((entry) => (
-                      <tr key={`${entry.side}-${entry.account}`}>
-                        <td className="w-12 py-0.5 text-muted">{entry.side === 'soll' ? 'Soll' : 'Haben'}</td>
-                        <td className="w-12 py-0.5 tabular-nums text-foreground">{entry.account}</td>
-                        <td className="py-0.5 text-foreground">{entry.label}</td>
-                        <td className="py-0.5 text-right tabular-nums text-foreground">{formatCurrency(entry.amount)}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              ) : (
-                <p className="mt-1.5 text-caption text-muted">Für diese Kennziffer gibt es keine Standardzuordnung.</p>
-              )}
-              <p className="mt-1 text-caption text-muted">Nur zur Orientierung. Bei der EÜR wird nichts doppelt gebucht.</p>
+          {showLedger && line && net !== undefined && (
+            <details className="mt-3.5 rounded-card border border-border" data-eur-booking-preview>
+              <summary className="cursor-pointer px-3.5 py-2.75 text-label text-foreground">Entspricht dem Buchungssatz ({chart})</summary>
+              <div className="border-t border-border p-3.5">
+                {booking ? (
+                  <Table bare density="compact">
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead className="w-20">S/H</TableHead>
+                        <TableHead>Konto</TableHead>
+                        <TableHead numeric>Betrag</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {booking.map((entry) => (
+                        <TableRow key={`${entry.side}-${entry.account}`}>
+                          <TableCell><Badge tone="neutral">{entry.side === 'soll' ? 'Soll' : 'Haben'}</Badge></TableCell>
+                          <TableCell><span className="font-medium tabular-nums">{entry.account}</span> {entry.label}</TableCell>
+                          <TableCell numeric>{formatCurrency(entry.amount)}</TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                ) : (
+                  <p className="text-caption text-muted">Für diese Kennziffer gibt es keine Standardzuordnung.</p>
+                )}
+                <p className="mt-2.5 text-caption text-muted">Nur zur Orientierung. Bei der EÜR wird nichts doppelt gebucht.</p>
+              </div>
             </details>
           )}
         </>
       )}
       {!excluded && inYearEndWindow(item.date) && (
-        <p role="note" className="mt-2 rounded-control border border-info-border bg-info-bg px-2.5 py-1.5 text-caption text-info-text">
+        <p role="note" className="mt-3.5 rounded-control border border-info-border bg-info-bg px-3 py-2.5 text-control text-info-text">
           Zahlung nahe am Jahreswechsel. Regelmäßig wiederkehrende Zahlungen (z. B. Miete, Versicherung) gehören nach § 11 EStG in das Jahr, zu dem sie wirtschaftlich gehören, wenn sie innerhalb von zehn Tagen um den Jahreswechsel fällig und bezahlt sind.
         </p>
       )}
@@ -207,6 +231,7 @@ export const EurView: React.FC = () => {
   const [lastUndo, setLastUndo] = React.useState<EurUndo | null>(null);
 
   const [showRulesModal, setShowRulesModal] = React.useState(false);
+  const [showAllCategories, setShowAllCategories] = React.useState(false);
   const { notify } = useActionFeedback('eur');
 
   const showNotification = (message: string, type: 'success' | 'error' | 'warning' | 'info' = 'success') => {
@@ -448,8 +473,18 @@ export const EurView: React.FC = () => {
     }
   };
 
+  const activeLine = activeLineOptions.find((line) => line.lineId === selectedLineId);
+  const bulkDisabled = selectedItems.length === 0 || isApplying || auditReason.trim().length === 0;
+  const checks = activeItem
+    ? [
+        !excluded && !activeLine ? 'Noch keine Kategorie gewählt' : undefined,
+        auditReason.trim().length === 0 ? 'Bitte eine Begründung für den Audit-Eintrag eingeben.' : undefined,
+        isProProduct && vatMode === 'default' ? activeItem.vatWarning : undefined,
+      ].filter((text): text is string => Boolean(text))
+    : [];
+
   return (
-    <div className="min-h-full px-1 pt-2 flex flex-col">
+    <div className="@container">
       <PageHeader
         title="Buchen"
         description={`Klassifizierung für Steuerjahr ${taxYear}. Die Anlage EÜR steht unter Auswertungen.`}
@@ -464,7 +499,7 @@ export const EurView: React.FC = () => {
                 <option key={year} value={year}>{year}</option>
               ))}
             </Select>
-            {!isWebShell && (
+            {(
               <Button variant="secondary" onClick={() => setShowRulesModal(true)}>
                 <Settings2 size={16} aria-hidden="true" />
                 Regeln
@@ -473,13 +508,13 @@ export const EurView: React.FC = () => {
           </>
         }
       />
-      <div className="min-h-0 flex-1">
 
-      {/* Undo Banner */}
+      {!isProProduct && <LiteCashPanel />}
+
       {lastUndo && (
-        <div className="mb-4 rounded-2xl border border-warning-border bg-warning-bg p-3 flex items-center justify-between gap-3">
-          <div className="flex items-center gap-2 text-sm text-warning-text">
-            <RotateCcw size={16} className="flex-shrink-0" />
+        <div className="mb-3 flex flex-wrap items-center justify-between gap-3 rounded-control border border-warning-border bg-warning-bg px-3 py-2.5 text-control text-warning-text">
+          <div className="flex items-center gap-2">
+            <RotateCcw size={16} className="shrink-0" aria-hidden="true" />
             <span>Aktion gespeichert: <span className="font-semibold">{lastUndo.label}</span></span>
           </div>
           <Button
@@ -488,24 +523,20 @@ export const EurView: React.FC = () => {
             onClick={() => void undoLast()}
             disabled={isApplying}
           >
-            <RotateCcw size={14} />
+            <RotateCcw size={14} aria-hidden="true" />
             Rückgängig
           </Button>
         </div>
       )}
 
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        {/* Queue Panel */}
-        <div className="rounded-card border border-border bg-surface p-4 lg:col-span-1">
-          <h3 className="font-semibold text-foreground mb-3 flex items-center gap-2">
-            <ClipboardList size={16} className="text-muted" />
-            Warteschlange
-            <span className="text-xs font-normal text-muted ml-auto tabular-nums">{queueItems.length} Einträge</span>
-          </h3>
-
-          {/* Filter Tabs */}
-          <div className="rounded-lg border border-border p-1 bg-surface-muted mb-3">
-            <div className="grid grid-cols-2 gap-1 text-xs">
+      <div className="grid items-start gap-3 @2xl:grid-cols-[260px_minmax(0,1fr)] @5xl:grid-cols-[264px_minmax(0,1fr)_312px]">
+        <Card padding="none" className="flex min-w-0 flex-col overflow-hidden">
+          <div className="flex flex-col gap-2 border-b border-border px-3 py-2.5">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <h2 className="text-sm font-semibold text-foreground">Warteschlange</h2>
+              <span className="flex items-center gap-1 text-caption text-muted"><Kbd>J</Kbd><Kbd>K</Kbd> blättern</span>
+            </div>
+            <div className="flex flex-wrap gap-1.25">
               {([
                 ['unclassified', 'Offen', statusCounts.unclassified],
                 ['classified', 'Klassifiziert', statusCounts.classified],
@@ -517,92 +548,76 @@ export const EurView: React.FC = () => {
                   type="button"
                   onClick={() => setQueueStatus(status)}
                   aria-pressed={queueStatus === status}
-                  className={`rounded-md px-2 py-1.5 font-medium transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring ${
-                    queueStatus === status
-                      ? 'bg-surface shadow-sm font-semibold text-foreground'
-                      : 'text-muted hover:text-foreground'
-                  }`}
+                  className={chipButtonClass}
                 >
-                  {label} ({count})
+                  <Badge tone={queueStatus === status ? 'inverse' : 'neutral'}>
+                    {label} <span className="tabular-nums">{count}</span>
+                  </Badge>
                 </button>
               ))}
             </div>
-          </div>
-
-          {/* Search */}
-          <div className="relative mb-3">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-muted" size={16} />
-            <input
+            <Input
               value={query}
               aria-label="Einträge durchsuchen"
               onChange={(e) => setQuery(e.target.value)}
               placeholder="Gegenpartei, Zweck oder Datum..."
- className="px-2.5 h-8 hover:border-control-border-hover w-full pl-9 pr-3 rounded-control border border-control-border bg-surface text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+              prefix={<Search size={14} />}
+              fullWidth
             />
-          </div>
-
-          {/* Flow & Sort Filters */}
-          <div className="grid grid-cols-2 gap-2 mb-3">
-            <select
-              value={flowFilter}
-              aria-label="Zahlungsrichtung filtern"
-              onChange={(e) => setFlowFilter(e.target.value as 'all' | 'income' | 'expense')}
-              className="px-2.5 h-8 hover:border-control-border-hover rounded-control border border-control-border bg-surface text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
-            >
-              <option value="all">Alle Typen</option>
-              <option value="income">Einnahmen</option>
-              <option value="expense">Ausgaben</option>
-            </select>
-            <select
-              value={queueSort}
-              aria-label="Einträge sortieren"
-              onChange={(e) => setQueueSort(e.target.value as QueueSort)}
-              className="px-2.5 h-8 hover:border-control-border-hover rounded-control border border-control-border bg-surface text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
-            >
-              <option value="date_desc">Neueste zuerst</option>
-              <option value="amount_desc">Betrag absteigend</option>
-              <option value="counterparty_asc">Name A-Z</option>
-            </select>
-          </div>
-
-          {/* Bulk Actions */}
-          <div className="mb-3 rounded-xl border border-border bg-surface-muted p-3">
-            <div className="flex items-center justify-between mb-2">
-              <label className="text-xs font-semibold text-foreground flex items-center gap-2">
-                <input
-                  type="checkbox"
-                  className="h-6 w-6 accent-black"
-                  checked={queueItems.length > 0 && selectedItems.length === queueItems.length}
-                  onChange={(e) => {
-                    if (e.target.checked) {
-                      setSelectedKeys(new Set(queueItems.map((item) => itemKey(item))));
-                    } else {
-                      setSelectedKeys(new Set());
-                    }
-                  }}
-                />
-                <span className="tabular-nums">{selectedItems.length}</span> ausgewählt
-              </label>
-              <button
-                type="button"
-                onClick={() => setSelectedKeys(new Set())}
-                className="min-h-6 rounded-sm px-2 text-xs text-muted transition-colors hover:text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+            <div className="grid grid-cols-2 gap-2">
+              <Select
+                value={flowFilter}
+                aria-label="Zahlungsrichtung filtern"
+                onChange={(e) => setFlowFilter(e.target.value as 'all' | 'income' | 'expense')}
+                fullWidth
               >
-                Auswahl löschen
-              </button>
+                <option value="all">Alle Typen</option>
+                <option value="income">Einnahmen</option>
+                <option value="expense">Ausgaben</option>
+              </Select>
+              <Select
+                value={queueSort}
+                aria-label="Einträge sortieren"
+                onChange={(e) => setQueueSort(e.target.value as QueueSort)}
+                fullWidth
+              >
+                <option value="date_desc">Neueste zuerst</option>
+                <option value="amount_desc">Betrag absteigend</option>
+                <option value="counterparty_asc">Name A-Z</option>
+              </Select>
             </div>
-            <div className="grid grid-cols-1 gap-1.5">
-              <label className="text-xs font-semibold text-foreground">
-                Begründung (Audit) <span className="text-error-text">*</span>
-                <input
-                  aria-label="Begründung für EÜR-Änderung"
-                  value={auditReason}
-                  onChange={(event) => setAuditReason(event.target.value)}
-                  className="mt-1 w-full rounded-lg border border-border bg-surface px-3 py-2 text-sm"
-                  placeholder="z. B. Beleg geprüft und Kontierung bestätigt"
-                />
-              </label>
-              <button
+          </div>
+
+          <div className="flex flex-col gap-2 border-b border-border bg-surface-muted px-3 py-2.5">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <Checkbox
+                label={<><span className="tabular-nums">{selectedItems.length}</span> ausgewählt</>}
+                checked={queueItems.length > 0 && selectedItems.length === queueItems.length}
+                onChange={(e) => {
+                  if (e.target.checked) {
+                    setSelectedKeys(new Set(queueItems.map((item) => itemKey(item))));
+                  } else {
+                    setSelectedKeys(new Set());
+                  }
+                }}
+              />
+              <span className="text-caption text-muted"><span className="tabular-nums">{queueItems.length}</span> Einträge</span>
+            </div>
+            {/* Bulk tools appear with a selection; the editor carries the same audit reason. */}
+            {selectedItems.length > 0 && (<>
+            <Input
+              label="Begründung (Audit)"
+              required
+              aria-label="Begründung für EÜR-Änderung"
+              value={auditReason}
+              onChange={(event) => setAuditReason(event.target.value)}
+              placeholder="z. B. Beleg geprüft und Kontierung bestätigt"
+              fullWidth
+            />
+            <div className="flex flex-wrap gap-1.5">
+              <Button
+                variant="secondary"
+                size="sm"
                 onClick={() =>
                   void applyBulk('Bulk: Vorschlag anwenden', (item) => ({
                     eurLineId: item.suggestedLineId,
@@ -611,13 +626,14 @@ export const EurView: React.FC = () => {
                     vatRate: item.classification?.vatRate,
                   }))
                 }
-                disabled={selectedItems.length === 0 || isApplying || auditReason.trim().length === 0}
-                className="flex items-center gap-2 rounded-lg border border-border bg-surface px-3 py-2 text-xs text-left text-foreground transition-colors hover:bg-surface-muted disabled:opacity-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                disabled={bulkDisabled}
               >
-                <Check size={14} className="text-info-text flex-shrink-0" aria-hidden="true" />
+                <Check size={14} aria-hidden="true" />
                 Vorschlag anwenden
-              </button>
-              <button
+              </Button>
+              <Button
+                variant="secondary"
+                size="sm"
                 onClick={() =>
                   void applyBulk('Bulk: Als privat/Transfer markieren', () => ({
                     eurLineId: undefined,
@@ -626,13 +642,14 @@ export const EurView: React.FC = () => {
                     vatRate: undefined,
                   }))
                 }
-                disabled={selectedItems.length === 0 || isApplying || auditReason.trim().length === 0}
-                className="flex items-center gap-2 rounded-lg border border-border bg-surface px-3 py-2 text-xs text-left text-foreground transition-colors hover:bg-surface-muted disabled:opacity-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                disabled={bulkDisabled}
               >
-                <Ban size={14} className="text-error-text flex-shrink-0" />
+                <Ban size={14} aria-hidden="true" />
                 Als privat/Transfer markieren
-              </button>
-              <button
+              </Button>
+              <Button
+                variant="secondary"
+                size="sm"
                 onClick={() =>
                   void applyBulk('Bulk: Klassifizierung zurücksetzen', () => ({
                     eurLineId: undefined,
@@ -641,16 +658,18 @@ export const EurView: React.FC = () => {
                     vatRate: undefined,
                   }))
                 }
-                disabled={selectedItems.length === 0 || isApplying || auditReason.trim().length === 0}
-                className="flex items-center gap-2 rounded-lg border border-border bg-surface px-3 py-2 text-xs text-left text-foreground transition-colors hover:bg-surface-muted disabled:opacity-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                disabled={bulkDisabled}
               >
-                <RotateCcw size={14} className="text-muted flex-shrink-0" />
+                <RotateCcw size={14} aria-hidden="true" />
                 Klassifizierung zurücksetzen
-              </button>
+              </Button>
+              <Button variant="ghost" size="sm" onClick={() => setSelectedKeys(new Set())}>
+                Auswahl löschen
+              </Button>
             </div>
+            </>)}
           </div>
 
-          {/* Queue Items */}
           {itemsIsError ? (
             <ErrorState
               title="Einträge konnten nicht geladen werden"
@@ -658,9 +677,9 @@ export const EurView: React.FC = () => {
               onRetry={() => void refetchItems()}
             />
           ) : itemsLoading ? (
-            <div className="flex flex-col items-center justify-center py-12">
+            <div className="flex flex-col items-center justify-center gap-3 py-10">
               <Spinner size="md" />
-              <p className="text-sm text-muted mt-3">Lade Einträge …</p>
+              <p className="text-control text-muted">Lade Einträge …</p>
             </div>
           ) : queueItems.length === 0 ? (
             <EmptyState
@@ -670,24 +689,21 @@ export const EurView: React.FC = () => {
               description={queueStatus === 'unclassified' && statusCounts.unclassified === 0
                 ? 'Für dieses Steuerjahr ist nichts mehr offen. Der Report rechts zeigt die Summen.'
                 : 'Wähle einen anderen Status oder leere die Suche, um weitere Einträge zu sehen.'}
-              className="border-0 bg-transparent"
             />
           ) : (
-            <div className="space-y-2 max-h-[460px] overflow-auto pr-1">
+            <div className="max-h-[min(62vh,560px)] overflow-y-auto">
               {queueItems.map((item) => {
                 const key = itemKey(item);
                 const isActive = activeSource?.sourceType === item.sourceType && activeSource.sourceId === item.sourceId;
                 return (
                   <div
                     key={key}
-                    className={`w-full text-left p-3 rounded-xl border transition-colors ${
-                      isActive ? 'border-foreground bg-surface-muted' : 'border-border hover:border-control-border'
+                    className={`flex items-start gap-2 border-b border-l-3 border-border py-2.5 pl-2.25 pr-3 transition-colors last:border-b-0 ${
+                      isActive ? 'border-l-accent bg-accent-50' : 'border-l-transparent hover:bg-surface-muted'
                     }`}
                   >
-                    <div className="flex items-start gap-2">
-                      <input
-                        type="checkbox"
-                        className="mt-1 h-6 w-6 accent-black"
+                    <span className="mt-px flex">
+                      <Checkbox
                         aria-label={`${item.counterparty} auswählen`}
                         checked={selectedKeys.has(key)}
                         onChange={(e) => {
@@ -697,242 +713,283 @@ export const EurView: React.FC = () => {
                           setSelectedKeys(next);
                         }}
                       />
-                      <button
-                        onClick={() => setActiveSource({ sourceType: item.sourceType, sourceId: item.sourceId })}
-                        className="flex-1 text-left"
-                      >
-                        <div className="flex items-center gap-1.5 text-xs text-muted">
-                          {item.classification?.excluded ? (
-                            <XCircle size={14} className="text-error-text" />
-                          ) : item.classification?.eurLineId ? (
-                            <CheckCircle2 size={14} className="text-success-text" />
-                          ) : (
-                            <AlertCircle size={14} className="text-warning-text" />
-                          )}
-                          <span>{item.date}</span>
-                          <span className="text-muted">|</span>
-                          <span>{item.sourceType === 'transaction' ? 'Bank' : 'Rechnung'}</span>
-                        </div>
-                        <div className="text-sm font-semibold text-foreground truncate">{item.counterparty}</div>
-                        <div className="text-xs text-muted truncate">{item.purpose}</div>
-                        <div className={`text-sm font-semibold tabular-nums mt-1 ${
-                          item.flowType === 'income' ? 'text-success-text' : 'text-error-text'
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => setActiveSource({ sourceType: item.sourceType, sourceId: item.sourceId })}
+                      aria-current={isActive ? 'true' : undefined}
+                      className="min-w-0 flex-1 rounded-xs text-left focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                    >
+                      <span className="flex items-baseline gap-2">
+                        <span className="min-w-0 flex-1 truncate text-control font-semibold text-foreground">{item.counterparty}</span>
+                        <span className={`text-control font-semibold tabular-nums ${
+                          item.flowType === 'income' ? 'text-success-text' : 'text-foreground'
                         }`}>
                           {item.flowType === 'income' ? '+' : '-'}{formatCurrency(item.amountGross)}
-                        </div>
-                        <div className="flex flex-wrap gap-1 mt-2 text-xs">
-                          {item.classification?.excluded ? (
-                            <span className="px-2 py-0.5 rounded-full bg-error-bg text-error-text">Ausgeschlossen</span>
-                          ) : item.classification?.eurLineId ? (
-                            <span className="px-2 py-0.5 rounded-full bg-success-bg text-success-text">Klassifiziert</span>
-                          ) : (
-                            <span className="px-2 py-0.5 rounded-full bg-warning-bg text-warning-text">Offen</span>
-                          )}
-                          {item.flowType === 'income' ? (
-                            <span className="px-2 py-0.5 rounded-full bg-success-bg text-success-text">Einnahme</span>
-                          ) : (
-                            <span className="px-2 py-0.5 rounded-full bg-error-bg text-error-text">Ausgabe</span>
-                          )}
-                          {item.suggestionLayer && !item.classification?.eurLineId && !item.classification?.excluded && (
-                            <span className={`px-2 py-0.5 rounded-full ${LAYER_COLORS[item.suggestionLayer]}`}>
-                              {LAYER_LABELS[item.suggestionLayer]}
-                            </span>
-                          )}
-                        </div>
-                      </button>
-                    </div>
+                        </span>
+                      </span>
+                      <span className="mt-0.75 flex flex-wrap items-center gap-1.5">
+                        <span className="text-caption tabular-nums text-muted">{item.date}</span>
+                        {item.classification?.excluded ? (
+                          <Badge tone="error">Ausgeschlossen</Badge>
+                        ) : item.classification?.eurLineId ? (
+                          <Badge tone="success">Klassifiziert</Badge>
+                        ) : (
+                          <Badge tone="warning">Offen</Badge>
+                        )}
+                        <Badge tone="neutral">{item.sourceType === 'transaction' ? 'Bank' : item.sourceType === 'manual' ? 'Manuell' : 'Rechnung'}</Badge>
+                        <Badge tone="neutral">{item.flowType === 'income' ? 'Einnahme' : 'Ausgabe'}</Badge>
+                        {item.suggestionLayer && !item.classification?.eurLineId && !item.classification?.excluded && (
+                          <Badge tone={LAYER_TONES[item.suggestionLayer]}>{LAYER_LABELS[item.suggestionLayer]}</Badge>
+                        )}
+                      </span>
+                      <span className="mt-0.75 block truncate text-caption text-muted">{item.purpose}</span>
+                    </button>
                   </div>
                 );
               })}
             </div>
           )}
-        </div>
+        </Card>
 
-        {/* Classification Panel */}
-        <div className="rounded-card border border-border bg-surface p-4 lg:col-span-2">
-          <h3 className="font-semibold text-foreground mb-3 flex items-center gap-2">
-            <Tags size={16} className="text-muted" />
-            Klassifizierung
-          </h3>
-          {!activeItem ? (
-            <EmptyState
-              title="Kein Eintrag ausgewählt"
-              description="Wähle links einen Eintrag aus, um ihn einer EÜR-Kennziffer zuzuordnen."
-              className="border-0 bg-transparent"
-            />
-          ) : (
-            <div className="space-y-3">
-              {/* Active Item Summary Card */}
-              <div className="rounded-xl border border-border bg-surface-muted p-3">
-                <div className="flex items-center gap-2 mb-1">
-                  {activeItem.flowType === 'income' ? (
-                    <TrendingUp size={16} className="text-success-text" />
-                  ) : (
-                    <TrendingDown size={16} className="text-error-text" />
-                  )}
-                  <span className="text-sm font-semibold text-foreground truncate">{activeItem.counterparty}</span>
-                </div>
-                <div className="text-xs text-muted truncate">{activeItem.purpose}</div>
-                <div className={`text-sm font-semibold tabular-nums mt-1 ${
-                  activeItem.flowType === 'income' ? 'text-success-text' : 'text-error-text'
-                }`}>
-                  {formatCurrency(activeItem.amountGross)}
-                </div>
-                <div className="text-xs text-muted mt-1">
-                  {activeItem.classification?.updatedAt
-                    ? `Zuletzt: ${new Date(activeItem.classification.updatedAt).toLocaleString('de-DE')}`
-                    : 'Noch nicht klassifiziert'}
-                </div>
-              </div>
-
-              {/* Suggestion Button */}
-              {activeItem.suggestedLineId && (
-                <button
-                  onClick={() => {
-                    setSelectedLineId(activeItem.suggestedLineId!);
-                    setExcluded(false);
-                  }}
-                  className="w-full rounded-xl border border-info-border bg-info-bg px-3 py-2.5 text-left hover:bg-info-bg transition-colors"
-                >
-                  <div className="flex items-center gap-2">
-                    <Check size={16} className="text-info-text flex-shrink-0" aria-hidden="true" />
-                    <div className="flex-1">
-                      <div className="text-xs text-info-text font-semibold flex items-center gap-2">
-                        Vorschlag übernehmen
-                        {activeItem.suggestionLayer && (
-                          <span className={`px-1.5 py-0.5 rounded-full text-xs ${LAYER_COLORS[activeItem.suggestionLayer]}`}>
-                            {LAYER_LABELS[activeItem.suggestionLayer]}
-                          </span>
-                        )}
-                      </div>
-                      {activeItem.suggestionReason && (
-                        <div className="text-xs text-info-text">{activeItem.suggestionReason}</div>
-                      )}
+        <Card padding="none" className={`min-w-0 ${activeItem ? '' : '@5xl:col-span-2'}`}>
+          <section aria-label="Klassifizierung" className="flex flex-col">
+            {!activeItem ? (
+              <EmptyState
+                title="Kein Eintrag ausgewählt"
+                description="Wähle links einen Eintrag aus, um seine Kategorie auszuwählen."
+              />
+            ) : (
+              <>
+                <div className="flex flex-wrap items-start justify-between gap-2.5 border-b border-border px-3 py-2.5">
+                  <div className="min-w-0">
+                    <h2 className="truncate text-section text-foreground">{activeItem.counterparty}</h2>
+                    <div className="truncate text-caption text-muted">
+                      <span className="tabular-nums">{formatDate(activeItem.date)}</span> · {activeItem.purpose}
                     </div>
                   </div>
-                </button>
-              )}
-
-              {/* Kennziffer Select */}
-              <div>
-                <label className="block text-xs font-semibold text-foreground" htmlFor="eur-line">Kennziffer</label>
-                <select
-                  id="eur-line"
-                  value={selectedLineId}
-                  onChange={(e) => setSelectedLineId(e.target.value)}
-                  disabled={excluded}
-                  className="px-2.5 h-8 hover:border-control-border-hover mt-1 w-full rounded-control border border-control-border bg-surface text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
-                >
-                  <option value="">Nicht zugeordnet</option>
-                  {activeLineOptions.map((line) => (
-                    <option key={line.lineId} value={line.lineId}>
-                      {line.kennziffer ? `${line.kennziffer} - ` : ''}{line.label}
-                    </option>
-                  ))}
-                </select>
-              </div>
-
-              <label className="block text-xs font-semibold text-foreground">Steuerliche Korrektur / Begründung
-                <input aria-label="Steuerliche Korrektur" value={taxNote} onChange={(event) => setTaxNote(event.target.value)} className="px-2.5 h-8 hover:border-control-border-hover mt-1 w-full rounded-control border border-control-border bg-surface text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring" placeholder="z. B. privater Anteil" />
-              </label>
-
-              <label className="block text-xs font-semibold text-foreground">
-                Begründung (Audit) <span className="text-error-text">*</span>
-                <input
-                  aria-label="Begründung für EÜR-Änderung"
-                  value={auditReason}
-                  onChange={(event) => setAuditReason(event.target.value)}
-                  className="mt-1 w-full rounded-xl border border-border bg-surface px-3 py-2 text-sm"
-                  placeholder="z. B. Beleg geprüft und Kontierung bestätigt"
-                />
-              </label>
-
-              {/* VAT Mode Select */}
-              <div>
-                <label className="block text-xs font-semibold text-foreground" htmlFor="eur-vat-mode">USt. Modus</label>
-                <select
-                  id="eur-vat-mode"
-                  value={vatMode}
-                  onChange={(e) => setVatMode(e.target.value as VatMode)}
-                  className="px-2.5 h-8 hover:border-control-border-hover mt-1 w-full rounded-control border border-control-border bg-surface text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
-                >
-                  <option value="none">Keine USt. Umrechnung</option>
-                  <option value="default">Default USt. (Netto)</option>
-                </select>
-              </div>
-
-              {isProProduct && vatMode === 'default' && (
-                <div>
-                  <label className="block text-xs font-semibold text-foreground" htmlFor="eur-vat-rate">USt.-Satz (%)</label>
-                  <input
-                    id="eur-vat-rate"
-                    type="number"
-                    min="0"
-                    max="100"
-                    step="0.01"
-                    value={vatRate ?? ''}
-                    onChange={(e) => setVatRate(e.target.value === '' ? undefined : Number(e.target.value))}
-                    className="px-2.5 h-8 hover:border-control-border-hover mt-1 w-full rounded-control border border-control-border bg-surface text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
-                    placeholder="z. B. 19"
-                  />
-                  {activeItem.vatWarning && <p className="mt-1 text-xs text-warning-text">{activeItem.vatWarning}</p>}
+                  <div className={`text-heading font-bold tabular-nums ${
+                    activeItem.flowType === 'income' ? 'text-success-text' : 'text-foreground'
+                  }`}>
+                    {formatCurrency(activeItem.amountGross)}
+                  </div>
                 </div>
-              )}
 
-              {/* Excluded Checkbox */}
-              <label className="flex items-center gap-2 text-sm text-foreground">
-                <input
-                  type="checkbox"
-                  className="h-6 w-6 accent-black"
-                  checked={excluded}
-                  onChange={(e) => setExcluded(e.target.checked)}
-                />
-                Privat/Transfer ausschließen
-              </label>
+                <div className="flex flex-col gap-3.5 p-3">
+                  <div className="flex flex-wrap items-start gap-2.5 rounded-control border border-info-border bg-info-bg px-3 py-2.5 text-control text-info-text">
+                    <Info size={16} className="mt-px shrink-0" aria-hidden="true" />
+                    <div className="min-w-0 flex-1">
+                      <strong className="font-semibold">Einnahmen-Überschuss-Rechnung.</strong> Erfasst wird die Zahlung, nicht die Rechnung.
+                      {activeItem.suggestedLineId && (activeItem.suggestionLayer || activeItem.suggestionReason) && (
+                        <div className="mt-1 flex flex-wrap items-center gap-1.5 text-caption">
+                          {activeItem.suggestionLayer && (
+                            <Badge tone={LAYER_TONES[activeItem.suggestionLayer]}>{LAYER_LABELS[activeItem.suggestionLayer]}</Badge>
+                          )}
+                          {activeItem.suggestionReason}
+                        </div>
+                      )}
+                    </div>
+                    {activeItem.suggestedLineId && (
+                      <Button
+                        variant="secondary"
+                        size="sm"
+                        onClick={() => {
+                          setSelectedLineId(activeItem.suggestedLineId!);
+                          setExcluded(false);
+                        }}
+                      >
+                        <Check size={14} aria-hidden="true" />
+                        Vorschlag übernehmen
+                      </Button>
+                    )}
+                  </div>
 
-              <EurEntryPreview
-                item={activeItem}
-                line={activeLineOptions.find((line) => line.lineId === selectedLineId)}
-                excluded={excluded}
-                vatMode={vatMode}
-                vatRate={vatRate}
-                // ponytail: Lite has no accounting policy row; the profile chart (default SKR03) only labels the preview.
-                chart={settings?.businessReportingProfile?.chart ?? 'SKR03'}
-              />
+                  <div>
+                    <div className="mb-1.5 text-eyebrow uppercase text-muted">Art des Vorgangs</div>
+                    <SegmentedControl
+                      aria-label="Art des Vorgangs"
+                      value={excluded ? 'excluded' : 'flow'}
+                      onChange={(value) => setExcluded(value === 'excluded')}
+                      options={[
+                        { value: 'flow', label: activeItem.flowType === 'income' ? 'Einnahme' : 'Ausgabe' },
+                        { value: 'excluded', label: 'Privat/Transfer ausschließen' },
+                      ]}
+                    />
+                  </div>
 
-              {/* Action Buttons */}
-              <div className="flex items-center gap-2">
-                <Button onClick={() => void applySingle()} disabled={isApplying || auditReason.trim().length === 0} fullWidth>
-                  <Save size={16} />
-                  {isApplying ? 'Speichern...' : 'Klassifizierung speichern'}
-                </Button>
+                  <div className="grid grid-cols-[repeat(auto-fit,minmax(170px,1fr))] gap-3.5">
+                    <div className="col-span-full">
+                      <Select
+                        id="eur-line"
+                        label={isProProduct ? 'Kennziffer' : 'Kategorie'}
+                        value={selectedLineId}
+                        onChange={(e) => setSelectedLineId(e.target.value)}
+                        disabled={excluded}
+                        fullWidth
+                      >
+                        <option value="">Nicht zugeordnet</option>
+                        {activeLineOptions.filter((line) => isProProduct || showAllCategories || isSimpleEurCategory(line) || line.lineId === selectedLineId).map((line) => (
+                          <option key={line.lineId} value={line.lineId}>
+                            {isProProduct ? `${line.kennziffer ? `${line.kennziffer} - ` : ''}${line.label}` : simpleEurCategoryLabel(line)}
+                          </option>
+                        ))}
+                      </Select>
+                      {!isProProduct && <Checkbox className="mt-2" label="Weitere Kategorien anzeigen" checked={showAllCategories} onChange={(e) => setShowAllCategories(e.target.checked)} />}
+                    </div>
+                    <Input
+                      label="Betrag brutto"
+                      value={formatCurrency(activeItem.amountGross)}
+                      readOnly
+                      fullWidth
+                      className="text-right tabular-nums"
+                    />
+                    <Select
+                      id="eur-vat-mode"
+                      label="USt. Modus"
+                      value={vatMode}
+                      onChange={(e) => setVatMode(e.target.value as VatMode)}
+                      fullWidth
+                    >
+                      <option value="none">Keine USt. Umrechnung</option>
+                      <option value="default">Default USt. (Netto)</option>
+                    </Select>
+                    {vatMode === 'default' && (
+                      <Input
+                        id="eur-vat-rate"
+                        label="USt.-Satz (%)"
+                        type="number"
+                        min="0"
+                        max="100"
+                        step="0.01"
+                        value={vatRate ?? ''}
+                        onChange={(e) => setVatRate(e.target.value === '' ? undefined : Number(e.target.value))}
+                        placeholder="z. B. 19"
+                        fullWidth
+                      />
+                    )}
+                    <Input
+                      label="Zahlungsdatum"
+                      value={formatDate(activeItem.date)}
+                      readOnly
+                      fullWidth
+                      className="tabular-nums"
+                    />
+                    <div className="col-span-full">
+                      <Input
+                        label="Steuerliche Korrektur / Begründung"
+                        aria-label="Steuerliche Korrektur"
+                        value={taxNote}
+                        onChange={(event) => setTaxNote(event.target.value)}
+                        placeholder="z. B. privater Anteil"
+                        fullWidth
+                      />
+                    </div>
+                    <div className="col-span-full">
+                      <Input
+                        label="Begründung (Audit)"
+                        required
+                        aria-label="Begründung für EÜR-Änderung"
+                        value={auditReason}
+                        onChange={(event) => setAuditReason(event.target.value)}
+                        placeholder="z. B. Beleg geprüft und Kontierung bestätigt"
+                        fullWidth
+                      />
+                    </div>
+                  </div>
+
+                  <EurEntryPreview
+                    item={activeItem}
+                    line={activeLine}
+                    excluded={excluded}
+                    vatMode={vatMode}
+                    vatRate={vatRate}
+                    // ponytail: Lite has no accounting policy row; the profile chart (default SKR03) only labels the preview.
+                    chart={settings?.businessReportingProfile?.chart ?? 'SKR03'}
+                    showLedger={isProProduct}
+                  />
+
+                  <div className="flex flex-wrap justify-end gap-2 border-t border-border pt-3">
+                    <Button
+                      variant="secondary"
+                      onClick={() => {
+                        setSelectedLineId('');
+                        setExcluded(false);
+                        setVatMode('none');
+                      }}
+                    >
+                      Zurücksetzen
+                    </Button>
+                    <Button onClick={() => void applySingle()} disabled={isApplying || auditReason.trim().length === 0}>
+                      <Save size={16} aria-hidden="true" />
+                      {isApplying ? 'Speichern...' : 'Klassifizierung speichern'}
+                    </Button>
+                  </div>
+                </div>
+              </>
+            )}
+          </section>
+        </Card>
+
+        {activeItem && (
+          <Card padding="sm" className="flex min-w-0 flex-col gap-3.5 @2xl:col-span-full @5xl:col-auto">
+            {checks.length > 0 && (
+              <div>
+                <div className="mb-2 text-eyebrow uppercase text-muted">Prüfungen</div>
+                <div className="flex flex-col gap-1.5">
+                  {checks.map((text) => (
+                    <div key={text} className="flex items-start gap-2 rounded-control border border-warning-border bg-warning-bg px-2.25 py-1.75 text-caption text-warning-text">
+                      <AlertCircle size={14} className="mt-px shrink-0" aria-hidden="true" />
+                      <span>{text}</span>
+                    </div>
+                  ))}
+                </div>
               </div>
-              <Button
-                variant="secondary"
-                size="sm"
-                onClick={() => {
-                  setSelectedLineId('');
-                  setExcluded(false);
-                  setVatMode('none');
-                }}
-              >
-                Zurücksetzen
-              </Button>
+            )}
+            <div>
+              <div className="mb-2 text-eyebrow uppercase text-muted">Verlauf</div>
+              <ol className="flex flex-col gap-3">
+                <li className="flex gap-2.25">
+                  <span
+                    aria-hidden="true"
+                    className={`ml-0.75 mt-1.25 size-1.75 shrink-0 rounded-full ${
+                      activeItem.classification?.eurLineId && !activeItem.classification.excluded ? 'bg-success' : 'bg-border-strong'
+                    }`}
+                  />
+                  <div className="min-w-0">
+                    <div className="text-caption text-foreground">
+                      {activeItem.classification?.updatedAt
+                        ? `Zuletzt: ${new Date(activeItem.classification.updatedAt).toLocaleString('de-DE')}`
+                        : 'Noch nicht klassifiziert'}
+                    </div>
+                    {activeItem.line && (
+                      <div className="text-micro text-muted">
+                        {isProProduct ? `${activeItem.line.kennziffer ? `Kz ${activeItem.line.kennziffer} · ` : ''}${activeItem.line.label}` : simpleEurCategoryLabel(activeItem.line)}
+                      </div>
+                    )}
+                  </div>
+                </li>
+                <li className="flex gap-2.25">
+                  <span aria-hidden="true" className="ml-0.75 mt-1.25 size-1.75 shrink-0 rounded-full bg-border-strong" />
+                  <div className="min-w-0">
+                    <div className="text-caption text-foreground">{activeItem.sourceType === 'transaction' ? 'Bank' : activeItem.sourceType === 'manual' ? 'Manuell' : 'Rechnung'}</div>
+                    <div className="text-micro text-muted">
+                      <span className="tabular-nums">{formatDate(activeItem.date)}</span> · {activeItem.purpose}
+                    </div>
+                  </div>
+                </li>
+              </ol>
             </div>
-          )}
-        </div>
-
+          </Card>
+        )}
       </div>
 
-      {showRulesModal && !isWebShell && (
+      {showRulesModal && (
         <EurRulesModal
           taxYear={taxYear}
           onClose={() => setShowRulesModal(false)}
           onRulesChanged={() => void invalidateEur()}
         />
       )}
-
-    </div>
     </div>
   );
 };

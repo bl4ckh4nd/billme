@@ -1,9 +1,10 @@
 import React from 'react';
 import { Outlet, useNavigate, useRouterState } from '@tanstack/react-router';
-import { Button, ConfirmDialog, EmptyState, useActionFeedback } from '@billme/ui';
-import type { AppSettings, Invoice } from '@billme/desktop-core/types';
+import { Button, Card, ConfirmDialog, EmptyState, useActionFeedback } from '@billme/ui';
+import type { AppSettings, Invoice, Offer } from '@billme/desktop-core/types';
 import { templateKindSchema } from '@billme/server-core/domain';
 import { calculateInvoiceTaxSnapshot, resolveInvoiceTaxMode } from '@billme/server-core/services';
+import { localIsoDate } from '@billme/desktop-utils';
 import { DashboardHome, TemplatesView, shouldShowBusinessOnboarding } from '../ui';
 import { ShortcutsModal } from '../ui/components/ShortcutsModal';
 import { useKeyboardShortcuts } from '../hooks/useKeyboardShortcuts';
@@ -73,17 +74,18 @@ export const DashboardPage: React.FC = () => {
 export const NotFoundPage: React.FC = () => {
   const navigate = useNavigate();
   return (
-    <div className="flex min-h-full items-center justify-center rounded-3xl bg-surface p-8 shadow-sm">
-      <EmptyState
-        className="w-full max-w-md"
-        title="Seite nicht gefunden"
-        description="Die angeforderte Seite konnte nicht gefunden werden."
-        action={
-          <Button variant="dark" onClick={() => navigate({ to: '/' })}>
-            Zurück zur Übersicht
-          </Button>
-        }
-      />
+    <div className="flex min-h-full items-center justify-center">
+      <Card padding="none" className="w-full max-w-md">
+        <EmptyState
+          title="Seite nicht gefunden"
+          description="Die angeforderte Seite konnte nicht gefunden werden."
+          action={
+            <Button variant="secondary" onClick={() => navigate({ to: '/' })}>
+              Zurück zur Übersicht
+            </Button>
+          }
+        />
+      </Card>
     </div>
   );
 };
@@ -142,7 +144,7 @@ export const DocumentsPage: React.FC = () => {
           client: '',
           clientEmail: '',
           taxMode: resolveInvoiceTaxMode(undefined, settings),
-          date: new Date().toISOString().split('T')[0] ?? '',
+          date: localIsoDate(),
           dueDate: '',
           amount: 0,
           status: 'draft',
@@ -158,7 +160,7 @@ export const DocumentsPage: React.FC = () => {
         setEditingInvoice(newInvoice, type, 'create');
         navigate({ to: '/documents/edit' });
       } catch (error) {
-        notify('error', `Nummer konnte nicht reserviert werden: ${String(error)}`);
+        notify('error', `Nummer konnte nicht reserviert werden: ${error instanceof Error ? error.message : String(error)}`);
       }
     })();
   };
@@ -196,22 +198,23 @@ export const DocumentEditorPage: React.FC<{ reasonSuggestions?: readonly string[
   const upsertInvoice = useUpsertInvoiceMutation();
   const upsertOffer = useUpsertOfferMutation();
   const [isReasonOpen, setIsReasonOpen] = React.useState(false);
-  const [pendingDoc, setPendingDoc] = React.useState<Invoice | null>(null);
+  const [pendingDoc, setPendingDoc] = React.useState<Invoice | Offer | null>(null);
   const [reason, setReason] = React.useState('');
 
   if (!invoice) {
     return (
-      <div className="flex min-h-full items-center justify-center rounded-3xl bg-surface p-8 shadow-sm">
-        <EmptyState
-          className="w-full max-w-md"
-          title="Kein Dokument ausgewählt"
-          description="Bitte wähle zuerst ein Dokument aus der Liste aus."
-          action={
-            <Button variant="dark" onClick={() => navigate({ to: '/documents' })}>
-              Zurück zu Dokumenten
-            </Button>
-          }
-        />
+      <div className="flex min-h-full items-center justify-center p-5">
+        <Card padding="none" className="w-full max-w-md">
+          <EmptyState
+            title="Kein Dokument ausgewählt"
+            description="Bitte wähle zuerst ein Dokument aus der Liste aus."
+            action={
+              <Button variant="secondary" onClick={() => navigate({ to: '/documents' })}>
+                Zurück zu Dokumenten
+              </Button>
+            }
+          />
+        </Card>
       </div>
     );
   }
@@ -224,13 +227,14 @@ export const DocumentEditorPage: React.FC<{ reasonSuggestions?: readonly string[
     const vars = docType === 'offer' ? { offer: pendingDoc, reason: trimmed } : { invoice: pendingDoc, reason: trimmed };
 
     (mutation as any).mutate(vars, {
-      onSettled: () => {
+      onSuccess: () => {
         setIsReasonOpen(false);
         setPendingDoc(null);
         setReason('');
         clearEditingInvoice();
-        navigate({ to: '/documents' });
+        navigate({ to: '/documents', search: docType === 'offer' ? { kind: 'offer' } : {} });
       },
+      onError: (error: unknown) => notify('error', `Speichern fehlgeschlagen: ${error instanceof Error ? error.message : String(error)}`),
     });
   };
 
@@ -244,9 +248,7 @@ export const DocumentEditorPage: React.FC<{ reasonSuggestions?: readonly string[
           const numberNote = meta?.numberChangeReason ? `Nummer manuell geändert: ${meta.numberChangeReason}` : undefined;
           if (docMode === 'create') {
             const numbers = ipc.numbers;
-            const reservationId = updated.numberReservationId;
             const persistedDoc = { ...updated };
-            delete persistedDoc.numberReservationId;
 
             void (async () => {
               try {
@@ -255,18 +257,12 @@ export const DocumentEditorPage: React.FC<{ reasonSuggestions?: readonly string[
                   docType === 'offer'
                     ? { offer: persistedDoc, reason: numberNote ? `create; ${numberNote}` : 'create' }
                     : { invoice: persistedDoc, reason: numberNote ? `create; ${numberNote}` : 'create' };
-                const saved = await (mutation as any).mutateAsync(vars);
-                if (reservationId) {
-                  await numbers.finalize({
-                    reservationId,
-                    documentId: saved.id,
-                  });
-                }
+                await (mutation as any).mutateAsync(vars);
                 if (ipc.numbers !== numbers) return;
                 clearEditingInvoice();
-                navigate({ to: '/documents' });
+                navigate({ to: '/documents', search: docType === 'offer' ? { kind: 'offer' } : {} });
               } catch (error) {
-                notify('error', `Speichern fehlgeschlagen: ${String(error)}`);
+                notify('error', `Speichern fehlgeschlagen: ${error instanceof Error ? error.message : String(error)}`);
               }
             })();
             return;
@@ -289,7 +285,7 @@ export const DocumentEditorPage: React.FC<{ reasonSuggestions?: readonly string[
             }
             if (ipc.numbers !== numbers) return;
             clearEditingInvoice();
-            navigate({ to: '/documents' });
+            navigate({ to: '/documents', search: { kind: docType } });
           })();
         }}
       />
@@ -310,14 +306,16 @@ export const DocumentEditorPage: React.FC<{ reasonSuggestions?: readonly string[
         details={reasonSuggestions && (
           <div className="flex flex-wrap gap-2" role="group" aria-label="Vorschläge für den Änderungsgrund">
             {reasonSuggestions.map((chip) => (
-              <button
+              <Button
                 key={chip}
-                type="button"
+                variant="secondary"
+                size="sm"
+                aria-pressed={reason === chip}
                 onClick={() => setReason(chip)}
-                className={`rounded-control border px-3 py-1.5 text-xs font-semibold transition-colors ${reason === chip ? 'border-dark-base bg-dark-base text-inverse-foreground' : 'border-border bg-surface-muted text-muted hover:bg-surface'}`}
+                className={`rounded-full ${reason === chip ? 'border-foreground bg-foreground text-ground hover:border-foreground hover:bg-foreground' : ''}`}
               >
                 {chip}
-              </button>
+              </Button>
             ))}
           </div>
         )}

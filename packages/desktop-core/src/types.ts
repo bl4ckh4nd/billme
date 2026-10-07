@@ -1,6 +1,6 @@
 
 import type { z } from 'zod';
-import type { documentLayoutSchema } from '@billme/desktop-contracts/schemas';
+import type { documentLayoutSchema, offerSchema } from '@billme/desktop-contracts/schemas';
 
 export interface GenerationRequest {
   industry: string;
@@ -277,6 +277,8 @@ export interface Invoice {
   layout?: z.infer<typeof documentLayoutSchema>;
 }
 
+export type Offer = Omit<Invoice, 'status'> & { status: z.infer<typeof offerSchema>['status'] };
+
 // --- Recurring Invoice Types ---
 
 export type RecurrenceInterval = 'daily' | 'weekly' | 'monthly' | 'quarterly' | 'yearly';
@@ -390,6 +392,9 @@ export interface Article {
 // --- Finance Types ---
 
 export interface Transaction {
+  matchedManualEntryId?: string;
+  appliedAmountCents?: number;
+  unallocatedAmountCents?: number;
   id: string;
   date: string;
   amount: number;
@@ -412,4 +417,3 @@ export interface Account {
   type: 'bank' | 'paypal' | 'cash' | 'checking' | 'savings' | 'credit' | 'other';
   color: string; // Tailwind class mostly or hex
 }
-

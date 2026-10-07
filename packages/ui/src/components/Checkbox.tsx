@@ -49,12 +49,12 @@ export const Checkbox = React.forwardRef<HTMLInputElement, CheckboxProps>(
         <Check
           size={12}
           aria-hidden="true"
-          className="pointer-events-none absolute inset-0 m-auto scale-50 [stroke-width:3] text-selected-foreground opacity-0 transition-[opacity,scale] duration-(--dur-micro) peer-checked:scale-100 peer-checked:opacity-100 peer-indeterminate:opacity-0 motion-reduce:transition-none"
+          className="pointer-events-none absolute inset-0 m-auto scale-50 text-selected-foreground opacity-0 transition-[opacity,scale] duration-(--dur-micro) peer-checked:scale-100 peer-checked:opacity-100 peer-indeterminate:opacity-0 motion-reduce:transition-none"
         />
         <Minus
           size={12}
           aria-hidden="true"
-          className="pointer-events-none absolute inset-0 m-auto text-selected-foreground opacity-0 [stroke-width:3] peer-indeterminate:opacity-100"
+          className="pointer-events-none absolute inset-0 m-auto text-selected-foreground opacity-0 peer-indeterminate:opacity-100"
         />
       </span>
     );
@@ -65,7 +65,7 @@ export const Checkbox = React.forwardRef<HTMLInputElement, CheckboxProps>(
       <label htmlFor={inputId} className={cn('inline-flex cursor-pointer items-start gap-2.5', disabled && 'cursor-not-allowed', className)}>
         <span className="mt-0.5">{box}</span>
         <span className="min-w-0">
-          <span className="block text-sm text-foreground">{label}</span>
+          <span className="block text-control text-foreground">{label}</span>
           {description && <span className="mt-0.5 block text-caption text-muted">{description}</span>}
         </span>
       </label>

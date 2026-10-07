@@ -8,10 +8,10 @@ import {
   TriangleAlert,
 } from 'lucide-react';
 import {
-  Checkbox, formatEmptyValue, Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
+  Badge, Button, Card, Checkbox, EmptyState, formatEmptyValue, Input, Select, Table, TableBody, TableCell, TableHead, TableHeader, TableRow, Textarea,
 } from '@billme/ui';
 import { userFacingReference } from '../domain/references';
-import { bookingActionLabels, getQueueCounts, getStatusPresentation, InboxQueueKey, txMatchesQueue } from '../domain/selectors';
+import { bookingActionLabels, getQueueCounts, InboxQueueKey, txMatchesQueue } from '../domain/selectors';
 import { normalizeTaxCaseKey, TAX_CASE_OPTIONS, toLegacyTaxCode } from '../domain/taxCases';
 import { getAllowedActions } from '../domain/workflow';
 import { permissionContextForRole } from '../domain/permissions';
@@ -21,7 +21,7 @@ import AccountCombobox from './AccountCombobox';
 import { getConfiguredBankAccountNumber } from './ReconciliationWorkbench';
 import { Account, BookingAction, BookingDraft, LinkedInvoiceSummary, OpenRouterVlmConfig, Transaction, TransactionDocumentAnalysis, UserRole } from '../types';
 import InboxQueueTabs from './InboxQueueTabs';
-import IssueBadges from './IssueBadges';
+import IssueBadges, { StatusBadge } from './IssueBadges';
 
 interface InboxViewProps {
   role: UserRole;
@@ -450,326 +450,263 @@ export default function InboxView({
   }, [previewDraft, previewTx, permissionCtx]);
   const previewPrimaryAction = previewAllowedActions.find((a) => ['approve', 'post', 'submit_for_review'].includes(a));
 
+  const eyebrow = 'mb-2 text-eyebrow uppercase text-muted';
+  const amountTone = (amount: number) => (amount > 0 ? 'text-success-text' : 'text-foreground');
+
   return (
-    <div className="flex h-full">
+    <div className="flex h-full min-h-0 gap-3">
       {/* Left: transaction table */}
-      <div className="flex flex-col h-full flex-1 min-w-0">
-        {/* Header: compact two-row layout */}
-        <div className="px-4 pt-3 pb-0 border-b border-border shrink-0">
-          {/* Title lives in the page header; kept for assistive tech. */}
-          <div className="sr-only">
-            <div className="w-8 h-8 bg-dark-base rounded-lg flex items-center justify-center text-accent shrink-0">
-              <Inbox size={16} />
-            </div>
-            <div className="flex-1 min-w-0">
-              <h2>Buchungs-Inbox</h2>
-              <p className="text-xs text-muted font-medium leading-tight">
-                Workflow-Queues, Validierungen und Freigaben.
-              </p>
-            </div>
-          </div>
-
-          {/* Row 2: queue tabs + select tools */}
-          <div className="flex items-center gap-3 pb-2">
-            <InboxQueueTabs activeQueue={activeQueue} counts={queueCounts} onChange={setActiveQueue} />
-            <div className="ml-auto flex items-center gap-1.5 shrink-0">
-              <button
-                onClick={toggleSelectAllVisible}
-                className="h-7 px-2.5 rounded-lg border border-control-border bg-surface text-xs font-semibold text-muted hover:bg-surface-muted inline-flex items-center gap-1 motion-safe:transition-colors motion-reduce:transition-none"
-              >
-                <CheckSquare size={12} />
-                {allVisibleSelected ? 'Auswahl aufheben' : 'Sichtbare markieren'}
-              </button>
-            </div>
-          </div>
-
-          {selectedIds.length > 0 && (
-            <div className="rounded-xl border border-border bg-surface-muted/60 p-3 mb-2 flex flex-wrap items-center justify-between gap-2">
-              <div className="text-sm font-medium text-foreground">
-                <span className="font-semibold">{selectedIds.length}</span> Vorgänge markiert für Sammelverarbeitung
-              </div>
-              <div className="flex flex-wrap gap-2">
-                <div className="min-w-64 max-w-72">
-                  <AccountCombobox
-                    accounts={accountOptions}
-                    valueAccountId={batchAccountSelection?.id ?? ''}
-                    valueAccountName={batchAccountSelection?.name ?? ''}
-                    placeholder="Sammel-Konto wählen..."
-                    onSelect={(account) => setBatchAccountSelection({ id: account.number, name: account.name })}
-                  />
-                </div>
-                <button
-                  onClick={assignBatchAccount}
-                  disabled={!canMutate}
-                  className="h-9 px-3 rounded-lg border border-control-border text-xs font-semibold text-foreground hover:bg-surface-muted motion-safe:transition-colors motion-reduce:transition-none"
-                >
-                  Konto zuweisen
-                </button>
-                <button
-                  onClick={() => runBatchAction('request_receipt')}
-                  disabled={!canMutate}
-                  className="h-9 px-3 rounded-lg border border-control-border text-xs font-semibold text-foreground hover:bg-surface-muted motion-safe:transition-colors motion-reduce:transition-none"
-                >
-                  Beleg anfordern
-                </button>
-                <button
-                  onClick={() => runBatchAction('submit_for_review')}
-                  disabled={!canMutate}
-                  className="h-9 px-3 rounded-lg border border-control-border text-xs font-semibold text-foreground hover:bg-surface-muted motion-safe:transition-colors motion-reduce:transition-none"
-                >
-                  {bookingActionLabels.submit_for_review}
-                </button>
-                <button
-                  onClick={() => runBatchAction('approve')}
-                  disabled={!canMutate}
-                  className="h-9 px-3 rounded-lg border border-control-border text-xs font-semibold text-foreground hover:bg-surface-muted motion-safe:transition-colors motion-reduce:transition-none"
-                >
-                  Freigeben
-                </button>
-                <button
-                  onClick={() => runBatchAction('post')}
-                  disabled={!canMutate}
-                  className="h-9 px-3 rounded-control bg-surface-inverse text-inverse-foreground text-xs font-semibold hover:bg-surface-inverse-raised motion-safe:transition-colors motion-reduce:transition-none"
-                >
-                  Sammel-Buchen
-                </button>
-              </div>
-            </div>
-          )}
-
-          {batchMessage && (
-            <div className="rounded-xl border border-border bg-surface-muted px-4 py-2 text-sm text-foreground" role="status" aria-live="polite">
-              {batchMessage}
-            </div>
-          )}
+      <div className="flex h-full min-w-0 flex-1 flex-col gap-3">
+        {/* Title lives in the page header; kept for assistive tech. */}
+        <div className="sr-only">
+          <h2>Buchungs-Inbox</h2>
+          <p>Workflow-Queues, Validierungen und Freigaben.</p>
         </div>
 
-        {/* Toolbar row with count + Einklappen */}
-        <div className="flex items-center justify-between px-6 py-2.5 border-b border-border bg-surface-muted/40 shrink-0">
-          <span className="text-xs font-semibold text-muted tabular-nums">
-            {filtered.length} Vorgänge
-          </span>
-          <button
-            onClick={() => setSidebarCollapsed((v) => !v)}
-            className="h-8 px-3 rounded-lg border border-control-border bg-surface text-xs font-semibold text-muted hover:bg-surface-muted inline-flex items-center gap-1.5 motion-safe:transition-colors motion-reduce:transition-none"
-          >
-            {sidebarCollapsed ? <PanelRightOpen size={14} /> : <PanelRightClose size={14} />}
-            {sidebarCollapsed ? 'Einblenden' : 'Einklappen'}
-          </button>
+        <div className="flex shrink-0 flex-wrap items-center gap-2">
+          <InboxQueueTabs activeQueue={activeQueue} counts={queueCounts} onChange={setActiveQueue} />
+          <div className="ml-auto flex shrink-0 items-center gap-2">
+            <span className="text-caption text-muted tabular-nums">{filtered.length} Vorgänge</span>
+            <Button variant="secondary" size="sm" onClick={toggleSelectAllVisible}>
+              <CheckSquare size={14} aria-hidden="true" />
+              {allVisibleSelected ? 'Auswahl aufheben' : 'Sichtbare markieren'}
+            </Button>
+            <Button variant="secondary" size="sm" onClick={() => setSidebarCollapsed((v) => !v)}>
+              {sidebarCollapsed ? <PanelRightOpen size={14} aria-hidden="true" /> : <PanelRightClose size={14} aria-hidden="true" />}
+              {sidebarCollapsed ? 'Einblenden' : 'Einklappen'}
+            </Button>
+          </div>
         </div>
 
-        {/* Compact table */}
-        <div className="flex min-h-0 flex-1 flex-col p-6">
-          <Table aria-label="Vorgänge" bare containerClassName="min-h-0 flex-1">
-            <TableHeader>
+        {selectedIds.length > 0 && (
+          <Card padding="sm" className="flex shrink-0 flex-wrap items-center justify-between gap-2">
+            <div className="text-control text-foreground">
+              <span className="font-semibold tabular-nums">{selectedIds.length}</span> Vorgänge markiert für Sammelverarbeitung
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <div className="w-64">
+                <AccountCombobox
+                  accounts={accountOptions}
+                  valueAccountId={batchAccountSelection?.id ?? ''}
+                  valueAccountName={batchAccountSelection?.name ?? ''}
+                  placeholder="Sammel-Konto wählen..."
+                  onSelect={(account) => setBatchAccountSelection({ id: account.number, name: account.name })}
+                />
+              </div>
+              <Button variant="secondary" onClick={assignBatchAccount} disabled={!canMutate}>
+                Konto zuweisen
+              </Button>
+              <Button variant="secondary" onClick={() => runBatchAction('request_receipt')} disabled={!canMutate}>
+                Beleg anfordern
+              </Button>
+              <Button variant="secondary" onClick={() => runBatchAction('submit_for_review')} disabled={!canMutate}>
+                {bookingActionLabels.submit_for_review}
+              </Button>
+              <Button variant="secondary" onClick={() => runBatchAction('approve')} disabled={!canMutate}>
+                Freigeben
+              </Button>
+              <Button variant="dark" onClick={() => runBatchAction('post')} disabled={!canMutate}>
+                Sammel-Buchen
+              </Button>
+            </div>
+          </Card>
+        )}
+
+        {batchMessage && (
+          <div className="shrink-0 rounded-control border border-border bg-surface px-3 py-2.5 text-control text-foreground" role="status" aria-live="polite">
+            {batchMessage}
+          </div>
+        )}
+
+        <Table aria-label="Vorgänge" containerClassName="min-h-0">
+          <TableHeader>
+            <TableRow>
+              <TableHead className="w-10">
+                <Checkbox
+                  aria-label="Alle sichtbaren Vorgänge markieren"
+                  checked={allVisibleSelected}
+                  indeterminate={!allVisibleSelected && filtered.some((tx) => selectedSet.has(tx.id))}
+                  onChange={toggleSelectAllVisible}
+                />
+              </TableHead>
+              <TableHead className="w-32">Status</TableHead>
+              <TableHead className="w-20">Datum</TableHead>
+              <TableHead>Empfänger / Zweck</TableHead>
+              <TableHead numeric className="w-44">Hinweise</TableHead>
+              <TableHead numeric className="w-32">Betrag</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {filtered.length === 0 ? (
               <TableRow>
-                <TableHead className="w-10">
-                  <Checkbox
-                    aria-label="Alle sichtbaren Vorgänge markieren"
-                    checked={allVisibleSelected}
-                    indeterminate={!allVisibleSelected && filtered.some((tx) => selectedSet.has(tx.id))}
-                    onChange={toggleSelectAllVisible}
+                <TableCell colSpan={6} className="p-0">
+                  <EmptyState
+                    title="Keine Vorgänge in dieser Queue"
+                    description="Passe Filter oder Queue an, um Vorgänge anzuzeigen."
                   />
-                </TableHead>
-                <TableHead className="w-32">Status</TableHead>
-                <TableHead className="w-24">Datum</TableHead>
-                <TableHead>Empfänger / Zweck</TableHead>
-                <TableHead numeric className="w-44">Hinweise</TableHead>
-                <TableHead numeric className="w-32">Betrag</TableHead>
+                </TableCell>
               </TableRow>
-            </TableHeader>
-            <TableBody>
-              {filtered.length === 0 ? (
-                <TableRow>
-                  <TableCell colSpan={6} className="py-12 text-center">
-                    <div className="text-sm font-semibold text-foreground">Keine Vorgänge in dieser Queue</div>
-                    <div className="mt-1 text-sm text-muted">Passe Filter oder Queue an, um Vorgänge anzuzeigen.</div>
+            ) : null}
+            {filtered.map((tx) => {
+              const draft = getBookingDraftByTransactionId(tx.id);
+              const isSelectedPreview = previewTx?.id === tx.id;
+              const blockerCount = draft?.validationIssues.filter((issue) => issue.blocking).length ?? 0;
+
+              return (
+                <TableRow
+                  key={tx.id}
+                  selected={isSelectedPreview}
+                  className={`hover:bg-surface-muted ${
+                    blockerCount > 0 && !isSelectedPreview ? '[&>td:first-child]:shadow-[inset_2px_0_0_var(--color-error)]' : ''
+                  }`}
+                >
+                  <TableCell>
+                    <Checkbox
+                      aria-label={`${tx.payee} markieren`}
+                      checked={selectedSet.has(tx.id)}
+                      onChange={() => toggleRowSelection(tx.id)}
+                    />
+                  </TableCell>
+                  <TableCell className="whitespace-nowrap">
+                    <StatusBadge status={tx.workflowStatus} />
+                  </TableCell>
+                  <TableCell muted className="whitespace-nowrap font-mono tabular-nums">
+                    {new Date(tx.date).toLocaleDateString('de-DE', { day: '2-digit', month: '2-digit' })}
+                  </TableCell>
+                  <TableCell className="w-full max-w-0">
+                    <button
+                      type="button"
+                      onClick={() => setPreviewId((current) => (current === tx.id ? null : tx.id))}
+                      aria-label={`${tx.payee} öffnen`}
+                      aria-pressed={isSelectedPreview}
+                      className="flex w-full items-baseline gap-2 rounded-xs text-left focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                    >
+                      <span className="shrink-0 font-medium text-foreground">{tx.payee}</span>
+                      <span className="min-w-0 truncate text-caption text-muted">{tx.description}</span>
+                    </button>
+                  </TableCell>
+                  <TableCell className="text-right">
+                    <IssueBadges transaction={tx} />
+                  </TableCell>
+                  <TableCell numeric className={`whitespace-nowrap font-medium ${amountTone(tx.amount)}`}>
+                    {formatCurrency(tx.amount, tx.currency)}
                   </TableCell>
                 </TableRow>
-              ) : null}
-              {filtered.map((tx) => {
-                const draft = getBookingDraftByTransactionId(tx.id);
-                const status = getStatusPresentation(tx.workflowStatus);
-                const isSelectedPreview = previewTx?.id === tx.id;
-                const blockerCount = draft?.validationIssues.filter((issue) => issue.blocking).length ?? 0;
-
-                return (
-                  <TableRow
-                    key={tx.id}
-                    selected={isSelectedPreview}
-                    className={`hover:bg-surface-muted ${
-                      blockerCount > 0 && !isSelectedPreview ? '[&>td:first-child]:shadow-[inset_2px_0_0_var(--color-error)]' : ''
-                    }`}
-                  >
-                    <TableCell className="py-3 align-top">
-                      <Checkbox
-                        aria-label={`${tx.payee} markieren`}
-                        checked={selectedSet.has(tx.id)}
-                        onChange={() => toggleRowSelection(tx.id)}
-                      />
-                    </TableCell>
-                    <TableCell className="py-3 whitespace-nowrap align-top">
-                      <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${status.className}`}>
-                        {status.label}
-                      </span>
-                    </TableCell>
-                    <TableCell muted className="py-3 whitespace-nowrap tabular-nums align-top">
-                      {new Date(tx.date).toLocaleDateString('de-DE', { day: '2-digit', month: '2-digit' })}
-                    </TableCell>
-                    <TableCell className="py-3 align-top">
-                      <button
-                        type="button"
-                        onClick={() => setPreviewId((current) => (current === tx.id ? null : tx.id))}
-                        aria-label={`${tx.payee} öffnen`}
-                        aria-pressed={isSelectedPreview}
-                        className="w-full text-left rounded-xs focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
-                      >
-                        <div className="font-medium text-foreground">{tx.payee}</div>
-                        <div className="text-xs text-muted mt-0.5 line-clamp-1">{tx.description}</div>
-                      </button>
-                    </TableCell>
-                    <TableCell className="py-3 text-right align-top">
-                      <div className="flex flex-col items-end gap-1">
-                        <IssueBadges transaction={tx} />
-                      </div>
-                    </TableCell>
-                    <TableCell numeric className={`py-3 whitespace-nowrap font-medium align-top ${tx.amount < 0 ? 'text-error-text' : ''}`}>
-                      {formatCurrency(tx.amount, tx.currency)}
-                    </TableCell>
-                  </TableRow>
-                );
-              })}
-            </TableBody>
-          </Table>
-        </div>
+              );
+            })}
+          </TableBody>
+        </Table>
       </div>
 
       {/* Right: editing sidebar */}
       <aside
-        className={`shrink-0 flex flex-col h-full border-l border-border overflow-hidden motion-safe:transition-[opacity,transform] motion-safe:duration-200 motion-safe:ease-out motion-reduce:transition-none ${
-          !sidebarCollapsed ? 'w-80 xl:w-80 opacity-100' : 'w-0 opacity-0 pointer-events-none'
-        }`}
+        className={`h-full w-78 shrink-0 flex-col overflow-hidden rounded-card border border-border bg-surface ${sidebarCollapsed ? 'hidden' : 'flex'}`}
         aria-hidden={sidebarCollapsed}
       >
         {!previewTx || !previewDraft ? (
-          <div className="flex flex-col items-center justify-center h-full text-muted text-sm p-6 text-center gap-3">
-            <Inbox size={24} className="text-muted" />
+          <div className="flex h-full flex-col items-center justify-center gap-2 px-5 py-10 text-center text-control text-muted">
+            <Inbox size={20} aria-hidden="true" />
             <span>Transaktion auswählen um die Schnellbuchung zu starten</span>
           </div>
         ) : (
           <>
-            {/* Header card */}
-            <div className="p-4 border-b border-border shrink-0">
+            <div className="shrink-0 border-b border-border px-3 py-2.5">
               <div className="flex items-start justify-between gap-3">
                 <div className="min-w-0">
-                  <div className="font-semibold text-foreground leading-tight truncate">{previewTx.payee}</div>
-                  <div className="text-xs text-muted mt-0.5">
+                  <div className="truncate text-section text-foreground">{previewTx.payee}</div>
+                  <div className="text-caption text-muted">
                     {new Date(previewTx.date).toLocaleDateString('de-DE')}
                     {previewReference ? ` · ${previewReference}` : ''}
                   </div>
                 </div>
-                <div className={`text-base font-semibold tabular-nums shrink-0 ${previewTx.amount < 0 ? 'text-error-text' : 'text-foreground'}`}>
+                <div className={`shrink-0 font-mono text-heading font-bold tabular-nums ${amountTone(previewTx.amount)}`}>
                   {formatCurrency(previewTx.amount, previewTx.currency)}
                 </div>
               </div>
-              <div className="flex flex-wrap gap-1.5 mt-2">
-                <span className={`px-2 py-0.5 rounded-full text-xs font-semibold ${getStatusPresentation(previewTx.workflowStatus).className}`}>
-                  {getStatusPresentation(previewTx.workflowStatus).label}
-                </span>
-                {!previewTx.hasReceipt && (
-                  <span className="px-2 py-0.5 rounded-full text-xs font-semibold bg-border-subtle text-muted">
-                    Ohne Beleg
-                  </span>
-                )}
+              <div className="mt-2 flex flex-wrap gap-1.5">
+                <StatusBadge status={previewTx.workflowStatus} />
+                {!previewTx.hasReceipt && <Badge tone="warning">Ohne Beleg</Badge>}
               </div>
             </div>
 
-            {/* Scrollable editing form */}
-            <div className="flex-1 min-h-0 overflow-y-auto p-4 space-y-5">
-              {/* TRANSAKTIONSDETAILS */}
+            <div className="flex min-h-0 flex-1 flex-col gap-3.5 overflow-y-auto p-3">
               <div>
-                <div className="text-xs font-semibold uppercase tracking-wide text-muted mb-2">
-                  Transaktionsdetails
-                </div>
-                <div className="space-y-2 text-sm">
+                <h3 className={eyebrow}>Transaktionsdetails</h3>
+                <div className="flex flex-col gap-1.5 text-control">
                   <div className="flex justify-between gap-3">
-                    <span className="text-muted shrink-0">Verwendungszweck</span>
-                    <span className="font-medium text-foreground text-right line-clamp-2">
+                    <span className="shrink-0 text-muted">Verwendungszweck</span>
+                    <span className="line-clamp-2 text-right font-medium text-foreground">
                       {formatEmptyValue(previewTx.description)}
                     </span>
                   </div>
                   <div className="flex justify-between gap-3">
-                    <span className="text-muted shrink-0">Buchungstext</span>
-                    <span className="font-medium text-foreground text-right">
+                    <span className="shrink-0 text-muted">Buchungstext</span>
+                    <span className="text-right font-medium text-foreground">
                       {formatEmptyValue(previewDraft.bookingText)}
                     </span>
                   </div>
                   {previewTx.suggestion && (
                     <div className="flex justify-between gap-3">
-                      <span className="text-muted shrink-0">Kategorie</span>
-                      <span className="font-medium text-foreground text-right">{previewTx.suggestion}</span>
+                      <span className="shrink-0 text-muted">Kategorie</span>
+                      <span className="text-right font-medium text-foreground">{previewTx.suggestion}</span>
                     </div>
                   )}
                 </div>
               </div>
 
-              {/* LINKED EVIDENCE + CURRENT JOURNAL */}
-              <div className="space-y-3">
-                <div>
-                  <div className="text-xs font-semibold uppercase tracking-wide text-muted mb-2">Verknüpfte Rechnung</div>
-                  {linkedInvoice ? (
-                    <div className="rounded-xl border border-border bg-surface-muted p-3 text-sm">
-                      <div className="flex items-center justify-between gap-2 font-semibold text-foreground">
-                        <span>{linkedInvoice.number}</span>
-                        <span className="tabular-nums">{formatCurrency(linkedInvoice.amount, previewTx.currency)}</span>
-                      </div>
-                      <div className="mt-1 text-xs text-muted">{linkedInvoice.client} · {new Date(linkedInvoice.date).toLocaleDateString('de-DE')} · {linkedInvoice.status}</div>
+              <div>
+                <h3 className={eyebrow}>Verknüpfte Rechnung</h3>
+                {linkedInvoice ? (
+                  <div className="rounded-control border border-border bg-surface-muted px-2.5 py-2 text-control">
+                    <div className="flex items-center justify-between gap-2 font-semibold text-foreground">
+                      <span>{linkedInvoice.number}</span>
+                      <span className="font-mono tabular-nums">{formatCurrency(linkedInvoice.amount, previewTx.currency)}</span>
                     </div>
-                  ) : (
-                    <div className="rounded-xl border border-dashed border-border p-3 text-xs text-muted">Keine Rechnung verknüpft.</div>
-                  )}
-                </div>
-                <div>
-                  <div className="text-xs font-semibold uppercase tracking-wide text-muted mb-2">Aktuelle Buchungszeilen</div>
-                  <div className="rounded-xl border border-border divide-y divide-border-subtle">
-                    {previewDraft.lines.map((line) => (
-                      <div key={line.id} className="flex items-center justify-between gap-2 px-3 py-2 text-xs">
-                        <span className="min-w-0 truncate text-foreground">{line.accountId} · {line.accountName}</span>
-                        <span className="shrink-0 font-semibold tabular-nums text-foreground">{line.type} {formatCurrency(Number(line.amount), previewTx.currency)}</span>
-                      </div>
-                    ))}
+                    <div className="mt-0.5 text-caption text-muted">{linkedInvoice.client} · {new Date(linkedInvoice.date).toLocaleDateString('de-DE')} · {linkedInvoice.status}</div>
                   </div>
+                ) : (
+                  <div className="rounded-control border border-dashed border-border-strong px-2.5 py-2 text-caption text-muted">Keine Rechnung verknüpft.</div>
+                )}
+              </div>
+
+              <div>
+                <h3 className={eyebrow}>Aktuelle Buchungszeilen</h3>
+                <div className="divide-y divide-border rounded-control border border-border">
+                  {previewDraft.lines.map((line) => (
+                    <div key={line.id} className="flex items-center justify-between gap-2 px-2.5 py-1.75 text-caption">
+                      <span className="min-w-0 truncate text-foreground">{line.accountId} · {line.accountName}</span>
+                      <span className="shrink-0 font-mono font-semibold tabular-nums text-foreground">{line.type} {formatCurrency(Number(line.amount), previewTx.currency)}</span>
+                    </div>
+                  ))}
                 </div>
               </div>
 
-              {/* VLM DOCUMENT EVIDENCE */}
               {dataAdapter?.analyzeTransactionDocument ? (
-                <div className="space-y-3 rounded-2xl border border-border bg-surface-muted/50 p-3">
+                <div className="flex flex-col gap-2.5">
                   <div>
-                    <div className="text-xs font-semibold uppercase tracking-wide text-muted">Beleg mit VLM prüfen</div>
-                    <p className="mt-1 text-xs text-muted">OpenRouter erstellt nur einen Vorschlag. Buchen und Validieren bleiben deterministisch.</p>
+                    <h3 className="text-eyebrow uppercase text-muted">Beleg mit VLM prüfen</h3>
+                    <p className="mt-1 text-caption text-muted">OpenRouter erstellt nur einen Vorschlag. Buchen und Validieren bleiben deterministisch.</p>
                   </div>
                   <div className="flex flex-wrap items-center gap-2">
-                    <label className="inline-flex h-9 cursor-pointer items-center rounded-lg border border-control-border bg-surface px-3 text-xs font-semibold text-foreground hover:bg-surface-muted">
+                    <label className="inline-flex h-7 cursor-pointer items-center rounded-control border border-border-strong bg-surface px-2.25 text-caption font-medium text-foreground hover:border-control-border hover:bg-surface-sunken focus-within:outline-2 focus-within:outline-offset-2 focus-within:outline-focus-ring">
                       Beleg auswählen
                       <input type="file" accept="application/pdf,image/jpeg,image/png,image/webp" className="sr-only" onChange={(event) => { const file = event.target.files?.[0]; if (file) void readVlmDocument(file); }} />
                     </label>
-                    {vlmDocument ? <span className="max-w-full truncate text-xs text-muted">{vlmDocument.fileName}</span> : null}
+                    {vlmDocument ? <span className="max-w-full truncate text-caption text-muted">{vlmDocument.fileName}</span> : null}
                   </div>
                   {vlmConfig?.configured ? (
-                    <div className="space-y-2">
-                      <label className="block text-xs font-semibold text-muted" htmlFor="pro-vlm-model">Modell</label>
-                      <select id="pro-vlm-model" value={vlmModel} onChange={(event) => setVlmModel(event.target.value)} className="px-2.5 hover:border-control-border-hover h-9 w-full rounded-control border border-control-border bg-surface text-xs text-foreground">
-                        {vlmConfig.models.map((model) => <option key={model} value={model}>{model}</option>)}
-                      </select>
-                    </div>
-                  ) : <p className="text-xs text-muted">OpenRouter ist auf dieser Verbindung nicht konfiguriert.</p>}
-                  <button type="button" onClick={() => void analyzePreviewDocument()} disabled={!vlmConfig?.configured || !vlmDocument || vlmBusy} className="h-9 rounded-lg bg-dark-base px-3 text-xs font-semibold text-inverse-foreground motion-safe:transition-colors motion-reduce:transition-none hover:bg-surface-inverse-raised disabled:cursor-not-allowed disabled:opacity-40" aria-busy={vlmBusy}>
-                    {vlmBusy ? 'Prüfung läuft…' : 'Analysieren'}
-                  </button>
-                  {vlmError ? <p className="text-xs text-error-text" role="alert">{vlmError}</p> : null}
+                    <Select id="pro-vlm-model" label="Modell" fullWidth value={vlmModel} onChange={(event) => setVlmModel(event.target.value)}>
+                      {vlmConfig.models.map((model) => <option key={model} value={model}>{model}</option>)}
+                    </Select>
+                  ) : <p className="text-caption text-muted">OpenRouter ist auf dieser Verbindung nicht konfiguriert.</p>}
+                  <div>
+                    <Button variant="secondary" size="sm" onClick={() => void analyzePreviewDocument()} disabled={!vlmConfig?.configured || !vlmDocument || vlmBusy} aria-busy={vlmBusy}>
+                      {vlmBusy ? 'Prüfung läuft…' : 'Analysieren'}
+                    </Button>
+                  </div>
+                  {vlmError ? <p className="text-caption text-error-text" role="alert">{vlmError}</p> : null}
                   {vlmAnalysis ? (
-                    <div className="space-y-2 rounded-xl border border-border bg-surface p-3 text-xs">
+                    <div className="flex flex-col gap-2 rounded-control border border-border bg-surface-muted px-2.5 py-2 text-caption">
                       <div className="flex flex-wrap items-center justify-between gap-2 font-semibold text-foreground"><span>{vlmAnalysis.extraction.documentType} · {vlmAnalysis.extraction.invoiceNumber ?? 'ohne Nummer'}</span><span>{vlmAnalysis.metadata.model}</span></div>
                       <div className="grid grid-cols-2 gap-1 text-muted">
                         <span className="inline-flex items-center gap-1">Betrag: {vlmAnalysis.deterministicChecks.amountMatches ? (<><CheckCircle2 size={12} aria-hidden="true" className="text-success-text" /> passend</>) : (<><TriangleAlert size={12} aria-hidden="true" className="text-warning-text" /> prüfen</>)}</span>
@@ -778,103 +715,88 @@ export default function InboxView({
                         <span className="tabular-nums">Evidence: {vlmAnalysis.extraction.evidence.length}</span>
                       </div>
                       {vlmAnalysis.extraction.warnings.length > 0 ? <p className="text-warning-text">{vlmAnalysis.extraction.warnings.join(' ')}</p> : null}
-                      {previewAccountEditable && canMutate ? <button type="button" onClick={() => void applyVlmToDraft()} className="h-8 rounded-lg border border-control-border px-3 text-xs font-semibold text-foreground hover:bg-surface-muted">Auf Entwurf anwenden</button> : null}
+                      {previewAccountEditable && canMutate ? <div><Button variant="secondary" size="sm" onClick={() => void applyVlmToDraft()}>Auf Entwurf anwenden</Button></div> : null}
                     </div>
                   ) : null}
                 </div>
               ) : null}
 
-              {/* SCHNELLBUCHUNG */}
               <div>
-                <div className="text-xs font-semibold uppercase tracking-wide text-muted mb-3">
-                  Schnellbuchung
-                </div>
-                <div className="space-y-3">
+                <h3 className={eyebrow}>Schnellbuchung</h3>
+                <div className="flex flex-col gap-2.5">
                   {!previewBankAccountNumber && (
-                    <p className="text-xs text-error-text" role="alert">
+                    <p className="text-caption text-error-text" role="alert">
                       Bankkonto ist nicht konfiguriert. Schnellbuchung ist deaktiviert.
                     </p>
                   )}
-                  <div>
-                    <label className="block text-xs font-semibold text-muted mb-1">Konto</label>
-                    <AccountCombobox
-                      accounts={accountOptions}
-                      valueAccountId={previewCounterLine?.accountId ?? ''}
-                      valueAccountName={previewCounterLine?.accountName ?? ''}
-                      disabled={!previewAccountEditable || !previewBankAccountNumber || !canMutate}
-                      onSelect={(account) =>
-                        updateInboxAccount(previewTx.id, account.number, account.name, account.defaultTaxCode)
-                      }
-                    />
-                  </div>
+                  <AccountCombobox
+                    label="Konto"
+                    accounts={accountOptions}
+                    valueAccountId={previewCounterLine?.accountId ?? ''}
+                    valueAccountName={previewCounterLine?.accountName ?? ''}
+                    disabled={!previewAccountEditable || !previewBankAccountNumber || !canMutate}
+                    onSelect={(account) =>
+                      updateInboxAccount(previewTx.id, account.number, account.name, account.defaultTaxCode)
+                    }
+                  />
 
-                  <div>
-                    <label className="block text-xs font-semibold text-muted mb-1" htmlFor="inboxview-steuerfall">Steuerfall</label>
-                    <select id="inboxview-steuerfall"
-                      value={normalizeTaxCaseKey(previewCounterLine?.taxCaseKey ?? previewCounterLine?.taxCode) ?? ''}
-                      disabled={!previewAccountEditable || !previewBankAccountNumber || !canMutate}
-                      onChange={(e) => updateInboxTaxCase(previewTx.id, e.target.value)}
-                      className="px-2.5 hover:border-control-border-hover h-10 w-full border border-control-border rounded-control text-sm bg-surface disabled:bg-surface-muted"
-                    >
-                      <option value="">Keine</option>
-                      {TAX_CASE_OPTIONS.map((option) => (
-                        <option key={option.key} value={option.key}>
-                          {option.label}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
+                  <Select
+                    id="inboxview-steuerfall"
+                    label="Steuerfall"
+                    fullWidth
+                    value={normalizeTaxCaseKey(previewCounterLine?.taxCaseKey ?? previewCounterLine?.taxCode) ?? ''}
+                    disabled={!previewAccountEditable || !previewBankAccountNumber || !canMutate}
+                    onChange={(e) => updateInboxTaxCase(previewTx.id, e.target.value)}
+                  >
+                    <option value="">Keine</option>
+                    {TAX_CASE_OPTIONS.map((option) => (
+                      <option key={option.key} value={option.key}>
+                        {option.label}
+                      </option>
+                    ))}
+                  </Select>
 
-                  <div>
-                    <label className="block text-xs font-semibold text-muted mb-1" htmlFor="inboxview-notiz">Notiz</label>
-                    <textarea id="inboxview-notiz"
-                      value={notesEdits[previewTx.id] ?? ''}
-                      onChange={(e) =>
-                        setNotesEdits((prev) => ({ ...prev, [previewTx.id]: e.target.value }))
-                      }
-                      disabled={!previewAccountEditable || !canMutate}
-                      placeholder="Optionale Notiz..."
-                      rows={3}
-                      className="px-2.5 py-2 hover:border-control-border-hover w-full border border-control-border rounded-control text-sm resize-none"
-                    />
-                  </div>
+                  <Textarea
+                    id="inboxview-notiz"
+                    label="Notiz"
+                    fullWidth
+                    rows={3}
+                    className="min-h-0 resize-none"
+                    value={notesEdits[previewTx.id] ?? ''}
+                    onChange={(e) =>
+                      setNotesEdits((prev) => ({ ...prev, [previewTx.id]: e.target.value }))
+                    }
+                    disabled={!previewAccountEditable || !canMutate}
+                    placeholder="Optionale Notiz..."
+                  />
 
-                  <div>
-                    <label className="block text-xs font-semibold text-muted mb-1" htmlFor="inboxview-buchungstext-bearbeiten">Buchungstext bearbeiten</label>
-                    <input id="inboxview-buchungstext-bearbeiten"
-                      type="text"
-                      value={bookingTextEdits[previewTx.id] ?? previewDraft.bookingText ?? ''}
-                      disabled={!previewAccountEditable || !canMutate}
-                      onChange={(e) =>
-                        setBookingTextEdits((prev) => ({ ...prev, [previewTx.id]: e.target.value }))
-                      }
-                      onBlur={() => commitInboxBookingText(previewTx.id)}
-                      onKeyDown={(e) => {
-                        if (e.key === 'Enter') (e.target as HTMLInputElement).blur();
-                      }}
-                      placeholder="Buchungstext eingeben"
-                      className="px-2.5 hover:border-control-border-hover h-10 w-full border border-control-border rounded-control text-sm bg-surface disabled:bg-surface-muted"
-                    />
-                  </div>
+                  <Input
+                    id="inboxview-buchungstext-bearbeiten"
+                    label="Buchungstext bearbeiten"
+                    type="text"
+                    fullWidth
+                    value={bookingTextEdits[previewTx.id] ?? previewDraft.bookingText ?? ''}
+                    disabled={!previewAccountEditable || !canMutate}
+                    onChange={(e) =>
+                      setBookingTextEdits((prev) => ({ ...prev, [previewTx.id]: e.target.value }))
+                    }
+                    onBlur={() => commitInboxBookingText(previewTx.id)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') (e.target as HTMLInputElement).blur();
+                    }}
+                    placeholder="Buchungstext eingeben"
+                  />
                 </div>
               </div>
             </div>
 
-            {/* Action bar */}
-            <div className="p-4 border-t border-border flex gap-2 shrink-0">
-              <button
-                onClick={() => handleInlineAction(previewTx)}
-                disabled={!previewPrimaryAction}
-                className="flex-1 py-3 rounded-control bg-surface-inverse text-inverse-foreground font-semibold text-sm hover:bg-surface-inverse-raised motion-safe:transition-colors motion-reduce:transition-none disabled:opacity-40"
-              >
-                {previewPrimaryAction ? nextActionLabel(previewPrimaryAction) : 'Keine Aktion'}
-              </button>
-              <button
-                onClick={() => onOpenTransaction(previewTx.id)}
-                className="px-5 py-3 rounded-xl border border-border font-semibold text-sm text-foreground hover:bg-surface-muted motion-safe:transition-colors motion-reduce:transition-none"
-              >
+            <div className="flex shrink-0 flex-wrap justify-end gap-2 border-t border-border p-3">
+              <Button variant="secondary" onClick={() => onOpenTransaction(previewTx.id)}>
                 Erweitern
-              </button>
+              </Button>
+              <Button className="flex-1" onClick={() => handleInlineAction(previewTx)} disabled={!previewPrimaryAction}>
+                {previewPrimaryAction ? nextActionLabel(previewPrimaryAction) : 'Keine Aktion'}
+              </Button>
             </div>
           </>
         )}

@@ -2,7 +2,7 @@ import React from 'react';
 import { DndContext, closestCenter, KeyboardSensor, PointerSensor, useSensor, useSensors, type DragEndEvent } from '@dnd-kit/core';
 import { arrayMove, SortableContext, sortableKeyboardCoordinates, useSortable, verticalListSortingStrategy } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
-import { Combobox } from '@billme/ui';
+import { Button, Combobox, Input, Kbd } from '@billme/ui';
 import { ArrowDown, ArrowUp, GripVertical, LockKeyhole, Plus, RotateCcw, Trash2, UnlockKeyhole, UserRound } from 'lucide-react';
 import { getInvoiceTaxModeDefinition } from '@billme/server-core/services';
 import type { DocumentViewModel } from '@billme/desktop-utils/document';
@@ -210,7 +210,7 @@ const InlineBillingRow: React.FC<InlineRowProps> = ({ row, columns, items, onIte
             getSearchText={(article) => `${article.title} ${article.sku ?? ''} ${article.description ?? ''} ${article.category}`}
             allowFreeText
             showSearchIcon={false}
-            inputClassName={`${controlClass} min-w-0 font-medium ${descriptionError ? 'border border-error' : ''}`}
+            inputClassName={`${controlClass} min-w-0 text-sm font-medium ${descriptionError ? 'border border-error' : ''}`}
             placeholder="Beschreibung"
             aria-label={`Beschreibung Position ${sourceIndex + 1}`}
           />
@@ -430,7 +430,7 @@ const InlineDocumentFields: React.FC<InlineDocumentFieldsProps> = ({ fields, def
 
       <div className="pointer-events-auto absolute box-border bg-white px-1 py-1 text-[11px] text-foreground" style={{ left: recipient.x, top: recipient.y, width: recipient.width, height: recipient.height }}>
         <div id="document-field-client" data-field-block data-field-error={fields.fieldErrors?.client ? 'true' : undefined} className="mb-0.5 min-w-0">
-          <div className="min-w-0"><span className={documentLabelClass}>{isManualRecipient ? 'Empfänger' : 'Kunde'}{requiredMark(true)}</span><Combobox key={`recipient-${document.id}`} ref={(input) => { recipientInputRef.current = input; setInputA11y(input, 'document-input-client', Boolean(fields.fieldErrors?.client), fields.fieldErrors?.client ? 'document-input-client-error' : undefined, true); }} items={fields.clients} value={document.client || fields.selectedClientLabel} onValueChange={fields.onClientNameChange ?? ((value) => set((previous) => ({ ...previous, client: value })))} onSelect={fields.onSelectClient} getLabel={(client) => client.company} getSublabel={clientSublabel} getSearchText={(client) => `${client.company} ${client.customerNumber ?? ''} ${client.email ?? ''} ${client.address ?? ''} ${(client.addresses ?? []).map((entry) => Object.values(entry).join(' ')).join(' ')}`} allowFreeText placeholder="Empfänger oder Kunde suchen…" aria-label="Kunde auswählen" showSearchIcon={false} leadingIcon={<UserRound size={14} />} showChevron showAvatar selectedId={fields.selectedClientId} footer={{ label: 'Empfänger ohne Kundenstamm eingeben', onSelect: startManualRecipient }} inputClassName={`${inputClass(Boolean(fields.fieldErrors?.client), 'font-medium')}`} /></div>
+          <div className="min-w-0"><span className={documentLabelClass}>{isManualRecipient ? 'Empfänger' : 'Kunde'}{requiredMark(true)}</span><Combobox key={`recipient-${document.id}`} ref={(input) => { recipientInputRef.current = input; setInputA11y(input, 'document-input-client', Boolean(fields.fieldErrors?.client), fields.fieldErrors?.client ? 'document-input-client-error' : undefined, true); }} items={fields.clients} value={document.client || fields.selectedClientLabel} onValueChange={fields.onClientNameChange ?? ((value) => set((previous) => ({ ...previous, client: value })))} onSelect={fields.onSelectClient} getLabel={(client) => client.company} getSublabel={clientSublabel} getSearchText={(client) => `${client.company} ${client.customerNumber ?? ''} ${client.email ?? ''} ${client.address ?? ''} ${(client.addresses ?? []).map((entry) => Object.values(entry).join(' ')).join(' ')}`} allowFreeText placeholder="Empfänger oder Kunde suchen…" aria-label="Kunde auswählen" showSearchIcon={false} leadingIcon={<UserRound size={14} />} showChevron showAvatar selectedId={fields.selectedClientId} footer={{ label: 'Empfänger ohne Kundenstamm eingeben', onSelect: startManualRecipient }} inputClassName={`${inputClass(Boolean(fields.fieldErrors?.client), 'text-sm font-medium')}`} /></div>
           {isManualRecipient ? <p className="mt-0.5 text-[10px] text-muted" role="status">Nur in diesem Beleg gespeichert</p> : null}
           {error('document-input-client-error', fields.fieldErrors?.client)}
         </div>
@@ -444,10 +444,10 @@ const InlineDocumentFields: React.FC<InlineDocumentFieldsProps> = ({ fields, def
       <div className="pointer-events-auto absolute" style={{ left: meta.x, top: meta.y, width: meta.width, height: meta.height }} data-inline-tax-fields>
         <div className="group/tax absolute bottom-0 right-0">
           <button type="button" aria-label="Details bearbeiten" aria-expanded={taxDetailsOpen} onClick={() => setTaxDetailsOpen(!taxDetailsOpen)} className="inline-flex min-h-6 items-center justify-center border-0 bg-white px-1 text-[10px] text-muted hover:text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring">Details</button>
-          <div className={`absolute right-0 top-full z-30 mt-1 w-80 border border-border bg-white p-2 text-xs text-foreground shadow-lg ${taxDetailsOpen ? 'pointer-events-auto visible opacity-100' : 'pointer-events-none invisible opacity-0 group-hover/tax:pointer-events-auto group-hover/tax:visible group-hover/tax:opacity-100 group-focus-within/tax:pointer-events-auto group-focus-within/tax:visible group-focus-within/tax:opacity-100'}`}>
+          <div className={`absolute right-0 top-full z-30 mt-1 w-80 rounded-card border border-border bg-surface p-2 text-xs text-foreground shadow-lift ${taxDetailsOpen ? 'pointer-events-auto visible opacity-100' : 'pointer-events-none invisible opacity-0 group-hover/tax:pointer-events-auto group-hover/tax:visible group-hover/tax:opacity-100 group-focus-within/tax:pointer-events-auto group-focus-within/tax:visible group-focus-within/tax:opacity-100'}`}>
             <div className="mb-1 space-y-1">
               <label className="flex items-center gap-1"><span className="text-xs text-muted">E-Mail</span><input type="email" value={document.clientEmail} onChange={(event) => set((previous) => ({ ...previous, clientEmail: event.target.value }))} aria-label="E-Mail" placeholder="E-Mail" className={`${documentInputClass} min-w-0 flex-1`} /></label>
-              <label className="flex items-center gap-1"><span className="text-xs text-muted">Projekt</span><div className="min-w-0 flex-1"><Combobox items={fields.projects} value={fields.selectedProjectLabel} onSelect={fields.onSelectProject} getLabel={(project) => `${project.code ? `${project.code} – ` : ''}${project.name}`} getSearchText={(project) => `${project.code ?? ''} ${project.name}`} disabled={!fields.selectedClientId} placeholder={fields.selectedClientId ? 'Projekt suchen…' : 'Kunde auswählen'} aria-label="Projekt auswählen" inputClassName={documentInputClass} /></div></label>
+              <label className="flex items-center gap-1"><span className="text-xs text-muted">Projekt</span><div className="min-w-0 flex-1"><Combobox items={fields.projects} value={fields.selectedProjectLabel} onSelect={fields.onSelectProject} getLabel={(project) => `${project.code ? `${project.code} – ` : ''}${project.name}`} getSearchText={(project) => `${project.code ?? ''} ${project.name}`} disabled={!fields.selectedClientId} placeholder={fields.selectedClientId ? 'Projekt suchen…' : 'Kunde auswählen'} aria-label="Projekt auswählen" inputClassName={`${documentInputClass} text-sm`} /></div></label>
             </div>
             <div className="grid grid-cols-[1.2fr_.8fr] gap-1">
               <div id="document-field-tax-rule" data-field-block data-field-error={fields.fieldErrors?.taxRule ? 'true' : undefined} className="min-w-0">
@@ -644,8 +644,8 @@ export const DocumentFlowEditor: React.FC<DocumentFlowEditorProps> = ({
     setCommandIndex(0);
   };
   const commandShortcut = typeof navigator !== 'undefined' && /mac/i.test(navigator.platform)
-    ? { label: '⌘K', aria: 'Meta+K' }
-    : { label: 'Strg K', aria: 'Control+K' };
+    ? { keys: ['⌘', 'K'], aria: 'Meta+K' }
+    : { keys: ['Strg', 'K'], aria: 'Control+K' };
 
   const renderRow = (row: TableRow, index: number) => {
     const item = items?.[index];
@@ -665,25 +665,28 @@ export const DocumentFlowEditor: React.FC<DocumentFlowEditorProps> = ({
   const docStyle = { '--bf-accent': model.accentColor } as React.CSSProperties;
 
   return (
-    <div className="relative mx-auto w-fit" data-theme="light" data-document-flow-editor data-editable={editable ? 'true' : 'false'}>
+    <div className="relative mx-auto w-fit" data-document-flow-editor data-editable={editable ? 'true' : 'false'}>
       {editable && documentFields ? (
-        <div className="relative mb-2 flex justify-end print:hidden" data-inline-actions>
-          <button type="button" aria-label="Aktionen" aria-keyshortcuts={commandShortcut.aria} onClick={() => setCommandOpen(true)} className="border border-control-border bg-white px-2 py-1 text-xs font-semibold text-muted hover:bg-surface-muted hover:text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring">Aktionen <span className="ml-1 text-xs text-muted">{commandShortcut.label}</span></button>
-          {commandOpen ? <div role="dialog" aria-label="Aktionen" data-command-dialog className="absolute right-0 top-full z-[var(--z-dropdown)] mt-1 w-80 border border-border bg-white p-2 text-foreground shadow-xl">
-            <input ref={commandInputRef} value={commandQuery} onChange={(event) => { setCommandQuery(event.target.value); setCommandIndex(0); }} onKeyDown={(event) => {
+        <div className="relative mb-3 flex justify-end print:hidden" data-inline-actions>
+          <Button variant="secondary" size="sm" aria-label="Aktionen" aria-keyshortcuts={commandShortcut.aria} onClick={() => setCommandOpen(true)} className="border-border-inverse bg-surface-inverse-overlay text-inverse-muted hover:border-border-inverse hover:bg-surface-inverse-overlay hover:text-inverse-foreground focus-visible:outline-focus-ring-dark">
+            Aktionen
+            <span className="inline-flex gap-0.5">{commandShortcut.keys.map((key) => <Kbd key={key} className="border-border-inverse bg-surface-inverse text-inverse-muted">{key}</Kbd>)}</span>
+          </Button>
+          {commandOpen ? <div role="dialog" aria-label="Aktionen" data-command-dialog className="absolute right-0 top-full z-[var(--z-dropdown)] mt-1 w-80 rounded-card border border-border bg-surface p-1.5 text-foreground shadow-lift">
+            <Input ref={commandInputRef} fullWidth value={commandQuery} onChange={(event) => { setCommandQuery(event.target.value); setCommandIndex(0); }} onKeyDown={(event) => {
               if (event.key === 'ArrowDown') { event.preventDefault(); setCommandIndex((index) => Math.min(index + 1, Math.max(0, filteredCommandActions.length - 1))); }
               else if (event.key === 'ArrowUp') { event.preventDefault(); setCommandIndex((index) => Math.max(0, index - 1)); }
               else if (event.key === 'Enter') { event.preventDefault(); executeCommand(); }
               else if (event.key === 'Escape') { event.preventDefault(); setCommandOpen(false); }
-            }} placeholder="Aktion suchen …" aria-label="Aktion suchen …" className="w-full border border-control-border px-2 py-1.5 text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring" />
-            <div className="mt-1 max-h-64 overflow-auto" role="listbox" aria-label="Aktionen">
-              {filteredCommandActions.length ? filteredCommandActions.map((action, index) => <button key={action.id} type="button" role="option" aria-selected={index === commandIndex} data-command-action={action.id} onMouseDown={(event) => { event.preventDefault(); executeCommand(action); }} className={`block w-full px-2 py-1.5 text-left text-xs ${index === commandIndex ? 'bg-surface-muted font-semibold' : 'hover:bg-surface-muted'}`}>{action.label}</button>) : <p className="px-2 py-2 text-xs text-muted">Keine Aktion gefunden</p>}
+            }} placeholder="Aktion suchen …" aria-label="Aktion suchen …" />
+            <div className="mt-1.5 max-h-64 overflow-auto" role="listbox" aria-label="Aktionen">
+              {filteredCommandActions.length ? filteredCommandActions.map((action, index) => <button key={action.id} type="button" role="option" aria-selected={index === commandIndex} data-command-action={action.id} onMouseDown={(event) => { event.preventDefault(); executeCommand(action); }} className={`block w-full rounded-control px-2.25 py-2 text-left text-control text-foreground ${index === commandIndex ? 'bg-surface-sunken' : 'hover:bg-surface-sunken'}`}>{action.label}</button>) : <p className="px-2.25 py-2 text-control text-muted">Keine Aktion gefunden</p>}
             </div>
           </div> : null}
         </div>
       ) : null}
 
-      <div className={docClass} style={docStyle}>
+      <div className={docClass} style={docStyle} data-theme="light">
         <section className="bf-page bf-page-first bf-edit-sheet shadow-2xl" data-edit-sheet>
           {model.din.foldMarks ? (<><div className="bf-mark" style={{ top: '105mm' }} /><div className="bf-mark" style={{ top: '210mm' }} /></>) : null}
           {model.din.holeMark ? <div className="bf-mark bf-mark-hole" style={{ top: '148.5mm' }} /> : null}
@@ -736,7 +739,7 @@ export const DocumentFlowEditor: React.FC<DocumentFlowEditorProps> = ({
                   <option value="group">Abschnitt</option>
                   <option value="summary">Zwischensumme</option>
                 </select>
-                <button type="button" aria-label="Position hinzufügen" onClick={() => add('item')} className="rounded-sm bg-accent px-2 py-1 font-semibold text-accent-foreground hover:bg-accent-hover focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring">+ Position</button>
+                <button id="document-field-positions" type="button" aria-label="Position hinzufügen" onClick={() => add('item')} className="rounded-sm bg-accent px-2 py-1 font-semibold text-accent-foreground hover:bg-accent-hover focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring">+ Position</button>
               </div>
             ) : null}
 

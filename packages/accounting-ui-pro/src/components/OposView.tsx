@@ -10,13 +10,15 @@ import type {
 } from '@billme/accounting-shared';
 import type { OposBankTransaction, ProAccountingDataAdapter } from '../services/accountingDataAdapter';
 import { permissionContextForRole } from '../domain/permissions';
+import { localToday } from '../domain/reportDates';
 import type { UserRole } from '../types';
 import {
-  Button, Table, TableBody, TableCell, TableHead, TableHeader, TableRow, ValidationSummary,
+  Badge, Button, Card, CardHeader, Checkbox, EmptyState, Input, Select, Table, TableBody, TableCell, TableHead, TableHeader, TableRow, ValidationSummary, cn,
+  type BadgeTone,
 } from '@billme/ui';
 
 const euro = (value: number) => new Intl.NumberFormat('de-DE', { style: 'currency', currency: 'EUR' }).format(value);
-const today = () => new Date().toISOString().slice(0, 10);
+const today = () => localToday();
 const eventId = () => `allocation-${crypto.randomUUID()}`;
 const invoiceId = () => `incoming-${crypto.randomUUID()}`;
 const supportedDocumentMimeTypes = new Set(['application/pdf', 'image/jpeg', 'image/png', 'image/webp']);
@@ -26,6 +28,13 @@ const openItemStatusLabels: Record<OpenItemEntity['status'], string> = {
   paid: 'Bezahlt',
   overpaid: 'Überzahlt',
   unresolved: 'Ungeklärt',
+};
+const openItemStatusTones: Record<OpenItemEntity['status'], BadgeTone> = {
+  open: 'info',
+  partially_paid: 'success',
+  paid: 'accent',
+  overpaid: 'warning',
+  unresolved: 'warning',
 };
 const incomingInvoiceStatusLabels: Record<IncomingInvoiceEntity['status'], string> = {
   draft: 'Entwurf',
@@ -45,6 +54,11 @@ const incomingInvoiceDocumentReviewLabels = {
   accepted: 'Geprüft',
   rejected: 'Abgelehnt',
 } as const;
+const incomingInvoiceDocumentReviewTones: Record<keyof typeof incomingInvoiceDocumentReviewLabels, BadgeTone> = {
+  pending: 'neutral',
+  accepted: 'success',
+  rejected: 'error',
+};
 const incomingInvoiceDocumentErrorLabels: Record<string, string> = {
   INCOMING_INVOICE_DOCUMENT_DUPLICATE: 'Diese Datei ist im Mandanten bereits als Originalbeleg archiviert.',
   INCOMING_INVOICE_DOCUMENT_CONTENT_MISMATCH: 'Der Dateiinhalt passt nicht zum angegebenen Dateityp.',
@@ -101,7 +115,9 @@ const invoiceFieldIds = {
 
 const invoiceLineFieldId = (lineId: string, field: 'description' | 'quantity' | 'unitPrice' | 'taxRate') => `opos-invoice-line-${lineId}-${field}`;
 
-const errorClassName = (hasError: boolean): string => hasError ?'border-error focus:border-error focus-visible:outline-focus-ring' :'border-control-border';
+const bannerClass = 'rounded-control border px-3 py-2.5 text-control';
+
+const formatDate = (iso: string): string => iso.slice(0, 10).split('-').reverse().join('.');
 
 const firstError = (errors: FieldErrors): string | null => Object.values(errors)[0] ?? null;
 
@@ -164,7 +180,7 @@ const base64ToBytes = (value: string): Uint8Array => {
 type OposViewProps = {
   dataAdapter?: ProAccountingDataAdapter;
   role?: UserRole;
-  /** Incoming invoice to select on open (from the Belege inbox). */
+  /** Invoice to select on open (from Belege or Bankabgleich). */
   initialInvoiceId?: string;
 };
 
@@ -175,6 +191,7 @@ export default function OposView({ dataAdapter, role = 'admin', initialInvoiceId
   const [invoices, setInvoices] = useState<IncomingInvoiceEntity[]>([]);
   const [documents, setDocuments] = useState<IncomingInvoiceDocumentEntity[]>([]);
   const [selectedItemId, setSelectedItemId] = useState('');
+  const initialItemSelectedRef = useRef(false);
   const [selectedBankTransactionId, setSelectedBankTransactionId] = useState('');
   const [reason, setReason] = useState('');
   const [lastPayment, setLastPayment] = useState<OpenItemPaymentEntity | null>(null);
@@ -255,6 +272,14 @@ export default function OposView({ dataAdapter, role = 'admin', initialInvoiceId
     setFeedback(null);
     void refresh().catch((cause) => setFeedback({ kind: 'error', retry: true, text: formatOposError(cause, 'OPOS-Daten konnten nicht geladen werden.') }));
   }, [refresh]);
+
+  useEffect(() => {
+    if (!initialInvoiceId || initialItemSelectedRef.current) return;
+    const item = items.find((candidate) => candidate.sourceId === initialInvoiceId);
+    if (!item) return;
+    initialItemSelectedRef.current = true;
+    setSelectedItemId(item.id);
+  }, [initialInvoiceId, items]);
 
   useEffect(() => {
     if (!selectedInvoiceId || !dataAdapter?.listIncomingInvoiceDocuments) {
@@ -629,98 +654,345 @@ export default function OposView({ dataAdapter, role = 'admin', initialInvoiceId
     .find(Boolean) ?? null;
   const invoiceFirstError = firstError(invoiceErrors);
 
+  const openItemsCard = (title: string, rows: OpenItemEntity[]) => (
+    <Card padding="none" className="min-w-0 overflow-hidden">
+      <CardHeader
+        as="h3"
+        className="border-b border-border px-3.5 py-3"
+        title={title}
+        actions={<span className="text-label tabular-nums text-foreground">{euro(rows.reduce((sum, item) => sum + item.residualAmount, 0))}</span>}
+      />
+      {!loading && feedback?.kind !== 'error' && rows.length === 0 ? <EmptyState title="Keine offenen Posten vorhanden." /> : (
+        <Table aria-label={title} bare>
+          <TableHeader><TableRow><TableHead>Beleg</TableHead><TableHead>Fällig</TableHead><TableHead numeric>Restbetrag</TableHead><TableHead>Status</TableHead></TableRow></TableHeader>
+          <TableBody>{rows.map((item) => {
+            const itemId = `opos-open-item-${item.id}`;
+            const itemError = paymentErrors[itemId];
+            return (
+              <TableRow key={item.id} selected={selectedItemId === item.id}>
+                <TableCell>
+                  <Button
+                    id={itemId}
+                    variant="ghost"
+                    size="sm"
+                    static
+                    aria-pressed={selectedItemId === item.id}
+                    aria-required="true"
+                    aria-invalid={itemError ? 'true' : undefined}
+                    aria-describedby={itemError ? `${itemId}-error` : undefined}
+                    className={cn('-my-1 -ml-2.25', itemError && 'border-error text-error-text')}
+                    onClick={() => selectOpenItem(item.id)}
+                  >
+                    {item.documentNumber}
+                  </Button>
+                </TableCell>
+                <TableCell muted className="tabular-nums">{formatDate(item.dueDate)}</TableCell>
+                <TableCell numeric>{euro(item.residualAmount)}</TableCell>
+                <TableCell><Badge tone={openItemStatusTones[item.status]}>{openItemStatusLabels[item.status]}</Badge></TableCell>
+              </TableRow>
+            );
+          })}</TableBody>
+        </Table>
+      )}
+    </Card>
+  );
+
   return (
-    <div className="h-full min-w-0 overflow-auto p-5" data-testid="opos-workspace">
+    <div className="min-w-0 space-y-3.5" data-testid="opos-workspace">
       <div className="sr-only">
         <h2>OPOS</h2>
-        <p className="text-sm text-muted">Offene Posten, Zahlungszuordnung und Eingangsrechnungen.</p>
+        <p>Offene Posten, Zahlungszuordnung und Eingangsrechnungen.</p>
       </div>
-      {busy ? <div className="mb-3 text-sm text-muted" aria-live="polite" aria-busy="true">Speichere Änderung…</div> : null}
-      {loading ? <div className="mb-3 text-sm text-muted" role="status" aria-live="polite" aria-busy="true">OPOS-Daten werden geladen…</div> : null}
+      {busy ? <div className="text-caption text-muted" aria-live="polite" aria-busy="true">Speichere Änderung…</div> : null}
+      {loading ? <div className="text-control text-muted" role="status" aria-live="polite" aria-busy="true">OPOS-Daten werden geladen…</div> : null}
       {/* ponytail: validation errors keep the retry action; split load and validation feedback when retry semantics diverge. */}
-      {feedback ? feedback.kind === 'error' ? <div data-testid="opos-feedback" className="mb-3 flex flex-wrap items-center gap-3 rounded-lg border border-error-border bg-error-bg px-3 py-2 text-sm text-error-text" role="alert" aria-live="assertive"><span>{feedback.text}</span>{feedback.retry ? <Button type="button" size="sm" variant="secondary" onClick={() => { setFeedback(null); void refresh().catch((cause) => setFeedback({ kind: 'error', retry: true, text: formatOposError(cause, 'OPOS-Daten konnten nicht geladen werden.') })); }}>Erneut versuchen</Button> : null}</div> : <div data-testid="opos-feedback" className="mb-3 rounded-lg border border-success-border bg-success-bg px-3 py-2 text-sm text-success-text" role="status" aria-live="polite">{feedback.text}</div> : null}
-      {!canMutate ? <div className="mb-3 rounded-lg border border-border bg-surface-muted px-3 py-2 text-sm text-muted" role="status">Diese Rolle kann OPOS-Daten nur lesen.</div> : null}
-      <div className="grid min-w-0 gap-5 xl:grid-cols-2">
-        <section className="min-w-0 rounded-xl border border-border p-4" aria-labelledby="open-items-heading">
-          <h3 id="open-items-heading" className="mb-3 text-base font-semibold">Offene Posten</h3>
-          {!loading && feedback?.kind !== 'error' && items.length === 0 ? <p className="text-sm text-muted">Keine offenen Posten vorhanden.</p> : (
-            <Table aria-label="Offene Posten" density="compact" bare>
-              <TableHeader><TableRow><TableHead>Beleg</TableHead><TableHead>Art</TableHead><TableHead numeric>Restbetrag</TableHead><TableHead>Status</TableHead></TableRow></TableHeader>
-              <TableBody>{items.map((item) => { const itemId = `opos-open-item-${item.id}`; const itemError = paymentErrors[itemId]; return <TableRow key={item.id} selected={selectedItemId === item.id}><TableCell><button id={itemId} type="button" aria-pressed={selectedItemId === item.id} aria-required="true" aria-invalid={itemError ? 'true' : undefined} aria-describedby={itemError ? `${itemId}-error` : undefined} className={`rounded-xs font-medium underline-offset-2 hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring ${itemError ? 'border border-error text-error-text' : ''}`} onClick={() => selectOpenItem(item.id)}>{item.documentNumber}</button></TableCell><TableCell muted>{item.partyType === 'debtor' ? 'Debitor' : 'Kreditor'}</TableCell><TableCell numeric>{euro(item.residualAmount)}</TableCell><TableCell>{openItemStatusLabels[item.status]}</TableCell></TableRow>; })}</TableBody>
-            </Table>
-          )}
-          {openItemError ? <p id={openItemErrorId} className="mt-1 text-xs text-error-text">{openItemError}</p> : null}
-          {paymentValidationIssues.length > 0 ? <ValidationSummary errors={paymentValidationIssues} onJump={focusValidationField} /> : null}
-          <div className="mt-4 grid gap-3 sm:grid-cols-2">
-            <label className="text-sm sm:col-span-2">Importierte Bankzahlung <span className="text-error-text" aria-hidden="true">*</span><select id={paymentFieldIds.bankTransaction} aria-label="Bankzahlung" required={canMutate} aria-required={canMutate} aria-invalid={Boolean(paymentErrors[paymentFieldIds.bankTransaction])} aria-describedby={paymentErrors[paymentFieldIds.bankTransaction] ? `${paymentFieldIds.bankTransaction}-error` : undefined} className={`mt-1 w-full rounded-lg border px-3 py-2 ${errorClassName(Boolean(paymentErrors[paymentFieldIds.bankTransaction]))}`} value={selectedBankTransactionId} onChange={(e) => { setSelectedBankTransactionId(e.target.value); clearPaymentError(paymentFieldIds.bankTransaction); allocationEventRef.current = null; }} disabled={!canMutate || !selectedItem}><option value="">Noch nicht gebuchte Zahlung auswählen</option>{eligibleBankTransactions.map((transaction) => <option key={transaction.id} value={transaction.id}>{transaction.date} · {transaction.counterparty || 'Unbekannt'} · {transaction.purpose || 'Ohne Verwendungszweck'} · {euro(Math.abs(transaction.amount))}</option>)}</select>{paymentErrors[paymentFieldIds.bankTransaction] ? <span id={`${paymentFieldIds.bankTransaction}-error`} className="mt-1 block text-xs text-error-text">{paymentErrors[paymentFieldIds.bankTransaction]}</span> : null}</label>
-            {selectedBankTransaction ? <p className="text-sm text-muted sm:col-span-2">Bankkonto {selectedBankTransaction.bankAccountNumber} · {selectedBankTransaction.date} · {euro(Math.abs(selectedBankTransaction.amount))}</p> : null}
-            <label className="text-sm sm:col-span-2">Begründung <span className="text-error-text" aria-hidden="true">*</span><input aria-label="Begründung" id={paymentFieldIds.reason} required={canMutate} aria-required={canMutate} aria-invalid={Boolean(paymentErrors[paymentFieldIds.reason])} aria-describedby={paymentErrors[paymentFieldIds.reason] ? `${paymentFieldIds.reason}-error` : undefined} disabled={!canMutate} className={`mt-1 w-full rounded-lg border px-3 py-2 ${errorClassName(Boolean(paymentErrors[paymentFieldIds.reason]))}`} value={reason} onChange={(e) => { setReason(e.target.value); clearPaymentError(paymentFieldIds.reason); }} placeholder="z. B. Kontoauszug geprüft" />{paymentErrors[paymentFieldIds.reason] ? <span id={`${paymentFieldIds.reason}-error`} className="mt-1 block text-xs text-error-text">{paymentErrors[paymentFieldIds.reason]}</span> : null}</label>
-          </div>
-          <button type="button" aria-describedby={paymentFirstError ? 'opos-payment-action-error' : undefined} className="mt-3 rounded-lg bg-dark-base px-4 py-2 text-sm font-semibold text-inverse-foreground disabled:opacity-50" disabled={!canMutate || busy} onClick={allocate}>Zahlung zuordnen</button>
-          {paymentFirstError ? <p id="opos-payment-action-error" className="mt-2 text-xs text-error-text" role="status" aria-live="assertive">{paymentFirstError}</p> : null}
-          {lastPayment && lastPayment.residualAmount > 0 ? <div className="mt-4 rounded-lg border border-warning-border bg-warning-bg p-3"><p className="text-sm font-semibold">Restzahlung: {euro(lastPayment.residualAmount)}</p><div className="mt-2 grid gap-2 sm:grid-cols-2"><label className="text-sm">Ziel <span className="text-error-text" aria-hidden="true">*</span><select id={paymentFieldIds.remainingItem} required={canMutate} aria-required={canMutate} aria-invalid={paymentErrors[paymentFieldIds.remainingItem] ? 'true' : undefined} aria-describedby={paymentErrors[paymentFieldIds.remainingItem] ? `${paymentFieldIds.remainingItem}-error` : undefined} disabled={!canMutate} className={`mt-1 w-full rounded-lg border px-3 py-2 text-sm ${errorClassName(Boolean(paymentErrors[paymentFieldIds.remainingItem]))}`} value={remainingItemId} onChange={(e) => { setRemainingItemId(e.target.value); clearPaymentError(paymentFieldIds.remainingItem); }}><option value="">Weiteren offenen Posten wählen</option>{items.filter((item) => item.id !== selectedItemId && item.partyType === lastPayment.partyType).map((item) => <option key={item.id} value={item.id}>{item.documentNumber} ({euro(item.residualAmount)})</option>)}</select>{paymentErrors[paymentFieldIds.remainingItem] ? <span id={`${paymentFieldIds.remainingItem}-error`} className="mt-1 block text-xs text-error-text">{paymentErrors[paymentFieldIds.remainingItem]}</span> : null}</label><label className="text-sm">Betrag <span className="text-error-text" aria-hidden="true">*</span><input id={paymentFieldIds.remainingAmount} disabled={!canMutate} required={canMutate} aria-required={canMutate} aria-invalid={paymentErrors[paymentFieldIds.remainingAmount] ? 'true' : undefined} aria-describedby={paymentErrors[paymentFieldIds.remainingAmount] ? `${paymentFieldIds.remainingAmount}-error` : undefined} type="number" min="0.01" step="0.01" className={`mt-1 w-full rounded-lg border px-3 py-2 text-sm ${errorClassName(Boolean(paymentErrors[paymentFieldIds.remainingAmount]))}`} value={remainingAmount} onChange={(e) => { setRemainingAmount(e.target.value); clearPaymentError(paymentFieldIds.remainingAmount); }} placeholder={String(lastPayment.residualAmount)} />{paymentErrors[paymentFieldIds.remainingAmount] ? <span id={`${paymentFieldIds.remainingAmount}-error`} className="mt-1 block text-xs text-error-text">{paymentErrors[paymentFieldIds.remainingAmount]}</span> : null}</label></div><button type="button" aria-describedby={remainingFirstError ? 'opos-payment-remaining-action-error' : undefined} className="mt-2 rounded-lg border border-muted px-3 py-2 text-sm font-semibold disabled:opacity-50" disabled={!canMutate || busy} onClick={allocateRemaining}>Restbetrag zuordnen</button>{remainingFirstError ? <p id="opos-payment-remaining-action-error" className="mt-2 text-xs text-error-text" role="status" aria-live="assertive">{remainingFirstError}</p> : null}</div> : null}
-        </section>
+      {feedback ? feedback.kind === 'error' ? <div data-testid="opos-feedback" className={`flex flex-wrap items-center gap-3 border-error-border bg-error-bg text-error-text ${bannerClass}`} role="alert" aria-live="assertive"><span>{feedback.text}</span>{feedback.retry ? <Button type="button" size="sm" variant="secondary" onClick={() => { setFeedback(null); void refresh().catch((cause) => setFeedback({ kind: 'error', retry: true, text: formatOposError(cause, 'OPOS-Daten konnten nicht geladen werden.') })); }}>Erneut versuchen</Button> : null}</div> : <div data-testid="opos-feedback" className={`border-success-border bg-success-bg text-success-text ${bannerClass}`} role="status" aria-live="polite">{feedback.text}</div> : null}
+      {!canMutate ? <div className={`border-border bg-surface-muted text-muted ${bannerClass}`} role="status">Diese Rolle kann OPOS-Daten nur lesen.</div> : null}
 
-        <section className="min-w-0 rounded-xl border border-border p-4" aria-labelledby="incoming-heading">
-          <h3 id="incoming-heading" className="mb-3 text-base font-semibold">Eingangsrechnungen</h3>
-          {invoiceValidationIssues.length > 0 ? <ValidationSummary errors={invoiceValidationIssues} onJump={focusValidationField} /> : null}
-          <fieldset disabled={!canMutate} className="contents">
-          <div className="grid gap-3 sm:grid-cols-2">
-            <label className="text-sm">Rechnungsnummer <span className="text-error-text" aria-hidden="true">*</span><input aria-label="Rechnungsnummer" id={invoiceFieldIds.number} required={canMutate} aria-required={canMutate} aria-invalid={Boolean(invoiceErrors[invoiceFieldIds.number])} aria-describedby={invoiceErrors[invoiceFieldIds.number] ? `${invoiceFieldIds.number}-error` : undefined} className={`mt-1 w-full rounded-lg border px-3 py-2 ${errorClassName(Boolean(invoiceErrors[invoiceFieldIds.number]))}`} value={invoiceNumber} onChange={(e) => { setInvoiceNumber(e.target.value); clearInvoiceError(invoiceFieldIds.number); }} />{invoiceErrors[invoiceFieldIds.number] ? <span id={`${invoiceFieldIds.number}-error`} className="mt-1 block text-xs text-error-text">{invoiceErrors[invoiceFieldIds.number]}</span> : null}</label>
-            <label className="text-sm">Kreditor<select id={invoiceFieldIds.vendor} aria-label="Kreditor" className="px-2.5 h-8 hover:border-control-border-hover text-sm mt-1 w-full rounded-control border border-control-border" value={vendorId} onChange={(e) => { setVendorId(e.target.value); clearInvoiceError(invoiceFieldIds.vendorName); }}><option value="">Neuen Kreditor anlegen</option>{vendors.map((vendor) => <option key={vendor.id} value={vendor.id}>{vendor.name}</option>)}</select></label>
-            {!vendorId ? <label className="text-sm">Kreditorname <span className="text-error-text" aria-hidden="true">*</span><input aria-label="Kreditorname" id={invoiceFieldIds.vendorName} required={canMutate} aria-required={canMutate} aria-invalid={Boolean(invoiceErrors[invoiceFieldIds.vendorName])} aria-describedby={invoiceErrors[invoiceFieldIds.vendorName] ? `${invoiceFieldIds.vendorName}-error` : undefined} className={`mt-1 w-full rounded-lg border px-3 py-2 ${errorClassName(Boolean(invoiceErrors[invoiceFieldIds.vendorName]))}`} value={vendorName} onChange={(e) => { setVendorName(e.target.value); clearInvoiceError(invoiceFieldIds.vendorName); }} />{invoiceErrors[invoiceFieldIds.vendorName] ? <span id={`${invoiceFieldIds.vendorName}-error`} className="mt-1 block text-xs text-error-text">{invoiceErrors[invoiceFieldIds.vendorName]}</span> : null}</label> : null}
-            <label className="text-sm">Rechnungsdatum<input type="date" className="px-2.5 h-8 hover:border-control-border-hover text-sm mt-1 w-full rounded-control border border-control-border" value={invoiceDate} onChange={(e) => setInvoiceDate(e.target.value)} /></label>
-            <label className="text-sm">Fällig am<input type="date" className="px-2.5 h-8 hover:border-control-border-hover text-sm mt-1 w-full rounded-control border border-control-border" value={dueDate} onChange={(e) => setDueDate(e.target.value)} /></label>
-            <div className="sm:col-span-2 rounded-lg border border-border-subtle p-3">
-              <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
-                <div>
-                  <h4 className="text-sm font-semibold">Positionen</h4>
-                  <p className="text-xs text-muted">Jede Position wird separat auf Cent gerundet und kann einen eigenen Steuersatz und ein eigenes Konto haben.</p>
+      <section className="grid min-w-0 gap-3.5 lg:grid-cols-2" aria-labelledby="open-items-heading">
+        <h3 id="open-items-heading" className="sr-only">Offene Posten</h3>
+        {openItemsCard('Forderungen', items.filter((item) => item.partyType === 'debtor'))}
+        {openItemsCard('Verbindlichkeiten', items.filter((item) => item.partyType === 'creditor'))}
+      </section>
+
+      <div className="grid min-w-0 items-start gap-3.5 xl:grid-cols-2">
+        <Card padding="none" className="min-w-0">
+          <CardHeader
+            as="h3"
+            className="border-b border-border px-3.5 py-3"
+            title="Zahlung zuordnen"
+            subtitle={selectedItem ? `${selectedItem.documentNumber} · ${euro(selectedItem.residualAmount)}` : undefined}
+          />
+          <div className="flex flex-col gap-3 p-3.5">
+            {openItemError ? <p id={openItemErrorId} className="text-caption text-error-text">{openItemError}</p> : null}
+            {paymentValidationIssues.length > 0 ? <ValidationSummary className="mb-0" errors={paymentValidationIssues} onJump={focusValidationField} /> : null}
+            <Select
+              id={paymentFieldIds.bankTransaction}
+              label="Importierte Bankzahlung"
+              aria-label="Bankzahlung"
+              required={canMutate}
+              fullWidth
+              error={paymentErrors[paymentFieldIds.bankTransaction]}
+              value={selectedBankTransactionId}
+              onChange={(e) => { setSelectedBankTransactionId(e.target.value); clearPaymentError(paymentFieldIds.bankTransaction); allocationEventRef.current = null; }}
+              disabled={!canMutate || !selectedItem}
+            >
+              <option value="">Noch nicht gebuchte Zahlung auswählen</option>
+              {eligibleBankTransactions.map((transaction) => <option key={transaction.id} value={transaction.id}>{transaction.date} · {transaction.counterparty || 'Unbekannt'} · {transaction.purpose || 'Ohne Verwendungszweck'} · {euro(Math.abs(transaction.amount))}</option>)}
+            </Select>
+            {selectedBankTransaction ? <p className="text-control text-muted">Bankkonto {selectedBankTransaction.bankAccountNumber} · {selectedBankTransaction.date} · {euro(Math.abs(selectedBankTransaction.amount))}</p> : null}
+            <Input
+              id={paymentFieldIds.reason}
+              label="Begründung"
+              aria-label="Begründung"
+              required={canMutate}
+              fullWidth
+              error={paymentErrors[paymentFieldIds.reason]}
+              disabled={!canMutate}
+              value={reason}
+              onChange={(e) => { setReason(e.target.value); clearPaymentError(paymentFieldIds.reason); }}
+              placeholder="z. B. Kontoauszug geprüft"
+            />
+            <div>
+              <Button aria-describedby={paymentFirstError ? 'opos-payment-action-error' : undefined} disabled={!canMutate || busy} onClick={allocate}>Zahlung zuordnen</Button>
+              {paymentFirstError ? <p id="opos-payment-action-error" className="mt-2 text-caption text-error-text" role="status" aria-live="assertive">{paymentFirstError}</p> : null}
+            </div>
+            {lastPayment && lastPayment.residualAmount > 0 ? (
+              <div className="rounded-control border border-warning-border bg-warning-bg p-3">
+                <p className="text-label text-warning-text">Restzahlung: {euro(lastPayment.residualAmount)}</p>
+                <div className="mt-2 grid gap-3 sm:grid-cols-2">
+                  <Select
+                    id={paymentFieldIds.remainingItem}
+                    label="Ziel"
+                    required={canMutate}
+                    fullWidth
+                    error={paymentErrors[paymentFieldIds.remainingItem]}
+                    disabled={!canMutate}
+                    value={remainingItemId}
+                    onChange={(e) => { setRemainingItemId(e.target.value); clearPaymentError(paymentFieldIds.remainingItem); }}
+                  >
+                    <option value="">Weiteren offenen Posten wählen</option>
+                    {items.filter((item) => item.id !== selectedItemId && item.partyType === lastPayment.partyType).map((item) => <option key={item.id} value={item.id}>{item.documentNumber} ({euro(item.residualAmount)})</option>)}
+                  </Select>
+                  <Input
+                    id={paymentFieldIds.remainingAmount}
+                    label="Betrag"
+                    required={canMutate}
+                    fullWidth
+                    error={paymentErrors[paymentFieldIds.remainingAmount]}
+                    disabled={!canMutate}
+                    type="number"
+                    min="0.01"
+                    step="0.01"
+                    value={remainingAmount}
+                    onChange={(e) => { setRemainingAmount(e.target.value); clearPaymentError(paymentFieldIds.remainingAmount); }}
+                    placeholder={String(lastPayment.residualAmount)}
+                  />
                 </div>
-                <button type="button" className="rounded-lg border border-muted px-3 py-2 text-sm font-semibold" onClick={addInvoiceLine}>Position hinzufügen</button>
+                <Button variant="secondary" className="mt-3" aria-describedby={remainingFirstError ? 'opos-payment-remaining-action-error' : undefined} disabled={!canMutate || busy} onClick={allocateRemaining}>Restbetrag zuordnen</Button>
+                {remainingFirstError ? <p id="opos-payment-remaining-action-error" className="mt-2 text-caption text-error-text" role="status" aria-live="assertive">{remainingFirstError}</p> : null}
               </div>
-              <div className="space-y-3">
-                {invoiceLines.map((line, index) => {
-                  const calculated = calculatedInvoiceLines[index];
-                  return <div key={line.id} className="rounded-lg border border-border-subtle bg-surface-muted p-3">
-                    <div className="mb-2 flex items-center justify-between gap-2">
-                      <span className="text-sm font-semibold">Position {index + 1}</span>
-                      <button type="button" className="text-sm underline disabled:opacity-50" disabled={invoiceLines.length === 1} onClick={() => removeInvoiceLine(line.id)}>Entfernen</button>
+            ) : null}
+          </div>
+        </Card>
+
+        <section className="min-w-0 space-y-3.5" aria-labelledby="incoming-heading">
+          <Card padding="none">
+            <CardHeader as="h3" className="border-b border-border px-3.5 py-3" title={<span id="incoming-heading">Eingangsrechnungen</span>} />
+            <div className="flex flex-col gap-3 p-3.5">
+              {invoiceValidationIssues.length > 0 ? <ValidationSummary className="mb-0" errors={invoiceValidationIssues} onJump={focusValidationField} /> : null}
+              <fieldset disabled={!canMutate} className="contents">
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <Input
+                    id={invoiceFieldIds.number}
+                    label="Rechnungsnummer"
+                    aria-label="Rechnungsnummer"
+                    required={canMutate}
+                    fullWidth
+                    error={invoiceErrors[invoiceFieldIds.number]}
+                    value={invoiceNumber}
+                    onChange={(e) => { setInvoiceNumber(e.target.value); clearInvoiceError(invoiceFieldIds.number); }}
+                  />
+                  <Select id={invoiceFieldIds.vendor} label="Kreditor" aria-label="Kreditor" fullWidth value={vendorId} onChange={(e) => { setVendorId(e.target.value); clearInvoiceError(invoiceFieldIds.vendorName); }}>
+                    <option value="">Neuen Kreditor anlegen</option>
+                    {vendors.map((vendor) => <option key={vendor.id} value={vendor.id}>{vendor.name}</option>)}
+                  </Select>
+                  {!vendorId ? (
+                    <Input
+                      id={invoiceFieldIds.vendorName}
+                      label="Kreditorname"
+                      aria-label="Kreditorname"
+                      required={canMutate}
+                      fullWidth
+                      error={invoiceErrors[invoiceFieldIds.vendorName]}
+                      value={vendorName}
+                      onChange={(e) => { setVendorName(e.target.value); clearInvoiceError(invoiceFieldIds.vendorName); }}
+                    />
+                  ) : null}
+                  <Input label="Rechnungsdatum" type="date" fullWidth value={invoiceDate} onChange={(e) => setInvoiceDate(e.target.value)} />
+                  <Input label="Fällig am" type="date" fullWidth value={dueDate} onChange={(e) => setDueDate(e.target.value)} />
+                </div>
+                <div className="border-t border-border pt-3">
+                  <div className="flex flex-wrap items-start justify-between gap-2">
+                    <div className="min-w-0">
+                      <h4 className="text-section text-foreground">Positionen</h4>
+                      <p className="text-caption text-muted">Jede Position wird separat auf Cent gerundet und kann einen eigenen Steuersatz und ein eigenes Konto haben.</p>
                     </div>
-                    <div className="grid gap-3 sm:grid-cols-2">
-                      <label className="text-sm sm:col-span-2">Beschreibung <span className="text-error-text" aria-hidden="true">*</span><input id={invoiceLineFieldId(line.id, 'description')} aria-label="Position" required={canMutate} aria-required={canMutate} aria-invalid={Boolean(invoiceErrors[invoiceLineFieldId(line.id, 'description')])} aria-describedby={invoiceErrors[invoiceLineFieldId(line.id, 'description')] ? `${invoiceLineFieldId(line.id, 'description')}-error` : undefined} className={`mt-1 w-full rounded-lg border px-3 py-2 ${errorClassName(Boolean(invoiceErrors[invoiceLineFieldId(line.id, 'description')]))}`} value={line.description} onChange={(e) => { updateInvoiceLine(line.id, 'description', e.target.value); clearInvoiceError(invoiceLineFieldId(line.id, 'description')); }} />{invoiceErrors[invoiceLineFieldId(line.id, 'description')] ? <span id={`${invoiceLineFieldId(line.id, 'description')}-error`} className="mt-1 block text-xs text-error-text">{invoiceErrors[invoiceLineFieldId(line.id, 'description')]}</span> : null}</label>
-                      <label className="text-sm">Menge <span className="text-error-text" aria-hidden="true">*</span><input aria-label="Menge" id={invoiceLineFieldId(line.id, 'quantity')} required={canMutate} aria-required={canMutate} aria-invalid={Boolean(invoiceErrors[invoiceLineFieldId(line.id, 'quantity')])} aria-describedby={invoiceErrors[invoiceLineFieldId(line.id, 'quantity')] ? `${invoiceLineFieldId(line.id, 'quantity')}-error` : undefined} type="number" min="0.001" step="0.001" className={`mt-1 w-full rounded-lg border px-3 py-2 ${errorClassName(Boolean(invoiceErrors[invoiceLineFieldId(line.id, 'quantity')]))}`} value={line.quantity} onChange={(e) => { updateInvoiceLine(line.id, 'quantity', e.target.value); clearInvoiceError(invoiceLineFieldId(line.id, 'quantity')); }} />{invoiceErrors[invoiceLineFieldId(line.id, 'quantity')] ? <span id={`${invoiceLineFieldId(line.id, 'quantity')}-error`} className="mt-1 block text-xs text-error-text">{invoiceErrors[invoiceLineFieldId(line.id, 'quantity')]}</span> : null}</label>
-                      <label className="text-sm">Einzelpreis netto <span className="text-error-text" aria-hidden="true">*</span><input aria-label="Einzelpreis" id={invoiceLineFieldId(line.id, 'unitPrice')} required={canMutate} aria-required={canMutate} aria-invalid={Boolean(invoiceErrors[invoiceLineFieldId(line.id, 'unitPrice')])} aria-describedby={invoiceErrors[invoiceLineFieldId(line.id, 'unitPrice')] ? `${invoiceLineFieldId(line.id, 'unitPrice')}-error` : undefined} type="number" min="0.01" step="0.01" className={`mt-1 w-full rounded-lg border px-3 py-2 ${errorClassName(Boolean(invoiceErrors[invoiceLineFieldId(line.id, 'unitPrice')]))}`} value={line.unitPrice} onChange={(e) => { updateInvoiceLine(line.id, 'unitPrice', e.target.value); clearInvoiceError(invoiceLineFieldId(line.id, 'unitPrice')); }} />{invoiceErrors[invoiceLineFieldId(line.id, 'unitPrice')] ? <span id={`${invoiceLineFieldId(line.id, 'unitPrice')}-error`} className="mt-1 block text-xs text-error-text">{invoiceErrors[invoiceLineFieldId(line.id, 'unitPrice')]}</span> : null}</label>
-                      <label className="text-sm">Steuersatz (%) <span className="text-error-text" aria-hidden="true">*</span><input aria-label="Steuersatz" id={invoiceLineFieldId(line.id, 'taxRate')} required={canMutate} aria-required={canMutate} aria-invalid={Boolean(invoiceErrors[invoiceLineFieldId(line.id, 'taxRate')])} aria-describedby={invoiceErrors[invoiceLineFieldId(line.id, 'taxRate')] ? `${invoiceLineFieldId(line.id, 'taxRate')}-error` : undefined} type="number" min="0" max="100" step="0.01" className={`mt-1 w-full rounded-lg border px-3 py-2 ${errorClassName(Boolean(invoiceErrors[invoiceLineFieldId(line.id, 'taxRate')]))}`} value={line.taxRate} onChange={(e) => { updateInvoiceLine(line.id, 'taxRate', e.target.value); clearInvoiceError(invoiceLineFieldId(line.id, 'taxRate')); }} />{invoiceErrors[invoiceLineFieldId(line.id, 'taxRate')] ? <span id={`${invoiceLineFieldId(line.id, 'taxRate')}-error`} className="mt-1 block text-xs text-error-text">{invoiceErrors[invoiceLineFieldId(line.id, 'taxRate')]}</span> : null}</label>
-                      <label className="text-sm">Aufwandskonto<input aria-label="Konto" inputMode="numeric" className="px-2.5 h-8 hover:border-control-border-hover text-sm mt-1 w-full rounded-control border border-control-border" value={line.accountNumber} onChange={(e) => updateInvoiceLine(line.id, 'accountNumber', e.target.value)} placeholder="z. B. 4900" /></label>
-                      <label className="text-sm">Anlagekonto (optional)<input aria-label="Anlagekonto" inputMode="numeric" className="px-2.5 h-8 hover:border-control-border-hover text-sm mt-1 w-full rounded-control border border-control-border" value={line.assetAccountNumber} onChange={(e) => updateInvoiceLine(line.id, 'assetAccountNumber', e.target.value)} placeholder="z. B. 0480" /></label>
-                    </div>
-                    <p className="mt-2 text-right text-xs text-muted">Netto {euro(calculated?.netAmount ?? 0)} · Steuer {euro(calculated?.taxAmount ?? 0)} · Brutto {euro(calculated?.grossAmount ?? 0)}</p>
-                  </div>;
-                })}
+                    <Button variant="secondary" size="sm" onClick={addInvoiceLine}>Position hinzufügen</Button>
+                  </div>
+                  <div className="divide-y divide-border">
+                    {invoiceLines.map((line, index) => {
+                      const calculated = calculatedInvoiceLines[index];
+                      const fieldId = (field: 'description' | 'quantity' | 'unitPrice' | 'taxRate') => invoiceLineFieldId(line.id, field);
+                      return (
+                        <div key={line.id} className="py-3">
+                          <div className="mb-2 flex items-center justify-between gap-2">
+                            <span className="text-label text-foreground">Position {index + 1}</span>
+                            <Button variant="ghost" size="sm" disabled={invoiceLines.length === 1} onClick={() => removeInvoiceLine(line.id)}>Entfernen</Button>
+                          </div>
+                          <div className="grid gap-3 sm:grid-cols-6">
+                            <div className="sm:col-span-6">
+                              <Input
+                                id={fieldId('description')}
+                                label="Beschreibung"
+                                aria-label="Position"
+                                required={canMutate}
+                                fullWidth
+                                error={invoiceErrors[fieldId('description')]}
+                                value={line.description}
+                                onChange={(e) => { updateInvoiceLine(line.id, 'description', e.target.value); clearInvoiceError(fieldId('description')); }}
+                              />
+                            </div>
+                            <div className="sm:col-span-2">
+                              <Input
+                                id={fieldId('quantity')}
+                                label="Menge"
+                                aria-label="Menge"
+                                required={canMutate}
+                                fullWidth
+                                error={invoiceErrors[fieldId('quantity')]}
+                                type="number"
+                                min="0.001"
+                                step="0.001"
+                                value={line.quantity}
+                                onChange={(e) => { updateInvoiceLine(line.id, 'quantity', e.target.value); clearInvoiceError(fieldId('quantity')); }}
+                              />
+                            </div>
+                            <div className="sm:col-span-2">
+                              <Input
+                                id={fieldId('unitPrice')}
+                                label="Einzelpreis netto"
+                                aria-label="Einzelpreis"
+                                required={canMutate}
+                                fullWidth
+                                error={invoiceErrors[fieldId('unitPrice')]}
+                                type="number"
+                                min="0.01"
+                                step="0.01"
+                                value={line.unitPrice}
+                                onChange={(e) => { updateInvoiceLine(line.id, 'unitPrice', e.target.value); clearInvoiceError(fieldId('unitPrice')); }}
+                              />
+                            </div>
+                            <div className="sm:col-span-2">
+                              <Input
+                                id={fieldId('taxRate')}
+                                label="Steuersatz (%)"
+                                aria-label="Steuersatz"
+                                required={canMutate}
+                                fullWidth
+                                error={invoiceErrors[fieldId('taxRate')]}
+                                type="number"
+                                min="0"
+                                max="100"
+                                step="0.01"
+                                value={line.taxRate}
+                                onChange={(e) => { updateInvoiceLine(line.id, 'taxRate', e.target.value); clearInvoiceError(fieldId('taxRate')); }}
+                              />
+                            </div>
+                            <div className="sm:col-span-3">
+                              <Input label="Aufwandskonto" aria-label="Konto" inputMode="numeric" fullWidth value={line.accountNumber} onChange={(e) => updateInvoiceLine(line.id, 'accountNumber', e.target.value)} placeholder="z. B. 4900" />
+                            </div>
+                            <div className="sm:col-span-3">
+                              <Input label="Anlagekonto (optional)" aria-label="Anlagekonto" inputMode="numeric" fullWidth value={line.assetAccountNumber} onChange={(e) => updateInvoiceLine(line.id, 'assetAccountNumber', e.target.value)} placeholder="z. B. 0480" />
+                            </div>
+                          </div>
+                          <p className="mt-2 text-right text-caption tabular-nums text-muted">Netto {euro(calculated?.netAmount ?? 0)} · Steuer {euro(calculated?.taxAmount ?? 0)} · Brutto {euro(calculated?.grossAmount ?? 0)}</p>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+                <Input
+                  id={invoiceFieldIds.reason}
+                  label="Begründung"
+                  aria-label="Begründung"
+                  required={canMutate}
+                  fullWidth
+                  error={invoiceErrors[invoiceFieldIds.reason]}
+                  value={invoiceReason}
+                  onChange={(e) => { setInvoiceReason(e.target.value); clearInvoiceError(invoiceFieldIds.reason); }}
+                  placeholder="z. B. Eingangsbeleg geprüft"
+                />
+              </fieldset>
+              <div className="text-control" aria-label="Rechnungssummen">
+                <p className="font-semibold tabular-nums text-foreground">Summen: Netto {euro(invoiceTotals.netAmount)} · Steuer {euro(invoiceTotals.taxAmount)} · Brutto {euro(invoiceTotals.grossAmount)}</p>
+                {invoiceTaxBreakdown.size > 0 ? <p className="mt-1 text-caption text-muted">Steueraufteilung: {Array.from(invoiceTaxBreakdown.entries()).sort(([left], [right]) => left - right).map(([rate, totals]) => `${rate}% ${euro(totals.taxAmount)}`).join(' · ')}</p> : null}
               </div>
             </div>
-            <label className="text-sm sm:col-span-2">Begründung <span className="text-error-text" aria-hidden="true">*</span><input aria-label="Begründung" id={invoiceFieldIds.reason} required={canMutate} aria-required={canMutate} aria-invalid={Boolean(invoiceErrors[invoiceFieldIds.reason])} aria-describedby={invoiceErrors[invoiceFieldIds.reason] ? `${invoiceFieldIds.reason}-error` : undefined} className={`mt-1 w-full rounded-lg border px-3 py-2 ${errorClassName(Boolean(invoiceErrors[invoiceFieldIds.reason]))}`} value={invoiceReason} onChange={(e) => { setInvoiceReason(e.target.value); clearInvoiceError(invoiceFieldIds.reason); }} placeholder="z. B. Eingangsbeleg geprüft" />{invoiceErrors[invoiceFieldIds.reason] ? <span id={`${invoiceFieldIds.reason}-error`} className="mt-1 block text-xs text-error-text">{invoiceErrors[invoiceFieldIds.reason]}</span> : null}</label>
-          </div>
-          </fieldset>
-          <div className="mt-2 rounded-lg bg-surface-muted p-3 text-sm" aria-label="Rechnungssummen">
-            <p className="font-semibold">Summen: Netto {euro(invoiceTotals.netAmount)} · Steuer {euro(invoiceTotals.taxAmount)} · Brutto {euro(invoiceTotals.grossAmount)}</p>
-            {invoiceTaxBreakdown.size > 0 ? <p className="mt-1 text-xs text-muted">Steueraufteilung: {Array.from(invoiceTaxBreakdown.entries()).sort(([left], [right]) => left - right).map(([rate, totals]) => `${rate}% ${euro(totals.taxAmount)}`).join(' · ')}</p> : null}
-          </div>
-          <div className="mt-3 flex min-w-0 flex-wrap gap-2"><button type="button" aria-describedby={invoiceFirstError ? 'opos-invoice-action-error' : undefined} className="rounded-lg bg-dark-base px-4 py-2 text-sm font-semibold text-inverse-foreground disabled:opacity-50" disabled={!canMutate || busy} onClick={saveInvoice}>Entwurf speichern</button><select aria-label="Gespeicherten Beleg wählen" className="px-2.5 h-8 hover:border-control-border-hover min-w-0 max-w-full rounded-control border border-control-border text-sm" value={selectedInvoiceId} onChange={(e) => { setSelectedInvoiceId(e.target.value); setPreview(null); }}><option value="">Gespeicherten Beleg wählen</option>{invoices.map((invoice) => <option key={invoice.id} value={invoice.id}>{invoice.number} · {incomingInvoiceStatusLabels[invoice.status]} · {incomingInvoiceAccountingStatusLabels[invoice.accountingStatus]}</option>)}</select><button type="button" className="rounded-lg border border-muted px-3 py-2 text-sm font-semibold disabled:opacity-50" disabled={busy || !selectedInvoice} onClick={previewInvoice}>Vorschau</button><button type="button" className="rounded-lg border border-muted px-3 py-2 text-sm font-semibold disabled:opacity-50" disabled={!canMutate || busy || !selectedInvoice || selectedInvoice.status !== 'draft'} onClick={finalizeInvoice}>Für Buchung freigeben</button><button type="button" className="rounded-lg border border-muted px-3 py-2 text-sm font-semibold disabled:opacity-50" disabled={!canMutate || busy || !selectedInvoice || selectedInvoice.status === 'draft'} onClick={postInvoice}>Buchen</button></div>
-          {invoiceFirstError ? <p id="opos-invoice-action-error" className="mt-2 text-xs text-error-text" role="status" aria-live="assertive">{invoiceFirstError}</p> : null}
-          {selectedInvoice ? <div className="mt-3 rounded-lg border border-border-subtle bg-surface-muted p-3 text-sm" data-testid="incoming-invoice-summary"><strong>{selectedInvoice.lines.length} {selectedInvoice.lines.length === 1 ? 'Position' : 'Positionen'} gespeichert</strong><p className="mt-1 text-xs text-muted">Steueraufteilung: {Array.from(selectedInvoiceTaxBreakdown.entries()).sort(([left], [right]) => left - right).map(([rate, totals]) => `${rate}% ${euro(totals.taxAmount)}`).join(' · ') || 'Keine Positionsdaten'} · Brutto {euro(selectedInvoice.grossAmount)}</p></div> : null}
-          <label className="mt-3 flex items-center gap-2 text-sm"><input type="checkbox" checked={softLockOverride} disabled={!canMutate} onChange={(e) => setSoftLockOverride(e.target.checked)} /> Soft-Lock übersteuern</label>
-          {softLockOverride ? <label className="mt-2 block text-sm">Override-Begründung<input disabled={!canMutate} className="px-2.5 h-8 hover:border-control-border-hover text-sm mt-1 w-full rounded-control border border-control-border" value={overrideReason} onChange={(e) => setOverrideReason(e.target.value)} /></label> : null}
-          {preview ? <div className="mt-3 rounded-lg bg-surface-muted p-3 text-sm" role="status" aria-live="polite"><strong>Vorschau: {preview.status === 'ready' ? 'bereit' : 'nicht bereit'}</strong>{preview.issues.map((issue) => <p key={issue.code} className="mt-1 text-error-text">{issue.message}</p>)}</div> : null}
-          <div className="mt-4 rounded-lg border border-border-subtle p-3" data-testid="incoming-documents">
-            <h4 className="text-sm font-semibold">Originalbelege</h4>
-            <p className="mt-1 text-xs text-muted">Unveränderliche Originaldatei; Reviewstatus und Journalbezug bleiben am Beleg sichtbar.</p>
-            {selectedInvoice && dataAdapter?.uploadIncomingInvoiceDocument ? <div className="mt-3 flex flex-wrap items-end gap-2">
-              <label className="min-w-0 flex-1 text-sm">Datei archivieren<input ref={selectedFileInputRef} type="file" accept="application/pdf,image/jpeg,image/png,image/webp" disabled={!canMutate || busy} className="mt-1 block w-full text-sm" onChange={(event) => setSelectedFile(event.target.files?.[0] ?? null)} /></label>
-              <button type="button" className="rounded-lg border border-muted px-3 py-2 text-sm font-semibold disabled:opacity-50" disabled={!canMutate || busy || !selectedFile} onClick={uploadDocument}>Original archivieren</button>
-            </div> : <p className="mt-2 text-sm text-muted">Zum Archivieren zuerst einen gespeicherten Beleg auswählen.</p>}
-            {selectedInvoice && documents.length > 0 ? <Table aria-label="Originalbelege" density="compact" bare containerClassName="mt-3" className="table-fixed"><colgroup><col className="w-1/6" /><col className="w-1/6" /><col className="w-1/3" /><col className="w-1/6" /><col className="w-1/6" /></colgroup><TableHeader><TableRow><TableHead>Datei</TableHead><TableHead>Größe</TableHead><TableHead>Review</TableHead><TableHead>Journal</TableHead><TableHead><span className="sr-only">Aktion</span></TableHead></TableRow></TableHeader><TableBody>{documents.map((document) => <TableRow key={document.id}><TableCell className="break-words py-2 font-medium">{document.originalFilename}</TableCell><TableCell muted className="break-words py-2 tabular-nums">{document.byteLength.toLocaleString('de-DE')} Bytes</TableCell><TableCell className="break-words py-2"><span>{incomingInvoiceDocumentReviewLabels[document.reviewStatus]}</span>{dataAdapter?.reviewIncomingInvoiceDocument ? <div className="mt-1 flex flex-wrap gap-1"><button type="button" className="underline" disabled={!canMutate || busy} onClick={() => reviewDocument(document, 'accepted')}>Als geprüft markieren</button><button type="button" className="underline" disabled={!canMutate || busy} onClick={() => reviewDocument(document, 'rejected')}>Ablehnen</button></div> : null}</TableCell><TableCell muted className="break-words py-2">{document.journalEntryId ? `Journal ${document.journalEntryId}` : 'Noch nicht gebucht'}</TableCell><TableCell className="whitespace-nowrap py-2 text-right"><button type="button" className="whitespace-nowrap underline" disabled={busy || !dataAdapter?.downloadIncomingInvoiceDocument} onClick={() => downloadDocument(document)}>Herunterladen</button></TableCell></TableRow>)}</TableBody></Table> : selectedInvoice ? <p className="mt-3 text-sm text-muted">Noch kein Originalbeleg archiviert.</p> : null}
+            <div className="flex min-w-0 flex-wrap items-center gap-2 border-t border-border px-3.5 py-3">
+              <Button aria-describedby={invoiceFirstError ? 'opos-invoice-action-error' : undefined} disabled={!canMutate || busy} onClick={saveInvoice}>Entwurf speichern</Button>
+              <div className="min-w-0 flex-1 basis-48">
+                <Select aria-label="Gespeicherten Beleg wählen" fullWidth value={selectedInvoiceId} onChange={(e) => { setSelectedInvoiceId(e.target.value); setPreview(null); }}>
+                  <option value="">Gespeicherten Beleg wählen</option>
+                  {invoices.map((invoice) => <option key={invoice.id} value={invoice.id}>{invoice.number} · {incomingInvoiceStatusLabels[invoice.status]} · {incomingInvoiceAccountingStatusLabels[invoice.accountingStatus]}</option>)}
+                </Select>
+              </div>
+              <Button variant="secondary" disabled={busy || !selectedInvoice} onClick={previewInvoice}>Vorschau</Button>
+              <Button variant="secondary" disabled={!canMutate || busy || !selectedInvoice || selectedInvoice.status !== 'draft'} onClick={finalizeInvoice}>Für Buchung freigeben</Button>
+              <Button variant="secondary" disabled={!canMutate || busy || !selectedInvoice || selectedInvoice.status === 'draft'} onClick={postInvoice}>Buchen</Button>
+            </div>
+            <div className="flex flex-col gap-3 border-t border-border p-3.5">
+              {invoiceFirstError ? <p id="opos-invoice-action-error" className="text-caption text-error-text" role="status" aria-live="assertive">{invoiceFirstError}</p> : null}
+              {selectedInvoice ? <div className={`border-border bg-surface-muted text-foreground ${bannerClass}`} data-testid="incoming-invoice-summary"><strong className="font-semibold">{selectedInvoice.lines.length} {selectedInvoice.lines.length === 1 ? 'Position' : 'Positionen'} gespeichert</strong><p className="mt-1 text-caption text-muted">Steueraufteilung: {Array.from(selectedInvoiceTaxBreakdown.entries()).sort(([left], [right]) => left - right).map(([rate, totals]) => `${rate}% ${euro(totals.taxAmount)}`).join(' · ') || 'Keine Positionsdaten'} · Brutto {euro(selectedInvoice.grossAmount)}</p></div> : null}
+              <Checkbox label="Soft-Lock übersteuern" checked={softLockOverride} disabled={!canMutate} onChange={(e) => setSoftLockOverride(e.target.checked)} />
+              {softLockOverride ? <Input label="Override-Begründung" fullWidth disabled={!canMutate} value={overrideReason} onChange={(e) => setOverrideReason(e.target.value)} /> : null}
+              {preview ? <div className={`border-border bg-surface-muted text-foreground ${bannerClass}`} role="status" aria-live="polite"><strong className="font-semibold">Vorschau: {preview.status === 'ready' ? 'bereit' : 'nicht bereit'}</strong>{preview.issues.map((issue) => <p key={issue.code} className="mt-1 text-error-text">{issue.message}</p>)}</div> : null}
+            </div>
+          </Card>
+
+          <div data-testid="incoming-documents">
+            <Card padding="none" className="overflow-hidden">
+              <CardHeader as="h3" className="px-3.5 py-3" title="Originalbelege" subtitle="Unveränderliche Originaldatei; Reviewstatus und Journalbezug bleiben am Beleg sichtbar." />
+              {selectedInvoice && dataAdapter?.uploadIncomingInvoiceDocument ? (
+                <div className="flex flex-wrap items-end gap-2 border-t border-border p-3.5">
+                  <label className="min-w-0 flex-1 text-caption font-medium text-foreground-secondary">Datei archivieren<input ref={selectedFileInputRef} type="file" accept="application/pdf,image/jpeg,image/png,image/webp" disabled={!canMutate || busy} className="mt-1 block w-full text-control font-normal text-foreground file:mr-3 file:h-8.5 file:rounded-control file:border file:border-border-strong file:bg-surface file:px-3 file:text-label file:font-medium file:text-foreground" onChange={(event) => setSelectedFile(event.target.files?.[0] ?? null)} /></label>
+                  <Button variant="secondary" disabled={!canMutate || busy || !selectedFile} onClick={uploadDocument}>Original archivieren</Button>
+                </div>
+              ) : <p className="border-t border-border p-3.5 text-control text-muted">Zum Archivieren zuerst einen gespeicherten Beleg auswählen.</p>}
+              {selectedInvoice && documents.length > 0 ? (
+                <Table aria-label="Originalbelege" bare containerClassName="border-t border-border" className="table-fixed">
+                  <colgroup><col className="w-1/6" /><col className="w-1/6" /><col className="w-1/3" /><col className="w-1/6" /><col className="w-1/6" /></colgroup>
+                  <TableHeader><TableRow><TableHead>Datei</TableHead><TableHead>Größe</TableHead><TableHead>Review</TableHead><TableHead>Journal</TableHead><TableHead><span className="sr-only">Aktion</span></TableHead></TableRow></TableHeader>
+                  <TableBody>{documents.map((document) => (
+                    <TableRow key={document.id}>
+                      <TableCell className="break-words font-medium">{document.originalFilename}</TableCell>
+                      <TableCell muted className="break-words tabular-nums">{document.byteLength.toLocaleString('de-DE')} Bytes</TableCell>
+                      <TableCell className="break-words">
+                        <Badge tone={incomingInvoiceDocumentReviewTones[document.reviewStatus]}>{incomingInvoiceDocumentReviewLabels[document.reviewStatus]}</Badge>
+                        {dataAdapter?.reviewIncomingInvoiceDocument ? (
+                          <div className="-ml-2.25 mt-1 flex flex-wrap gap-1">
+                            <Button variant="ghost" size="sm" disabled={!canMutate || busy} onClick={() => reviewDocument(document, 'accepted')}>Als geprüft markieren</Button>
+                            <Button variant="ghost" size="sm" disabled={!canMutate || busy} onClick={() => reviewDocument(document, 'rejected')}>Ablehnen</Button>
+                          </div>
+                        ) : null}
+                      </TableCell>
+                      <TableCell muted className="break-words">{document.journalEntryId ? `Journal ${document.journalEntryId}` : 'Noch nicht gebucht'}</TableCell>
+                      <TableCell className="text-right"><Button variant="ghost" size="sm" className="-my-1" disabled={busy || !dataAdapter?.downloadIncomingInvoiceDocument} onClick={() => downloadDocument(document)}>Herunterladen</Button></TableCell>
+                    </TableRow>
+                  ))}</TableBody>
+                </Table>
+              ) : selectedInvoice ? <p className="border-t border-border p-3.5 text-control text-muted">Noch kein Originalbeleg archiviert.</p> : null}
+            </Card>
           </div>
         </section>
       </div>

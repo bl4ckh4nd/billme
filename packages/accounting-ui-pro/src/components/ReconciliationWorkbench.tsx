@@ -1,18 +1,18 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 // Lucide is the app's icon set; every glyph here names its own control (ArrowRightLeft = Abgleich,
-// Play = buchen, ArrowRight = nächster Workflow-Schritt, GitBranch = Split, CheckCircle2 = bestätigen),
-// so the surface carries no decorative or "magic" symbol.
-import { ArrowRight, ArrowRightLeft, CheckCircle2, GitBranch, Play } from 'lucide-react';
-import { bookingActionLabels, getStatusPresentation } from '../domain/selectors';
+// Play = buchen, ArrowRight = nächster Workflow-Schritt, GitBranch = Split, CheckCircle2 = bestätigen,
+// X = Zeile entfernen), so the surface carries no decorative or "magic" symbol.
+import { ArrowRight, ArrowRightLeft, CheckCircle2, GitBranch, Play, X } from 'lucide-react';
+import { bookingActionLabels } from '../domain/selectors';
 import { normalizeTaxCaseKey, toLegacyTaxCode } from '../domain/taxCases';
 import { getAllowedActions } from '../domain/workflow';
 import { permissionContextForRole } from '../domain/permissions';
 import { useAccountingWorkspace, useWorkspaceLifetime } from '../AccountingWorkspaceContext';
 import { Account, BookingAction, BookingDraft, BookingWorkflowStatus, JournalLine, Transaction, UserRole } from '../types';
 import type { AccountSuggestionRuleSummary, InvoiceMatchCandidate, ProAccountingDataAdapter } from '../services/accountingDataAdapter';
-import { Badge, ConfirmDialog, HatchedProgress } from '@billme/ui';
+import { Badge, Button, Card, CardHeader, ConfirmDialog, EmptyState, HatchedProgress, IconButton, Input, Select, cn } from '@billme/ui';
 import AccountCombobox from './AccountCombobox';
-import IssueBadges from './IssueBadges';
+import IssueBadges, { StatusBadge } from './IssueBadges';
 
 export interface ReconciliationTotals {
   target: number;
@@ -269,7 +269,7 @@ export default function ReconciliationWorkbench({
 
   useEffect(() => {
     setLocalDraft(storeDraft ?? null);
-  }, [storeDraft?.id, storeDraft?.activity.length]);
+  }, [storeDraft?.id, storeDraft?.activity.length, storeDraft?.workflowStatus]);
 
   const draft = localDraft ?? storeDraft;
   const draftReadOnly = !permissionCtx.canMutate || (!!draft && ['posted', 'reversed'].includes(draft.workflowStatus));
@@ -447,9 +447,13 @@ export default function ReconciliationWorkbench({
     }
   };
 
+  const incomingTone = (amount: number) => (amount < 0 ? 'text-foreground' : 'text-success-text');
+  const scoreTone = (score: number) => (score >= CONFIDENT_THRESHOLD ? 'success' : score > 0.5 ? 'warning' : 'neutral');
+  const cardHead = 'border-b border-border px-3.5 py-3';
+
   return (
-    <div className="flex">
-      <div className="w-80 shrink-0 border-r border-border flex flex-col">
+    <div>
+      <div className="flex flex-col gap-3.5">
         <div className="sr-only">
           <div>
             <div>
@@ -457,34 +461,36 @@ export default function ReconciliationWorkbench({
             </div>
             <div className="min-w-0">
               <h2>Bankabgleich Workbench</h2>
-              <p className="text-xs text-muted font-medium leading-tight">
-                Vorschläge prüfen und in den Buchungsworkflow überführen.
-              </p>
+              <p>Vorschläge prüfen und in den Buchungsworkflow überführen.</p>
             </div>
           </div>
         </div>
-        <section aria-label="Fortschritt Bankabgleich" className="border-b border-border px-4 py-3">
-          <div className="flex items-baseline justify-between gap-3">
-            <p className="text-label font-semibold text-foreground">
-              <span className="tabular-nums">{done}</span> von <span className="tabular-nums">{transactions.length}</span> Umsätzen erledigt
-            </p>
-            <span className="text-caption text-muted tabular-nums">{queue.length} offen</span>
-          </div>
-          <HatchedProgress className="mt-2" size="sm" value={transactions.length ? done / transactions.length : 0} label="Abgleichfortschritt" valueText={`${done} von ${transactions.length} erledigt`} />
-          {confident.length > 0 && (
-            <button
-              type="button"
-              onClick={() => setBatchOpen(true)}
-              disabled={mutationBusy || !permissionCtx.canMutate}
-              className="mt-3 inline-flex h-8 w-full items-center justify-center gap-1.5 rounded-control border border-control-border bg-surface text-xs font-semibold text-foreground hover:bg-surface-muted disabled:opacity-50"
-            >
-              <CheckCircle2 size={14} aria-hidden="true" />
-              Sichere Treffer bestätigen ({confident.length})
-            </button>
-          )}
-          {batchResult && (
-            <p role="status" className="mt-2 text-caption text-muted">{batchResult}</p>
-          )}
+        <section aria-label="Fortschritt Bankabgleich">
+          <Card className="flex flex-col gap-2.5">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <p className="text-section text-foreground">
+                  {done} von {transactions.length} Umsätzen erledigt
+                </p>
+                <span className="text-caption text-muted">{queue.length} offen</span>
+              </div>
+              {confident.length > 0 && (
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  onClick={() => setBatchOpen(true)}
+                  disabled={mutationBusy || !permissionCtx.canMutate}
+                >
+                  <CheckCircle2 size={14} aria-hidden="true" />
+                  Sichere Treffer bestätigen ({confident.length})
+                </Button>
+              )}
+            </div>
+            <HatchedProgress size="sm" flat value={transactions.length ? done / transactions.length : 0} label="Abgleichfortschritt" valueText={`${done} von ${transactions.length} erledigt`} />
+            {batchResult && (
+              <p role="status" className="text-caption text-muted">{batchResult}</p>
+            )}
+          </Card>
         </section>
         <ConfirmDialog
           open={batchOpen}
@@ -494,7 +500,7 @@ export default function ReconciliationWorkbench({
           cancelLabel="Abbrechen"
           busy={mutationBusy}
           details={
-            <ul className="space-y-1 text-sm text-foreground" aria-label="Betroffene Umsätze">
+            <ul className="space-y-1 text-control text-foreground" aria-label="Betroffene Umsätze">
               {confident.map(({ tx, action }) => (
                 <li key={tx.id} className="flex justify-between gap-3">
                   <span className="min-w-0 truncate">{tx.payee}</span>
@@ -506,427 +512,413 @@ export default function ReconciliationWorkbench({
           onConfirm={() => void runConfidentBatch()}
           onCancel={() => setBatchOpen(false)}
         />
-        <div className="overflow-y-auto p-3 space-y-2">
-          {queue.map((tx) => {
-            const status = getStatusPresentation(tx.workflowStatus);
-            return (
-              <button
-                key={tx.id}
-                onClick={() => setSelectedId(tx.id)}
-                className={`w-full text-left border rounded-xl p-3 transition-colors ${
-                  selectedTx?.id === tx.id
-                    ? 'border-dark-base bg-surface-muted'
-                    : 'border-border bg-surface hover:bg-surface-muted'
-                }`}
-              >
-                <div className="flex items-start justify-between gap-3">
-                  <div>
-                    <div className="font-semibold text-sm text-foreground leading-tight">{tx.payee}</div>
-                    <div className="text-xs text-muted mt-0.5 line-clamp-2">
-                      {new Date(tx.date).toLocaleDateString('de-DE')} • {tx.description}
-                    </div>
-                  </div>
-                  <span className={`px-2 py-1 rounded-full text-xs font-semibold ${status.className}`}>
-                    {status.label}
-                  </span>
-                </div>
-                <div className={`text-xs font-semibold tabular-nums mt-1.5 ${tx.amount < 0 ? 'text-error-text' : 'text-success-text'}`}>
-                  {formatCurrency(tx.amount, tx.currency)}
-                </div>
-                <div className="mt-1.5 flex flex-wrap items-center gap-1">
-                  {candidatesById[tx.id] && isZweifelsfall(candidatesById[tx.id]) && <Badge tone="warning">Zweifelsfall</Badge>}
-                  <IssueBadges transaction={tx} />
-                </div>
-              </button>
-            );
-          })}
-          {queue.length === 0 && (
-            <div className="border border-border rounded-xl p-6 text-sm text-muted bg-surface">
-              Keine offenen Transaktionen im Abgleich.
-            </div>
-          )}
-        </div>
-      </div>
 
-      <div className="flex-1 min-w-0 p-6 overflow-y-auto max-h-[56vh]">
-        {!selectedTx || !draft ? (
-            <div className="text-muted">Keine Position ausgewählt.</div>
-          ) : (
-            <div className="grid grid-cols-1 2xl:grid-cols-2 gap-6">
-            <section className="space-y-4">
-              {mutationError && <div className="rounded-lg border border-error-border bg-error-bg px-3 py-2 text-sm text-error-text" role="alert" aria-live="assertive">{mutationError}</div>}
-              <div className="border border-border rounded-2xl bg-surface p-5">
-                <div className="text-xs uppercase tracking-wider text-muted font-semibold">Bankbewegung</div>
-                <div className="mt-2 grid grid-cols-1 2xl:grid-cols-2 gap-3 items-start">
-                  <div className="min-w-0">
-                    <div className="font-semibold text-base text-foreground">{selectedTx.payee}</div>
-                    <div className="text-sm text-muted line-clamp-2">{selectedTx.description}</div>
-                    <div className="text-xs text-muted mt-1">
-                      {new Date(selectedTx.date).toLocaleDateString('de-DE')} • {selectedTx.id}
-                    </div>
-                  </div>
-                  <div className={`text-xl font-semibold tabular-nums whitespace-nowrap ${selectedTx.amount < 0 ? 'text-error-text' : 'text-success-text'}`}>
-                    {formatCurrency(selectedTx.amount, selectedTx.currency)}
-                  </div>
-                </div>
-                <div className="mt-4">
-                  <div className="text-xs font-semibold uppercase tracking-wide text-muted mb-1">Gegenkonto</div>
-                  <AccountCombobox
-                    accounts={accountOptions}
-                    valueAccountId={bankAccountNumber ? draft.lines.find((line) => line.accountId !== bankAccountNumber)?.accountId ?? '' : ''}
-                    valueAccountName={bankAccountNumber ? draft.lines.find((line) => line.accountId !== bankAccountNumber)?.accountName ?? '' : ''}
-                    disabled={draftReadOnly || !bankAccountNumber}
-                    placeholder="Gegenkonto wählen..."
-                    onSelect={(account) => {
-                      if (!bankAccountNumber) return;
-                      const line = draft.lines.find((item) => item.accountId !== bankAccountNumber);
-                      if (!line) return;
-                      updateLine(line.id, (cur) => ({
-                        ...cur,
-                        accountId: account.number,
-                        accountName: account.name,
-                        taxCaseKey: normalizeTaxCaseKey(cur.taxCaseKey ?? cur.taxCode ?? account.defaultTaxCode),
-                        taxCode:
-                          toLegacyTaxCode(normalizeTaxCaseKey(cur.taxCaseKey ?? cur.taxCode ?? account.defaultTaxCode))
-                          ?? cur.taxCode
-                          ?? account.defaultTaxCode
-                          ?? '',
-                      }));
-                    }}
-                  />
-                </div>
-              </div>
-
-              {canMatchInvoices && selectedTx.amount > 0 && (
-                <section aria-label="Passende Rechnungen" className="border border-border rounded-2xl bg-surface p-5">
-                  <div className="text-sm font-semibold text-foreground">Passende Rechnungen</div>
-                  {!selectedCandidates ? (
-                    <p className="mt-2 text-sm text-muted" role="status">Suche passende Rechnungen…</p>
-                  ) : selectedCandidates.length === 0 ? (
-                    <p className="mt-2 text-sm text-muted">Keine offene Rechnung passt zu diesem Umsatz.</p>
-                  ) : (
-                    <>
-                      {selectedZweifelsfall && (
-                        <div role="status" className="mt-3 rounded-lg border border-warning-border bg-warning-bg px-3 py-2 text-sm text-warning-text">
-                          <span className="font-semibold">Zweifelsfall: zwei Belege passen fast gleich gut.</span>{' '}
-                          {selectedCandidates[0].invoiceNumber} und {selectedCandidates[1].invoiceNumber} liegen weniger als 10 Punkte auseinander. Es ist nichts vorausgewählt, bitte selbst zuordnen.
-                        </div>
-                      )}
-                      <ul className="mt-3 space-y-2" aria-label="Kandidaten">
-                        {selectedCandidates.map((candidate, index) => (
-                          <li
-                            key={candidate.invoiceId}
-                            aria-label={`Rechnung ${candidate.invoiceNumber}`}
-                            className={`rounded-xl border p-3 ${index === 0 && !selectedZweifelsfall && candidate.score >= CONFIDENT_THRESHOLD ? 'border-dark-base' : 'border-border'}`}
-                          >
-                            <div className="flex items-start justify-between gap-3">
-                              <div className="min-w-0">
-                                <div className="text-sm font-semibold text-foreground">{candidate.invoiceNumber}</div>
-                                <div className="text-caption text-muted">
-                                  {candidate.client}, fällig {new Date(candidate.dueDate).toLocaleDateString('de-DE')}
-                                </div>
-                              </div>
-                              <div className="shrink-0 text-right">
-                                <div className="text-sm font-semibold tabular-nums text-foreground">{formatCurrency(candidate.amount, selectedTx.currency)}</div>
-                                <Badge tone={candidate.score >= CONFIDENT_THRESHOLD ? 'success' : candidate.score > 0.5 ? 'warning' : 'neutral'}>
-                                  <span className="tabular-nums">{Math.round(candidate.score * 100)} %</span>
-                                </Badge>
-                              </div>
-                            </div>
-                            <p className="mt-1.5 text-caption text-muted">{candidate.matchReasons.join(' · ')}</p>
-                            {onOpenInvoice && (
-                              <button
-                                type="button"
-                                onClick={() => onOpenInvoice(candidate.invoiceId)}
-                                aria-label={`Rechnung ${candidate.invoiceNumber} in Offene Posten ausgleichen`}
-                                className="mt-2 px-3 py-1.5 rounded-lg border border-control-border bg-surface text-xs font-semibold text-foreground hover:bg-surface-muted"
-                              >
-                                In Offene Posten ausgleichen
-                              </button>
-                            )}
-                          </li>
-                        ))}
-                      </ul>
-                    </>
-                  )}
-                </section>
-              )}
-
-              <div className="border border-border rounded-2xl bg-surface p-5">
-                <div className="flex items-center justify-between">
-                  <div className="text-sm font-semibold text-foreground">Kontierungsvorschlag</div>
-                  <span className="text-xs text-muted font-medium">
-                    Sicherheit {Math.round((selectedTx.suggestionConfidence ?? 0.5) * 100)} %
-                  </span>
-                </div>
-                <div className="mt-4 space-y-3">
-                  <div className="border border-border rounded-xl p-4 bg-surface-muted/50">
-                    <div className="flex items-center justify-between">
-                      <div className="font-semibold text-foreground">
-                        {selectedTx.suggestion ?? 'Kein Vorschlag'}
-                      </div>
-                    </div>
-                    <div className="text-sm text-muted mt-2">
-                      Entwurf enthält {draft.lines.length} Buchungszeilen und {draft.validationIssues.length} Validierungshinweise.
-                    </div>
-                    <div className="mt-3 flex flex-wrap gap-2">
-                        <button
-                          onClick={runPrimaryAction}
-                          disabled={!primary || !splitIsValid || mutationBusy}
-                        className="px-4 py-2 rounded-control bg-surface-inverse text-inverse-foreground text-sm font-semibold hover:bg-surface-inverse-raised disabled:opacity-40 inline-flex items-center gap-1"
-                      >
-                        <CheckCircle2 size={14} />
-                        {primary ? 'Nächste Aktion' : 'Kein Schritt möglich'}
-                      </button>
-                        <button
-                          onClick={() => onOpenTransaction(selectedTx.id)}
-                        className="px-4 py-2 rounded-lg border border-control-border bg-surface text-sm font-semibold text-foreground hover:bg-surface-muted"
-                      >
-                        Im Editor öffnen
-                      </button>
-                        <button
-                          className="px-4 py-2 rounded-lg border border-control-border bg-surface text-sm font-semibold text-foreground hover:bg-surface-muted inline-flex items-center gap-1"
-                          onClick={addSplitLine}
-                          disabled={draftReadOnly}
-                      >
-                        <GitBranch size={14} />
-                        Split-Zeile hinzufügen
-                      </button>
-                    </div>
-                  </div>
-                  {!splitIsValid && (
-                    <div className="mt-3 rounded-lg border border-error-border bg-error-bg px-3 py-2 text-sm text-error-text">
-                      <div className="font-semibold">Abgleich-Validierung fehlgeschlagen</div>
-                      <ul className="mt-1 space-y-1">
-                        {splitDifference >= 0.01 && (
-                          <li>
-                            Summe der Gegenbuchungen stimmt nicht mit der Bankbewegung überein. Differenz:{' '}
-                            <span className="font-semibold tabular-nums">{formatCurrency(splitDifference, selectedTx.currency)}</span>
-                          </li>
-                        )}
-                        {directionErrors.map((msg) => (
-                          <li key={msg}>{msg}</li>
-                        ))}
-                      </ul>
-                    </div>
-                  )}
-                </div>
-              </div>
-            </section>
-
-            <section className="space-y-4">
-              <div className="border border-border rounded-2xl bg-surface p-5">
-                <div className="flex items-center justify-between gap-3">
-                  <div className="text-sm font-semibold text-foreground">Entwurf / Split-Bearbeitung inline</div>
-                    <button
-                    onClick={saveInlineSplit}
-                    disabled={draftReadOnly || mutationBusy}
-                    className="px-3 py-1.5 rounded-control bg-surface-inverse text-inverse-foreground text-xs font-semibold hover:bg-surface-inverse-raised"
-                  >
-                    Split speichern
-                  </button>
-                </div>
-                <div className="mt-3 space-y-2">
-                  {draft.lines.map((line) => (
-                    <div
-                      key={line.id}
-                      className="grid grid-cols-12 gap-2 items-center text-sm border border-border rounded-lg p-2"
-                    >
-                      <select
-                        value={line.type}
-                        onChange={(e) =>
-                          updateLine(line.id, (cur) => ({ ...cur, type: e.target.value as 'Soll' | 'Haben' }))
-                        }
-                        disabled={draftReadOnly}
-                        className="px-2.5 h-8 hover:border-control-border-hover col-span-2 border border-control-border rounded-control text-sm"
-                        aria-label="Soll/Haben"
-                      >
-                        <option value="Soll">Soll</option>
-                        <option value="Haben">Haben</option>
-                      </select>
-                      <div className="col-span-6">
-                        <AccountCombobox
-                          accounts={accountOptions}
-                          valueAccountId={line.accountId}
-                          valueAccountName={line.accountName}
-                          disabled={draftReadOnly || !bankAccountNumber}
-                          onSelect={(account) =>
-                            updateLine(line.id, (cur) => ({
-                              ...cur,
-                              accountId: account.number,
-                              accountName: account.name,
-                              taxCaseKey: normalizeTaxCaseKey(cur.taxCaseKey ?? cur.taxCode ?? account.defaultTaxCode),
-                              taxCode:
-                                toLegacyTaxCode(normalizeTaxCaseKey(cur.taxCaseKey ?? cur.taxCode ?? account.defaultTaxCode))
-                                ?? cur.taxCode
-                                ?? account.defaultTaxCode
-                                ?? '',
-                            }))
-                          }
-                        />
-                      </div>
-                      <input
-                        type="number"
-                        step="0.01"
-                        min="0"
-                        value={line.amount}
-                        onChange={(e) => updateLine(line.id, (cur) => ({ ...cur, amount: e.target.value }))}
-                        disabled={draftReadOnly}
-                        className="px-2.5 h-8 hover:border-control-border-hover col-span-3 border border-control-border rounded-control text-sm text-right"
-                        aria-label="Betrag"
-                      />
-                      <button
-                        onClick={() => removeLine(line.id)}
-                        className="col-span-1 text-xs font-semibold text-muted hover:text-error-text"
-                        aria-label="Zeile entfernen"
-                        disabled={draftReadOnly || draft.lines.length <= 2}
-                      >
-                        ×
-                      </button>
-                    </div>
-                  ))}
-                </div>
-                <div className="mt-3 flex flex-wrap items-center justify-between gap-x-4 gap-y-1 text-xs text-muted">
-                  <span className="tabular-nums">{draft.lines.length} Zeilen</span>
-                  <span className="tabular-nums">Bank: {formatCurrency(totals?.bank ?? 0, selectedTx.currency)}</span>
-                  <span className="tabular-nums">Gegenbuchungen: {formatCurrency(totals?.counterpart ?? 0, selectedTx.currency)}</span>
-                  <span className="tabular-nums">Ziel: {formatCurrency(targetTotal, selectedTx.currency)}</span>
-                  <span>
-                    Richtung: {selectedTx.amount >= 0 ? 'Eingang (Bank Soll)' : 'Ausgang (Bank Haben)'}
-                  </span>
-                  <span className={`tabular-nums ${splitIsValid ? 'text-success-text font-semibold' : 'text-error-text font-semibold'}`}>
-                    {splitIsValid ? 'OK' : `Diff ${formatCurrency(splitDifference, selectedTx.currency)}`}
-                  </span>
-                </div>
-              </div>
-
-              <div className="border border-border rounded-2xl bg-surface p-5">
-                <div className="text-sm font-semibold text-foreground mb-2">Workflow Schnellaktionen</div>
-                <div className="flex flex-wrap gap-2">
-                  {allowed.map((action) => (
-                    <button
-                      key={action}
-                      onClick={() => {
-                        if (!splitIsValid && (action === 'submit_for_review' || action === 'approve' || action === 'post')) {
-                          return;
-                        }
-                        void (async () => {
-                          setMutationBusy(true);
-                          setMutationError(null);
-                          try {
-                            await dispatchBookingAction(selectedTx.id, action, { role, actorName: role });
-                            onRefresh();
-                          } catch (error) {
-                            setMutationError(error instanceof Error ? error.message : 'Aktion konnte nicht gespeichert werden.');
-                          } finally {
-                            setMutationBusy(false);
-                          }
-                        })();
-                      }}
-                      className="px-3 py-2 rounded-lg border border-control-border bg-surface text-sm font-semibold text-foreground hover:bg-surface-muted inline-flex items-center gap-1"
-                      disabled={mutationBusy || (!splitIsValid && (action === 'submit_for_review' || action === 'approve' || action === 'post'))}
-                    >
-                      {action === 'post' ? <Play size={14} /> : <ArrowRight size={14} />}
-                      {actionLabel(action)}
-                    </button>
-                  ))}
-                </div>
-              </div>
-            </section>
-          </div>
-        )}
-
-        {sessionEntries.length > 0 && (
-          <section aria-label="Zugeordnet" className="mt-6 border border-border rounded-2xl bg-surface">
-            <div className="flex items-center justify-between gap-3 border-b border-border px-5 py-3">
-              <h3 className="text-sm font-semibold text-foreground">Zugeordnet</h3>
-              <span className="text-caption text-muted">Rückweg bis zur Freigabe</span>
-            </div>
-            <ul>
-              {sessionEntries.map(({ tx, match }) => {
-                const posted = isPosted(tx.id);
-                const undoable = draftStatus(tx.id) === 'pending_approval';
-                return (
-                  <li key={tx.id} className="flex flex-wrap items-center gap-3 border-b border-border-subtle px-5 py-2.5 last:border-b-0">
-                    <span className="min-w-0 flex-1 text-sm">
-                      <span className="font-semibold text-foreground">{tx.payee}</span>{' '}
-                      <span className="text-muted">bestätigt: {match.label}</span>
-                    </span>
-                    <span className="text-sm font-semibold tabular-nums text-foreground">{formatCurrency(tx.amount, tx.currency)}</span>
-                    {posted ? (
-                      <Badge tone="success">gebucht</Badge>
-                    ) : !undoable ? (
-                      <Badge tone="neutral">freigegeben, wartet auf Buchung</Badge>
-                    ) : (
-                      <>
-                        <Badge tone="warning">nicht gebucht</Badge>
-                        <button
-                          type="button"
-                          onClick={() => void undoSessionMatch(tx.id)}
-                          disabled={mutationBusy || !permissionCtx.canMutate}
-                          aria-label={`Rückgängig: ${tx.payee}`}
-                          className="px-3 py-1.5 rounded-lg border border-control-border bg-surface text-xs font-semibold text-foreground hover:bg-surface-muted disabled:opacity-50"
-                        >
-                          Rückgängig
-                        </button>
-                      </>
-                    )}
-                  </li>
-                );
-              })}
-            </ul>
-          </section>
-        )}
-
-        {dataAdapter?.listAccountSuggestionRules && (
-          <section aria-label="Kontierungsregeln" className="mt-6 border border-border rounded-2xl bg-surface">
-            <div className="flex flex-wrap items-center gap-3 border-b border-border px-5 py-3">
-              <h3 className="text-sm font-semibold text-foreground">Regeln</h3>
-              {rules && (staleRules.length > 0
-                ? <Badge tone="warning">{staleRules.length} greifen nicht mehr</Badge>
-                : <Badge tone="success">alle greifen</Badge>)}
-              <span className="flex-1" />
-              {onManageRules && (
-                <button
-                  type="button"
-                  onClick={onManageRules}
-                  className="px-3 py-1.5 rounded-lg border border-control-border bg-surface text-xs font-semibold text-foreground hover:bg-surface-muted"
-                >
-                  Regeln bearbeiten
-                </button>
-              )}
-            </div>
-            {rulesError ? (
-              <p role="alert" className="px-5 py-3 text-sm text-error-text">{rulesError}</p>
-            ) : !rules ? (
-              <p className="px-5 py-3 text-sm text-muted" role="status">Regeln werden geladen…</p>
-            ) : rules.length === 0 ? (
-              <p className="px-5 py-3 text-sm text-muted">Noch keine Regeln angelegt.</p>
-            ) : (
-              <ul>
-                {rules.map((rule) => {
-                  const stale = staleRules.includes(rule);
-                  const months = Math.max(1, Math.floor(daysSince(rule.lastHitAt ?? rule.createdAt) / 30.44));
+        {queue.length === 0 ? (
+          <Card padding="none">
+            <EmptyState title="Keine offenen Transaktionen im Abgleich." />
+          </Card>
+        ) : (
+          <div className="grid items-start gap-3.5 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.15fr)]">
+            <Card padding="none" className="overflow-hidden">
+              <CardHeader as="h3" title="Offene Kontoumsätze" count={<span className="tabular-nums">{queue.length}</span>} className={cardHead} />
+              <ul className="max-h-140 overflow-y-auto">
+                {queue.map((tx) => {
+                  const current = selectedTx?.id === tx.id;
+                  const hasIssues = tx.issueCounts.errors + tx.issueCounts.warnings + tx.issueCounts.infos > 0 || tx.flags.length > 0;
                   return (
-                    <li key={rule.id} aria-label={`Regel ${rule.value}`} className="flex flex-wrap items-start gap-3 border-b border-border-subtle px-5 py-2.5 last:border-b-0">
-                      <span className="min-w-0 flex-1 text-sm">
-                        <span className="font-semibold text-foreground">
-                          Wenn {RULE_FIELD_LABELS[rule.field]} {RULE_OPERATOR_LABELS[rule.operator]} „{rule.value}“
+                    <li key={tx.id} className="border-b border-border last:border-b-0">
+                      {/* Raw button: a list row with three lines of content, not a labelled action. */}
+                      <button
+                        type="button"
+                        onClick={() => setSelectedId(tx.id)}
+                        aria-current={current ? 'true' : undefined}
+                        className={cn(
+                          'block w-full px-3 py-2.5 text-left focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-focus-ring',
+                          current ? 'bg-accent-50 shadow-[inset_3px_0_0_var(--color-accent)]' : 'hover:bg-surface-muted',
+                        )}
+                      >
+                        <span className="flex items-baseline gap-2">
+                          <span className="min-w-0 flex-1 truncate text-label font-semibold text-foreground">{tx.payee}</span>
+                          <span className={cn('shrink-0 font-mono text-label font-semibold tabular-nums', incomingTone(tx.amount))}>
+                            {formatCurrency(tx.amount, tx.currency)}
+                          </span>
                         </span>
-                        <span className="block text-caption text-muted">dann Konto {rule.targetAccountNumber}</span>
-                        <span className="block text-caption text-muted tabular-nums">
-                          {rule.hitCount
-                            ? `${rule.hitCount} Treffer, zuletzt ${rule.lastHitAt ? new Date(rule.lastHitAt).toLocaleDateString('de-DE') : 'unbekannt'}`
-                            : 'noch nie angewendet'}
+                        <span className="mt-0.75 flex flex-wrap items-center gap-1.5">
+                          <span className="font-mono text-caption text-muted tabular-nums">{new Date(tx.date).toLocaleDateString('de-DE')}</span>
+                          <StatusBadge status={tx.workflowStatus} />
+                          {candidatesById[tx.id] && isZweifelsfall(candidatesById[tx.id]) && <Badge tone="warning">Zweifelsfall</Badge>}
+                          {hasIssues && <IssueBadges transaction={tx} />}
                         </span>
-                      </span>
-                      {stale && <Badge tone="warning">seit {months === 1 ? 'einem Monat' : `${months} Monaten`} kein Treffer</Badge>}
-                      {!rule.active && <Badge tone="neutral">deaktiviert</Badge>}
+                        <span className="mt-0.75 block truncate text-caption text-muted">{tx.description}</span>
+                      </button>
                     </li>
                   );
                 })}
               </ul>
-            )}
+            </Card>
+
+            <div className="flex min-w-0 flex-col gap-3.5">
+              {!selectedTx || !draft ? (
+                <Card padding="none">
+                  <EmptyState title="Keine Position ausgewählt." />
+                </Card>
+              ) : (
+                <>
+                  {mutationError && (
+                    <div className="rounded-control border border-error-border bg-error-bg px-3 py-2.5 text-control text-error-text" role="alert" aria-live="assertive">{mutationError}</div>
+                  )}
+                  <Card padding="none">
+                    <div className={cn('flex flex-wrap items-start gap-x-3 gap-y-2', cardHead)}>
+                      <div className="min-w-0 flex-1">
+                        <div className="text-eyebrow uppercase text-muted">Bankbewegung</div>
+                        <h3 className="text-section text-foreground">{selectedTx.payee}</h3>
+                      </div>
+                      <span className={cn('whitespace-nowrap font-mono text-section font-bold tabular-nums', incomingTone(selectedTx.amount))}>
+                        {formatCurrency(selectedTx.amount, selectedTx.currency)}
+                      </span>
+                    </div>
+                    <div className="flex flex-col gap-2.5 p-3.5">
+                      <div className="text-caption text-muted">
+                        <div className="line-clamp-2">{selectedTx.description}</div>
+                        <div>{new Date(selectedTx.date).toLocaleDateString('de-DE')} • {selectedTx.id}</div>
+                      </div>
+                      <AccountCombobox
+                        label="Gegenkonto"
+                        accounts={accountOptions}
+                        valueAccountId={bankAccountNumber ? draft.lines.find((line) => line.accountId !== bankAccountNumber)?.accountId ?? '' : ''}
+                        valueAccountName={bankAccountNumber ? draft.lines.find((line) => line.accountId !== bankAccountNumber)?.accountName ?? '' : ''}
+                        disabled={draftReadOnly || !bankAccountNumber}
+                        placeholder="Gegenkonto wählen..."
+                        onSelect={(account) => {
+                          if (!bankAccountNumber) return;
+                          const line = draft.lines.find((item) => item.accountId !== bankAccountNumber);
+                          if (!line) return;
+                          updateLine(line.id, (cur) => ({
+                            ...cur,
+                            accountId: account.number,
+                            accountName: account.name,
+                            taxCaseKey: normalizeTaxCaseKey(cur.taxCaseKey ?? cur.taxCode ?? account.defaultTaxCode),
+                            taxCode:
+                              toLegacyTaxCode(normalizeTaxCaseKey(cur.taxCaseKey ?? cur.taxCode ?? account.defaultTaxCode))
+                              ?? cur.taxCode
+                              ?? account.defaultTaxCode
+                              ?? '',
+                          }));
+                        }}
+                      />
+
+                      {canMatchInvoices && selectedTx.amount > 0 && (
+                        <section aria-label="Passende Rechnungen" className="flex flex-col gap-2.5">
+                          <div className="text-label text-foreground">Passende Rechnungen</div>
+                          {!selectedCandidates ? (
+                            <p className="text-caption text-muted" role="status">Suche passende Rechnungen…</p>
+                          ) : selectedCandidates.length === 0 ? (
+                            <p className="text-caption text-muted">Keine offene Rechnung passt zu diesem Umsatz.</p>
+                          ) : (
+                            <>
+                              {selectedZweifelsfall && (
+                                <div role="status" className="rounded-control border border-warning-border bg-warning-bg px-3 py-2.5 text-control text-warning-text">
+                                  <span className="font-semibold">Zweifelsfall: zwei Belege passen fast gleich gut.</span>{' '}
+                                  {selectedCandidates[0].invoiceNumber} und {selectedCandidates[1].invoiceNumber} liegen weniger als 10 Punkte auseinander. Es ist nichts vorausgewählt, bitte selbst zuordnen.
+                                </div>
+                              )}
+                              <ul className="flex flex-col gap-2.5" aria-label="Kandidaten">
+                                {selectedCandidates.map((candidate) => (
+                                  <li key={candidate.invoiceId} aria-label={`Rechnung ${candidate.invoiceNumber}`}>
+                                    <Card padding="sm">
+                                      <div className="flex items-start justify-between gap-3">
+                                        <div className="min-w-0">
+                                          <div className="text-label text-foreground">{candidate.invoiceNumber}</div>
+                                          <div className="text-caption text-muted">
+                                            {candidate.client}, fällig {new Date(candidate.dueDate).toLocaleDateString('de-DE')}
+                                          </div>
+                                        </div>
+                                        <div className="shrink-0 text-right">
+                                          <div className="font-mono text-label tabular-nums text-foreground">{formatCurrency(candidate.amount, selectedTx.currency)}</div>
+                                          <Badge tone={scoreTone(candidate.score)}>
+                                            <span className="tabular-nums">{Math.round(candidate.score * 100)} %</span>
+                                          </Badge>
+                                        </div>
+                                      </div>
+                                      <p className="mt-1.5 text-caption text-muted">{candidate.matchReasons.join(' · ')}</p>
+                                      {onOpenInvoice && (
+                                        <div className="mt-2.25 flex flex-wrap gap-2">
+                                          <Button
+                                            size="sm"
+                                            onClick={() => onOpenInvoice(candidate.invoiceId)}
+                                            aria-label={`Rechnung ${candidate.invoiceNumber} in Offene Posten ausgleichen`}
+                                          >
+                                            In Offene Posten ausgleichen
+                                          </Button>
+                                        </div>
+                                      )}
+                                    </Card>
+                                  </li>
+                                ))}
+                              </ul>
+                            </>
+                          )}
+                        </section>
+                      )}
+
+                      <Card padding="sm">
+                        <div className="flex items-start justify-between gap-3">
+                          <div className="min-w-0">
+                            <div className="text-label text-foreground">{selectedTx.suggestion ?? 'Kein Vorschlag'}</div>
+                            <div className="text-caption text-muted">Kontierungsvorschlag</div>
+                          </div>
+                          <Badge tone={scoreTone(selectedTx.suggestionConfidence ?? 0.5)}>
+                            <span className="tabular-nums">Sicherheit {Math.round((selectedTx.suggestionConfidence ?? 0.5) * 100)} %</span>
+                          </Badge>
+                        </div>
+                        <p className="mt-1.5 text-caption text-muted">
+                          Entwurf enthält {draft.lines.length} Buchungszeilen und {draft.validationIssues.length} Validierungshinweise.
+                        </p>
+                        <div className="mt-2.25 flex flex-wrap gap-2">
+                          <Button size="sm" onClick={runPrimaryAction} disabled={!primary || !splitIsValid || mutationBusy}>
+                            <CheckCircle2 size={14} aria-hidden="true" />
+                            {primary ? 'Nächste Aktion' : 'Kein Schritt möglich'}
+                          </Button>
+                        </div>
+                      </Card>
+
+                      {!splitIsValid && (
+                        <div className="rounded-control border border-error-border bg-error-bg px-3 py-2.5 text-control text-error-text">
+                          <div className="font-semibold">Abgleich-Validierung fehlgeschlagen</div>
+                          <ul className="mt-1 space-y-1">
+                            {splitDifference >= 0.01 && (
+                              <li>
+                                Summe der Gegenbuchungen stimmt nicht mit der Bankbewegung überein. Differenz:{' '}
+                                <span className="font-semibold tabular-nums">{formatCurrency(splitDifference, selectedTx.currency)}</span>
+                              </li>
+                            )}
+                            {directionErrors.map((msg) => (
+                              <li key={msg}>{msg}</li>
+                            ))}
+                          </ul>
+                        </div>
+                      )}
+
+                      <div className="flex flex-wrap gap-2 border-t border-border pt-2.5">
+                        <Button variant="secondary" size="sm" onClick={() => onOpenTransaction(selectedTx.id)}>
+                          Im Editor öffnen
+                        </Button>
+                        <Button variant="secondary" size="sm" onClick={addSplitLine} disabled={draftReadOnly}>
+                          <GitBranch size={14} aria-hidden="true" />
+                          Split-Zeile hinzufügen
+                        </Button>
+                      </div>
+                    </div>
+                  </Card>
+
+                  <Card padding="none">
+                    <CardHeader
+                      as="h3"
+                      title="Entwurf / Split-Bearbeitung inline"
+                      className={cardHead}
+                      actions={
+                        <Button variant="secondary" size="sm" onClick={saveInlineSplit} disabled={draftReadOnly || mutationBusy}>
+                          Split speichern
+                        </Button>
+                      }
+                    />
+                    <div className="flex flex-col gap-2 p-3.5">
+                      {draft.lines.map((line) => (
+                        <div key={line.id} className="grid grid-cols-[5.5rem_minmax(0,1fr)_6.5rem_auto] items-center gap-2">
+                          <Select
+                            fullWidth
+                            value={line.type}
+                            onChange={(e) =>
+                              updateLine(line.id, (cur) => ({ ...cur, type: e.target.value as 'Soll' | 'Haben' }))
+                            }
+                            disabled={draftReadOnly}
+                            aria-label="Soll/Haben"
+                          >
+                            <option value="Soll">Soll</option>
+                            <option value="Haben">Haben</option>
+                          </Select>
+                          <AccountCombobox
+                            accounts={accountOptions}
+                            valueAccountId={line.accountId}
+                            valueAccountName={line.accountName}
+                            disabled={draftReadOnly || !bankAccountNumber}
+                            onSelect={(account) =>
+                              updateLine(line.id, (cur) => ({
+                                ...cur,
+                                accountId: account.number,
+                                accountName: account.name,
+                                taxCaseKey: normalizeTaxCaseKey(cur.taxCaseKey ?? cur.taxCode ?? account.defaultTaxCode),
+                                taxCode:
+                                  toLegacyTaxCode(normalizeTaxCaseKey(cur.taxCaseKey ?? cur.taxCode ?? account.defaultTaxCode))
+                                  ?? cur.taxCode
+                                  ?? account.defaultTaxCode
+                                  ?? '',
+                              }))
+                            }
+                          />
+                          <Input
+                            fullWidth
+                            type="number"
+                            step="0.01"
+                            min="0"
+                            value={line.amount}
+                            onChange={(e) => updateLine(line.id, (cur) => ({ ...cur, amount: e.target.value }))}
+                            disabled={draftReadOnly}
+                            className="text-right tabular-nums"
+                            aria-label="Betrag"
+                          />
+                          <IconButton
+                            size="sm"
+                            onClick={() => removeLine(line.id)}
+                            aria-label="Zeile entfernen"
+                            disabled={draftReadOnly || draft.lines.length <= 2}
+                          >
+                            <X size={14} aria-hidden="true" />
+                          </IconButton>
+                        </div>
+                      ))}
+                      <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1 pt-1 text-caption text-muted">
+                        <span className="tabular-nums">{draft.lines.length} Zeilen</span>
+                        <span className="tabular-nums">Bank: {formatCurrency(totals?.bank ?? 0, selectedTx.currency)}</span>
+                        <span className="tabular-nums">Gegenbuchungen: {formatCurrency(totals?.counterpart ?? 0, selectedTx.currency)}</span>
+                        <span className="tabular-nums">Ziel: {formatCurrency(targetTotal, selectedTx.currency)}</span>
+                        <span>
+                          Richtung: {selectedTx.amount >= 0 ? 'Eingang (Bank Soll)' : 'Ausgang (Bank Haben)'}
+                        </span>
+                        <Badge tone={splitIsValid ? 'success' : 'error'}>
+                          <span className="tabular-nums">{splitIsValid ? 'OK' : `Diff ${formatCurrency(splitDifference, selectedTx.currency)}`}</span>
+                        </Badge>
+                      </div>
+                    </div>
+                  </Card>
+
+                  <Card padding="none">
+                    <CardHeader as="h3" title="Workflow Schnellaktionen" className={cardHead} />
+                    <div className="flex flex-wrap gap-2 p-3.5">
+                      {allowed.map((action) => (
+                        <Button
+                          key={action}
+                          variant="secondary"
+                          size="sm"
+                          onClick={() => {
+                            if (!splitIsValid && (action === 'submit_for_review' || action === 'approve' || action === 'post')) {
+                              return;
+                            }
+                            void (async () => {
+                              setMutationBusy(true);
+                              setMutationError(null);
+                              try {
+                                await dispatchBookingAction(selectedTx.id, action, { role, actorName: role });
+                                onRefresh();
+                              } catch (error) {
+                                setMutationError(error instanceof Error ? error.message : 'Aktion konnte nicht gespeichert werden.');
+                              } finally {
+                                setMutationBusy(false);
+                              }
+                            })();
+                          }}
+                          disabled={mutationBusy || (!splitIsValid && (action === 'submit_for_review' || action === 'approve' || action === 'post'))}
+                        >
+                          {action === 'post' ? <Play size={14} aria-hidden="true" /> : <ArrowRight size={14} aria-hidden="true" />}
+                          {actionLabel(action)}
+                        </Button>
+                      ))}
+                    </div>
+                  </Card>
+                </>
+              )}
+            </div>
+          </div>
+        )}
+
+        {sessionEntries.length > 0 && (
+          <section aria-label="Zugeordnet">
+            <Card padding="none" className="overflow-hidden">
+              <CardHeader as="h3" title="Zugeordnet" count="Rückweg bis zur Freigabe" className={cardHead} />
+              <ul>
+                {sessionEntries.map(({ tx, match }) => {
+                  const posted = isPosted(tx.id);
+                  const undoable = draftStatus(tx.id) === 'pending_approval';
+                  return (
+                    <li key={tx.id} className="flex flex-wrap items-center gap-2.5 border-b border-border px-3 py-2.5 last:border-b-0">
+                      <span className="min-w-0 flex-1">
+                        <span className="text-label text-foreground">{tx.payee}</span>{' '}
+                        <span className="text-caption text-muted">bestätigt: {match.label}</span>
+                      </span>
+                      <span className="font-mono text-label tabular-nums text-foreground">{formatCurrency(tx.amount, tx.currency)}</span>
+                      {posted ? (
+                        <Badge tone="success">gebucht</Badge>
+                      ) : !undoable ? (
+                        <Badge tone="neutral">freigegeben, wartet auf Buchung</Badge>
+                      ) : (
+                        <>
+                          <Badge tone="warning">nicht gebucht</Badge>
+                          <Button
+                            variant="secondary"
+                            size="sm"
+                            onClick={() => void undoSessionMatch(tx.id)}
+                            disabled={mutationBusy || !permissionCtx.canMutate}
+                            aria-label={`Rückgängig: ${tx.payee}`}
+                          >
+                            Rückgängig
+                          </Button>
+                        </>
+                      )}
+                    </li>
+                  );
+                })}
+              </ul>
+            </Card>
+          </section>
+        )}
+
+        {dataAdapter?.listAccountSuggestionRules && (
+          <section aria-label="Kontierungsregeln">
+            <Card padding="none" className="overflow-hidden">
+              <div className={cn('flex flex-wrap items-center gap-2.5', cardHead)}>
+                <h3 className="text-section text-foreground">Regeln</h3>
+                {rules && (staleRules.length > 0
+                  ? <Badge tone="warning">{staleRules.length} greifen nicht mehr</Badge>
+                  : <Badge tone="success">alle greifen</Badge>)}
+                <span className="flex-1" />
+                {onManageRules && (
+                  <Button variant="secondary" size="sm" onClick={onManageRules}>
+                    Regeln bearbeiten
+                  </Button>
+                )}
+              </div>
+              {rulesError ? (
+                <p role="alert" className="px-3.5 py-3 text-control text-error-text">{rulesError}</p>
+              ) : !rules ? (
+                <p className="px-3.5 py-3 text-control text-muted" role="status">Regeln werden geladen…</p>
+              ) : rules.length === 0 ? (
+                <p className="px-3.5 py-3 text-control text-muted">Noch keine Regeln angelegt.</p>
+              ) : (
+                <ul>
+                  {rules.map((rule) => {
+                    const stale = staleRules.includes(rule);
+                    const months = Math.max(1, Math.floor(daysSince(rule.lastHitAt ?? rule.createdAt) / 30.44));
+                    return (
+                      <li key={rule.id} aria-label={`Regel ${rule.value}`} className="flex flex-wrap items-start gap-2.5 border-b border-border px-3 py-2.75 last:border-b-0">
+                        <span className="min-w-0 flex-1">
+                          <span className="text-label text-foreground">
+                            Wenn {RULE_FIELD_LABELS[rule.field]} {RULE_OPERATOR_LABELS[rule.operator]} „{rule.value}“
+                          </span>
+                          <span className="block text-caption text-muted">dann Konto {rule.targetAccountNumber}</span>
+                          <span className="block text-caption text-muted tabular-nums">
+                            {rule.hitCount
+                              ? `${rule.hitCount} Treffer, zuletzt ${rule.lastHitAt ? new Date(rule.lastHitAt).toLocaleDateString('de-DE') : 'unbekannt'}`
+                              : 'noch nie angewendet'}
+                          </span>
+                        </span>
+                        {stale && <Badge tone="warning">seit {months === 1 ? 'einem Monat' : `${months} Monaten`} kein Treffer</Badge>}
+                        {!rule.active && <Badge tone="neutral">deaktiviert</Badge>}
+                      </li>
+                    );
+                  })}
+                </ul>
+              )}
+            </Card>
           </section>
         )}
       </div>

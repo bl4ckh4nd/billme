@@ -1,5 +1,5 @@
 import Database from "better-sqlite3";
-import { and, desc, eq, isNull, lt } from "drizzle-orm";
+import { and, desc, eq, isNull, lt, sql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/better-sqlite3";
 import type {
   CustomerAccessTokenRecord,
@@ -87,7 +87,7 @@ export const createNodeSqliteOfferStore = (dbPath: string): OfferStore => {
       };
       db.insert(schema.offers)
         .values(values)
-        .onConflictDoUpdate({ target: schema.offers.tokenHash, set: values })
+        .onConflictDoUpdate({ target: schema.offers.tokenHash, set: { ...values, decisionJson: sql`coalesce(${schema.offers.decisionJson}, ${values.decisionJson})` } })
         .run();
       const docValues = {
         tokenHash: offer.tokenHash,
@@ -106,7 +106,7 @@ export const createNodeSqliteOfferStore = (dbPath: string): OfferStore => {
         .values(docValues)
         .onConflictDoUpdate({
           target: schema.portalDocuments.tokenHash,
-          set: { ...docValues, tokenHash: undefined },
+          set: { ...docValues, tokenHash: undefined, decisionJson: sql`coalesce(${schema.portalDocuments.decisionJson}, ${docValues.decisionJson})` },
         })
         .run();
     },

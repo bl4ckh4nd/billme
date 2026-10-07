@@ -1,58 +1,48 @@
+import { Check, Info, TriangleAlert } from 'lucide-react';
 import { ValidationIssue } from '../types';
 
 interface ValidationSummaryProps {
   issues: ValidationIssue[];
 }
 
+const ROW = 'flex items-start gap-2 rounded-control border px-2.25 py-1.75 text-caption';
+
+const SEVERITY = {
+  error: { label: 'Fehler', tone: 'border-error-border bg-error-bg text-error-text', Icon: TriangleAlert },
+  warning: { label: 'Warnung', tone: 'border-warning-border bg-warning-bg text-warning-text', Icon: TriangleAlert },
+  info: { label: 'Hinweis', tone: 'border-border bg-surface-muted text-foreground', Icon: Info },
+} as const;
+
 export default function ValidationSummary({ issues }: ValidationSummaryProps) {
-  if (issues.length === 0) {
-    return (
-      <div className="mb-4 shrink-0 border border-success-border bg-success-bg rounded-xl p-4 text-sm font-medium text-success-text">
-        Keine Validierungsprobleme. Buchung ist prüfbar.
-      </div>
-    );
-  }
-
-  const groups = {
-    error: issues.filter((issue) => issue.severity === 'error'),
-    warning: issues.filter((issue) => issue.severity === 'warning'),
-    info: issues.filter((issue) => issue.severity === 'info'),
-  };
-
   return (
-    <div aria-live="polite" className="mb-4 shrink-0 border border-border rounded-xl overflow-hidden">
-      <div className="px-4 py-3 bg-surface-muted border-b border-border text-sm font-semibold text-foreground">
-        Validierung ({issues.length})
-      </div>
-      <div className="grid gap-3 p-4 sm:grid-cols-2">
-        {(['error', 'warning', 'info'] as const).map((severity) => {
-          if (groups[severity].length === 0) return null;
-          return (
-            <div key={severity}>
-              <div className="text-xs font-semibold uppercase tracking-wide text-muted mb-1">
-                {severity === 'error' ? 'Fehler' : severity === 'warning' ? 'Warnungen' : 'Hinweise'}
-              </div>
-              <ul className="space-y-1">
-                {groups[severity].map((issue) => (
-                  <li key={issue.id} className="text-sm text-foreground flex items-start gap-2">
-                    <span
-                      aria-hidden="true"
-                      className={`mt-1 h-2 w-2 rounded-full ${
-                        severity === 'error'
-                          ? 'bg-error'
-                          : severity === 'warning'
-                            ? 'bg-warning'
-                            : 'bg-muted'
-                      }`}
-                    />
-                    <span>{issue.message}</span>
+    <section aria-live="polite">
+      <h3 className="mb-2 text-eyebrow uppercase text-muted">
+        Validierung{issues.length > 0 ? ` (${issues.length})` : ''}
+      </h3>
+      {issues.length === 0 ? (
+        <div className={`${ROW} border-success-border bg-success-bg text-success-text`}>
+          <Check size={14} aria-hidden="true" className="mt-px shrink-0" />
+          <span>Keine Validierungsprobleme. Buchung ist prüfbar.</span>
+        </div>
+      ) : (
+        <ul className="flex flex-col gap-1.5">
+          {(['error', 'warning', 'info'] as const).flatMap((severity) =>
+            issues
+              .filter((issue) => issue.severity === severity)
+              .map((issue) => {
+                const { label, tone, Icon } = SEVERITY[severity];
+                return (
+                  <li key={issue.id} className={`${ROW} ${tone}`}>
+                    <Icon size={14} aria-hidden="true" className="mt-px shrink-0" />
+                    <span>
+                      <strong className="font-semibold">{label}.</strong> {issue.message}
+                    </span>
                   </li>
-                ))}
-              </ul>
-            </div>
-          );
-        })}
-      </div>
-    </div>
+                );
+              }),
+          )}
+        </ul>
+      )}
+    </section>
   );
 }

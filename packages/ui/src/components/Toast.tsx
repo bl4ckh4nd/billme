@@ -30,8 +30,8 @@ export interface ToastProps {
 }
 
 const sizeStyles: Record<ToastSize, string> = {
-  default: 'px-4 py-3',
-  compact: 'px-3.5 py-2.5',
+  default: 'px-3.5 py-3',
+  compact: 'px-3 py-2.5',
 };
 
 /**
@@ -105,7 +105,7 @@ export const Toast: React.FC<ToastProps> = ({
         }
       }}
       className={cn(
-        'ui-enter-toast no-print flex max-w-md items-center gap-3 break-words rounded-card bg-surface-inverse text-inverse-foreground shadow-lg',
+        'ui-enter-toast no-print flex max-w-md items-start gap-2 break-words rounded-control border border-border-toast bg-surface-toast text-inverse-foreground shadow-lift',
         portal ? toastOverlayPosition : 'relative',
         (leaving || closing) && 'translate-y-1 opacity-0 duration-(--dur-overlay-exit) [transition-delay:0ms]',
         sizeStyles[size],
@@ -119,7 +119,7 @@ export const Toast: React.FC<ToastProps> = ({
           type="button"
           onClick={action.onClick}
           className={cn(
-            'ml-2 inline-flex min-h-6 shrink-0 items-center text-xs font-semibold underline underline-offset-2 opacity-80 motion-safe:transition-opacity motion-reduce:transition-none hover:opacity-100 focus-visible:outline-2 focus-visible:outline-offset-2',
+            '-my-0.75 ml-1 inline-flex min-h-6 shrink-0 items-center text-caption font-semibold underline underline-offset-2 opacity-80 motion-safe:transition-opacity motion-reduce:transition-none hover:opacity-100 focus-visible:outline-2 focus-visible:outline-offset-2',
             focusRing,
           )}
         >
@@ -131,7 +131,7 @@ export const Toast: React.FC<ToastProps> = ({
         aria-label={dismissLabel}
         onClick={dismiss}
         className={cn(
-          'ml-auto inline-flex size-6 min-h-6 min-w-6 shrink-0 items-center justify-center rounded-full opacity-80 motion-safe:transition-opacity motion-reduce:transition-none hover:opacity-100 focus-visible:outline-2 focus-visible:outline-offset-2',
+          '-my-0.75 ml-auto inline-flex size-6 min-h-6 min-w-6 shrink-0 items-center justify-center rounded-full opacity-80 motion-safe:transition-opacity motion-reduce:transition-none hover:opacity-100 focus-visible:outline-2 focus-visible:outline-offset-2',
           focusRing,
         )}
       >

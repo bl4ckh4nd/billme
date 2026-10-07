@@ -1,16 +1,15 @@
 import React, { useState, useMemo } from 'react';
-import {
-  Search, Plus, Edit3, Trash2, Tag,
-  Euro, LayoutGrid, List, Check, X,
-  Copy, ToggleLeft, ToggleRight, Archive, CheckSquare
-} from 'lucide-react';
+import { Search, Plus, Edit3, Trash2, LayoutGrid, List, Check, X, Copy } from 'lucide-react';
 import type { Article } from '@billme/desktop-core/types';
 import { v4 as uuidv4 } from 'uuid';
 import { useArticlesQuery, useDeleteArticleMutation, useUpsertArticleMutation } from '../hooks/useArticles';
 import { useCreateIntent } from '../hooks/useCreateIntent';
 import { useDeferredDelete } from '../hooks/useDeferredDelete';
 import { useSettingsQuery } from '../hooks/useSettings';
-import { Badge, Button, EmptyState, ErrorState, IconButton, Input, PageHeader, SegmentedControl } from '@billme/ui';
+import {
+  Badge, Button, Card, Checkbox, EMPTY_VALUE, EmptyState, ErrorState, IconButton, Input, Modal, PageHeader, SegmentedControl, Select,
+  Table, TableBody, TableCell, TableHead, TableHeader, TableRow, Textarea,
+} from '@billme/ui';
 import { SkeletonLoader } from '../ui/components/SkeletonLoader';
 import { useRouterState } from '@tanstack/react-router';
 
@@ -25,35 +24,6 @@ const buildConfiguredCategories = (
 
   const unique = Array.from(new Set(normalized)).sort((a, b) => a.localeCompare(b, 'de-DE'));
   return unique.length > 0 ? unique : ['Allgemein'];
-};
-
-// Category avatars stay neutral so no semantic hue implies a category meaning.
-const PASTEL_COLORS = [
-    'bg-surface-muted text-foreground',
-    'bg-border-subtle text-foreground',
-    'bg-surface-muted text-muted',
-    'bg-border-subtle text-muted',
-    'bg-surface-muted text-foreground',
-    'bg-border-subtle text-foreground',
-    'bg-surface-muted text-muted',
-    'bg-border-subtle text-muted',
-    'bg-surface-muted text-foreground',
-    'bg-border-subtle text-foreground',
-    'bg-surface-muted text-muted',
-    'bg-border-subtle text-muted',
-];
-
-const getAvatarColor = (str: string) => {
-    let hash = 0;
-    for (let i = 0; i < str.length; i++) {
-        hash = str.charCodeAt(i) + ((hash << 5) - hash);
-    }
-    const index = Math.abs(hash) % PASTEL_COLORS.length;
-    return PASTEL_COLORS[index];
-};
-
-const getInitials = (str: string) => {
-    return str.substring(0, 2).toUpperCase();
 };
 
 export const ArticlesView: React.FC = () => {
@@ -80,7 +50,7 @@ export const ArticlesView: React.FC = () => {
   const locationSearch = useRouterState({ select: (s) => s.location.search }) as Record<string, unknown>;
   const [selectedCategory, setSelectedCategory] = useState<string>('Alle');
   const [isNetPrice, setIsNetPrice] = useState(true); // Toggle Net/Gross
-  const [viewMode, setViewMode] = useState<'grid' | 'list'>('grid');
+  const [viewMode, setViewMode] = useState<'grid' | 'list'>('list');
 
   // Selection
   const [selectedArticles, setSelectedArticles] = useState<Set<string>>(new Set());
@@ -102,6 +72,7 @@ export const ArticlesView: React.FC = () => {
   });
   const [formErrors, setFormErrors] = useState<Partial<Record<'title' | 'price' | 'unit' | 'category' | 'taxRate' | 'sku', string>>>({});
   const [isSaving, setIsSaving] = useState(false);
+  const titleInputRef = React.useRef<HTMLInputElement>(null);
 
   const configuredCategories = useMemo(
     () => buildConfiguredCategories(settings?.catalog?.categories),
@@ -194,7 +165,7 @@ export const ArticlesView: React.FC = () => {
         setOperationMessage(`Artikel "${newArticle.title}" dupliziert.`);
       } catch (error) {
         setOperationTone('error');
-        setOperationMessage(`Duplizieren fehlgeschlagen: ${String(error)}`);
+        setOperationMessage(`Duplizieren fehlgeschlagen: ${error instanceof Error ? error.message : String(error)}`);
       }
   };
 
@@ -297,431 +268,376 @@ export const ArticlesView: React.FC = () => {
         setIsFormOpen(false);
       } catch (error) {
         setOperationTone('error');
-        setOperationMessage(`Speichern fehlgeschlagen: ${String(error)}`);
+        setOperationMessage(`Speichern fehlgeschlagen: ${error instanceof Error ? error.message : String(error)}`);
       } finally {
         setIsSaving(false);
       }
   };
 
-  return (
-    <div className="flex gap-6 h-full">
-        {/* Main Content */}
-        <div className="min-h-full px-1 pt-2 flex-1 flex flex-col overflow-hidden relative">
-
-            {/* Header Area */}
-            <div className="relative shrink-0">
-                <PageHeader
-                    title="Produkte & Leistungen"
-                    description={isLoadingView
-                        ? 'Wird geladen …'
-                        : hasQueryError
-                          ? 'Nicht verfügbar'
-                          : `${filteredArticles.length} Einträge`}
-                    actions={
-                        <Button onClick={() => handleOpenForm()}>
-                            <Plus size={16} aria-hidden="true" /> Neuer Artikel
-                        </Button>
-                    }
-                    toolbar={
-                        <>
-                            <div className="w-full sm:w-64">
-                                <Input
-                                    type="search"
-                                    aria-label="Artikel durchsuchen"
-                                    placeholder="Artikel suchen"
-                                    value={searchTerm}
-                                    onChange={(e) => setSearchTerm(e.target.value)}
-                                    prefix={<Search size={14} aria-hidden="true" />}
-                                    fullWidth
-                                />
-                            </div>
-                            <div className="flex min-w-0 flex-1 gap-1.5 overflow-x-auto scrollbar-hide" role="group" aria-label="Kategorie">
-                                {categories.map(cat => (
-                                    <button
-                                        key={cat}
-                                        type="button"
-                                        onClick={() => setSelectedCategory(cat)}
-                                        aria-pressed={selectedCategory === cat}
-                                        className={`h-7 shrink-0 whitespace-nowrap rounded-full px-3 text-label transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring ${
-                                            selectedCategory === cat
-                                            ? 'bg-surface-inverse text-inverse-foreground'
-                                            : 'bg-surface-sunken text-muted hover:text-foreground'
-                                        }`}
-                                    >
-                                        {cat}
-                                    </button>
-                                ))}
-                            </div>
-                            <SegmentedControl
-                                aria-label="Preisangabe"
-                                value={isNetPrice ? 'net' : 'gross'}
-                                onChange={(value) => setIsNetPrice(value === 'net')}
-                                options={[{ value: 'net', label: 'Netto' }, { value: 'gross', label: 'Brutto' }]}
-                            />
-                            <SegmentedControl
-                                aria-label="Ansicht"
-                                value={viewMode}
-                                onChange={setViewMode}
-                                options={[
-                                    { value: 'grid', label: <LayoutGrid size={16} aria-hidden="true" />, ariaLabel: 'Rasteransicht' },
-                                    { value: 'list', label: <List size={16} aria-hidden="true" />, ariaLabel: 'Listenansicht' },
-                                ]}
-                            />
-                        </>
-                    }
-                />
-
-                {/* Bulk Actions Bar */}
-                {selectedArticles.size > 0 && (
-                    <div className="absolute top-0 left-1/2 -translate-x-1/2 z-[var(--z-dropdown)] flex items-center gap-3 rounded-card bg-surface-inverse px-4 py-2 text-inverse-foreground shadow-lg">
-                        <span className="text-sm font-medium tabular-nums">{selectedArticles.size} ausgewählt</span>
-                        <div className="h-4 w-px bg-border-inverse" aria-hidden="true" />
-                        <button
-                          type="button"
-                          onClick={() => void handleBulkDelete()}
-                          className="inline-flex h-8 items-center gap-1.5 rounded-control px-2.5 text-label text-error-inverse transition-colors hover:bg-surface-inverse-overlay disabled:opacity-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring-dark"
-                        >
-                            <Trash2 size={14} aria-hidden="true" /> Löschen
-                        </button>
-                        <IconButton variant="inverse" size="sm" aria-label="Auswahl aufheben" onClick={() => setSelectedArticles(new Set())}>
-                            <X size={16} aria-hidden="true" />
-                        </IconButton>
-                    </div>
-                )}
-            </div>
-      <div className="min-h-0 flex-1 rounded-card border border-border bg-surface p-5 lg:p-6 flex flex-col overflow-hidden relative">
-
-            {operationMessage && (
-              <div
-                className={`mb-4 rounded-xl border px-4 py-3 text-sm font-medium ${
-                  operationTone === 'success'
-                    ? 'border-success-border bg-success-bg text-success-text'
-                    : 'border-error-border bg-error-bg text-error-text'
-                }`}
-              >
-                {operationMessage}
-              </div>
-            )}
-
-            {/* List Content */}
-            {isLoadingView ? (
-                <SkeletonLoader variant="card" count={6} />
-            ) : hasQueryError ? (
-                <ErrorState
-                    title="Artikel konnten nicht geladen werden"
-                    description="Die Artikel oder die Kategorien aus den Einstellungen sind nicht verfügbar. Es werden bewusst keine Ersatzdaten angezeigt."
-                    onRetry={retryQueries}
-                />
-            ) : viewMode === 'grid' ? (
-                <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4 gap-3 overflow-y-auto p-0.5 pb-4 scrollbar-hide">
-                    {filteredArticles.length === 0 ? (
-                        <EmptyState
-                            className="col-span-full"
-                            title={isFiltered ? 'Keine Artikel passen zu dieser Auswahl' : 'Noch keine Artikel angelegt'}
-                            description={
-                                isFiltered
-                                    ? `Suche und Kategorie-Filter schließen alle ${visibleArticles.length} vorhandenen Artikel aus.`
-                                    : 'Artikel sind die Positionen, die du in Rechnungen und Angeboten auswählst. Lege den ersten über das + oben rechts an.'
-                            }
-                            action={
-                                isFiltered ? (
-                                    <button
-                                        onClick={resetFilters}
-                                        className="px-4 py-2 rounded-control bg-surface-muted text-foreground font-semibold text-xs hover:bg-border-subtle focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring transition-colors"
-                                    >
-                                        Filter zurücksetzen
-                                    </button>
-                                ) : undefined
-                            }
-                        />
-                    ) : filteredArticles.map((article) => (
-                        <div
-                            key={article.id}
-                            data-leaving={leavingIds.has(article.id) || undefined}
-                            className="group relative flex flex-col rounded-card bg-surface p-5 shadow-xs transition-shadow hover:shadow-md"
-                        >
-                            <div className="flex items-start justify-between gap-3">
-                                <div className="min-w-0">
-                                    <div className="flex items-center gap-1.5">
-                                        <span className="truncate text-caption text-muted">{article.category}</span>
-                                        {article.taxRate !== 19 && <Badge tone="info">{article.taxRate} % USt</Badge>}
-                                    </div>
-                                    <h3 className="mt-1 text-section leading-snug line-clamp-2">{article.title}</h3>
-                                    {article.sku && <p className="mt-0.5 font-mono text-caption text-muted">#{article.sku}</p>}
-                                </div>
-                                <div className="ui-reveal flex shrink-0 gap-0.5">
-                                    <IconButton size="sm" tooltip="Duplizieren" aria-label={`${article.title} duplizieren`} onClick={() => void handleDuplicate(article)}>
-                                        <Copy size={14} aria-hidden="true" />
-                                    </IconButton>
-                                    <IconButton size="sm" tooltip="Bearbeiten" aria-label={`${article.title} bearbeiten`} onClick={() => handleOpenForm(article)}>
-                                        <Edit3 size={14} aria-hidden="true" />
-                                    </IconButton>
-                                </div>
-                            </div>
-
-                            <div className="mt-auto flex items-baseline justify-between gap-3 pt-5">
-                                <span className="text-xl font-semibold tracking-[-0.01em] tabular-nums">
-                                    {formatCurrency(calculateDisplayPrice(article))}
-                                </span>
-                                <span className="text-caption text-muted">{isNetPrice ? 'netto' : 'brutto'} / {article.unit}</span>
-                            </div>
-                        </div>
-                    ))}
-                </div>
-            ) : (
-                <div className="flex-1 overflow-y-auto pr-2 pb-4 space-y-2 scrollbar-hide">
-                     <div className="grid grid-cols-12 gap-4 px-4 py-2 text-xs font-semibold text-muted uppercase tracking-wider sticky top-0 bg-surface z-10 border-b border-border">
-                        <div className="col-span-1 flex justify-center">
-                            <button onClick={handleSelectAll} className="hover:text-foreground">
-                                <CheckSquare size={16} className={selectedArticles.size > 0 ? 'text-foreground fill-foreground/10' : 'text-muted'} />
-                            </button>
-                        </div>
-                        <div className="col-span-4">Artikel / Leistung</div>
-                        <div className="col-span-2">SKU / Kat</div>
-                        <div className="col-span-1 text-center">USt</div>
-                        <div className="col-span-2 text-right">Preis ({isNetPrice ? 'Netto' : 'Brutto'})</div>
-                        <div className="col-span-2 text-right">Aktionen</div>
-                    </div>
-                    {filteredArticles.length === 0 ? (
-                        <EmptyState
-                            title={isFiltered ? 'Keine Artikel passen zu dieser Auswahl' : 'Noch keine Artikel angelegt'}
-                            description={
-                                isFiltered
-                                    ? `Suche und Kategorie-Filter schließen alle ${visibleArticles.length} vorhandenen Artikel aus.`
-                                    : 'Artikel sind die Positionen, die du in Rechnungen und Angeboten auswählst. Lege den ersten über das + oben rechts an.'
-                            }
-                            action={
-                                isFiltered ? (
-                                    <button
-                                        onClick={resetFilters}
-                                        className="px-4 py-2 rounded-control bg-surface-muted text-foreground font-semibold text-xs hover:bg-border-subtle focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring transition-colors"
-                                    >
-                                        Filter zurücksetzen
-                                    </button>
-                                ) : undefined
-                            }
-                        />
-                    ) : filteredArticles.map((article) => (
-                        <div
-                            key={article.id}
-                            data-leaving={leavingIds.has(article.id) || undefined}
-                            className={`group rounded-2xl p-4 border transition-colors grid grid-cols-12 gap-4 items-center ${
-                                selectedArticles.has(article.id)
-                                ? 'bg-info-bg border-info'
-                                : 'bg-surface-muted border-border-subtle hover:border-border hover:bg-surface'
-                            }`}
-                        >
-                             <div className="col-span-1 flex justify-center">
-                                 <button onClick={() => handleToggleSelect(article.id)} title={selectedArticles.has(article.id) ? 'Auswahl entfernen' : 'Auswählen'}>
-                                     <div className={`w-5 h-5 rounded-sm border flex items-center justify-center transition-colors ${
-                                         selectedArticles.has(article.id) ? 'bg-surface-inverse border-surface-inverse text-inverse-foreground' : 'border-control-border bg-surface'
-                                     }`}>
-                                         {selectedArticles.has(article.id) && <Check size={12} />}
-                                     </div>
-                                 </button>
-                             </div>
-                             <div className="col-span-4 flex items-center gap-4">
-                                <div className={`w-10 h-10 rounded-xl flex items-center justify-center text-xs font-semibold shadow-sm shrink-0 ${getAvatarColor(article.category)}`}>
-                                    {getInitials(article.title)}
-                                </div>
-                                <div className="min-w-0">
-                                    <h3 className="font-semibold text-sm text-foreground truncate">{article.title}</h3>
-                                    <p className="text-xs text-muted truncate">{article.description || 'Keine Beschreibung'}</p>
-                                </div>
-                             </div>
-                             <div className="col-span-2">
-                                 <div className="flex flex-col items-start gap-1">
-                                    {article.sku && <span className="font-mono text-xs text-muted bg-surface px-1.5 rounded-sm border border-border">#{article.sku}</span>}
-                                    <span className="text-xs font-semibold uppercase bg-border-subtle text-muted px-2 py-1 rounded-full truncate max-w-full">{article.category}</span>
-                                 </div>
-                             </div>
-                             <div className="col-span-1 text-center">
-                                 <span className={`text-xs font-semibold px-2 py-1 rounded-sm tabular-nums ${article.taxRate === 19 ? 'bg-surface-muted text-muted' : 'bg-info-bg text-info-text'}`}>
-                                     {article.taxRate}%
-                                 </span>
-                             </div>
-                             <div className="col-span-2 text-right">
-                                 <p className="font-semibold text-sm text-foreground tabular-nums">{formatCurrency(calculateDisplayPrice(article))}</p>
-                                 <p className="text-xs text-muted">pro {article.unit}</p>
-                             </div>
-                             <div className="ui-reveal col-span-2 flex items-center justify-end gap-2 focus-within:opacity-100">
-                                <button onClick={() => void handleDuplicate(article)} title="Duplizieren" className="ui-press p-2 bg-surface border border-control-border rounded-lg hover:bg-border-subtle text-muted transition-colors"><Copy size={14}/></button>
-                                <button onClick={() => handleOpenForm(article)} title="Bearbeiten" className="ui-press p-2 bg-surface border border-control-border rounded-lg hover:bg-surface-inverse hover:text-inverse-foreground transition-colors"><Edit3 size={14}/></button>
-                                <button onClick={() => void handleDelete(article.id)} title="Löschen" className="ui-press p-2 bg-surface border border-control-border text-error-text rounded-lg hover:bg-error hover:text-inverse-foreground transition-colors"><Trash2 size={14}/></button>
-                             </div>
-                        </div>
-                    ))}
-                </div>
-            )}
-        </div>
+  const banner = operationMessage && (
+    <div
+      className={`rounded-control border px-3 py-2.5 text-control ${
+        operationTone === 'success'
+          ? 'border-success-border bg-success-bg text-success-text'
+          : 'border-error-border bg-error-bg text-error-text'
+      }`}
+    >
+      {operationMessage}
     </div>
+  );
 
-        {/* Slide-over Form */}
-        {isFormOpen && (
-            <div className="w-[450px] bg-surface rounded-2xl shadow-2xl flex flex-col relative">
-                <div className="p-8 border-b border-border flex items-center justify-between">
-                    <div>
-                        <h2 className="text-xl font-semibold">{editingArticle ? 'Artikel bearbeiten' : 'Neuer Artikel'}</h2>
-                        <p className="text-xs text-muted">
-                            {editingArticle ? `ID: ${editingArticle.id.substring(0,8)}` : 'Neuer Eintrag wird erstellt'}
-                        </p>
-                    </div>
-                    <button onClick={() => setIsFormOpen(false)} className="p-2 hover:bg-border-subtle rounded-full transition-colors"><X size={20} /></button>
-                </div>
+  const emptyState = (
+    <Card padding="none">
+      <EmptyState
+        title={isFiltered ? 'Keine Artikel passen zu dieser Auswahl' : 'Noch keine Artikel angelegt'}
+        description={
+          isFiltered
+            ? `Suche und Kategorie-Filter schließen alle ${visibleArticles.length} vorhandenen Artikel aus.`
+            : 'Artikel sind die Positionen, die du in Rechnungen und Angeboten auswählst. Lege den ersten über das + oben rechts an.'
+        }
+        action={
+          isFiltered ? (
+            <Button variant="secondary" size="sm" onClick={resetFilters}>
+              Filter zurücksetzen
+            </Button>
+          ) : undefined
+        }
+      />
+    </Card>
+  );
 
-                <div className="p-8 space-y-6 flex-1 overflow-y-auto">
+  const allSelected = filteredArticles.length > 0 && selectedArticles.size === filteredArticles.length;
 
-                    {/* Basic Info */}
-                    <div className="space-y-4">
-                        <div className="flex gap-4">
-                            <div className="flex-1">
-                                <label className="block mb-1.5 text-label text-foreground" htmlFor="articlesview-bezeichnung">Bezeichnung <span className="text-error-text" aria-hidden="true">*</span></label>
-                                <input id="articlesview-bezeichnung" aria-required="true"
-                                    type="text"
-                                    value={formData.title}
-                                    onChange={(e) => setFormData({...formData, title: e.target.value})}
-                                    className="px-3 h-10 hover:border-control-border-hover w-full bg-surface border border-control-border rounded-control text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring transition-colors"
-                                    placeholder="z.B. Webdesign"
-                                    autoFocus
-                                />
-                                {formErrors.title && <p className="mt-1 text-xs font-semibold text-error-text">{formErrors.title}</p>}
-                            </div>
-                             <div className="w-1/3">
-                                <label className="block mb-1.5 text-label text-foreground" htmlFor="articlesview-artikel-nr">Artikel-Nr.</label>
-                                <input id="articlesview-artikel-nr"
-                                    type="text"
-                                    value={formData.sku}
-                                    onChange={(e) => setFormData({...formData, sku: e.target.value})}
-                                    className="px-3 h-10 hover:border-control-border-hover w-full bg-surface border border-control-border rounded-control text-sm font-mono focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring transition-colors"
-                                    placeholder="SKU-001"
-                                />
-                                {formErrors.sku && <p className="mt-1 text-xs font-semibold text-error-text">{formErrors.sku}</p>}
-                            </div>
-                        </div>
+  return (
+    <div className="flex flex-col">
+      <div className="relative">
+        <PageHeader
+          title="Leistungen"
+          description={isLoadingView
+            ? 'Wird geladen …'
+            : hasQueryError
+              ? 'Nicht verfügbar'
+              : `${filteredArticles.length} Einträge`}
+          actions={
+            <Button onClick={() => handleOpenForm()}>
+              <Plus size={16} aria-hidden="true" /> Neuer Artikel
+            </Button>
+          }
+          toolbar={
+            <>
+              <div className="w-full sm:w-64">
+                <Input
+                  type="search"
+                  aria-label="Artikel durchsuchen"
+                  placeholder="Artikel suchen"
+                  value={searchTerm}
+                  onChange={(e) => setSearchTerm(e.target.value)}
+                  prefix={<Search size={14} aria-hidden="true" />}
+                  fullWidth
+                />
+              </div>
+              <div className="flex min-w-0 flex-1 gap-1.5 overflow-x-auto p-0.5 scrollbar-hide" role="group" aria-label="Kategorie">
+                {categories.map(cat => (
+                  <button
+                    key={cat}
+                    type="button"
+                    onClick={() => setSelectedCategory(cat)}
+                    aria-pressed={selectedCategory === cat}
+                    className={`shrink-0 whitespace-nowrap rounded-full border px-1.75 py-0.5 text-micro transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring ${
+                      selectedCategory === cat
+                        ? 'border-foreground bg-foreground font-semibold text-ground'
+                        : 'border-border bg-surface-sunken font-medium text-foreground-secondary hover:text-foreground'
+                    }`}
+                  >
+                    {cat}
+                  </button>
+                ))}
+              </div>
+              <SegmentedControl
+                aria-label="Preisangabe"
+                value={isNetPrice ? 'net' : 'gross'}
+                onChange={(value) => setIsNetPrice(value === 'net')}
+                options={[{ value: 'net', label: 'Netto' }, { value: 'gross', label: 'Brutto' }]}
+              />
+              <SegmentedControl
+                aria-label="Ansicht"
+                value={viewMode}
+                onChange={setViewMode}
+                options={[
+                  { value: 'grid', label: <LayoutGrid size={16} aria-hidden="true" />, ariaLabel: 'Rasteransicht' },
+                  { value: 'list', label: <List size={16} aria-hidden="true" />, ariaLabel: 'Listenansicht' },
+                ]}
+              />
+            </>
+          }
+        />
 
-                        <div>
-                             <label className="block mb-1.5 text-label text-foreground" htmlFor="articlesview-kategorie">Kategorie</label>
-                             <div className="relative">
-                                <Tag size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-muted"/>
-                                <select id="articlesview-kategorie"
-                                    value={formData.category}
-                                    onChange={(e) => setFormData({...formData, category: e.target.value})}
-                                    className="px-3 h-10 hover:border-control-border-hover w-full bg-surface border border-control-border rounded-control pl-10 text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring transition-colors appearance-none"
-                                >
-                                    {configuredCategories.map((c) => (
-                                      <option key={c} value={c}>
-                                        {c}
-                                      </option>
-                                    ))}
-                                </select>
-                             </div>
-                             {formErrors.category && <p className="mt-1 text-xs font-semibold text-error-text">{formErrors.category}</p>}
-                        </div>
-                    </div>
-
-                    <hr className="border-border" />
-
-                    {/* Pricing */}
-                    <div className="space-y-4">
-                        <h3 className="text-sm font-semibold flex items-center gap-2">
-                            <Euro size={16} /> Preise & Steuer
-                        </h3>
-                        <div className="grid grid-cols-2 gap-4">
-                            <div>
-                                <label className="block mb-1.5 text-label text-foreground" htmlFor="articlesview-preis">Preis (Netto) <span className="text-error-text" aria-hidden="true">*</span></label>
-                                <div className="relative">
-                                    <input id="articlesview-preis" aria-required="true"
-                                        type="number"
-                                        value={formData.price}
-                                        onChange={(e) => setFormData({...formData, price: Number(e.target.value)})}
-                                        className={`w-full bg-surface-muted border rounded-xl p-3 text-sm font-semibold focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring transition-shadow ${Number(formData.price) < 0 ? 'border-error-border text-error-text' : 'border-control-border'}`}
-                                        step="0.01"
-                                    />
-                                    <span className="absolute right-3 top-1/2 -translate-y-1/2 text-xs font-semibold text-muted">EUR</span>
-                                </div>
-                                {formErrors.price && <p className="mt-1 text-xs font-semibold text-error-text">{formErrors.price}</p>}
-                            </div>
-                            <div>
-                                <label className="block mb-1.5 text-label text-foreground" htmlFor="articlesview-einheit">Einheit</label>
-                                <select id="articlesview-einheit"
-                                    value={formData.unit}
-                                    onChange={(e) => setFormData({...formData, unit: e.target.value})}
-                                    className="px-3 h-10 hover:border-control-border-hover w-full bg-surface border border-control-border rounded-control text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring appearance-none transition-colors"
-                                >
-                                    <option value="Std">Stunde</option>
-                                    <option value="Stk">Stück</option>
-                                    <option value="Pauschale">Pauschale</option>
-                                    <option value="Tag">Tag</option>
-                                    <option value="Monat">Monat</option>
-                                    <option value="km">Kilometer</option>
-                                </select>
-                                {formErrors.unit && <p className="mt-1 text-xs font-semibold text-error-text">{formErrors.unit}</p>}
-                            </div>
-                        </div>
-
-                        <div>
-                            <p className="block mb-1.5 text-label text-foreground" id="articlesview-ust">Umsatzsteuer (USt)</p>
-                            <div role="group" aria-labelledby="articlesview-ust" className="flex bg-surface-muted rounded-xl p-1 border border-border">
-                                {[19, 7, 0].map((rate) => (
-                                    <button
-                                        key={rate}
-                                        onClick={() => setFormData({...formData, taxRate: rate})}
-                                        className={`flex-1 py-2 rounded-lg text-xs font-semibold transition-colors ${
-                                            formData.taxRate === rate
-                                            ? 'bg-surface-inverse text-inverse-foreground'
-                                            : 'text-muted hover:bg-border-subtle'
-                                        }`}
-                                    >
-                                        {rate}%
-                                    </button>
-                                ))}
-                            </div>
-                            {formErrors.taxRate && <p className="mt-1 text-xs font-semibold text-error-text">{formErrors.taxRate}</p>}
-                        </div>
-                    </div>
-
-                    <hr className="border-border" />
-
-                    {/* Description */}
-                    <div>
-                        <div className="flex justify-between items-center mb-2">
-                            <label className="block text-label text-foreground" htmlFor="articlesview-beschreibung">Beschreibung</label>
-                        </div>
-                        <textarea id="articlesview-beschreibung"
-                            value={formData.description}
-                            onChange={(e) => setFormData({...formData, description: e.target.value})}
-                            className="px-3 py-2.5 hover:border-control-border-hover w-full bg-surface border border-control-border rounded-control text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring h-32 resize-none transition-colors"
-                            placeholder="Details zum Produkt..."
-                        />
-                         <p className="text-xs text-muted mt-2 flex items-center gap-1">
-                            <Archive size={12} /> Wird auf der Rechnung unter dem Titel angezeigt.
-                        </p>
-                    </div>
-                </div>
-
-                <div className="p-8 border-t border-border bg-surface-muted rounded-b-2xl">
-                    <div className="flex gap-4">
-                         {editingArticle && (
-                            <button
-                                onClick={() => void handleDelete(editingArticle.id)}
-                                title="Artikel löschen"
-                                className="px-4 py-4 rounded-xl bg-surface border border-control-border text-error-text hover:bg-error-bg hover:border-error-border transition-colors"
-                            >
-                                <Trash2 size={20} />
-                            </button>
-                         )}
-                         <button
-                            onClick={() => void handleSubmit()}
-                            disabled={isSaving}
-                            className="flex-1 bg-surface-inverse text-inverse-foreground py-3 rounded-xl font-semibold flex items-center justify-center gap-2 hover:bg-dark-1 motion-safe:transition-transform motion-safe:active:scale-95 motion-reduce:transition-none disabled:opacity-50 disabled:cursor-not-allowed"
-                        >
-                            <Check size={16} />
-                            {isSaving ? 'Speichere...' : editingArticle ? 'Speichern' : 'Erstellen'}
-                        </button>
-                    </div>
-                </div>
-            </div>
+        {selectedArticles.size > 0 && (
+          <div className="absolute left-1/2 top-0 z-[var(--z-dropdown)] flex -translate-x-1/2 items-center gap-3 rounded-card border border-border bg-surface py-1 pl-3 pr-1 text-control shadow-lift">
+            <span className="font-medium tabular-nums">{selectedArticles.size} ausgewählt</span>
+            <Button variant="danger" size="sm" onClick={() => void handleBulkDelete()}>
+              <Trash2 size={14} aria-hidden="true" /> Löschen
+            </Button>
+            <IconButton size="sm" aria-label="Auswahl aufheben" onClick={() => setSelectedArticles(new Set())}>
+              <X size={16} aria-hidden="true" />
+            </IconButton>
+          </div>
         )}
+      </div>
+
+      {banner && !isFormOpen && <div className="mb-3">{banner}</div>}
+
+      {isLoadingView ? (
+        <SkeletonLoader variant={viewMode === 'grid' ? 'card' : 'table'} count={6} />
+      ) : hasQueryError ? (
+        <Card padding="none">
+          <ErrorState
+            title="Artikel konnten nicht geladen werden"
+            description="Die Artikel oder die Kategorien aus den Einstellungen sind nicht verfügbar. Es werden bewusst keine Ersatzdaten angezeigt."
+            onRetry={retryQueries}
+          />
+        </Card>
+      ) : filteredArticles.length === 0 ? (
+        emptyState
+      ) : viewMode === 'grid' ? (
+        <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
+          {filteredArticles.map((article) => (
+            <div key={article.id} data-leaving={leavingIds.has(article.id) || undefined} className="group">
+              <Card className="flex h-full flex-col transition-colors hover:border-control-border-hover">
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-1.5">
+                      <span className="truncate text-caption text-muted">{article.category}</span>
+                      {article.taxRate !== 19 && <Badge tone="info">{article.taxRate} % USt</Badge>}
+                    </div>
+                    <h3 className="mt-1 line-clamp-2 text-sm font-semibold text-foreground">{article.title}</h3>
+                    {article.sku && <p className="mt-0.5 font-mono text-caption text-muted">#{article.sku}</p>}
+                  </div>
+                  <div className="ui-reveal flex shrink-0 gap-0.5">
+                    <IconButton size="sm" tooltip="Duplizieren" aria-label={`${article.title} duplizieren`} onClick={() => void handleDuplicate(article)}>
+                      <Copy size={14} aria-hidden="true" />
+                    </IconButton>
+                    <IconButton size="sm" tooltip="Bearbeiten" aria-label={`${article.title} bearbeiten`} onClick={() => handleOpenForm(article)}>
+                      <Edit3 size={14} aria-hidden="true" />
+                    </IconButton>
+                  </div>
+                </div>
+
+                <div className="mt-auto flex items-baseline justify-between gap-3 pt-4">
+                  <span className="text-section font-bold tabular-nums">
+                    {formatCurrency(calculateDisplayPrice(article))}
+                  </span>
+                  <span className="text-caption text-muted">{isNetPrice ? 'netto' : 'brutto'} / {article.unit}</span>
+                </div>
+              </Card>
+            </div>
+          ))}
+        </div>
+      ) : (
+        <Table aria-label="Leistungen">
+          <TableHeader>
+            <TableRow>
+              <TableHead className="w-10">
+                <Checkbox
+                  aria-label="Alle auswählen"
+                  checked={allSelected}
+                  indeterminate={selectedArticles.size > 0 && !allSelected}
+                  onChange={handleSelectAll}
+                />
+              </TableHead>
+              <TableHead>Nummer</TableHead>
+              <TableHead>Bezeichnung</TableHead>
+              <TableHead className="hidden xl:table-cell">Beschreibung</TableHead>
+              <TableHead className="hidden md:table-cell">Kategorie</TableHead>
+              <TableHead>Einheit</TableHead>
+              <TableHead numeric>Preis ({isNetPrice ? 'Netto' : 'Brutto'})</TableHead>
+              <TableHead>USt</TableHead>
+              <TableHead className="w-28"><span className="sr-only">Aktionen</span></TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {filteredArticles.map((article) => (
+              <TableRow
+                key={article.id}
+                data-leaving={leavingIds.has(article.id) || undefined}
+                selected={selectedArticles.has(article.id)}
+              >
+                <TableCell>
+                  <Checkbox
+                    aria-label={`${article.title} auswählen`}
+                    checked={selectedArticles.has(article.id)}
+                    onChange={() => handleToggleSelect(article.id)}
+                  />
+                </TableCell>
+                <TableCell className="font-mono font-semibold">
+                  {article.sku || <span className="font-normal text-muted">{EMPTY_VALUE}</span>}
+                </TableCell>
+                <TableCell className="font-medium">{article.title}</TableCell>
+                <TableCell muted className="hidden max-w-64 truncate xl:table-cell">{article.description || EMPTY_VALUE}</TableCell>
+                <TableCell className="hidden md:table-cell"><Badge tone="neutral">{article.category}</Badge></TableCell>
+                <TableCell>{article.unit}</TableCell>
+                <TableCell numeric>{formatCurrency(calculateDisplayPrice(article))}</TableCell>
+                <TableCell className="tabular-nums">{article.taxRate} %</TableCell>
+                <TableCell className="py-0.5">
+                  <div className="ui-reveal flex items-center justify-end gap-0.5">
+                    <IconButton size="sm" tooltip="Duplizieren" aria-label={`${article.title} duplizieren`} onClick={() => void handleDuplicate(article)}>
+                      <Copy size={14} aria-hidden="true" />
+                    </IconButton>
+                    <IconButton size="sm" tooltip="Bearbeiten" aria-label={`${article.title} bearbeiten`} onClick={() => handleOpenForm(article)}>
+                      <Edit3 size={14} aria-hidden="true" />
+                    </IconButton>
+                    <IconButton size="sm" tooltip="Löschen" aria-label={`${article.title} löschen`} onClick={() => void handleDelete(article.id)}>
+                      <Trash2 size={14} aria-hidden="true" />
+                    </IconButton>
+                  </div>
+                </TableCell>
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
+      )}
+
+      <Modal
+        open={isFormOpen}
+        onClose={() => setIsFormOpen(false)}
+        titleId="articlesview-form-title"
+        initialFocusRef={titleInputRef}
+      >
+        <div className="flex items-start gap-3 px-4.5 pb-2.5 pt-4">
+          <div className="min-w-0 flex-1">
+            <h2 id="articlesview-form-title" className="text-title text-foreground">{editingArticle ? 'Artikel bearbeiten' : 'Neuer Artikel'}</h2>
+            <p className="text-caption text-muted">
+              {editingArticle ? `ID: ${editingArticle.id.substring(0,8)}` : 'Neuer Eintrag wird erstellt'}
+            </p>
+          </div>
+          <IconButton size="sm" aria-label="Schließen" onClick={() => setIsFormOpen(false)}>
+            <X size={16} aria-hidden="true" />
+          </IconButton>
+        </div>
+
+        <div className="flex flex-col gap-3 px-4.5 pb-4 pt-1">
+          {operationTone === 'error' && banner}
+          <div className="flex gap-3">
+            <div className="min-w-0 flex-1">
+              <Input
+                ref={titleInputRef}
+                id="articlesview-bezeichnung"
+                label="Bezeichnung"
+                required
+                value={formData.title}
+                onChange={(e) => setFormData({...formData, title: e.target.value})}
+                placeholder="z.B. Webdesign"
+                error={formErrors.title}
+                fullWidth
+              />
+            </div>
+            <div className="w-1/3">
+              <Input
+                id="articlesview-artikel-nr"
+                label="Artikel-Nr."
+                value={formData.sku}
+                onChange={(e) => setFormData({...formData, sku: e.target.value})}
+                placeholder="SKU-001"
+                error={formErrors.sku}
+                className="font-mono"
+                fullWidth
+              />
+            </div>
+          </div>
+
+          <Select
+            id="articlesview-kategorie"
+            label="Kategorie"
+            value={formData.category}
+            onChange={(e) => setFormData({...formData, category: e.target.value})}
+            error={formErrors.category}
+            fullWidth
+          >
+            {configuredCategories.map((c) => (
+              <option key={c} value={c}>
+                {c}
+              </option>
+            ))}
+          </Select>
+
+          <h3 className="mt-1 text-eyebrow uppercase text-muted">Preise & Steuer</h3>
+          <div className="grid grid-cols-2 gap-3">
+            <Input
+              id="articlesview-preis"
+              type="number"
+              step="0.01"
+              label="Preis (Netto)"
+              required
+              value={formData.price}
+              onChange={(e) => setFormData({...formData, price: Number(e.target.value)})}
+              suffix="EUR"
+              error={formErrors.price}
+              className={`tabular-nums ${Number(formData.price) < 0 ? 'border-error text-error-text' : ''}`}
+              fullWidth
+            />
+            <Select
+              id="articlesview-einheit"
+              label="Einheit"
+              value={formData.unit}
+              onChange={(e) => setFormData({...formData, unit: e.target.value})}
+              error={formErrors.unit}
+              fullWidth
+            >
+              <option value="Std">Stunde</option>
+              <option value="Stk">Stück</option>
+              <option value="Pauschale">Pauschale</option>
+              <option value="Tag">Tag</option>
+              <option value="Monat">Monat</option>
+              <option value="km">Kilometer</option>
+            </Select>
+          </div>
+
+          <div>
+            <p className="mb-1 text-caption font-medium text-foreground-secondary" id="articlesview-ust">Umsatzsteuer (USt)</p>
+            <div role="group" aria-labelledby="articlesview-ust" className="inline-flex gap-0.5 rounded-control border border-border bg-surface-sunken p-0.5">
+              {[19, 7, 0].map((rate) => (
+                <button
+                  key={rate}
+                  type="button"
+                  aria-pressed={formData.taxRate === rate}
+                  onClick={() => setFormData({...formData, taxRate: rate})}
+                  className={`h-6.5 rounded-sm px-2.5 text-caption tabular-nums transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring ${
+                    formData.taxRate === rate
+                      ? 'bg-surface font-semibold text-foreground shadow-thumb'
+                      : 'font-medium text-muted hover:text-foreground'
+                  }`}
+                >
+                  {rate}%
+                </button>
+              ))}
+            </div>
+            {formErrors.taxRate && <p className="mt-1 text-caption text-error-text">{formErrors.taxRate}</p>}
+          </div>
+
+          <Textarea
+            id="articlesview-beschreibung"
+            label="Beschreibung"
+            rows={4}
+            value={formData.description}
+            onChange={(e) => setFormData({...formData, description: e.target.value})}
+            placeholder="Details zum Produkt..."
+            hint="Wird auf der Rechnung unter dem Titel angezeigt."
+            fullWidth
+          />
+        </div>
+
+        <div className="flex flex-wrap justify-end gap-2 border-t border-border px-4.5 py-3">
+          {editingArticle && (
+            <Button variant="danger" className="mr-auto" aria-label="Artikel löschen" onClick={() => void handleDelete(editingArticle.id)}>
+              <Trash2 size={16} aria-hidden="true" /> Löschen
+            </Button>
+          )}
+          <Button onClick={() => void handleSubmit()} disabled={isSaving}>
+            <Check size={16} aria-hidden="true" />
+            {isSaving ? 'Speichere...' : editingArticle ? 'Speichern' : 'Erstellen'}
+          </Button>
+        </div>
+      </Modal>
     </div>
   );
 };

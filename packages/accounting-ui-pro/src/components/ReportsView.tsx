@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Button, FeedbackProvider, useActionFeedback } from '@billme/ui';
+import { Button, Card, Checkbox, FeedbackProvider, Input, Select, useActionFeedback } from '@billme/ui';
 import { positionTitle } from '../domain/references';
 import {
   isSupportedEurTaxYear,
@@ -672,286 +672,273 @@ function ReportsViewContent({ dataAdapter, chartFramework, businessReportingProf
   };
 
   return (
-    <div className="flex flex-col h-full overflow-hidden">
-      <div className="sr-only">
-        <div>
-          <div>
-            Auswertungen
-          </div>
-          <div>
-            <h2>EÜR und Finanzberichte</h2>
-            <p className="text-xs text-muted">Hierarchische Positionen mit Journal-Drilldown.</p>
-          </div>
-        </div>
+    <div className="min-w-0 space-y-3.5">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <ReportTabSwitch activeTab={activeTab} onChange={setActiveTab} tabs={visibleTabs} />
+        <ReportStatusBadge quality={activeQuality} />
       </div>
-
-      <div className="flex-1 min-h-0 overflow-y-auto p-4 space-y-3">
-        <ReportMappingSetup
-          dataAdapter={dataAdapter}
-          chart={filters.chart}
-          role={role}
-          statements={mappingStatements}
-          asOfDate={mappingAsOfDate}
-          refreshKey={reportsRetryKey}
-          onMappingChanged={() => setReportsRetryKey((current) => current + 1)}
-          activeReportMapping={{ label: activeReportLabel, blocked: Boolean(activeQuality && reportIsMappingBlocked(activeQuality)) }}
-        />
-        <ReportToolbar
-          filters={filtersForTab(activeTab)}
-          onChange={setFilters}
-          activeTab={activeTab}
-          onExport={exportReport}
-          exporting={exporting}
-          exportBlockedReason={exportBlockedReason}
-          lockNativeEurPeriod={activeTab === 'eur'}
-          nativeEurTaxYear={eurTaxYear}
-        />
-        {activeTab === 'eur' && dataAdapter?.saveReportSnapshot ? canMutate ? (
-          <div className="flex flex-wrap items-end gap-2 rounded-xl border border-border bg-surface p-3">
-            <label className="flex min-w-64 flex-1 flex-col gap-1 text-xs font-semibold text-foreground" htmlFor="report-freeze-reason">
-              Audit-Grund für EÜR-Snapshot
-              <input
-                id="report-freeze-reason"
-                className="px-2.5 h-8 hover:border-control-border-hover rounded-control border border-control-border bg-surface text-sm font-normal"
-                value={freezeReason}
-                onChange={(event) => setFreezeReason(event.target.value)}
-                placeholder={`z. B. Abschlussprüfung EÜR ${eurTaxYear}`}
-                maxLength={500}
-              />
-            </label>
-            <Button type="button" variant="secondary" onClick={() => void freezeCurrentReport()} disabled={freezing || !activeReport || activeQualityBlocksFreeze || !freezeReason.trim()} aria-busy={freezing}>
-              {freezing ? 'Friere ein…' : 'Snapshot einfrieren'}
-            </Button>
-            {activeQualityBlocksFreeze ? <p className="basis-full text-xs text-error-text" role="status">Snapshot kann wegen unvollständiger oder nicht-live Reportdaten nicht eingefroren werden.</p> : null}
+      <ReportToolbar
+        filters={filtersForTab(activeTab)}
+        onChange={setFilters}
+        activeTab={activeTab}
+        onExport={exportReport}
+        exporting={exporting}
+        exportBlockedReason={exportBlockedReason}
+        lockNativeEurPeriod={activeTab === 'eur'}
+        nativeEurTaxYear={eurTaxYear}
+      />
+      <ReportMappingSetup
+        dataAdapter={dataAdapter}
+        chart={filters.chart}
+        role={role}
+        statements={mappingStatements}
+        asOfDate={mappingAsOfDate}
+        validFrom={reportDateRange(filters).from ?? mappingAsOfDate}
+        refreshKey={reportsRetryKey}
+        onMappingChanged={() => setReportsRetryKey((current) => current + 1)}
+        activeReportMapping={{ label: activeReportLabel, blocked: Boolean(activeQuality && reportIsMappingBlocked(activeQuality)) }}
+      />
+      {activeTab === 'eur' && dataAdapter?.saveReportSnapshot ? canMutate ? (
+        <Card className="flex flex-wrap items-end gap-2">
+          <div className="min-w-64 flex-1">
+            <Input
+              id="report-freeze-reason"
+              label="Audit-Grund für EÜR-Snapshot"
+              value={freezeReason}
+              onChange={(event) => setFreezeReason(event.target.value)}
+              placeholder={`z. B. Abschlussprüfung EÜR ${eurTaxYear}`}
+              maxLength={500}
+              fullWidth
+            />
           </div>
-        ) : <div className="rounded-xl border border-border bg-surface-muted px-3 py-2 text-sm text-muted" role="status">Diese Rolle kann EÜR-Snapshots nur lesen.</div> : null}
-        {activeTab === 'eur' && (dataAdapter?.listEurCashItems || dataAdapter?.listEurCashFacts || dataAdapter?.listEurAnnexFacts) ? (
-          <section className="space-y-3 rounded-xl border border-border bg-surface p-3" aria-labelledby="eur-classification-heading">
-            <div className="flex flex-wrap items-end justify-between gap-3">
-              <div>
-                <h2 id="eur-classification-heading" className="text-sm font-semibold text-foreground">EÜR-Klassifikation {eurTaxYear}</h2>
-                <p className="text-xs text-muted">Cash-Basis-Quellen prüfen und einer echten EÜR-Kennziffer zuordnen. Private, durchlaufende und geteilte Fakten bleiben nachvollziehbar.</p>
-              </div>
-              <label className="flex flex-col gap-1 text-xs font-semibold" htmlFor="eur-tax-year">
-                Steuerjahr
-                <select id="eur-tax-year" value={eurTaxYear} onChange={(event) => {
-                  const year = Number(event.target.value);
-                  if (isSupportedEurTaxYear(year)) {
-                    eurTaxYearUserSelected.current = true;
-                    setEurTaxYear(year);
-                  }
-                }} className="px-2.5 h-8 hover:border-control-border-hover rounded-control border border-control-border bg-surface text-sm font-normal">
-                  {SUPPORTED_EUR_TAX_YEARS.map((year) => <option key={year} value={year}>{year}</option>)}
-                </select>
-              </label>
-              <Button type="button" size="sm" variant="secondary" onClick={() => setReportsRetryKey((current) => current + 1)} disabled={eurItemsLoading} aria-busy={eurItemsLoading}>
-                {eurItemsLoading ? 'Lade Quellen…' : 'Quellen aktualisieren'}
-              </Button>
+          <Button type="button" variant="secondary" onClick={() => void freezeCurrentReport()} disabled={freezing || !activeReport || activeQualityBlocksFreeze || !freezeReason.trim()} aria-busy={freezing}>
+            {freezing ? 'Friere ein…' : 'Snapshot einfrieren'}
+          </Button>
+          {activeQualityBlocksFreeze ? <p className="basis-full text-caption text-error-text" role="status">Snapshot kann wegen unvollständiger oder nicht-live Reportdaten nicht eingefroren werden.</p> : null}
+        </Card>
+      ) : <div className="rounded-control border border-border bg-surface-sunken px-3 py-2.5 text-control text-muted" role="status">Diese Rolle kann EÜR-Snapshots nur lesen.</div> : null}
+      {activeTab === 'eur' && (dataAdapter?.listEurCashItems || dataAdapter?.listEurCashFacts || dataAdapter?.listEurAnnexFacts) ? (
+        <section className="rounded-card border border-border bg-surface" aria-labelledby="eur-classification-heading">
+          <div className="flex flex-wrap items-end justify-between gap-3 border-b border-border px-3.5 py-3">
+            <div className="min-w-48 flex-1">
+              <h2 id="eur-classification-heading" className="text-section text-foreground">EÜR-Klassifikation {eurTaxYear}</h2>
+              <p className="mt-0.5 text-caption text-muted">Cash-Basis-Quellen prüfen und einer echten EÜR-Kennziffer zuordnen. Private, durchlaufende und geteilte Fakten bleiben nachvollziehbar.</p>
             </div>
+            <Select
+              id="eur-tax-year"
+              label="Steuerjahr"
+              value={eurTaxYear}
+              onChange={(event) => {
+                const year = Number(event.target.value);
+                if (isSupportedEurTaxYear(year)) {
+                  eurTaxYearUserSelected.current = true;
+                  setEurTaxYear(year);
+                }
+              }}
+            >
+              {SUPPORTED_EUR_TAX_YEARS.map((year) => <option key={year} value={year}>{year}</option>)}
+            </Select>
+            <Button type="button" variant="secondary" onClick={() => setReportsRetryKey((current) => current + 1)} disabled={eurItemsLoading} aria-busy={eurItemsLoading}>
+              {eurItemsLoading ? 'Lade Quellen…' : 'Quellen aktualisieren'}
+            </Button>
+          </div>
+          <div className="space-y-3 p-3.5">
             {canMutate && (dataAdapter.upsertEurClassification || dataAdapter.saveEurCashFact || dataAdapter.saveEurAnnexFact) ? (
-              <label className="flex max-w-xl flex-col gap-1 text-xs font-semibold text-foreground" htmlFor="eur-classification-reason">
-                Audit-Grund für Klassifikationen
-                <input
+              <div className="max-w-xl">
+                <Input
                   id="eur-classification-reason"
-                  className="px-2.5 h-8 hover:border-control-border-hover rounded-control border border-control-border bg-surface text-sm font-normal"
+                  label="Audit-Grund für Klassifikationen"
                   value={eurClassificationReason}
                   onChange={(event) => setEurClassificationReason(event.target.value)}
                   placeholder={`z. B. Belegprüfung EÜR ${eurTaxYear}`}
                   maxLength={500}
+                  fullWidth
                 />
-              </label>
-            ) : <p className="rounded-lg border border-border-subtle bg-surface-muted px-3 py-2 text-sm text-muted" role="status">Diese Rolle kann EÜR-Quellen prüfen, aber nicht klassifizieren.</p>}
-            {eurItemsError ? <div className="rounded-lg border border-error-border bg-error-bg px-3 py-2 text-sm text-error-text" role="alert">{eurItemsError}</div> : null}
-            {eurFactsError ? <div className="rounded-lg border border-error-border bg-error-bg px-3 py-2 text-sm text-error-text" role="alert">{eurFactsError}</div> : null}
-            {!eurItemsLoading && !eurItemsError && eurItems.length === 0 ? <p className="text-sm text-muted">Keine Cash-Basis-Quellen im Kalenderjahr {eurTaxYear}.</p> : null}
+              </div>
+            ) : <p className="rounded-control border border-border bg-surface-sunken px-3 py-2.5 text-control text-muted" role="status">Diese Rolle kann EÜR-Quellen prüfen, aber nicht klassifizieren.</p>}
+            {eurItemsError ? <div className="rounded-control border border-error-border bg-error-bg px-3 py-2.5 text-control text-error-text" role="alert">{eurItemsError}</div> : null}
+            {eurFactsError ? <div className="rounded-control border border-error-border bg-error-bg px-3 py-2.5 text-control text-error-text" role="alert">{eurFactsError}</div> : null}
+            {!eurItemsLoading && !eurItemsError && eurItems.length === 0 ? <p className="text-control text-muted">Keine Cash-Basis-Quellen im Kalenderjahr {eurTaxYear}.</p> : null}
             {eurItems.length > 0 ? (
-              <div className="space-y-2" role="list" aria-label="Unklassifizierte EÜR-Cash-Quellen">
+              <div className="divide-y divide-border border-y border-border" role="list" aria-label="Unklassifizierte EÜR-Cash-Quellen">
                 {eurItems.map((item) => {
                   const key = eurCashItemKey(item);
                   const draft = eurDrafts[key] ?? eurDraftFor(item);
                   return (
-                    <div key={key} role="listitem" className="grid gap-2 rounded-lg border border-border-subtle bg-surface-muted p-3 lg:grid-cols-[minmax(12rem,1.4fr)_minmax(14rem,1fr)_auto] lg:items-end">
+                    <div key={key} role="listitem" className="grid gap-2 py-3 lg:grid-cols-[minmax(12rem,1.4fr)_minmax(14rem,1fr)_auto] lg:items-end">
                       <div className="min-w-0">
                         <p className="truncate text-sm font-semibold text-foreground">{item.purpose || item.counterparty || item.sourceId}</p>
-                        <p className="text-xs text-muted">{item.date} · {item.flowType === 'income' ? 'Einnahme' : 'Ausgabe'} · <span className="tabular-nums">{item.amountGross.toFixed(2)} €</span> brutto</p>
-                        <p className="truncate text-xs text-muted">Quelle: {item.sourceType}:{item.sourceId}</p>
-                        {item.vatWarning ? <p className="text-xs text-warning-text">{item.vatWarning}</p> : null}
+                        <p className="text-caption text-muted">{item.date} · {item.flowType === 'income' ? 'Einnahme' : 'Ausgabe'} · <span className="tabular-nums">{item.amountGross.toFixed(2)} €</span> brutto</p>
+                        <p className="truncate text-caption text-muted">Quelle: {item.sourceType}:{item.sourceId}</p>
+                        {item.vatWarning ? <p className="text-caption text-warning-text">{item.vatWarning}</p> : null}
                       </div>
                       {canMutate && (dataAdapter.upsertEurClassification || dataAdapter.saveEurCashFact) ? <div className="grid gap-2 sm:grid-cols-[minmax(12rem,1fr)_auto_auto] sm:items-end">
-                        {dataAdapter.saveEurCashFact ? <label className="flex flex-col gap-1 text-xs font-semibold text-foreground" htmlFor={`eur-kind-${key}`}>
-                          Faktart
-                          <select id={`eur-kind-${key}`} className="px-2.5 h-8 hover:border-control-border-hover rounded-control border border-control-border bg-surface text-sm font-normal" value={eurFactKinds[key] ?? item.flowType} onChange={(event) => setEurFactKinds((current) => ({ ...current, [key]: event.target.value as typeof eurFactKinds[string] }))}>
+                        {dataAdapter.saveEurCashFact ? (
+                          <Select id={`eur-kind-${key}`} label="Faktart" fullWidth value={eurFactKinds[key] ?? item.flowType} onChange={(event) => setEurFactKinds((current) => ({ ...current, [key]: event.target.value as typeof eurFactKinds[string] }))}>
                             <option value="income">Einnahme</option><option value="expense">Ausgabe</option><option value="private-withdrawal">Privatentnahme</option><option value="private-contribution">Privateinlage</option><option value="pass-through">Durchlaufender Posten</option>
-                          </select>
-                        </label> : null}
-                        <label className="flex flex-col gap-1 text-xs font-semibold text-foreground" htmlFor={`eur-line-${key}`}>
-                          EÜR-Zeile
-                          <select
-                            id={`eur-line-${key}`}
-                            className="px-2.5 h-8 hover:border-control-border-hover rounded-control border border-control-border bg-surface text-sm font-normal"
-                            value={draft.eurLineId ?? ''}
-                            onChange={(event) => setEurDrafts((current) => ({ ...current, [key]: { ...draft, eurLineId: event.target.value || undefined } }))}
-                          >
-                            <option value="">Nicht klassifiziert</option>
-                            {eurLines.map((line) => <option key={line.id} value={line.id}>{line.label}</option>)}
-                          </select>
-                        </label>
-                        <label className="flex items-center gap-2 pb-2 text-xs text-foreground" htmlFor={`eur-excluded-${key}`}>
-                          <input id={`eur-excluded-${key}`} type="checkbox" checked={draft.excluded} onChange={(event) => setEurDrafts((current) => ({ ...current, [key]: { ...draft, excluded: event.target.checked } }))} />
-                          Ausschließen
-                        </label>
-                        <label className="flex flex-col gap-1 text-xs font-semibold text-foreground" htmlFor={`eur-vat-${key}`}>
-                          USt.
-                          <select id={`eur-vat-${key}`} className="px-2.5 h-8 hover:border-control-border-hover rounded-control border border-control-border bg-surface text-sm font-normal" value={draft.vatMode} onChange={(event) => setEurDrafts((current) => ({ ...current, [key]: { ...draft, vatMode: event.target.value as EurClassificationDraft['vatMode'] } }))}>
-                            <option value="none">Keine Aufteilung</option>
-                            <option value="default">Netto aus USt-Satz</option>
-                          </select>
-                        </label>
-                        {draft.vatMode === 'default' ? (
-                          <label className="flex flex-col gap-1 text-xs font-semibold text-foreground" htmlFor={`eur-vat-rate-${key}`}>
-                            USt.-Satz
-                            <select
-                              id={`eur-vat-rate-${key}`}
-                              className="px-2.5 h-8 hover:border-control-border-hover rounded-control border border-control-border bg-surface text-sm font-normal"
-                              value={draft.vatRate ?? ''}
-                              onChange={(event) => setEurDrafts((current) => ({ ...current, [key]: { ...draft, vatRate: event.target.value ? Number(event.target.value) : undefined } }))}
-                            >
-                              <option value="">Bitte wählen</option>
-                              <option value="0">0 %</option>
-                              <option value="7">7 %</option>
-                              <option value="19">19 %</option>
-                            </select>
-                          </label>
+                          </Select>
                         ) : null}
-                        {dataAdapter.saveEurCashFact ? <label className="flex flex-col gap-1 text-xs font-semibold text-foreground" htmlFor={`eur-split-${key}`}>
-                          Split-Netto (optional)
-                          <span className="text-xs font-normal text-muted">Restbetrag wird als nicht abzugsfähig gespeichert.</span>
-                          <input id={`eur-split-${key}`} aria-label="Split-Netto (optional)" type="number" min="0" step="0.01" className="px-2.5 h-8 hover:border-control-border-hover rounded-control border border-control-border bg-surface text-sm font-normal" value={eurSplitAmounts[key] ?? ''} onChange={(event) => setEurSplitAmounts((current) => ({ ...current, [key]: event.target.value }))} />
-                        </label> : null}
+                        <Select
+                          id={`eur-line-${key}`}
+                          label="EÜR-Zeile"
+                          fullWidth
+                          value={draft.eurLineId ?? ''}
+                          onChange={(event) => setEurDrafts((current) => ({ ...current, [key]: { ...draft, eurLineId: event.target.value || undefined } }))}
+                        >
+                          <option value="">Nicht klassifiziert</option>
+                          {eurLines.map((line) => <option key={line.id} value={line.id}>{line.label}</option>)}
+                        </Select>
+                        <Checkbox
+                          id={`eur-excluded-${key}`}
+                          label="Ausschließen"
+                          className="pb-2"
+                          checked={draft.excluded}
+                          onChange={(event) => setEurDrafts((current) => ({ ...current, [key]: { ...draft, excluded: event.target.checked } }))}
+                        />
+                        <Select id={`eur-vat-${key}`} label="USt." fullWidth value={draft.vatMode} onChange={(event) => setEurDrafts((current) => ({ ...current, [key]: { ...draft, vatMode: event.target.value as EurClassificationDraft['vatMode'] } }))}>
+                          <option value="none">Keine Aufteilung</option>
+                          <option value="default">Netto aus USt-Satz</option>
+                        </Select>
+                        {draft.vatMode === 'default' ? (
+                          <Select
+                            id={`eur-vat-rate-${key}`}
+                            label="USt.-Satz"
+                            fullWidth
+                            value={draft.vatRate ?? ''}
+                            onChange={(event) => setEurDrafts((current) => ({ ...current, [key]: { ...draft, vatRate: event.target.value ? Number(event.target.value) : undefined } }))}
+                          >
+                            <option value="">Bitte wählen</option>
+                            <option value="0">0 %</option>
+                            <option value="7">7 %</option>
+                            <option value="19">19 %</option>
+                          </Select>
+                        ) : null}
+                        {dataAdapter.saveEurCashFact ? (
+                          <Input
+                            id={`eur-split-${key}`}
+                            label="Split-Netto (optional)"
+                            hint="Restbetrag wird als nicht abzugsfähig gespeichert."
+                            type="number"
+                            min="0"
+                            step="0.01"
+                            fullWidth
+                            value={eurSplitAmounts[key] ?? ''}
+                            onChange={(event) => setEurSplitAmounts((current) => ({ ...current, [key]: event.target.value }))}
+                          />
+                        ) : null}
                       </div> : null}
-                      {canMutate && dataAdapter.upsertEurClassification ? <Button type="button" size="sm" variant="secondary" onClick={() => void saveEurClassification(item)} disabled={eurClassifying !== null || !eurClassificationReason.trim() || (draft.vatMode === 'default' && draft.vatRate === undefined)} aria-busy={eurClassifying === key}>
+                      {canMutate && dataAdapter.upsertEurClassification ? <Button type="button" variant="secondary" onClick={() => void saveEurClassification(item)} disabled={eurClassifying !== null || !eurClassificationReason.trim() || (draft.vatMode === 'default' && draft.vatRate === undefined)} aria-busy={eurClassifying === key}>
                         {eurClassifying === key ? 'Speichere…' : 'Speichern'}
                       </Button> : null}
-                      {canMutate && dataAdapter.saveEurCashFact ? <Button type="button" size="sm" variant="secondary" onClick={() => void saveEurFact(item)} disabled={eurClassifying !== null || !eurClassificationReason.trim()} aria-busy={eurClassifying === key}>Fakt speichern</Button> : null}
+                      {canMutate && dataAdapter.saveEurCashFact ? <Button type="button" variant="secondary" onClick={() => void saveEurFact(item)} disabled={eurClassifying !== null || !eurClassificationReason.trim()} aria-busy={eurClassifying === key}>Fakt speichern</Button> : null}
                     </div>
                   );
                 })}
               </div>
             ) : null}
-            {canMutate && dataAdapter.saveEurAnnexFact ? <div className="grid gap-2 rounded-lg border border-border-subtle bg-surface-muted p-3 sm:grid-cols-[8rem_10rem_minmax(8rem,1fr)_auto] sm:items-end" aria-label="EÜR-Anlagen-Fakt">
-              <label className="flex flex-col gap-1 text-xs font-semibold">Anlage
-                <select value={eurAnnex} onChange={(event) => setEurAnnex(event.target.value)} className="px-2.5 h-8 hover:border-control-border-hover rounded-control border border-control-border bg-surface text-sm font-normal"><option value="IAB">IAB</option><option value="annex">Weitere Anlage</option></select>
-              </label>
-              <label className="flex flex-col gap-1 text-xs font-semibold">Zeile
-                <input value={eurAnnexLine} onChange={(event) => setEurAnnexLine(event.target.value)} className="px-2.5 h-8 hover:border-control-border-hover rounded-control border border-control-border bg-surface text-sm font-normal" />
-              </label>
-              <label className="flex flex-col gap-1 text-xs font-semibold">Betrag
-                <input type="number" step="0.01" value={eurAnnexAmount} onChange={(event) => setEurAnnexAmount(event.target.value)} className="px-2.5 h-8 hover:border-control-border-hover rounded-control border border-control-border bg-surface text-sm font-normal" />
-              </label>
-              <Button type="button" size="sm" variant="secondary" onClick={() => void saveEurAnnexFact()} disabled={eurAnnexBusy || !eurClassificationReason.trim() || eurAnnexAmount === ''} aria-busy={eurAnnexBusy}>{eurAnnexBusy ? 'Speichere…' : 'Anlagen-Fakt speichern'}</Button>
+            {canMutate && dataAdapter.saveEurAnnexFact ? <div className="grid gap-2 sm:grid-cols-[8rem_10rem_minmax(8rem,1fr)_auto] sm:items-end" aria-label="EÜR-Anlagen-Fakt">
+              <Select label="Anlage" fullWidth value={eurAnnex} onChange={(event) => setEurAnnex(event.target.value)}>
+                <option value="IAB">IAB</option><option value="annex">Weitere Anlage</option>
+              </Select>
+              <Input label="Zeile" fullWidth value={eurAnnexLine} onChange={(event) => setEurAnnexLine(event.target.value)} />
+              <Input label="Betrag" type="number" step="0.01" fullWidth value={eurAnnexAmount} onChange={(event) => setEurAnnexAmount(event.target.value)} />
+              <Button type="button" variant="secondary" onClick={() => void saveEurAnnexFact()} disabled={eurAnnexBusy || !eurClassificationReason.trim() || eurAnnexAmount === ''} aria-busy={eurAnnexBusy}>{eurAnnexBusy ? 'Speichere…' : 'Anlagen-Fakt speichern'}</Button>
             </div> : null}
-            {eurAnnexFacts.length > 0 ? <div className="rounded-lg border border-border-subtle bg-surface-muted p-3 text-sm" aria-label="Gespeicherte EÜR-Anlagen-Fakten">
-              <p className="font-semibold">Gespeicherte Anlagen-Fakten</p>
-              <ul className="mt-2 space-y-1 text-xs text-muted">
+            {eurAnnexFacts.length > 0 ? <div className="border-t border-border pt-3" aria-label="Gespeicherte EÜR-Anlagen-Fakten">
+              <p className="text-label text-foreground">Gespeicherte Anlagen-Fakten</p>
+              <ul className="mt-1.5 space-y-1 text-caption text-muted">
                 {eurAnnexFacts.map((fact) => <li key={fact.id}>{fact.annex} · {fact.lineId} · <span className="tabular-nums">{fact.amount.toFixed(2)} €</span></li>)}
               </ul>
             </div> : null}
-          </section>
-        ) : null}
-        {reportsNotice ? <div className="rounded-xl border border-success-border bg-success-bg px-3 py-2 text-sm text-success-text" role="status" aria-live="polite">{reportsNotice}</div> : null}
-        <div className="flex items-center justify-between gap-3">
-          <ReportTabSwitch activeTab={activeTab} onChange={setActiveTab} tabs={visibleTabs} />
-          <div className="text-xs text-muted flex items-center gap-2">
-            Aktive Ansicht: {activeReportLabel}
-            <ReportStatusBadge quality={activeQuality} />
           </div>
+        </section>
+      ) : null}
+      {reportsNotice ? <div className="rounded-control border border-success-border bg-success-bg px-3 py-2.5 text-control text-success-text" role="status" aria-live="polite">{reportsNotice}</div> : null}
+
+      <div className="flex min-w-0 flex-col gap-3.5 xl:flex-row">
+        <div className="min-w-0 flex-1 space-y-3.5">
+          {activeReportLoading ? (
+            <Card className="text-control text-muted">
+              Lade Auswertungen…
+            </Card>
+          ) : activeReportLoadError || reportsError ? (
+            <div className="flex flex-wrap items-center gap-3 rounded-control border border-error-border bg-error-bg px-3 py-2.5 text-control text-error-text" role="alert" aria-live="assertive">
+              <span>{reportErrorMessage}</span>
+              <Button
+                type="button"
+                size="sm"
+                variant="secondary"
+                onClick={() => setReportsRetryKey((current) => current + 1)}
+                disabled={activeReportLoading}
+                aria-busy={activeReportLoading}
+              >
+                {activeReportLoading ? 'Lade erneut…' : 'Erneut versuchen'}
+              </Button>
+            </div>
+          ) : activeReportUnavailable ? (
+            <div className="flex flex-wrap items-center gap-3 rounded-control border border-error-border bg-error-bg px-3 py-2.5 text-control text-error-text" role="alert" aria-live="assertive">
+              <span>Für den aktuellen Report liegen keine Daten vor.</span>
+              <Button type="button" size="sm" variant="secondary" onClick={() => setReportsRetryKey((current) => current + 1)}>
+                Erneut versuchen
+              </Button>
+            </div>
+          ) : (
+            <>
+              <MappingHealthBlock quality={activeQuality} />
+              {!activeQuality || reportIsMappingBlocked(activeQuality) ? null : activeTab === 'susa' ? (
+                <SusaTable report={susaReport} onSelectRow={handleSusaSelect} onRetry={() => setReportsRetryKey((current) => current + 1)} />
+              ) : activeTab === 'bilanz' ? (
+                <BalanceSheetPreviewView report={balanceSheetPreview} onSelectLine={handleBilanzSelect} onRetry={() => setReportsRetryKey((current) => current + 1)} />
+              ) : (
+                <GuvView report={activeReport as GuvReport | null} title={activeReportLabel} onSelectLine={handleGuvSelect} onRetry={() => setReportsRetryKey((current) => current + 1)} />
+              )}
+            </>
+          )}
         </div>
 
-        <div className="flex min-w-0 flex-col xl:flex-row gap-4">
-            <div className="flex-1 min-w-0 pr-1">
-              {activeReportLoading ? (
-                <div className="rounded-2xl border border-border bg-surface p-8 text-sm text-muted">
-                  Lade Auswertungen…
-                </div>
-              ) : activeReportLoadError || reportsError ? (
-                <div className="flex flex-wrap items-center gap-3 rounded-2xl border border-error-border bg-error-bg p-8 text-sm text-error-text" role="alert" aria-live="assertive">
-                  <span>{reportErrorMessage}</span>
+        <div className={`min-w-0 w-full space-y-3 ${drilldownSelection ? 'xl:w-96' : 'xl:w-72'}`}>
+          {drilldownSelection ? (
+            <>
+              <ReportDrilldownPanel
+                selection={drilldownSelection}
+                entries={drilldownEntries}
+                loading={drilldownLoading}
+                onClose={() => {
+                  setDrilldownSelection(null);
+                  setDrilldownError(null);
+                }}
+                onOpenTransaction={onOpenTransaction}
+                onOpenInvoice={onOpenInvoice}
+                onOpenIncomingInvoice={onOpenIncomingInvoice}
+                onOpenJournalEntry={onOpenJournalEntry}
+              />
+              {drilldownError ? (
+                <div className="flex flex-wrap items-center gap-3 rounded-control border border-error-border bg-error-bg px-3 py-2.5 text-control text-error-text" role="alert" aria-live="assertive">
+                  <span>{drilldownError}</span>
                   <Button
                     type="button"
                     size="sm"
                     variant="secondary"
-                    onClick={() => setReportsRetryKey((current) => current + 1)}
-                    disabled={activeReportLoading}
-                    aria-busy={activeReportLoading}
+                    onClick={() => setDrilldownRetryKey((current) => current + 1)}
+                    disabled={drilldownLoading}
+                    aria-busy={drilldownLoading}
                   >
-                    {activeReportLoading ? 'Lade erneut…' : 'Erneut versuchen'}
+                    {drilldownLoading ? 'Lade erneut…' : 'Drilldown erneut versuchen'}
                   </Button>
                 </div>
-              ) : activeReportUnavailable ? (
-                <div className="flex flex-wrap items-center gap-3 rounded-2xl border border-error-border bg-error-bg p-8 text-sm text-error-text" role="alert" aria-live="assertive">
-                  <span>Für den aktuellen Report liegen keine Daten vor.</span>
-                  <Button type="button" size="sm" variant="secondary" onClick={() => setReportsRetryKey((current) => current + 1)}>
-                    Erneut versuchen
-                  </Button>
-                </div>
-              ) : (
-                <>
-                  <MappingHealthBlock quality={activeQuality} />
-                  {!activeQuality || reportIsMappingBlocked(activeQuality) ? null : activeTab === 'susa' ? (
-                    <SusaTable report={susaReport} onSelectRow={handleSusaSelect} onRetry={() => setReportsRetryKey((current) => current + 1)} />
-                  ) : activeTab === 'bilanz' ? (
-                    <BalanceSheetPreviewView report={balanceSheetPreview} onSelectLine={handleBilanzSelect} onRetry={() => setReportsRetryKey((current) => current + 1)} />
-                  ) : (
-                    <GuvView report={activeReport as GuvReport | null} title={activeReportLabel} onSelectLine={handleGuvSelect} onRetry={() => setReportsRetryKey((current) => current + 1)} />
-                  )}
-                </>
-              )}
-            </div>
-
-            <div className={`min-w-0 overflow-hidden ${drilldownSelection ? 'xl:w-96 w-full' : 'xl:w-72 w-full'}`}>
-              {drilldownSelection ? (
-                <div className="space-y-3">
-                  <ReportDrilldownPanel
-                    selection={drilldownSelection}
-                    entries={drilldownEntries}
-                    loading={drilldownLoading}
-                    onClose={() => {
-                      setDrilldownSelection(null);
-                      setDrilldownError(null);
-                    }}
-                    onOpenTransaction={onOpenTransaction}
-                    onOpenInvoice={onOpenInvoice}
-                    onOpenIncomingInvoice={onOpenIncomingInvoice}
-                    onOpenJournalEntry={onOpenJournalEntry}
-                  />
-                  {drilldownError ? (
-                    <div className="flex flex-wrap items-center gap-3 rounded-xl border border-error-border bg-error-bg px-3 py-2 text-sm text-error-text" role="alert" aria-live="assertive">
-                      <span>{drilldownError}</span>
-                      <Button
-                        type="button"
-                        size="sm"
-                        variant="secondary"
-                        onClick={() => setDrilldownRetryKey((current) => current + 1)}
-                        disabled={drilldownLoading}
-                        aria-busy={drilldownLoading}
-                      >
-                        {drilldownLoading ? 'Lade erneut…' : 'Drilldown erneut versuchen'}
-                      </Button>
-                    </div>
-                  ) : null}
-                </div>
-              ) : (
-                <div className="space-y-3">
-                  <div className="hidden xl:flex h-full items-center justify-center rounded-2xl border border-dashed border-border bg-surface/70 text-sm text-muted px-6 text-center">
-                    Konto- oder Reportzeile anklicken, um Drilldown zu sehen.
-                  </div>
-                  {drilldownError ? <div className="rounded-xl border border-error-border bg-error-bg px-3 py-2 text-sm text-error-text" role="alert">{drilldownError}</div> : null}
-                </div>
-              )}
-            </div>
+              ) : null}
+            </>
+          ) : (
+            <>
+              <div className="hidden rounded-card border border-dashed border-border-strong px-4 py-6 text-center text-caption text-muted xl:block">
+                Konto- oder Reportzeile anklicken, um Drilldown zu sehen.
+              </div>
+              {drilldownError ? <div className="rounded-control border border-error-border bg-error-bg px-3 py-2.5 text-control text-error-text" role="alert">{drilldownError}</div> : null}
+            </>
+          )}
         </div>
-        <DatevExportPanel dataAdapter={dataAdapter} chartFramework={filters.chart} role={role} />
       </div>
+      <DatevExportPanel dataAdapter={dataAdapter} chartFramework={filters.chart} role={role} />
     </div>
   );
 }

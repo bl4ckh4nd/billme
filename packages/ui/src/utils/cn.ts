@@ -8,9 +8,9 @@ import { extendTailwindMerge } from 'tailwind-merge';
 const twMerge = extendTailwindMerge({
   extend: {
     classGroups: {
-      'font-size': [{ text: ['title', 'section', 'label', 'caption', 'figure'] }],
-      rounded: [{ rounded: ['control', 'card', 'panel', 'modal'] }],
-      shadow: [{ shadow: ['button', 'button-inverse'] }],
+      'font-size': [{ text: ['title', 'heading', 'section', 'control', 'label', 'caption', 'micro', 'eyebrow', 'figure'] }],
+      rounded: [{ rounded: ['control', 'card', 'tile', 'panel', 'modal'] }],
+      shadow: [{ shadow: ['button', 'button-inverse', 'lift', 'thumb'] }],
     },
   },
 });

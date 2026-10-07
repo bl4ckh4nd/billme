@@ -106,6 +106,7 @@ export const aggregateFlows = (
 export const useDashboardFlows = (profitDetermination: 'eur' | 'double_entry' | undefined) =>
   useQuery({
     queryKey: ['dashboard-flows', profitDetermination],
+    enabled: Boolean(profitDetermination),
     staleTime: 30_000,
     queryFn: async (): Promise<DashboardFlows> => {
       const now = new Date();
@@ -136,6 +137,7 @@ export const useMonthResult = (profitDetermination: 'eur' | 'double_entry' | und
   const month = monthKey(now);
   return useQuery({
     queryKey: ['dashboard-month-result', profitDetermination, profileChart, month],
+    enabled: Boolean(profitDetermination),
     retry: false,
     staleTime: 30_000,
     queryFn: async (): Promise<number> => {
@@ -146,7 +148,9 @@ export const useMonthResult = (profitDetermination: 'eur' | 'double_entry' | und
         const pro = getRendererApi('pro').pro;
         // The GuV refuses a profile chart that differs from the booking chart; ask first instead of provoking the error.
         if (profileChart && (await pro.getAccountingPolicy()).activeChart !== profileChart) throw new Error('REPORT_CHART_MISMATCH');
-        return (await pro.getGuvReport({ from, to })).netResult;
+        const report = await pro.getGuvReport({ from, to });
+        if (report.blocking) throw new Error('REPORT_MAPPING_BLOCKED');
+        return report.netResult;
       }
       if (now.getFullYear() < EUR_MIN_TAX_YEAR) throw new Error('EUR_TAX_YEAR_UNSUPPORTED');
       // ponytail: the EÜR report only accepts whole calendar years, so the month sums classified items

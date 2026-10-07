@@ -336,9 +336,9 @@ export const DatePicker: React.FC<DatePickerProps> = ({
               if (draftValue !== formatDe(value)) setDraftValue(formatDe(value));
             });
           }}
-          className="w-full rounded-xl border border-control-border bg-surface-muted p-2.5 pr-9 text-sm font-medium text-foreground placeholder:text-muted focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring motion-safe:transition-[border-color,box-shadow,outline-color] motion-reduce:transition-none"
+          className="min-h-8.5 w-full rounded-control border border-control-border bg-surface py-1.5 pl-2.25 pr-8 text-control text-foreground placeholder:text-muted hover:border-control-border-hover focus-visible:outline-2 focus-visible:outline-offset-0 focus-visible:outline-focus-ring focus-visible:border-transparent motion-safe:transition-[border-color,box-shadow,outline-color] motion-reduce:transition-none"
         />
-        <Calendar size={14} strokeWidth={1.5} className="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 text-muted" aria-hidden="true" />
+        <Calendar size={14} strokeWidth={1.5} className="pointer-events-none absolute right-2.25 top-1/2 -translate-y-1/2 text-muted" aria-hidden="true" />
       </div>
 
       {popupMounted && popupPosition ? (
@@ -355,7 +355,7 @@ export const DatePicker: React.FC<DatePickerProps> = ({
               }
             }}
             className={cn(
-              'ui-enter-popover fixed z-[var(--z-dropdown)] select-none rounded-panel bg-surface p-3 shadow-md',
+              'ui-enter-popover fixed z-[var(--z-dropdown)] select-none rounded-card border border-border bg-surface p-3 shadow-lift',
               popupClosing && popoverExitClass,
             )}
             style={{
@@ -370,18 +370,18 @@ export const DatePicker: React.FC<DatePickerProps> = ({
                 type="button"
                 aria-label="Vorheriger Monat"
                 onClick={() => shiftMonth(-1)}
-                className="ui-press inline-flex h-10 w-10 items-center justify-center rounded-lg text-muted hover:bg-surface-muted focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring motion-safe:transition-colors"
+                className="ui-press inline-flex size-8 items-center justify-center rounded-control text-muted hover:bg-surface-sunken hover:text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring motion-safe:transition-colors"
               >
                 <ChevronLeft size={14} strokeWidth={1.5} aria-hidden="true" />
               </button>
-              <span id={titleId} className="text-xs font-semibold text-foreground">
+              <span id={titleId} className="text-control font-semibold text-foreground">
                 {MONTHS_DE[view.month]} {view.year}
               </span>
               <button
                 type="button"
                 aria-label="Nächster Monat"
                 onClick={() => shiftMonth(1)}
-                className="ui-press inline-flex h-10 w-10 items-center justify-center rounded-lg text-muted hover:bg-surface-muted focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring motion-safe:transition-colors"
+                className="ui-press inline-flex size-8 items-center justify-center rounded-control text-muted hover:bg-surface-sunken hover:text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring motion-safe:transition-colors"
               >
                 <ChevronRight size={14} strokeWidth={1.5} aria-hidden="true" />
               </button>
@@ -390,7 +390,7 @@ export const DatePicker: React.FC<DatePickerProps> = ({
             <div role="grid" aria-label={`Kalender ${MONTHS_DE[view.month]} ${view.year}`}>
               <div role="row" className="mb-1 grid grid-cols-7">
                 {DAYS_DE.map((day) => (
-                  <div key={day} role="columnheader" className="py-0.5 text-center text-xs font-semibold text-muted">
+                  <div key={day} role="columnheader" className="py-0.5 text-center text-micro font-semibold text-muted">
                     {day}
                   </div>
                 ))}
@@ -418,14 +418,14 @@ export const DatePicker: React.FC<DatePickerProps> = ({
                         onClick={() => pick(day)}
                         onKeyDown={(event) => handleDayKeyDown(event, dayValue)}
                         className={cn(
-                          'h-7 w-full rounded-lg text-xs font-medium focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring motion-safe:transition-colors',
+                          'h-7 w-full rounded-sm text-caption font-medium focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring motion-safe:transition-colors',
                           disabled
                             ? 'cursor-not-allowed bg-disabled-surface text-disabled-foreground'
                             : selected
                             ? cn('bg-accent font-semibold text-accent-foreground', today && 'ring-2 ring-foreground')
                             : today
-                            ? 'bg-surface-muted font-semibold text-foreground ring-1 ring-foreground'
-                            : 'text-foreground hover:bg-surface-muted',
+                            ? 'bg-surface-sunken font-semibold text-foreground ring-1 ring-foreground'
+                            : 'text-foreground hover:bg-surface-sunken',
                         )}
                       >
                         {day}
@@ -436,12 +436,12 @@ export const DatePicker: React.FC<DatePickerProps> = ({
               ))}
             </div>
 
-            <div className="mt-2 flex items-center justify-between gap-2 border-t border-border-subtle pt-2">
+            <div className="mt-2 flex items-center justify-between gap-2 border-t border-border pt-2">
               <button
                 type="button"
                 onClick={() => commitValue(todayIso)}
                 disabled={isDateUnavailable(todayIso)}
-                className="-mx-2 inline-flex min-h-9 items-center px-2 text-xs font-medium text-muted hover:text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring motion-safe:transition-colors disabled:cursor-not-allowed disabled:text-disabled-foreground"
+                className="-mx-2 inline-flex min-h-7 items-center rounded-control px-2 text-caption font-medium text-muted hover:text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring motion-safe:transition-colors disabled:cursor-not-allowed disabled:text-disabled-foreground"
               >
                 Heute
               </button>
@@ -449,7 +449,7 @@ export const DatePicker: React.FC<DatePickerProps> = ({
                 <button
                   type="button"
                   onClick={() => commitValue('')}
-                  className="-mx-2 inline-flex min-h-9 items-center px-2 text-xs text-muted hover:text-error focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring motion-safe:transition-colors"
+                  className="-mx-2 inline-flex min-h-7 items-center rounded-control px-2 text-caption text-muted hover:text-error-text focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring motion-safe:transition-colors"
                 >
                   Entfernen
                 </button>

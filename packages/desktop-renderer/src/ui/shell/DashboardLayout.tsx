@@ -1,7 +1,8 @@
 import React from 'react';
+import { flushSync } from 'react-dom';
 import { useNavigate, useRouterState } from '@tanstack/react-router';
 import { Bell, CheckCheck, Plus, X, type LucideIcon } from 'lucide-react';
-import { BillmeLogo, Button, IconButton, Kbd, KontorIcon, Portal, cn, popoverExitClass, useAnchoredPosition, useExitTransition, useThemePreference, type ThemePreference } from '@billme/ui';
+import { BillmeLogo, Button, IconButton, Kbd, KontorIcon, Portal, SegmentedControl, cn, popoverExitClass, useAnchoredPosition, useExitTransition, useThemePreference, type ThemePreference } from '@billme/ui';
 import { useSettingsQuery } from '../../hooks/useSettings';
 import { useNotificationsStore, type AppNotification } from '@billme/desktop-core/state/notificationsStore';
 import { CommandPalette, isMacPlatform, type ShellCommand } from './CommandPalette';
@@ -44,7 +45,7 @@ export interface ShellNavItem {
   also?: string[];
   /** Open work in this area, shown as a pill in the full rail. */
   count?: number;
-  /** Context line next to the header title, from 1100px on. */
+  /** Context line under the header title, from 1100px on. */
   subtitle?: string;
   /** Palette command that opens this entry, e.g. "Nächsten Umsatz buchen". */
   action?: string;
@@ -224,7 +225,73 @@ export const DashboardLayout: React.FC<DashboardLayoutProps> = ({ children, isEd
     return list;
   }, [go, navItems, navigate, setTheme]);
 
+  // A page's PageHeader renders into these slots; the nav label, the nav
+  // subtitle and "Neue Rechnung" only fill what the page leaves empty.
+  const titleSlotRef = React.useRef<HTMLDivElement | null>(null);
+  const actionsSlotRef = React.useRef<HTMLDivElement | null>(null);
+  const [pageOwns, setPageOwns] = React.useState({ title: false, subtitle: false, actions: false });
+  React.useLayoutEffect(() => {
+    const titleSlot = titleSlotRef.current;
+    const actionsSlot = actionsSlotRef.current;
+    if (!titleSlot || !actionsSlot) return undefined;
+    const read = () =>
+      setPageOwns((prev) => {
+        const next = {
+          title: titleSlot.querySelector('h1') !== null,
+          subtitle: titleSlot.querySelector('[data-shell-subtitle]') !== null,
+          actions: actionsSlot.childElementCount > 0,
+        };
+        return prev.title === next.title && prev.subtitle === next.subtitle && prev.actions === next.actions ? prev : next;
+      });
+    read();
+    // Applied before the next paint, so the fallback never shows beside the page's own title.
+    const observer = new MutationObserver(() => flushSync(read));
+    observer.observe(titleSlot, { childList: true });
+    observer.observe(actionsSlot, { childList: true });
+    return () => observer.disconnect();
+  }, [isEditorActive]);
+
   const mini = rail === 'mini';
+
+  const navEntry = (
+    compact: boolean,
+    entry: { id: string; label: string; icon: LucideIcon; active: boolean; count?: number; onClick: () => void },
+  ) => {
+    const Icon = entry.icon;
+    const count = entry.count || undefined;
+    return (
+      <li key={entry.id}>
+        <button
+          type="button"
+          onClick={entry.onClick}
+          aria-current={entry.active ? 'page' : undefined}
+          title={compact ? entry.label : undefined}
+          aria-label={compact ? entry.label : undefined}
+          aria-describedby={count ? `nav-count-${entry.id}` : undefined}
+          className={cn(
+            'flex w-full items-center gap-2.5 rounded-control px-2 py-1.75 text-left text-label leading-4.75 motion-safe:transition-colors motion-reduce:transition-none',
+            'focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-focus-ring',
+            compact && 'justify-center px-0 py-2',
+            entry.active ? 'bg-selected text-selected-foreground' : 'text-foreground-secondary hover:bg-surface-sunken hover:text-foreground',
+          )}
+        >
+          <Icon size={16} aria-hidden="true" className="shrink-0" />
+          {!compact && <span className="min-w-0 flex-1 truncate">{entry.label}</span>}
+          {!compact && count && (
+            <span
+              aria-hidden="true"
+              className={`shrink-0 rounded-full border px-1.25 py-0.5 font-mono text-micro leading-none tabular-nums ${
+                entry.active ? 'border-transparent bg-selected-foreground/15 text-selected-foreground' : 'border-border bg-surface-sunken text-muted'
+              }`}
+            >
+              {count}
+            </span>
+          )}
+        </button>
+        {count && <span id={`nav-count-${entry.id}`} className="sr-only">{count} offen</span>}
+      </li>
+    );
+  };
 
   const railContent = (compact: boolean) => (
     <>
@@ -236,7 +303,7 @@ export const DashboardLayout: React.FC<DashboardLayoutProps> = ({ children, isEd
         {!compact && settings && (
           <div className="rounded-card border border-border bg-surface-sunken px-2.5 py-2" aria-label="Unternehmen">
             <div className="truncate text-label font-semibold text-foreground">{settings.company.name || 'Unternehmen'}</div>
-            <div className="text-[0.6875rem] leading-4 text-muted">
+            <div className="truncate text-micro text-muted">
               {[
                 profile && LEGAL_FORM[profile.legalForm],
                 profile && (profile.profitDetermination === 'eur' ? 'EÜR' : 'Doppelte Buchführung'),
@@ -248,73 +315,26 @@ export const DashboardLayout: React.FC<DashboardLayoutProps> = ({ children, isEd
           </div>
         )}
       </div>
-      <nav aria-label="Hauptnavigation" className="min-h-0 flex-1 overflow-y-auto px-2 pb-2">
+      <nav aria-label="Hauptnavigation" className="scrollbar-hide min-h-0 flex-1 overflow-y-auto px-2 pb-2 pt-1">
         {GROUPS.map((group) => {
           const items = navItems.filter((item) => item.group === group);
-          if (items.length === 0) return null;
+          const withSettings = group === 'Abschluss';
+          if (items.length === 0 && !withSettings) return null;
           return (
             <div key={group} className="mt-3.5 first:mt-0.5">
-              <p className={cn('px-2 pb-1.5 text-[0.6875rem] font-semibold uppercase tracking-[0.04em] text-muted', compact && 'sr-only')}>{group}</p>
-              <ul className="flex flex-col gap-0.5">
-                {items.map((item) => {
-                  const Icon = item.icon;
-                  const active = item.id === activeId;
-                  const count = item.count || undefined;
-                  return (
-                    <li key={item.id}>
-                      <button
-                        type="button"
-                        onClick={() => go(item)}
-                        aria-current={active ? 'page' : undefined}
-                        title={compact ? item.label : undefined}
-                        aria-label={compact ? item.label : undefined}
-                        aria-describedby={count ? `nav-count-${item.id}` : undefined}
-                        className={cn(
-                          'flex w-full items-center gap-2.5 rounded-control px-2 py-[7px] text-left text-label motion-safe:transition-colors motion-reduce:transition-none',
-                          'focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-focus-ring',
-                          compact && 'justify-center px-0',
-                          active ? 'bg-selected text-selected-foreground' : 'text-muted hover:bg-surface-sunken hover:text-foreground',
-                        )}
-                      >
-                        <Icon size={16} aria-hidden="true" className="shrink-0" />
-                        {!compact && <span className="min-w-0 flex-1 truncate">{item.label}</span>}
-                        {!compact && count && (
-                          <span
-                            aria-hidden="true"
-                            className={cn(
-                              'shrink-0 rounded-full border px-[5px] font-mono text-[0.6875rem] leading-4 tabular-nums',
-                              active ? 'border-transparent bg-selected-foreground/15 text-selected-foreground' : 'border-border bg-surface-sunken text-muted',
-                            )}
-                          >
-                            {count}
-                          </span>
-                        )}
-                      </button>
-                      {count && <span id={`nav-count-${item.id}`} className="sr-only">{count} offen</span>}
-                    </li>
-                  );
-                })}
+              <p className={compact ? 'sr-only' : 'px-2 pb-1.5 text-eyebrow uppercase text-muted'}>{group}</p>
+              <ul className="flex flex-col">
+                {items.map((item) =>
+                  navEntry(compact, { id: item.id, label: item.label, icon: item.icon, active: item.id === activeId, count: item.count, onClick: () => go(item) }),
+                )}
+                {withSettings &&
+                  navEntry(compact, { id: 'settings', label: 'Einstellungen', icon: KontorIcon.settings, active: settingsActive, onClick: () => go({ to: '/settings' }) })}
               </ul>
             </div>
           );
         })}
       </nav>
-      <div className="flex flex-col gap-1 border-t border-border p-2">
-        <button
-          type="button"
-          onClick={() => go({ to: '/settings' })}
-          aria-current={settingsActive ? 'page' : undefined}
-          title={compact ? 'Einstellungen' : undefined}
-          aria-label={compact ? 'Einstellungen' : undefined}
-          className={cn(
-            'flex w-full items-center gap-2.5 rounded-control px-2 py-[7px] text-left text-label focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-focus-ring',
-            compact && 'justify-center px-0',
-            settingsActive ? 'bg-selected text-selected-foreground' : 'text-muted hover:bg-surface-sunken hover:text-foreground',
-          )}
-        >
-          <KontorIcon.settings size={16} aria-hidden="true" className="shrink-0" />
-          {!compact && <span className="flex-1">Einstellungen</span>}
-        </button>
+      <div className="flex flex-col border-t border-border p-2">
         {compact ? (
           <IconButton
             aria-label={`Darstellung: ${currentTheme.label}. Wechseln`}
@@ -325,43 +345,35 @@ export const DashboardLayout: React.FC<DashboardLayoutProps> = ({ children, isEd
             <currentTheme.icon size={16} aria-hidden="true" />
           </IconButton>
         ) : (
-          <div role="radiogroup" aria-label="Darstellung" className="flex rounded-control bg-surface-sunken p-0.5">
-            {THEME_OPTIONS.map(({ value, label, icon: Icon }) => (
-              <button
-                key={value}
-                type="button"
-                role="radio"
-                aria-checked={theme === value}
-                aria-label={`Darstellung ${label}`}
-                title={label}
-                onClick={() => setTheme(value)}
-                className={cn(
-                  'flex h-7 flex-1 items-center justify-center rounded-sm focus-visible:outline-2 focus-visible:outline-focus-ring',
-                  theme === value ? 'bg-surface text-foreground shadow-xs' : 'text-muted hover:text-foreground',
-                )}
-              >
-                <Icon size={14} aria-hidden="true" />
-              </button>
-            ))}
-          </div>
+          <SegmentedControl
+            aria-label="Darstellung"
+            fullWidth
+            value={theme}
+            onChange={setTheme}
+            options={THEME_OPTIONS.map(({ value, label, icon: Icon }) => ({
+              value,
+              label: <Icon size={14} aria-hidden="true" />,
+              ariaLabel: `Darstellung ${label}`,
+            }))}
+          />
         )}
       </div>
     </>
   );
 
   return (
-    <div className="relative flex h-screen w-full flex-col overflow-hidden bg-surface-sunken font-sans text-foreground">
+    <div className="relative flex h-screen w-full flex-col overflow-hidden bg-ground font-sans text-foreground">
       {titlebar}
 
       {isEditorActive ? (
-        <div className="w-full flex-1 overflow-auto bg-surface-sunken">{children}</div>
+        <div className="w-full flex-1 overflow-auto bg-ground">{children}</div>
       ) : (
         <div className="flex min-h-0 flex-1">
           <aside
             aria-label="Bereiche"
             className={cn(
-              'hidden min-h-0 shrink-0 flex-col border-r border-border bg-surface no-print min-[900px]:flex',
-              mini ? 'w-16' : 'w-[236px]',
+              'hidden min-h-0 shrink-0 flex-col border-r border-border bg-rail no-print min-[900px]:flex',
+              mini ? 'w-16' : 'w-59',
             )}
           >
             {railContent(mini)}
@@ -370,8 +382,8 @@ export const DashboardLayout: React.FC<DashboardLayoutProps> = ({ children, isEd
           {drawerOpen && (
             <Portal>
               <div className="fixed inset-0 z-[var(--z-overlay)] min-[900px]:hidden">
-                <div className="absolute inset-0 bg-surface-inverse/45" onClick={() => setDrawerOpen(false)} aria-hidden="true" />
-                <aside aria-label="Bereiche" className="ui-enter-panel absolute inset-y-0 left-0 flex w-[min(280px,86vw)] flex-col bg-surface shadow-2xl">
+                <div className="absolute inset-0 bg-ink-950/45" onClick={() => setDrawerOpen(false)} aria-hidden="true" />
+                <aside aria-label="Bereiche" className="ui-enter-panel absolute inset-y-0 left-0 flex w-[min(280px,86vw)] flex-col border-r border-border bg-rail shadow-lift">
                   {railContent(false)}
                 </aside>
               </div>
@@ -379,7 +391,7 @@ export const DashboardLayout: React.FC<DashboardLayoutProps> = ({ children, isEd
           )}
 
           <div className="flex min-w-0 flex-1 flex-col">
-            <header className="z-[var(--z-dropdown)] flex h-14 shrink-0 items-center gap-2 px-3 no-print md:px-4">
+            <header className="z-[var(--z-dropdown)] flex shrink-0 flex-wrap items-center gap-x-3 gap-y-2 border-b border-border bg-surface px-5 py-2.5 no-print max-[1099px]:gap-x-2 max-[1099px]:px-3 max-[1099px]:py-2">
               <IconButton
                 className="min-[900px]:hidden"
                 aria-label="Bereiche öffnen"
@@ -397,41 +409,28 @@ export const DashboardLayout: React.FC<DashboardLayoutProps> = ({ children, isEd
                 <KontorIcon.panel size={16} aria-hidden="true" />
               </IconButton>
 
-              <div className="flex min-w-0 flex-1 items-baseline gap-2">
-                <p className="min-w-0 shrink truncate text-label text-muted" data-shell-area>
-                  {activeItem ? (
-                    <>
-                      <span className="max-sm:hidden">{activeItem.group} / </span>
-                      <span className="font-semibold text-foreground">{activeItem.label}</span>
-                    </>
-                  ) : settingsActive ? (
-                    <span className="font-semibold text-foreground">Einstellungen</span>
-                  ) : null}
-                </p>
-                {subtitle && (
-                  <span className="hidden min-w-0 truncate text-caption text-muted min-[1100px]:inline" data-shell-subtitle>
+              <div className="flex min-w-24 flex-1 flex-col justify-center min-[1100px]:min-h-10">
+                <div ref={titleSlotRef} data-shell-title className="contents" />
+                {!pageOwns.title && (activeItem || settingsActive) && (
+                  <h1 className="truncate text-title text-foreground">{activeItem ? activeItem.label : 'Einstellungen'}</h1>
+                )}
+                {!pageOwns.subtitle && subtitle && (
+                  <p className="hidden truncate text-caption text-muted min-[1100px]:block" data-shell-subtitle>
                     {subtitle}
-                  </span>
+                  </p>
                 )}
               </div>
-
-              {/* Pages carry their own create action in the page header; the topbar only offers the invoice. */}
-              {canCreateInvoice && !pathMatches(location.pathname, '/documents') && (
-                <Button size="sm" onClick={() => go({ to: '/documents', search: { create: 'invoice' } })} className="max-sm:hidden">
-                  <Plus size={14} aria-hidden="true" />
-                  Neue Rechnung
-                </Button>
-              )}
 
               <button
                 type="button"
                 onClick={() => setPaletteOpen(true)}
                 aria-keyshortcuts={isMacPlatform() ? 'Meta+K' : 'Control+K'}
-                className="flex h-9 max-w-80 flex-1 items-center gap-2 rounded-control border border-control-border bg-surface px-2.5 text-left text-sm text-muted hover:border-control-border-hover focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring max-sm:max-w-9 max-sm:flex-none max-sm:justify-center max-sm:px-0"
+                className="flex min-w-50 max-w-80 flex-1 items-center gap-2 rounded-control border border-border bg-surface-sunken px-2 py-1.5 text-left text-control text-muted hover:border-border-strong focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring max-[1099px]:size-8.5 max-[1099px]:min-w-0 max-[1099px]:flex-none max-[1099px]:justify-center max-[1099px]:p-0"
               >
-                <KontorIcon.search size={14} className="shrink-0" aria-hidden="true" />
-                <span className="flex-1 truncate max-sm:sr-only">Suchen oder Befehl …</span>
-                <Kbd className="shrink-0 max-sm:hidden">{isMacPlatform() ? '⌘K' : 'Strg K'}</Kbd>
+                <KontorIcon.search size={16} className="shrink-0" aria-hidden="true" />
+                <span className="flex-1 truncate max-[1099px]:sr-only">Suchen oder Befehl …</span>
+                <Kbd className="shrink-0 max-[1099px]:hidden">{isMacPlatform() ? '⌘' : 'Strg'}</Kbd>
+                <Kbd className="shrink-0 max-[1099px]:hidden">K</Kbd>
               </button>
 
               <div ref={notifPanelRef} className="relative">
@@ -445,7 +444,7 @@ export const DashboardLayout: React.FC<DashboardLayoutProps> = ({ children, isEd
                 >
                   <Bell size={16} aria-hidden="true" />
                   {unreadCount > 0 && (
-                    <span className="absolute right-0.5 top-0.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-error-text px-1 text-caption font-semibold leading-none text-background ring-2 ring-surface-sunken tabular-nums">
+                    <span className="absolute right-0.5 top-0.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-error-text px-1 text-caption font-semibold leading-none text-background ring-2 ring-surface tabular-nums">
                       {unreadCount > 9 ? '9+' : unreadCount}
                     </span>
                   )}
@@ -457,7 +456,7 @@ export const DashboardLayout: React.FC<DashboardLayoutProps> = ({ children, isEd
                       ref={notifDropdownRef}
                       style={notifPanelPos.style}
                       className={cn(
-                        'ui-enter-popover z-[var(--z-dropdown)] max-h-96 w-80 overflow-auto rounded-panel bg-surface shadow-md',
+                        'ui-enter-popover z-[var(--z-dropdown)] max-h-96 w-80 overflow-auto rounded-card border border-border bg-surface shadow-lift',
                         notifPanel.closing && popoverExitClass,
                       )}
                     >
@@ -516,12 +515,19 @@ export const DashboardLayout: React.FC<DashboardLayoutProps> = ({ children, isEd
                   </Portal>
                 )}
               </div>
+
+              {/* The primary action sits last: the page's own, else the invoice. */}
+              <div ref={actionsSlotRef} data-shell-actions className="flex shrink-0 items-center gap-2 empty:hidden" />
+              {canCreateInvoice && !pageOwns.actions && !pathMatches(location.pathname, '/documents') && (
+                <Button onClick={() => go({ to: '/documents', search: { create: 'invoice' } })} className="max-sm:hidden">
+                  <Plus size={16} aria-hidden="true" />
+                  Neue Rechnung
+                </Button>
+              )}
             </header>
 
-            {/* A tight gutter lets each page's raised surface read as one inset
-                panel on the ground, framed by the rail and the header. */}
-            <main className="scrollbar-hide flex-1 overflow-auto px-2 pb-2 md:px-3 md:pb-3">
-              <div className="mx-auto h-full max-w-[1800px]">{children}</div>
+            <main className="scrollbar-hide flex-1 overflow-auto p-5 max-sm:p-4">
+              <div className="h-full max-w-[1500px]">{children}</div>
             </main>
           </div>
         </div>

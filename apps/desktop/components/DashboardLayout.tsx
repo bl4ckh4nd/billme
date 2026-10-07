@@ -30,7 +30,7 @@ export const DashboardLayout: React.FC<Props> = (props) => {
   const runtime = React.useMemo(() => getBillmeRuntimeConfig(), []);
   const { data: settings } = useSettingsQuery();
   const profile = settings?.businessReportingProfile;
-  const openCount = useOpenEurItemCount(profile?.profitDetermination === 'eur');
+  const openCount = useOpenEurItemCount(settings?.onboardingCompleted === true && profile?.profitDetermination === 'eur');
   const navItems: readonly ShellNavItem[] = React.useMemo(() => {
     const visible = runtime.navigation;
     const items = visible && visible.length > 0 ? ALL_ITEMS.filter((item) => visible.includes(item.section)) : ALL_ITEMS;

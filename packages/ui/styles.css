@@ -76,13 +76,24 @@
   --color-foreground: #0d0e11;
   --color-surface: #ffffff;
   --color-surface-muted: #f9fafb;
-  /* App shell ground, ink-50. White surfaces read as raised against it. */
+  /* Inset fill: control tracks, search field, neutral pills, hover. */
   --color-surface-sunken: #f3f4f6;
+  /* The shell ground every card sits on, and the side rail. Separate roles
+     because their dark values differ from surface-sunken and surface. */
+  --color-ground: #f3f4f6;
+  --color-rail: #ffffff;
+  /* Second text step, ink-700: nav items, field labels, neutral pills.
+     8.49:1 on white, 7.71:1 on ground. */
+  --color-foreground-secondary: #4a4d52;
   /* Secondary copy, ink-600: 5.61:1 on white, 5.37:1 on surface-muted,
      5.10:1 on surface-sunken. */
   --color-muted: #64686d;
   --color-border: #e5e6e9;
   --color-border-subtle: #f3f4f6;
+  /* Edge of a filled control whose label already names it (secondary button,
+     key cap) and the T-Konto rule, ink-200. 1.49:1 on white, so it never
+     outlines a control that has no fill or label of its own. */
+  --color-border-strong: #d2d4d7;
   /* Boundary of interactive controls, ink-400: 3.50:1 on white, 3.18:1 on
      surface-sunken, meeting the 3:1 non-text requirement. --color-border is
      1.25:1 and can only separate, never outline a control. */
@@ -95,6 +106,17 @@
      dark, where an ink fill would vanish into the ground. */
   --color-selected: #0d0e11;
   --color-selected-foreground: #ffffff;
+
+  /* Toast and chart tooltip: ink in light, a raised bordered step in dark,
+     where an ink fill would vanish into the ground. */
+  --color-surface-toast: #0d0e11;
+  --color-border-toast: #0d0e11;
+
+  /* Donut segments after the first (accent). One hue, lightness by size. */
+  --color-donut-2: #3a3d42;
+  --color-donut-3: #5c6065;
+  --color-donut-4: #77797e;
+  --color-donut-5: #8e9195;
 
   /* Interaction States */
   --color-focus-ring: #0d0e11;
@@ -158,6 +180,7 @@
   --radius-3xl: 1.25rem;
   --radius-control: 0.5rem;
   --radius-card: 0.75rem;
+  --radius-tile: 0.875rem;
   --radius-panel: 1rem;
   --radius-modal: 1.25rem;
 
@@ -170,34 +193,56 @@
   --shadow-lg: 0 0 0 1px rgb(13 14 17 / 0.07), 0 4px 8px -2px rgb(13 14 17 / 0.06), 0 16px 32px -8px rgb(13 14 17 / 0.14);
   --shadow-xl: 0 0 0 1px rgb(13 14 17 / 0.07), 0 2px 4px -1px rgb(13 14 17 / 0.06), 0 12px 24px -6px rgb(13 14 17 / 0.12);
   --shadow-2xl: 0 0 0 1px rgb(13 14 17 / 0.07), 0 4px 8px -2px rgb(13 14 17 / 0.06), 0 24px 48px -12px rgb(13 14 17 / 0.18);
+  /* Ringless, for surfaces that carry their own 1px border: lift for what
+     floats (popover, menu, modal, toast, sticky totals), thumb for the
+     segmented control's selected item. */
+  --shadow-lift: 0 8px 24px -8px var(--shade-lift-far), 0 2px 6px -2px var(--shade-lift-near);
+  --shadow-thumb: 0 1px 2px var(--shade-thumb);
   /* Filled buttons: a 1px top highlight gives the fill a pressed, tactile edge
      without a glow; the ring keeps lime legible on white. */
   --shadow-button: inset 0 1px 0 rgb(255 255 255 / 0.45), 0 0 0 1px rgb(13 14 17 / 0.1), 0 1px 2px rgb(13 14 17 / 0.08);
   --shadow-button-inverse: inset 0 1px 0 rgb(255 255 255 / 0.12), 0 0 0 1px rgb(13 14 17 / 0.9), 0 1px 2px rgb(13 14 17 / 0.2);
 
-  /* Type roles. Weight contrast carries hierarchy: 400 body, 500 labels,
-     600 titles and controls. Uppercase tracking belongs to table column
-     headers only. */
+  /* Type roles. Body is 14px (set on body below); controls and dense rows
+     are 13px. Weight contrast carries hierarchy: 400 body, 500 labels,
+     600 titles, 700 figures. */
   --font-sans: 'Inter Variable', Inter, system-ui, Avenir, Helvetica, Arial, sans-serif;
   /* Figures read digit by digit: amounts, account and document numbers, IBAN.
      A transposed digit is easier to spot in a monospace face. */
   --font-mono: 'JetBrains Mono Variable', 'JetBrains Mono', ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
-  --text-title: 1.5rem;
-  --text-title--line-height: 2rem;
-  --text-title--letter-spacing: -0.02em;
+  --text-title: 1rem;
+  --text-title--line-height: 1.5rem;
+  --text-title--letter-spacing: -0.015em;
   --text-title--font-weight: 600;
+  --text-heading: 1.0625rem;
+  --text-heading--line-height: 1.5rem;
+  --text-heading--letter-spacing: -0.01em;
+  --text-heading--font-weight: 600;
   --text-section: 0.9375rem;
   --text-section--line-height: 1.375rem;
   --text-section--font-weight: 600;
   --text-label: 0.8125rem;
   --text-label--line-height: 1.125rem;
   --text-label--font-weight: 500;
+  /* 13px without a weight: the text inside inputs, selects, table cells,
+     menu items and banners. text-label is the same size at 500. */
+  --text-control: 0.8125rem;
+  --text-control--line-height: 1.125rem;
   --text-caption: 0.75rem;
   --text-caption--line-height: 1rem;
-  --text-figure: 2rem;
-  --text-figure--line-height: 2.25rem;
-  --text-figure--letter-spacing: -0.02em;
-  --text-figure--font-weight: 600;
+  /* 11px: pills, key caps, counts, field hints. */
+  --text-micro: 0.6875rem;
+  --text-micro--line-height: 1rem;
+  /* 11px/600 tracked: group titles and table heads. Add `uppercase` at the
+     call site; a type role cannot carry text-transform. */
+  --text-eyebrow: 0.6875rem;
+  --text-eyebrow--line-height: 1rem;
+  --text-eyebrow--letter-spacing: 0.04em;
+  --text-eyebrow--font-weight: 600;
+  --text-figure: 1.5rem;
+  --text-figure--line-height: 1.75rem;
+  --text-figure--letter-spacing: -0.025em;
+  --text-figure--font-weight: 700;
 
   /* Motion. Every transition-* utility without its own duration or ease
      reads these two defaults. */
@@ -229,9 +274,13 @@
       --color-surface: #181a1d;
       --color-surface-muted: #14161a;
       --color-surface-sunken: #101214;
+      --color-ground: #0d0e11;
+      --color-rail: #101214;
+      --color-foreground-secondary: #d2d4d7;
       --color-muted: #aeb1b6;
       --color-border: #2e3034;
       --color-border-subtle: #1c1e22;
+      --color-border-strong: #42454a;
       --color-control-border: #6f7276;
       --color-control-border-hover: #87898d;
       --color-focus-ring: #d9f944;
@@ -254,6 +303,12 @@
       --color-surface-inverse-raised: #101214;
       --color-surface-inverse-overlay: #1c1e22;
       --color-border-inverse: #42454a;
+      --color-surface-toast: #1c1e22;
+      --color-border-toast: #42454a;
+      --color-donut-2: #dfe1e4;
+      --color-donut-3: #bdc0c4;
+      --color-donut-4: #9da0a5;
+      --color-donut-5: #82858a;
       --color-success-bg: #12231a;
       --color-success-border: #1f4732;
       --color-success-text: #86efac;
@@ -278,6 +333,9 @@
       --shadow-lg: 0 0 0 1px rgb(255 255 255 / 0.07), 0 4px 8px -2px rgb(0 0 0 / 0.5), 0 16px 32px -8px rgb(0 0 0 / 0.7);
       --shadow-xl: 0 0 0 1px rgb(255 255 255 / 0.07), 0 2px 4px -1px rgb(0 0 0 / 0.5), 0 12px 24px -6px rgb(0 0 0 / 0.6);
       --shadow-2xl: 0 0 0 1px rgb(255 255 255 / 0.07), 0 4px 8px -2px rgb(0 0 0 / 0.5), 0 24px 48px -12px rgb(0 0 0 / 0.7);
+      --shade-lift-far: rgb(0 0 0 / 0.7);
+      --shade-lift-near: rgb(0 0 0 / 0.5);
+      --shade-thumb: rgb(0 0 0 / 0.4);
       --shadow-button-inverse: inset 0 1px 0 rgb(255 255 255 / 0.1), 0 0 0 1px rgb(255 255 255 / 0.16), 0 1px 2px rgb(0 0 0 / 0.4);
     }
   }
@@ -288,9 +346,13 @@
     --color-surface: #181a1d;
     --color-surface-muted: #14161a;
     --color-surface-sunken: #101214;
+    --color-ground: #0d0e11;
+    --color-rail: #101214;
+    --color-foreground-secondary: #d2d4d7;
     --color-muted: #aeb1b6;
     --color-border: #2e3034;
     --color-border-subtle: #1c1e22;
+    --color-border-strong: #42454a;
     --color-control-border: #6f7276;
     --color-control-border-hover: #87898d;
     --color-focus-ring: #d9f944;
@@ -313,6 +375,12 @@
     --color-surface-inverse-raised: #101214;
     --color-surface-inverse-overlay: #1c1e22;
     --color-border-inverse: #42454a;
+    --color-surface-toast: #1c1e22;
+    --color-border-toast: #42454a;
+    --color-donut-2: #dfe1e4;
+    --color-donut-3: #bdc0c4;
+    --color-donut-4: #9da0a5;
+    --color-donut-5: #82858a;
     --color-success-bg: #12231a;
     --color-success-border: #1f4732;
     --color-success-text: #86efac;
@@ -337,6 +405,9 @@
     --shadow-lg: 0 0 0 1px rgb(255 255 255 / 0.07), 0 4px 8px -2px rgb(0 0 0 / 0.5), 0 16px 32px -8px rgb(0 0 0 / 0.7);
     --shadow-xl: 0 0 0 1px rgb(255 255 255 / 0.07), 0 2px 4px -1px rgb(0 0 0 / 0.5), 0 12px 24px -6px rgb(0 0 0 / 0.6);
     --shadow-2xl: 0 0 0 1px rgb(255 255 255 / 0.07), 0 4px 8px -2px rgb(0 0 0 / 0.5), 0 24px 48px -12px rgb(0 0 0 / 0.7);
+    --shade-lift-far: rgb(0 0 0 / 0.7);
+    --shade-lift-near: rgb(0 0 0 / 0.5);
+    --shade-thumb: rgb(0 0 0 / 0.4);
     --shadow-button-inverse: inset 0 1px 0 rgb(255 255 255 / 0.1), 0 0 0 1px rgb(255 255 255 / 0.16), 0 1px 2px rgb(0 0 0 / 0.4);
   }
   [data-theme="light"]:not(:root) {
@@ -346,15 +417,37 @@
     --color-surface: #ffffff;
     --color-surface-muted: #f9fafb;
     --color-surface-sunken: #f3f4f6;
+    --color-ground: #f3f4f6;
+    --color-rail: #ffffff;
+    --color-foreground-secondary: #4a4d52;
     --color-muted: #64686d;
     --color-border: #e5e6e9;
     --color-border-subtle: #f3f4f6;
+    --color-border-strong: #d2d4d7;
     --color-control-border: #87898d;
     --color-control-border-hover: #6f7276;
     --color-focus-ring: #0d0e11;
     --color-selected: #0d0e11;
     --color-selected-foreground: #ffffff;
+    --color-surface-toast: #0d0e11;
+    --color-border-toast: #0d0e11;
+    --color-donut-2: #3a3d42;
+    --color-donut-3: #5c6065;
+    --color-donut-4: #77797e;
+    --color-donut-5: #8e9195;
+    --shade-lift-far: rgb(13 14 17 / 0.18);
+    --shade-lift-near: rgb(13 14 17 / 0.08);
+    --shade-thumb: rgb(13 14 17 / 0.05);
     color: var(--color-foreground);
+  }
+
+  /* Tailwind inlines a shadow's value into its utility, so a theme shadow
+     cannot be overridden per theme. shadow-lift and shadow-thumb read their
+     colours from these variables instead, and the dark blocks above flip them. */
+  :root {
+    --shade-lift-far: rgb(13 14 17 / 0.18);
+    --shade-lift-near: rgb(13 14 17 / 0.08);
+    --shade-thumb: rgb(13 14 17 / 0.05);
   }
 
   :root {
@@ -368,6 +461,10 @@
     background: var(--color-background);
     color: var(--color-foreground);
     font-family: var(--font-sans);
+    /* 14px base on a 16px root: rem-based utilities keep their size, text
+       without a size utility stops rendering at 16px. */
+    font-size: 0.875rem;
+    line-height: 1.429;
     /* cv11 single-storey a, ss03 rounded quotes; calt keeps contextual
        alternates on. Figures opt into tnum through tabular-nums. */
     font-feature-settings: "cv11", "ss03", "calt";
@@ -391,14 +488,15 @@
     text-wrap: pretty;
   }
 
-  /* Icon stroke follows the weight of the text beside it: 1.75 next to
-     regular and medium text, 2 inside semibold or bold labels (buttons, titles).
-     CSS outranks lucide's stroke-width attribute, so no call site sets it. */
+  /* Lucide draws on a 24 grid, the own icon set (icons/kontor.tsx) on a 16
+     grid at stroke 1.5. A non-scaling stroke renders lucide at the same 1.5px
+     at every size, so both sets carry one line weight. CSS outranks lucide's
+     stroke-width attribute, so no call site sets it. */
   .lucide {
-    stroke-width: 1.75;
+    stroke-width: 1.5;
   }
-  :where(.font-semibold, .font-bold) .lucide {
-    stroke-width: 2;
+  .lucide * {
+    vector-effect: non-scaling-stroke;
   }
 
   /* Motion policy: MOTION 1 means interaction feedback only (hover, focus,

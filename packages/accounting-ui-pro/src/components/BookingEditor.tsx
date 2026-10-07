@@ -2,25 +2,26 @@ import { useEffect, useId, useMemo, useRef, useState } from 'react';
 import {
   ArrowLeft,
   Check,
-  FileText,
   Lock,
   Plus,
   Save,
   ShieldAlert,
   Trash2,
+  TriangleAlert,
 } from 'lucide-react';
 import { defaultBookingPolicy } from '../domain/policies';
-import { WORKFLOW_STEPS, getStatusPresentation, getWorkflowStep } from '../domain/selectors';
+import { WORKFLOW_STEPS, getWorkflowStep } from '../domain/selectors';
 import { findTaxCaseOption, normalizeTaxCaseKey, TAX_CASE_OPTIONS, toLegacyTaxCode } from '../domain/taxCases';
 import { hasBlockingIssues, validateBookingDraft } from '../domain/validation';
 import { getAllowedActions } from '../domain/workflow';
 import { permissionContextForRole } from '../domain/permissions';
 import { useAccountingWorkspace, useWorkspaceLifetime } from '../AccountingWorkspaceContext';
-import { Badge, ConfirmDialog, Modal, Stepper } from '@billme/ui';
+import { Badge, Button, ConfirmDialog, IconButton, Input, Modal, Select, Stepper } from '@billme/ui';
 import { BOOKING_TEMPLATES } from '../domain/bookingTemplates';
 import { Account, BookingAction, BookingDraft, JournalLine, Transaction, UserRole } from '../types';
 import AccountCombobox from './AccountCombobox';
 import ActivityTimeline from './ActivityTimeline';
+import { StatusBadge } from './IssueBadges';
 import ValidationSummary from './ValidationSummary';
 import WorkflowActionBar from './WorkflowActionBar';
 
@@ -45,6 +46,10 @@ function parseAmountInput(value: string) {
 }
 
 const LIVE_CHECKED_CODES = new Set(['MISSING_POSTING_DATE', 'MISSING_BOOKING_TEXT', 'MISSING_ACCOUNT', 'INVALID_AMOUNT_FORMAT', 'UNBALANCED_ENTRY']);
+
+// The prototype's .lines table: S|H 82px, account and tax case share the rest, amount 104px, delete 32px.
+const LINE_GRID = 'grid grid-cols-[82px_minmax(0,1.1fr)_minmax(0,1fr)_104px_32px] gap-x-2';
+const LINE_INDENT = 'pl-22.5';
 
 function actionRequiresConfirmation(action: BookingAction) {
   return action === 'reverse' || action === 'reject';
@@ -125,7 +130,7 @@ export default function BookingEditor({ transactionId, role, accounts, onBack, o
 
   if (!transactionId || !transaction || !draft) {
     return (
-      <div className="flex items-center justify-center h-full text-muted">
+      <div className="rounded-card border border-border bg-surface px-5 py-10 text-center text-control text-muted">
         Keine Buchung ausgewählt.
       </div>
     );
@@ -182,7 +187,6 @@ export default function BookingEditor({ transactionId, role, accounts, onBack, o
   const templates = bankLine
     ? chartTemplates.filter((template) => template.direction === (bankSide === 'Soll' ? 'in' : 'out') && accountByNumber.has(template.accountId))
     : [];
-  const statusPresentation = getStatusPresentation(draft.workflowStatus);
 
   function patchDraft(updater: (prev: BookingDraft) => BookingDraft) {
     setDraft((prev) => (prev ? updater(prev) : prev));
@@ -324,512 +328,434 @@ export default function BookingEditor({ transactionId, role, accounts, onBack, o
     };
 
   return (
-    <div className="flex h-full min-w-0 flex-col bg-surface">
-      {announceMessage ? (
-        <div
-          className={`mx-4 mt-3 rounded-xl border px-3 py-2 text-sm font-medium ${announceKind === 'error' ? 'border-error-border bg-error-bg text-error-text' : 'border-success-border bg-success-bg text-success-text'}`}
-          role={announceKind === 'error' ? 'alert' : 'status'}
-          aria-live={announceKind === 'error' ? 'assertive' : 'polite'}
-        >
-          {announceMessage}
-        </div>
-      ) : null}
-
-      <div className="flex items-center justify-between px-4 py-2.5 border-b border-border shrink-0 gap-3">
-        <div className="flex items-center gap-2.5 min-w-0">
-          <button
-            onClick={onBack}
-            aria-label="Zurück zur Inbox"
-            className="w-8 h-8 flex items-center justify-center rounded-lg border border-border text-muted hover:bg-surface-muted shrink-0"
-          >
-            <ArrowLeft size={16} />
-          </button>
-          <div className="w-8 h-8 bg-dark-base rounded-lg flex items-center justify-center text-inverse-foreground shrink-0">
-            <FileText size={16} />
-          </div>
-          <div className="min-w-0">
-            <div className="flex items-center gap-2 flex-wrap">
-              <h2 className="text-sm font-semibold text-foreground truncate">Buchung erfassen</h2>
-              <span className={`px-2 py-0.5 rounded-full text-xs font-semibold ${statusPresentation.className}`}>
-                {statusPresentation.label}
-              </span>
-              {blocking ? (
-                <span className="px-1.5 py-0.5 rounded-full border border-error-text bg-error-bg text-error-text text-xs font-semibold inline-flex items-center gap-0.5">
-                  <ShieldAlert size={12} /> Blockiert
-                </span>
-              ) : (
-                <span className="px-1.5 py-0.5 rounded-full border border-success-text bg-success-bg text-success-text text-xs font-semibold inline-flex items-center gap-0.5">
-                  <Check size={12} /> OK
-                </span>
+    // Editor and aside are the second and third pane of the workbench grid in App.tsx.
+    <div className="contents">
+      <section aria-label="Buchung" className="flex min-w-0 flex-col rounded-card border border-border bg-surface">
+        <div className="flex flex-col gap-2.25 border-b border-border px-3 py-2.5">
+          <div className="flex items-start gap-2">
+            <IconButton aria-label="Zurück zur Inbox" size="sm" className="-ml-1" onClick={onBack}>
+              <ArrowLeft size={16} aria-hidden="true" />
+            </IconButton>
+            <div className="min-w-0 flex-1">
+              <h2 className="sr-only">Buchung erfassen</h2>
+              {/* The stepper below shows the workflow state; only states outside it and blockers get a pill. */}
+              {(getWorkflowStep(draft.workflowStatus) < 0 || blocking || readOnly) && (
+                <div className="mb-0.5 flex flex-wrap items-center gap-1.5">
+                  {getWorkflowStep(draft.workflowStatus) < 0 && <StatusBadge status={draft.workflowStatus} />}
+                  {blocking && <Badge tone="error"><ShieldAlert size={12} aria-hidden="true" /> Blockiert</Badge>}
+                  {readOnly && <Badge tone="neutral"><Lock size={12} aria-hidden="true" /> Read-only</Badge>}
+                </div>
               )}
-              {readOnly && (
-                <span className="px-1.5 py-0.5 rounded-full border border-border bg-border-subtle text-foreground text-xs font-semibold inline-flex items-center gap-0.5">
-                  <Lock size={12} /> Read-only
-                </span>
-              )}
+              <div className="truncate text-section text-foreground">{transaction.payee}</div>
+              <p className="truncate text-caption text-muted">
+                {new Date(transaction.date).toLocaleDateString('de-DE')} • {transaction.description}
+              </p>
             </div>
-            {getWorkflowStep(draft.workflowStatus) >= 0 && (
-              <Stepper className="mt-1.5" label="Bearbeitungsstand" steps={[...WORKFLOW_STEPS]} current={getWorkflowStep(draft.workflowStatus)} />
-            )}
-            {readOnly && <p className="mt-1 text-xs text-muted" role="status">{readOnlyMessage}</p>}
-            <p className="text-xs text-muted font-medium mt-0.5">
-              {transaction.payee} • {new Date(transaction.date).toLocaleDateString('de-DE')} •{' '}
+            <div className="shrink-0 font-mono text-heading font-bold tabular-nums text-foreground">
               {formatCurrency(transaction.amount, transaction.currency)}
-            </p>
+            </div>
           </div>
+          {getWorkflowStep(draft.workflowStatus) >= 0 && (
+            <Stepper label="Bearbeitungsstand" steps={[...WORKFLOW_STEPS]} current={getWorkflowStep(draft.workflowStatus)} />
+          )}
+          {readOnly && <p className="text-caption text-muted" role="status">{readOnlyMessage}</p>}
         </div>
 
-        <WorkflowActionBar
-          draft={draft}
-          permissionCtx={permissionCtx}
-          allowedActions={allowedActions}
-          onAction={(action) => void handleWorkflowAction(action)}
-          isBusy={busy}
-          blockedAction={blockedAction}
-          blockedReason={blockedReason}
-        />
-      </div>
-
-      {/* Beside the workbench queue the lines need the width; meta moves beside them only on very wide screens. */}
-      {/* Workbench centre and aside: Belegkopf, Buchungssatz and T-Konto in the main column;
-          receipt, checks and history beside them (below them on narrower screens). */}
-      <div className="grid min-w-0 flex-1 gap-4 overflow-auto p-4 min-[1440px]:grid-cols-[minmax(0,1fr)_300px] min-[1440px]:items-start">
-        <div className="flex min-w-0 flex-col gap-4">
-        <div className="flex w-full shrink-0 flex-col gap-4">
-          <div className="border border-border rounded-2xl overflow-hidden">
-            <div className="p-4 border-b border-border bg-surface-muted/50 flex items-center justify-between">
-              <h3 className="text-sm font-semibold text-foreground">Belegkopf</h3>
+        <div className="flex min-w-0 flex-col gap-3.5 p-3">
+          {announceMessage ? (
+            <div
+              className={`rounded-control border px-3 py-2.5 text-control ${announceKind === 'error' ? 'border-error-border bg-error-bg text-error-text' : 'border-success-border bg-success-bg text-success-text'}`}
+              role={announceKind === 'error' ? 'alert' : 'status'}
+              aria-live={announceKind === 'error' ? 'assertive' : 'polite'}
+            >
+              {announceMessage}
             </div>
-            <div className="grid gap-4 p-4 lg:grid-cols-2">
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="block mb-1 text-label text-foreground" htmlFor={`${editorId}-bookingeditor-belegdatum`}>
-                    Belegdatum
-                  </label>
-                  <input id={`${editorId}-bookingeditor-belegdatum`}
-                    type="date"
-                    value={draft.documentDate ?? ''}
-                    disabled={readOnly}
-                    onChange={(e) => patchDraft((prev) => ({ ...prev, documentDate: e.target.value }))}
-                    className="px-2.5 h-8 hover:border-control-border-hover w-full border border-control-border rounded-control text-sm disabled:bg-surface-muted"
-                  />
-                </div>
-                <div>
-                  <label className="block mb-1 text-label text-foreground">
-                    Buchungsdatum *
-                  </label>
-                  <input
-                    type="date"
-                    value={draft.postingDate ?? ''}
-                    disabled={readOnly}
-                    onChange={(e) => patchDraft((prev) => ({ ...prev, postingDate: e.target.value }))}
-                    className="px-2.5 h-8 hover:border-control-border-hover w-full border border-control-border rounded-control text-sm disabled:bg-surface-muted"
-                  />
-                </div>
-              </div>
+          ) : null}
 
-              <div>
-                <label className="block mb-1 text-label text-foreground" htmlFor={`${editorId}-bookingeditor-buchungstext`}>
-                  Buchungstext *
-                </label>
-                <input id={`${editorId}-bookingeditor-buchungstext`}
-                  type="text"
-                  value={draft.bookingText}
-                  disabled={readOnly}
-                  onChange={(e) => patchDraft((prev) => ({ ...prev, bookingText: e.target.value }))}
-                  className="px-2.5 h-8 hover:border-control-border-hover w-full border border-control-border rounded-control text-sm disabled:bg-surface-muted"
-                />
-              </div>
-
-              <div>
-                <label className="block mb-1 text-label text-foreground">
-                  Referenz / Belegnummer
-                </label>
-                <input
-                  type="text"
-                  value={draft.externalReference ?? ''}
-                  disabled={readOnly}
-                  onChange={(e) => patchDraft((prev) => ({ ...prev, externalReference: e.target.value }))}
-                  className="px-2.5 h-8 hover:border-control-border-hover w-full border border-control-border rounded-control text-sm disabled:bg-surface-muted"
-                />
-              </div>
-
+          <div>
+            <h3 className="mb-2 text-eyebrow uppercase text-muted">Belegkopf</h3>
+            <div className="grid grid-cols-[repeat(auto-fit,minmax(148px,1fr))] gap-2.5">
+              <Input
+                id={`${editorId}-bookingeditor-belegdatum`}
+                label="Belegdatum"
+                type="date"
+                fullWidth
+                value={draft.documentDate ?? ''}
+                disabled={readOnly}
+                onChange={(e) => patchDraft((prev) => ({ ...prev, documentDate: e.target.value }))}
+              />
+              <Input
+                label="Buchungsdatum *"
+                type="date"
+                fullWidth
+                value={draft.postingDate ?? ''}
+                disabled={readOnly}
+                onChange={(e) => patchDraft((prev) => ({ ...prev, postingDate: e.target.value }))}
+              />
+              <Input
+                label="Referenz / Belegnummer"
+                type="text"
+                fullWidth
+                value={draft.externalReference ?? ''}
+                disabled={readOnly}
+                onChange={(e) => patchDraft((prev) => ({ ...prev, externalReference: e.target.value }))}
+              />
+            </div>
+            <div className="mt-2.5">
+              <Input
+                id={`${editorId}-bookingeditor-buchungstext`}
+                label="Buchungstext *"
+                type="text"
+                fullWidth
+                value={draft.bookingText}
+                disabled={readOnly}
+                onChange={(e) => patchDraft((prev) => ({ ...prev, bookingText: e.target.value }))}
+              />
             </div>
           </div>
 
-        </div>
+          {!readOnly && templates.length > 0 && (
+            <Select
+              id={`${editorId}-booking-template`}
+              label="Buchungsvorlage"
+              fullWidth
+              value=""
+              onChange={(e) => {
+                if (e.target.value !== '') applyTemplate(Number(e.target.value));
+              }}
+            >
+              <option value="">Vorlage einsetzen…</option>
+              {templates.map((template, index) => (
+                <option key={template.label} value={index}>
+                  {template.label} ({bankSide === 'Soll' ? `${bankLine?.accountId} an ${template.accountId}` : `${template.accountId} an ${bankLine?.accountId}`})
+                </option>
+              ))}
+            </Select>
+          )}
 
-        <div className="flex min-w-0 flex-col">
-
-          {/* Kartenrumpf: Kopfleiste, Fußleiste und mindestens eine Buchungszeile bleiben immer sichtbar, der Rest scrollt.
-              min-h-26 = Spaltenkopf (41px) + eine Zeile (57px); min-h-55 = das plus Kopf- und Fußleiste. */}
-          <div className="border border-border rounded-xl overflow-hidden flex-1 flex flex-col min-h-55">
-            <div className="p-4 border-b border-border bg-surface-muted flex items-center justify-between shrink-0">
-              <h3 className="text-sm font-semibold text-foreground">Buchungssatz</h3>
-              <div className="flex items-center gap-3">
-                {!readOnly && templates.length > 0 && (
-                  <>
-                    <label className="sr-only" htmlFor={`${editorId}-booking-template`}>Buchungsvorlage</label>
-                    <select
-                      id={`${editorId}-booking-template`}
-                      value=""
-                      onChange={(e) => {
-                        if (e.target.value !== '') applyTemplate(Number(e.target.value));
-                      }}
-                      className="px-2.5 h-8 hover:border-control-border-hover border border-control-border rounded-control bg-surface text-sm"
-                    >
-                      <option value="">Vorlage einsetzen…</option>
-                      {templates.map((template, index) => (
-                        <option key={template.label} value={index}>
-                          {template.label} ({bankSide === 'Soll' ? `${bankLine?.accountId} an ${template.accountId}` : `${template.accountId} an ${bankLine?.accountId}`})
-                        </option>
-                      ))}
-                    </select>
-                  </>
-                )}
-                <div className="text-xs text-muted font-medium">
+          <div>
+            <div className="mb-1.5 flex flex-wrap items-center justify-between gap-2">
+              <div className="flex flex-wrap items-baseline gap-2">
+                <h3 className="text-eyebrow uppercase text-muted">Buchungssatz, {draft.chartFramework}</h3>
+                <span className="text-caption text-muted">
                   {draft.lines.length} Zeilen • {blocking ? 'Blocker vorhanden' : 'Prüfbar'}
-                </div>
+                </span>
+              </div>
+              <div className="flex items-center gap-1">
+                <Button variant="ghost" size="sm" onClick={addLine} disabled={readOnly}>
+                  <Plus size={14} aria-hidden="true" />
+                  Zeile hinzufügen
+                </Button>
+                {!readOnly && (
+                  <Button variant="ghost" size="sm" onClick={() => void handleWorkflowAction('save_draft')} disabled={busy}>
+                    <Save size={14} aria-hidden="true" />
+                    Speichern
+                  </Button>
+                )}
               </div>
             </div>
 
-            <div className="overflow-auto flex-1 min-h-26">
-              <div className="sticky top-0 z-10 grid grid-cols-12 gap-3 bg-surface px-4 py-3 text-xs font-semibold uppercase tracking-wide text-muted border-b border-border">
-                <div className="col-span-1">S/H</div>
-                <div className="col-span-4">Konto</div>
-                <div className="col-span-2">KSt.</div>
-                <div className="col-span-2">Steuerfall</div>
-                <div className="col-span-2 text-right">Betrag</div>
-                <div className="col-span-1 text-right"><span className="sr-only">Zeile entfernen</span></div>
-              </div>
+            <div className={`${LINE_GRID} pb-1.5 text-eyebrow uppercase text-muted`}>
+              <div>S/H</div>
+              <div>Konto</div>
+              <div>Steuerfall</div>
+              <div className="text-right">Betrag</div>
+              <div><span className="sr-only">Zeile entfernen</span></div>
+            </div>
 
-              <div className="divide-y divide-border-subtle">
-                {draft.lines.map((line) => {
-                  const selectedTaxCaseKey = normalizeTaxCaseKey(line.taxCaseKey ?? line.taxCode);
-                  const selectedTaxCase = findTaxCaseOption(selectedTaxCaseKey);
-                  // The line books gross; the tax part is split off automatically from the tax case at posting.
-                  const autoTaxRate = line.taxRate ?? selectedTaxCase?.defaultRate ?? 0;
-                  const lineGross = Number(line.amount) || 0;
-                  // Reverse charge adds tax on top of the net line (input and output); standard VAT sits inside the gross.
-                  const reverseCharge = /(^|_)RC(_|$)/.test(selectedTaxCase?.key ?? '');
-                  // Same rounding as the server's enrichTaxFields, from the amount as currently typed.
-                  const round2 = (value: number) => Math.round(value * 100) / 100;
-                  const autoTaxAmount = reverseCharge
-                    ? round2(lineGross * (autoTaxRate / 100))
-                    : round2(lineGross - round2(lineGross / (1 + autoTaxRate / 100)));
-                  const autoTaxLabel = reverseCharge
-                    ? `Vorsteuer und Umsatzsteuer ${autoTaxRate} % (Reverse Charge)`
-                    : `${line.type === 'Soll' ? 'Vorsteuer' : 'Umsatzsteuer'} ${autoTaxRate} %`;
-                  return (
-                    <div key={line.id} className="px-4 py-3 space-y-3">
-                      <div className="grid grid-cols-12 gap-3 items-center">
-                        <div className="col-span-1">
-                          {/* Two-state switch: the side is a binary fact, not a list choice. */}
-                          <div role="radiogroup" aria-label="Soll oder Haben" className="inline-flex h-8 overflow-hidden rounded-control border border-control-border">
-                            {(['Soll', 'Haben'] as const).map((side) => (
-                              <button
-                                key={side}
-                                type="button"
-                                role="radio"
-                                aria-checked={line.type === side}
-                                aria-label={side}
-                                disabled={readOnly}
-                                onClick={() => updateLine(line.id, (current) => ({ ...current, type: side }))}
-                                className={`w-7 text-xs font-semibold focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-focus-ring disabled:cursor-not-allowed ${line.type === side ? 'bg-selected text-selected-foreground' : 'bg-surface text-muted hover:text-foreground'} ${side === 'Haben' ? 'border-l border-border' : ''}`}
-                              >
-                                {side === 'Soll' ? 'S' : 'H'}
-                              </button>
-                            ))}
-                          </div>
-                        </div>
-
-                        <div className="col-span-4">
-                          <AccountCombobox
-                            accounts={accountOptions}
-                            valueAccountId={line.accountId}
-                            valueAccountName={line.accountName}
+            <div className="divide-y divide-border">
+              {draft.lines.map((line) => {
+                const selectedTaxCaseKey = normalizeTaxCaseKey(line.taxCaseKey ?? line.taxCode);
+                const selectedTaxCase = findTaxCaseOption(selectedTaxCaseKey);
+                // The line books gross; the tax part is split off automatically from the tax case at posting.
+                const autoTaxRate = line.taxRate ?? selectedTaxCase?.defaultRate ?? 0;
+                const lineGross = Number(line.amount) || 0;
+                // Reverse charge adds tax on top of the net line (input and output); standard VAT sits inside the gross.
+                const reverseCharge = /(^|_)RC(_|$)/.test(selectedTaxCase?.key ?? '');
+                // Same rounding as the server's enrichTaxFields, from the amount as currently typed.
+                const round2 = (value: number) => Math.round(value * 100) / 100;
+                const autoTaxAmount = reverseCharge
+                  ? round2(lineGross * (autoTaxRate / 100))
+                  : round2(lineGross - round2(lineGross / (1 + autoTaxRate / 100)));
+                const autoTaxLabel = reverseCharge
+                  ? `Vorsteuer und Umsatzsteuer ${autoTaxRate} % (Reverse Charge)`
+                  : `${line.type === 'Soll' ? 'Vorsteuer' : 'Umsatzsteuer'} ${autoTaxRate} %`;
+                return (
+                  <div key={line.id} className="flex flex-col gap-2 py-2 first:pt-0.5">
+                    <div className={`${LINE_GRID} items-center`}>
+                      {/* Two-state switch: the side is a binary fact, not a list choice. */}
+                      <div role="radiogroup" aria-label="Soll oder Haben" className="inline-flex h-8.5 overflow-hidden rounded-control border border-control-border">
+                        {(['Soll', 'Haben'] as const).map((side) => (
+                          <button
+                            key={side}
+                            type="button"
+                            role="radio"
+                            aria-checked={line.type === side}
+                            aria-label={side}
                             disabled={readOnly}
-                            onSelect={(account) =>
-                              updateLine(line.id, (current) => {
-                                const normalized = normalizeTaxCaseKey(current.taxCaseKey ?? current.taxCode ?? account.defaultTaxCode);
-                                const def = findTaxCaseOption(normalized);
-                                return {
-                                  ...current,
-                                  accountId: account.number,
-                                  accountName: account.name,
-                                  taxCaseKey: normalized,
-                                  taxCode: toLegacyTaxCode(normalized) ?? current.taxCode ?? account.defaultTaxCode ?? '',
-                                  taxRate: current.taxRate ?? def?.defaultRate,
-                                };
-                              })
-                            }
-                          />
-                        </div>
-
-                        <div className="col-span-2">
-                          <label className="sr-only" htmlFor={`${editorId}-cost-center-${line.id}`}>
-                            Kostenstelle
-                          </label>
-                          <input
-                            id={`${editorId}-cost-center-${line.id}`}
-                            type="text"
-                            value={line.costCenter ?? ''}
-                            disabled={readOnly}
-                            onChange={(e) => updateLine(line.id, (current) => ({ ...current, costCenter: e.target.value }))}
-                            className="px-2.5 h-8 hover:border-control-border-hover w-full border border-control-border rounded-control text-sm disabled:bg-surface-muted"
-                            placeholder="-"
-                          />
-                        </div>
-
-                        <div className="col-span-2">
-                          <label className="sr-only" htmlFor={`${editorId}-tax-case-${line.id}`}>
-                            Steuerfall
-                          </label>
-                          <select
-                            id={`${editorId}-tax-case-${line.id}`}
-                            value={selectedTaxCaseKey ?? ''}
-                            disabled={readOnly}
-                            onChange={(e) =>
-                              updateLine(line.id, (current) => {
-                                const nextTaxCase = normalizeTaxCaseKey(e.target.value);
-                                const nextOption = findTaxCaseOption(nextTaxCase);
-                                return {
-                                  ...current,
-                                  taxCaseKey: nextTaxCase,
-                                  taxCode: toLegacyTaxCode(nextTaxCase) ?? (nextTaxCase ?? ''),
-                                  taxRate: nextTaxCase ? current.taxRate ?? nextOption?.defaultRate : undefined,
-                                };
-                              })
-                            }
-                            className="px-2.5 h-8 hover:border-control-border-hover w-full border border-control-border rounded-control text-sm disabled:bg-surface-muted"
+                            onClick={() => updateLine(line.id, (current) => ({ ...current, type: side }))}
+                            className={`min-w-9.5 flex-1 px-2.5 text-caption font-semibold focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-focus-ring disabled:cursor-not-allowed ${line.type === side ? 'bg-selected text-selected-foreground' : 'bg-surface text-muted hover:text-foreground'} ${side === 'Haben' ? 'border-l border-border' : ''}`}
                           >
-                            <option value="">Keine</option>
-                            {TAX_CASE_OPTIONS.map((option) => (
-                              <option key={option.key} value={option.key}>
-                                {option.label}
-                              </option>
-                            ))}
-                          </select>
-                        </div>
+                            {side === 'Soll' ? 'S' : 'H'}
+                          </button>
+                        ))}
+                      </div>
 
-                        <div className="col-span-2">
-                          <label className="sr-only" htmlFor={`${editorId}-amount-${line.id}`}>
-                            Betrag
-                          </label>
-                          <input
-                            id={`${editorId}-amount-${line.id}`}
+                      <AccountCombobox
+                        accounts={accountOptions}
+                        valueAccountId={line.accountId}
+                        valueAccountName={line.accountName}
+                        disabled={readOnly}
+                        onSelect={(account) =>
+                          updateLine(line.id, (current) => {
+                            const normalized = normalizeTaxCaseKey(current.taxCaseKey ?? current.taxCode ?? account.defaultTaxCode);
+                            const def = findTaxCaseOption(normalized);
+                            return {
+                              ...current,
+                              accountId: account.number,
+                              accountName: account.name,
+                              taxCaseKey: normalized,
+                              taxCode: toLegacyTaxCode(normalized) ?? current.taxCode ?? account.defaultTaxCode ?? '',
+                              taxRate: current.taxRate ?? def?.defaultRate,
+                            };
+                          })
+                        }
+                      />
+
+                      <Select
+                        id={`${editorId}-tax-case-${line.id}`}
+                        aria-label="Steuerfall"
+                        fullWidth
+                        value={selectedTaxCaseKey ?? ''}
+                        disabled={readOnly}
+                        onChange={(e) =>
+                          updateLine(line.id, (current) => {
+                            const nextTaxCase = normalizeTaxCaseKey(e.target.value);
+                            const nextOption = findTaxCaseOption(nextTaxCase);
+                            return {
+                              ...current,
+                              taxCaseKey: nextTaxCase,
+                              taxCode: toLegacyTaxCode(nextTaxCase) ?? (nextTaxCase ?? ''),
+                              taxRate: nextTaxCase ? current.taxRate ?? nextOption?.defaultRate : undefined,
+                            };
+                          })
+                        }
+                      >
+                        <option value="">Keine</option>
+                        {TAX_CASE_OPTIONS.map((option) => (
+                          <option key={option.key} value={option.key}>
+                            {option.label}
+                          </option>
+                        ))}
+                      </Select>
+
+                      <Input
+                        id={`${editorId}-amount-${line.id}`}
+                        aria-label="Betrag"
+                        type="number"
+                        step="0.01"
+                        min="0"
+                        fullWidth
+                        className="text-right font-mono tabular-nums"
+                        value={line.amount}
+                        disabled={readOnly}
+                        onChange={(e) =>
+                          updateLine(line.id, (current) => ({ ...current, amount: parseAmountInput(e.target.value) }))
+                        }
+                      />
+
+                      <IconButton
+                        aria-label="Zeile löschen"
+                        onClick={() => removeLine(line.id)}
+                        disabled={readOnly || draft.lines.length <= 2}
+                      >
+                        <Trash2 size={16} aria-hidden="true" />
+                      </IconButton>
+                    </div>
+
+                    {selectedTaxCase && autoTaxRate > 0 && lineGross > 0 && (
+                      <div
+                        role="note"
+                        aria-label={`Steuer automatisch: ${autoTaxLabel}`}
+                        data-auto-tax-line
+                        className={`${LINE_INDENT} flex flex-wrap items-center gap-2 text-caption text-muted`}
+                      >
+                        <Badge tone="info">Steuer automatisch</Badge>
+                        <span>
+                          {reverseCharge ? '' : 'davon '}{autoTaxLabel} aus dem Steuerfall:{' '}
+                          <span className="font-mono font-semibold tabular-nums text-foreground">{formatCurrency(autoTaxAmount, transaction.currency)}</span>
+                        </span>
+                      </div>
+                    )}
+
+                    <div className={`${LINE_INDENT} grid grid-cols-[repeat(auto-fill,minmax(112px,1fr))] gap-2`}>
+                      <Input
+                        id={`${editorId}-cost-center-${line.id}`}
+                        label="Kostenstelle"
+                        type="text"
+                        fullWidth
+                        value={line.costCenter ?? ''}
+                        disabled={readOnly}
+                        onChange={(e) => updateLine(line.id, (current) => ({ ...current, costCenter: e.target.value }))}
+                        placeholder="-"
+                      />
+                      {selectedTaxCase && (
+                        <>
+                          <Input
+                            label="Steuersatz %"
                             type="number"
                             step="0.01"
                             min="0"
-                            value={line.amount}
+                            fullWidth
+                            className="tabular-nums"
+                            value={line.taxRate ?? ''}
                             disabled={readOnly}
                             onChange={(e) =>
-                              updateLine(line.id, (current) => ({ ...current, amount: parseAmountInput(e.target.value) }))
+                              updateLine(line.id, (current) => ({
+                                ...current,
+                                taxRate: e.target.value === '' ? undefined : Number(parseAmountInput(e.target.value)),
+                              }))
                             }
-                            className="px-2.5 h-8 hover:border-control-border-hover w-full border border-control-border rounded-control text-sm tabular-nums text-right disabled:bg-surface-muted"
                           />
-                        </div>
-
-                        <div className="col-span-1 flex justify-end">
-                          <button
-                            onClick={() => removeLine(line.id)}
-                            disabled={readOnly || draft.lines.length <= 2}
-                            className="p-2 rounded-lg text-muted hover:text-error-text hover:bg-error-bg disabled:opacity-40"
-                            aria-label="Zeile löschen"
-                          >
-                            <Trash2 size={16} />
-                          </button>
-                        </div>
-                      </div>
-
-                      {selectedTaxCase && autoTaxRate > 0 && lineGross > 0 && (
-                        <div
-                          role="note"
-                          aria-label={`Steuer automatisch: ${autoTaxLabel}`}
-                          data-auto-tax-line
-                          className="flex flex-wrap items-center gap-2 pl-[calc(8.333%+0.75rem)] text-xs text-muted"
-                        >
-                          <Badge tone="info">Steuer automatisch</Badge>
-                          <span>
-                            {reverseCharge ? '' : 'davon '}{autoTaxLabel} aus dem Steuerfall:{' '}
-                            <span className="font-semibold tabular-nums text-foreground">{formatCurrency(autoTaxAmount, transaction.currency)}</span>
-                          </span>
-                        </div>
-                      )}
-
-                      {selectedTaxCase && (
-                        <div className="grid grid-cols-1 md:grid-cols-5 gap-2">
-                          <div>
-                            <label className="block mb-1 text-label text-foreground">
-                              Steuersatz %
-                            </label>
-                            <input
-                              type="number"
-                              step="0.01"
-                              min="0"
-                              value={line.taxRate ?? ''}
-                              disabled={readOnly}
-                              onChange={(e) =>
-                                updateLine(line.id, (current) => ({
-                                  ...current,
-                                  taxRate: e.target.value === '' ? undefined : Number(parseAmountInput(e.target.value)),
-                                }))
-                              }
-                              className="px-2.5 h-8 hover:border-control-border-hover w-full border border-control-border rounded-control text-sm tabular-nums disabled:bg-surface-muted"
-                            />
-                          </div>
-                          <div>
-                            <label className="block mb-1 text-label text-foreground">
-                              Land
-                            </label>
-                            <input
-                              type="text"
-                              value={line.countryCode ?? ''}
-                              disabled={readOnly}
-                              onChange={(e) =>
-                                updateLine(line.id, (current) => ({
-                                  ...current,
-                                  countryCode: e.target.value.toUpperCase(),
-                                }))
-                              }
-                              placeholder={selectedTaxCase.requiresCountry ? 'Pflicht (z.B. FR)' : 'Optional'}
-                              className="px-2.5 h-8 hover:border-control-border-hover w-full border border-control-border rounded-control text-sm tabular-nums disabled:bg-surface-muted"
-                            />
-                          </div>
-                          <div>
-                            <label className="block mb-1 text-label text-foreground">
-                              USt-IdNr.
-                            </label>
-                            <input
-                              type="text"
-                              value={line.counterpartyVatId ?? ''}
-                              disabled={readOnly}
-                              onChange={(e) =>
-                                updateLine(line.id, (current) => ({
-                                  ...current,
-                                  counterpartyVatId: e.target.value.toUpperCase(),
-                                }))
-                              }
-                              placeholder={selectedTaxCase.requiresCounterpartyVatId ? 'Pflicht' : 'Optional'}
-                              className="px-2.5 h-8 hover:border-control-border-hover w-full border border-control-border rounded-control text-sm tabular-nums disabled:bg-surface-muted"
-                            />
-                          </div>
-                          <div>
-                            <label className="block mb-1 text-label text-foreground">
-                              Nachweisart
-                            </label>
-                            <input
-                              type="text"
-                              value={line.evidenceType ?? ''}
-                              disabled={readOnly}
-                              onChange={(e) => updateLine(line.id, (current) => ({ ...current, evidenceType: e.target.value }))}
-                              placeholder={selectedTaxCase.requiresEvidence ? 'Pflicht' : 'Optional'}
-                              className="px-2.5 h-8 hover:border-control-border-hover w-full border border-control-border rounded-control text-sm tabular-nums disabled:bg-surface-muted"
-                            />
-                          </div>
-                          <div>
-                            <label className="block mb-1 text-label text-foreground">
-                              Nachweis-Referenz
-                            </label>
-                            <input
-                              type="text"
-                              value={line.evidenceReference ?? ''}
-                              disabled={readOnly}
-                              onChange={(e) =>
-                                updateLine(line.id, (current) => ({ ...current, evidenceReference: e.target.value }))
-                              }
-                              placeholder={selectedTaxCase.requiresEvidence ? 'Pflicht' : 'Optional'}
-                              className="px-2.5 h-8 hover:border-control-border-hover w-full border border-control-border rounded-control text-sm tabular-nums disabled:bg-surface-muted"
-                            />
-                          </div>
-                        </div>
+                          <Input
+                            label="Land"
+                            type="text"
+                            fullWidth
+                            value={line.countryCode ?? ''}
+                            disabled={readOnly}
+                            onChange={(e) =>
+                              updateLine(line.id, (current) => ({
+                                ...current,
+                                countryCode: e.target.value.toUpperCase(),
+                              }))
+                            }
+                            placeholder={selectedTaxCase.requiresCountry ? 'Pflicht (z.B. FR)' : 'Optional'}
+                          />
+                          <Input
+                            label="USt-IdNr."
+                            type="text"
+                            fullWidth
+                            value={line.counterpartyVatId ?? ''}
+                            disabled={readOnly}
+                            onChange={(e) =>
+                              updateLine(line.id, (current) => ({
+                                ...current,
+                                counterpartyVatId: e.target.value.toUpperCase(),
+                              }))
+                            }
+                            placeholder={selectedTaxCase.requiresCounterpartyVatId ? 'Pflicht' : 'Optional'}
+                          />
+                          <Input
+                            label="Nachweisart"
+                            type="text"
+                            fullWidth
+                            value={line.evidenceType ?? ''}
+                            disabled={readOnly}
+                            onChange={(e) => updateLine(line.id, (current) => ({ ...current, evidenceType: e.target.value }))}
+                            placeholder={selectedTaxCase.requiresEvidence ? 'Pflicht' : 'Optional'}
+                          />
+                          <Input
+                            label="Nachweis-Referenz"
+                            type="text"
+                            fullWidth
+                            value={line.evidenceReference ?? ''}
+                            disabled={readOnly}
+                            onChange={(e) =>
+                              updateLine(line.id, (current) => ({ ...current, evidenceReference: e.target.value }))
+                            }
+                            placeholder={selectedTaxCase.requiresEvidence ? 'Pflicht' : 'Optional'}
+                          />
+                        </>
                       )}
                     </div>
-                  );
-                })}
-              </div>
+                  </div>
+                );
+              })}
             </div>
 
-            <div className="p-3 border-t border-border bg-surface-muted/50 flex items-center justify-between shrink-0">
-              <button
-                onClick={addLine}
-                disabled={readOnly}
-                className="px-4 py-2 rounded-lg border border-control-border bg-surface text-sm font-semibold text-foreground hover:bg-surface-muted disabled:opacity-50 inline-flex items-center gap-1"
-              >
-                <Plus size={16} />
-                Zeile hinzufügen
-              </button>
-              {!readOnly && (
-                <button
-                  onClick={() => void handleWorkflowAction('save_draft')}
-                  disabled={busy}
-                  className="px-4 py-2 rounded-lg border border-control-border bg-surface text-sm font-semibold text-foreground hover:bg-surface-muted inline-flex items-center gap-1"
-                >
-                  <Save size={16} />
-                  Speichern
-                </button>
-              )}
-            </div>
-          </div>
-
-          <div className="mt-4 shrink-0">
             {/* T-Konto: one figure split into its two sides, the difference named in euros. */}
-            <section aria-label="Summen Soll und Haben" className="rounded-2xl border border-border bg-surface p-5">
-              <div className="grid grid-cols-[1fr_1px_1fr] border-t border-control-border pt-3">
-                <div className="pr-4">
-                  <div className="text-caption font-semibold uppercase tracking-[0.04em] text-muted">Soll</div>
-                  <div className="text-xl font-semibold tabular-nums text-foreground">{formatCurrency(totalSoll, transaction.currency)}</div>
+            <section aria-label="Summen Soll und Haben" className="mt-3.5">
+              <div className="grid grid-cols-[1fr_1px_1fr] border-t border-border-strong pt-2.5">
+                <div className="pr-3.5">
+                  <div className="text-eyebrow uppercase text-muted">Soll</div>
+                  <div className="font-mono text-heading font-bold tabular-nums text-foreground">{formatCurrency(totalSoll, transaction.currency)}</div>
                 </div>
-                <div className="bg-control-border" aria-hidden="true" />
-                <div className="pl-4 text-right">
-                  <div className="text-caption font-semibold uppercase tracking-[0.04em] text-muted">Haben</div>
-                  <div className="text-xl font-semibold tabular-nums text-foreground">{formatCurrency(totalHaben, transaction.currency)}</div>
+                <div className="bg-border-strong" aria-hidden="true" />
+                <div className="pl-3.5 text-right">
+                  <div className="text-eyebrow uppercase text-muted">Haben</div>
+                  <div className="font-mono text-heading font-bold tabular-nums text-foreground">{formatCurrency(totalHaben, transaction.currency)}</div>
                 </div>
               </div>
-              <div
-                className={`mt-4 flex items-center justify-between rounded-control border px-3 py-2 text-label ${difference < 0.01 ? 'border-success-border bg-success-bg text-success-text' : 'border-error-border bg-error-bg text-error-text'}`}
-                role="status"
-              >
-                <span>{difference < 0.01 ? 'Soll und Haben gleichen sich aus' : 'Differenz, Buchung nicht ausgeglichen'}</span>
-                <span className="font-semibold tabular-nums">{formatCurrency(difference, transaction.currency)}</span>
-              </div>
+              {difference < 0.01 ? (
+                <p className="mt-2 flex items-center gap-1.5 text-caption text-success-text" role="status">
+                  <Check size={14} aria-hidden="true" />
+                  Soll und Haben gleichen sich aus
+                </p>
+              ) : (
+                <div
+                  className="mt-2.5 flex items-start gap-2.5 rounded-control border border-error-border bg-error-bg px-3 py-2.5 text-control text-error-text"
+                  role="status"
+                >
+                  <TriangleAlert size={16} aria-hidden="true" className="mt-px shrink-0" />
+                  <span className="min-w-0 flex-1">Differenz, Buchung nicht ausgeglichen</span>
+                  <span className="font-mono font-semibold tabular-nums">{formatCurrency(difference, transaction.currency)}</span>
+                </div>
+              )}
             </section>
           </div>
-        </div>
-        </div>
 
-        <aside aria-label="Beleg, Prüfungen und Verlauf" className="flex min-w-0 flex-col gap-4">
-          <section aria-label="Beleg" className="rounded-2xl border border-border bg-surface p-4">
-            <div className="text-caption font-semibold uppercase tracking-[0.04em] text-muted">Beleg</div>
-            <div className={`mt-1 text-sm font-semibold ${transaction.hasReceipt ? 'text-success-text' : 'text-warning-text'}`}>
-              {transaction.hasReceipt ? 'Beleg vorhanden' : 'Beleg fehlt'}
+          <WorkflowActionBar
+            draft={draft}
+            permissionCtx={permissionCtx}
+            allowedActions={allowedActions}
+            onAction={(action) => void handleWorkflowAction(action)}
+            isBusy={busy}
+            blockedAction={blockedAction}
+            blockedReason={blockedReason}
+          />
+        </div>
+      </section>
+
+      <aside
+        aria-label="Beleg, Prüfungen und Verlauf"
+        className="flex min-w-0 flex-col gap-3.5 rounded-card border border-border bg-surface p-3 @2xl:col-span-2 @5xl:col-span-1"
+      >
+        <section aria-label="Beleg">
+          <h3 className="mb-2 text-eyebrow uppercase text-muted">Beleg</h3>
+          {transaction.hasReceipt ? (
+            <div className="flex items-center gap-2 text-caption text-foreground-secondary">
+              <Check size={14} aria-hidden="true" className="shrink-0 text-success-text" />
+              Beleg vorhanden
             </div>
-            <div className="mt-3 text-caption font-semibold uppercase tracking-[0.04em] text-muted">Kontenrahmen</div>
-            <div className="mt-1 text-sm font-semibold tabular-nums text-foreground">{draft.chartFramework}</div>
-          </section>
-          <ValidationSummary issues={validationIssues} />
-          <ActivityTimeline events={draft.activity} />
-        </aside>
-      </div>
+          ) : (
+            <div className="rounded-control border border-dashed border-border-strong px-2.5 py-5 text-center text-sm font-semibold text-foreground">
+              Beleg fehlt
+            </div>
+          )}
+        </section>
+        <ValidationSummary issues={validationIssues} />
+        <ActivityTimeline events={draft.activity} />
+      </aside>
 
       <Modal
         open={showShortcutHelp}
         onClose={() => setShowShortcutHelp(false)}
         titleId={`${editorId}-shortcut-help-title`}
         initialFocusRef={shortcutCloseRef}
-        className="max-w-lg rounded-2xl border border-border p-6"
       >
-        <div className="flex items-center justify-between mb-4">
-          <h3 id={`${editorId}-shortcut-help-title`} className="text-base font-semibold text-foreground">Tastenkürzel</h3>
-          <button ref={shortcutCloseRef} aria-label="Schließen (Tastenkürzel-Hilfe)" onClick={() => setShowShortcutHelp(false)} className="text-sm font-semibold text-muted">
-            Schließen
-          </button>
+        <div className="flex items-start gap-3 px-4.5 pb-2.5 pt-4">
+          <h3 id={`${editorId}-shortcut-help-title`} className="min-w-0 flex-1 text-title text-foreground">Tastenkürzel</h3>
         </div>
-        <ul className="space-y-2 text-sm text-foreground">
-          <li><strong>Ctrl/Cmd + Enter</strong>: Primäraktion ausführen (z. B. Freigeben/Buchen)</li>
-          <li><strong>?</strong>: Shortcut-Hilfe öffnen/schließen</li>
-          <li><strong>Esc</strong>: Dialog schließen</li>
+        <ul className="flex flex-col gap-2 px-4.5 pb-4 pt-1 text-control text-foreground">
+          <li><strong className="font-semibold">Ctrl/Cmd + Enter</strong>: Primäraktion ausführen (z. B. Freigeben/Buchen)</li>
+          <li><strong className="font-semibold">?</strong>: Shortcut-Hilfe öffnen/schließen</li>
+          <li><strong className="font-semibold">Esc</strong>: Dialog schließen</li>
         </ul>
+        <div className="flex flex-wrap justify-end gap-2 border-t border-border px-4.5 py-3">
+          <Button ref={shortcutCloseRef} variant="secondary" aria-label="Schließen (Tastenkürzel-Hilfe)" onClick={() => setShowShortcutHelp(false)}>
+            Schließen
+          </Button>
+        </div>
       </Modal>
 
       <ConfirmDialog
@@ -851,23 +777,23 @@ export default function BookingEditor({ transactionId, role, accounts, onBack, o
           <div className="space-y-2" aria-label="Buchung, die storniert wird">
             <div className="grid grid-cols-2 gap-3">
               <div>
-                <div className="text-xs font-semibold uppercase tracking-wide text-muted">Betrag</div>
-                <div className="font-semibold tabular-nums text-foreground">{formatCurrency(transaction.amount, transaction.currency)}</div>
+                <div className="text-eyebrow uppercase text-muted">Betrag</div>
+                <div className="font-mono font-semibold tabular-nums text-foreground">{formatCurrency(transaction.amount, transaction.currency)}</div>
               </div>
               <div>
-                <div className="text-xs font-semibold uppercase tracking-wide text-muted">Soll / Haben</div>
-                <div className="font-semibold tabular-nums text-foreground">
+                <div className="text-eyebrow uppercase text-muted">Soll / Haben</div>
+                <div className="font-mono font-semibold tabular-nums text-foreground">
                   {formatCurrency(totalSoll, transaction.currency)} / {formatCurrency(totalHaben, transaction.currency)}
                 </div>
               </div>
             </div>
             <div>
-              <div className="text-xs font-semibold uppercase tracking-wide text-muted">Konten und Seiten</div>
-              <ul className="mt-1 space-y-1 text-sm text-foreground">
+              <div className="text-eyebrow uppercase text-muted">Konten und Seiten</div>
+              <ul className="mt-1 space-y-1 text-control text-foreground">
                 {draft.lines.map((line) => (
                   <li key={line.id} className="flex items-center justify-between gap-3">
                     <span className="min-w-0 truncate">{line.accountId || line.accountName}</span>
-                    <span className="shrink-0 font-semibold tabular-nums">{line.type} · {formatCurrency(Number(line.amount) || 0, transaction.currency)}</span>
+                    <span className="shrink-0 font-mono font-semibold tabular-nums">{line.type} · {formatCurrency(Number(line.amount) || 0, transaction.currency)}</span>
                   </li>
                 ))}
               </ul>

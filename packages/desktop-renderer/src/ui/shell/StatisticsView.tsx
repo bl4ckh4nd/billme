@@ -1,7 +1,7 @@
 import React, { useState, useMemo } from 'react';
 import { useNavigate } from '@tanstack/react-router';
 import { TrendingUp, TrendingDown, ArrowUpRight } from 'lucide-react';
-import { BarChart, Button, EmptyState, ErrorState, Metric, PageHeader, SegmentedControl } from '@billme/ui';
+import { BarChart, Button, Card, CardHeader, EmptyState, ErrorState, Metric, PageHeader, SegmentedControl, cn } from '@billme/ui';
 import type { AppSettings, Client, Invoice } from '@billme/desktop-core/types';
 import { useInvoicesQuery } from '../../hooks/useInvoices';
 import { useClientsQuery } from '../../hooks/useClients';
@@ -19,10 +19,9 @@ const formatAxisValue = (amount: number) =>
 type TimeRange = 'month' | 'quarter' | 'year' | 'all';
 
 /**
- * Statistiken answer "how much did we actually earn". The revenue figure is the
- * answer, so it carries the focal card; open items, average invoice and payment
- * ratio stay a compact row underneath. All three queries are gated: a failed
- * query must not render as a zero statistic.
+ * Statistiken answer "how much did we actually earn". The revenue figure leads
+ * the KPI row; open items, average invoice and payment ratio follow it. All
+ * three queries are gated: a failed query must not render as a zero statistic.
  */
 export interface StatisticsViewProps {
   /** Hosts that group several reports (Lite Auswertungen) pass their own title and tab row. */
@@ -223,7 +222,6 @@ const StatisticsContent: React.FC<{
         title={title}
         description="Finanzüberblick und Geschäftsentwicklung"
         toolbar={toolbar}
-        className="px-1 pt-2"
         actions={
           <SegmentedControl
             aria-label="Zeitraum"
@@ -239,50 +237,55 @@ const StatisticsContent: React.FC<{
         }
       />
 
-      {/* Revenue is the answer this screen exists for: the one inverse figure. */}
-      <div className="grid grid-cols-1 gap-3 lg:grid-cols-3">
-          <section className="flex flex-col justify-between gap-6 rounded-panel bg-surface-inverse p-6 text-inverse-foreground">
-              <div className="flex items-start justify-between gap-3">
-                  <h2 className="text-label text-inverse-muted">Umsatz, bezahlt</h2>
-                  {revenueTrend !== null && (
-                    <span className={`inline-flex items-center gap-1 text-caption font-medium tabular-nums ${revenueTrend >= 0 ? 'text-accent' : 'text-error-inverse'}`}>
-                        {revenueTrend >= 0 ? <TrendingUp size={14} aria-hidden="true" /> : <TrendingDown size={14} aria-hidden="true" />}
-                        {revenueTrend >= 0 ? '+' : ''}{revenueTrend}% zum Vorzeitraum
-                    </span>
-                  )}
-              </div>
-              <p className="text-4xl font-semibold tracking-[-0.02em] tabular-nums">{formatCurrency(kpis.revenue)}</p>
-          </section>
+      <section aria-label="Kennzahlen" className="grid grid-cols-[repeat(auto-fit,minmax(min(13.25rem,100%),1fr))] gap-3">
+        <div className="rounded-tile border border-border bg-surface px-4 py-3.5">
+          <Metric
+            marker="tick"
+            label="Umsatz, bezahlt"
+            value={formatCurrency(kpis.revenue)}
+            hint={revenueTrend !== null ? (
+              <span className={cn('inline-flex items-center gap-1 tabular-nums', revenueTrend >= 0 ? 'text-success-text' : 'text-error-text')}>
+                {revenueTrend >= 0 ? <TrendingUp size={14} aria-hidden="true" /> : <TrendingDown size={14} aria-hidden="true" />}
+                {revenueTrend >= 0 ? '+' : ''}{revenueTrend}% zum Vorzeitraum
+              </span>
+            ) : undefined}
+          />
+        </div>
+        <div className="rounded-tile border border-border bg-surface px-4 py-3.5">
+          <Metric
+            marker="tick"
+            label="Offene Forderungen"
+            value={formatCurrency(kpis.outstanding)}
+            tone={kpis.overdue > 0 ? 'error' : 'neutral'}
+            hint={kpis.overdue > 0 ? <span className="text-error-text tabular-nums">davon {formatCurrency(kpis.overdue)} überfällig</span> : undefined}
+          />
+        </div>
+        <div className="rounded-tile border border-border bg-surface px-4 py-3.5">
+          <Metric marker="tick" label="Ø Rechnungswert" value={formatCurrency(kpis.avgTicket)} />
+        </div>
+        <div className="rounded-tile border border-border bg-surface px-4 py-3.5">
+          <Metric
+            marker="tick"
+            label="Zahlungsquote"
+            value={`${Math.round(kpis.conversionRate)} %`}
+            hint={kpis.totalCount > 0
+              ? `${kpis.paidCount} von ${kpis.totalCount} ${kpis.totalCount === 1 ? 'Rechnung' : 'Rechnungen'} bezahlt`
+              : undefined}
+          />
+        </div>
+      </section>
 
-          <section className="lg:col-span-2 grid grid-cols-1 divide-y divide-border-subtle rounded-panel bg-surface shadow-xs sm:grid-cols-3 sm:divide-x sm:divide-y-0">
-              <Metric
-                className="p-6"
-                label="Offene Forderungen"
-                value={formatCurrency(kpis.outstanding)}
-                tone={kpis.overdue > 0 ? 'error' : 'neutral'}
-                hint={kpis.overdue > 0 ? <span className="text-error-text tabular-nums">davon {formatCurrency(kpis.overdue)} überfällig</span> : undefined}
-              />
-              <Metric className="p-6" label="Ø Rechnungswert" value={formatCurrency(kpis.avgTicket)} />
-              <Metric
-                className="p-6"
-                label="Zahlungsquote"
-                value={`${Math.round(kpis.conversionRate)} %`}
-                hint={kpis.totalCount > 0
-                  ? `${kpis.paidCount} von ${kpis.totalCount} ${kpis.totalCount === 1 ? 'Rechnung' : 'Rechnungen'} bezahlt`
-                  : undefined}
-              />
-          </section>
-      </div>
-
-      <div className="mt-3 grid flex-1 grid-cols-1 gap-3 lg:grid-cols-3">
-          <section aria-labelledby="statistics-chart" className="lg:col-span-2 flex flex-col rounded-panel bg-surface p-6 shadow-xs">
-              <div className="mb-6 flex items-baseline justify-between gap-4">
-                  <h2 id="statistics-chart" className="text-section">Umsatzentwicklung</h2>
-                  <span className="shrink-0 text-caption text-muted">Bezahlte Rechnungen, Monatssumme</span>
-              </div>
+      <div className="mt-3.5 grid grid-cols-1 items-start gap-3.5 lg:grid-cols-3">
+        <section aria-labelledby="statistics-chart" className="min-w-0 lg:col-span-2">
+          <Card padding="none">
+            <CardHeader
+              className="border-b border-border px-3.5 py-3"
+              title={<span id="statistics-chart">Umsatzentwicklung</span>}
+              subtitle="Bezahlte Rechnungen, Monatssumme"
+            />
+            <div className="p-3.5">
               {chartMax <= 0 ? (
                 <EmptyState
-                  className="flex-1"
                   title="Keine bezahlten Rechnungen"
                   description="In diesem Zeitraum ist keine bezahlte Rechnung enthalten. Wähle einen größeren Zeitraum oder markiere Rechnungen als bezahlt."
                   action={<Button variant="secondary" size="sm" onClick={() => setTimeRange('all')}>Gesamten Zeitraum anzeigen</Button>}
@@ -297,30 +300,36 @@ const StatisticsContent: React.FC<{
                   height={260}
                 />
               )}
-          </section>
+            </div>
+          </Card>
+        </section>
 
-          <section aria-labelledby="statistics-clients" className="flex flex-col rounded-panel bg-surface p-6 shadow-xs">
-              <h2 id="statistics-clients" className="mb-4 text-section">Kunden mit dem höchsten Umsatz</h2>
+        <section aria-labelledby="statistics-clients" className="min-w-0">
+          <Card padding="none">
+            <CardHeader
+              className="border-b border-border px-3.5 py-3"
+              title={<span id="statistics-clients">Kunden mit dem höchsten Umsatz</span>}
+            />
+            <div className="flex flex-col p-3.5">
               {topClients.length === 0 ? (
                 <EmptyState
-                  className="flex-1"
                   title="Keine bezahlten Rechnungen in diesem Zeitraum"
                   description="Wähle einen größeren Zeitraum oder markiere Rechnungen als bezahlt."
                   action={<Button variant="secondary" size="sm" onClick={() => setTimeRange('all')}>Gesamten Zeitraum anzeigen</Button>}
                 />
               ) : (
-                <ol className="flex-1 space-y-4 overflow-y-auto">
+                <ol className="space-y-3.5">
                   {topClients.map((client, idx) => (
                     <li key={`${client.name}:${idx}`} className="flex items-center gap-3">
                       <span className="w-5 shrink-0 text-caption font-medium text-muted tabular-nums">{idx + 1}</span>
                       <div className="min-w-0 flex-1">
-                        <div className="mb-1.5 flex items-center justify-between gap-3">
-                          <span className="truncate text-sm font-medium">{client.name}</span>
-                          <span className="text-sm font-medium tabular-nums">{formatCurrency(client.amount)}</span>
+                        <div className="mb-1.5 flex items-center justify-between gap-3 text-control font-medium">
+                          <span className="truncate">{client.name}</span>
+                          <span className="tabular-nums">{formatCurrency(client.amount)}</span>
                         </div>
                         <div className="h-1 w-full overflow-hidden rounded-full bg-surface-sunken">
                           <div
-                            className={`h-full rounded-full ${idx === 0 ? 'bg-selected' : 'bg-ink-400'}`}
+                            className={`h-full rounded-full ${idx === 0 ? 'bg-selected' : 'bg-muted'}`}
                             style={{ width: `${kpis.revenue > 0 ? Math.min(100, (client.amount / kpis.revenue) * 100) : 0}%` }}
                           />
                         </div>
@@ -330,10 +339,12 @@ const StatisticsContent: React.FC<{
                 </ol>
               )}
 
-              <Button variant="ghost" size="sm" className="mt-4 self-start -ml-3" onClick={() => navigate({ to: '/clients' })}>
-                  Alle Kunden ansehen <ArrowUpRight size={14} aria-hidden="true" />
+              <Button variant="ghost" size="sm" className="mt-3 -ml-2.25 self-start" onClick={() => navigate({ to: '/clients' })}>
+                Alle Kunden ansehen <ArrowUpRight size={14} aria-hidden="true" />
               </Button>
-          </section>
+            </div>
+          </Card>
+        </section>
       </div>
     </div>
   );

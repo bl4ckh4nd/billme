@@ -1,6 +1,6 @@
 import {
-  Badge, Button, Checkbox, EmptyState, ErrorState, IconButton, Input, Menu, Modal, PageHeader,
-  Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
+  Badge, Button, Card, Checkbox, EmptyState, ErrorState, IconButton, Input, Menu, Modal, PageHeader, Select,
+  Table, TableBody, TableCell, TableHead, TableHeader, TableRow, Textarea,
 } from '@billme/ui';
 import React from 'react';
 import { Archive, Edit3, MoreHorizontal, Plus, Search, X } from 'lucide-react';
@@ -11,6 +11,7 @@ import { useClientsQuery } from '../hooks/useClients';
 import { useArchiveProjectMutation, useProjectsQuery, useUpsertProjectMutation } from '../hooks/useProjects';
 import { useCreateIntent } from '../hooks/useCreateIntent';
 import { SkeletonLoader } from '../ui/components/SkeletonLoader';
+import { localIsoDate } from '@billme/desktop-utils';
 
 type EditorMode = 'create' | 'edit';
 
@@ -61,7 +62,7 @@ export const ProjectsView: React.FC = () => {
   });
 
   const openCreate = () => {
-    const today = new Date().toISOString().split('T')[0] ?? '';
+    const today = localIsoDate();
     setEditorMode('create');
     setDraft({
       id: uuidv4(),
@@ -155,9 +156,16 @@ export const ProjectsView: React.FC = () => {
     archived: 'Archiviert',
   };
 
+  const closeArchive = () => {
+    setArchiveTarget(null);
+    setArchiveReason('');
+    setArchiveError(null);
+  };
+
   return (
-    <div className="min-h-full px-1 pt-2 flex flex-col">
+    <div className="flex flex-col gap-3">
       <PageHeader
+        className="mb-0"
         title="Projekte"
         description="Projekte bündeln alle Rechnungen und Angebote eines Kunden."
         actions={
@@ -187,7 +195,6 @@ export const ProjectsView: React.FC = () => {
           </>
         }
       />
-      <div className="min-h-0 flex-1 rounded-card border border-border bg-surface p-5 lg:p-6">
 
       {isLoadingView ? (
         <SkeletonLoader variant="table" count={5} />
@@ -198,26 +205,28 @@ export const ProjectsView: React.FC = () => {
           onRetry={retryQueries}
         />
       ) : filtered.length === 0 ? (
-        projects.length === 0 ? (
-          <EmptyState
-            title={includeArchived ? 'Noch keine Projekte angelegt' : 'Noch keine aktiven Projekte'}
-            description={
-              includeArchived
-                ? 'Ein Projekt bündelt alle Dokumente eines Kunden, damit Rechnungen und Angebote zuordenbar bleiben. Lege das erste Projekt über "Neues Projekt" oben rechts an.'
-                : 'Archivierte Projekte sind ausgeblendet. Aktiviere "Archivierte anzeigen" oder lege über "Neues Projekt" ein neues an.'
-            }
-          />
-        ) : (
-          <EmptyState
-            title="Kein Projekt passt zu dieser Suche"
-            description={`Die Suche "${search.trim()}" schließt alle ${projects.length} geladenen Projekte aus.`}
-            action={
-              <Button variant="secondary" size="sm" onClick={() => setSearch('')}>
-                Suche zurücksetzen
-              </Button>
-            }
-          />
-        )
+        <Card padding="none">
+          {projects.length === 0 ? (
+            <EmptyState
+              title={includeArchived ? 'Noch keine Projekte angelegt' : 'Noch keine aktiven Projekte'}
+              description={
+                includeArchived
+                  ? 'Ein Projekt bündelt alle Dokumente eines Kunden, damit Rechnungen und Angebote zuordenbar bleiben. Lege das erste Projekt über "Neues Projekt" oben rechts an.'
+                  : 'Archivierte Projekte sind ausgeblendet. Aktiviere "Archivierte anzeigen" oder lege über "Neues Projekt" ein neues an.'
+              }
+            />
+          ) : (
+            <EmptyState
+              title="Kein Projekt passt zu dieser Suche"
+              description={`Die Suche "${search.trim()}" schließt alle ${projects.length} geladenen Projekte aus.`}
+              action={
+                <Button variant="secondary" size="sm" onClick={() => setSearch('')}>
+                  Suche zurücksetzen
+                </Button>
+              }
+            />
+          )}
+        </Card>
       ) : (
         <Table aria-label="Projekte">
           <TableHeader>
@@ -235,8 +244,8 @@ export const ProjectsView: React.FC = () => {
               return (
                 <TableRow key={p.id} interactive onClick={() => navigate({ to: `/projects/${p.id}` })} title="Projekt öffnen">
                   <TableCell>
-                    <div className="font-medium">{p.name}</div>
-                    {p.code && <div className="text-caption text-muted">{p.code}</div>}
+                    <span className="font-medium">{p.name}</span>
+                    {p.code && <span className="ml-2 text-caption text-muted">{p.code}</span>}
                   </TableCell>
                   <TableCell className="max-w-64 truncate">{clientName}</TableCell>
                   <TableCell>
@@ -245,7 +254,7 @@ export const ProjectsView: React.FC = () => {
                     </Badge>
                   </TableCell>
                   <TableCell muted className="hidden tabular-nums md:table-cell">{p.startDate}</TableCell>
-                  <TableCell className="text-right" onClick={(event) => event.stopPropagation()}>
+                  <TableCell className="py-1 text-right" onClick={(event) => event.stopPropagation()}>
                     <Menu
                       aria-label={`Aktionen für ${p.name}`}
                       align="end"
@@ -282,35 +291,31 @@ export const ProjectsView: React.FC = () => {
         onClose={closeEditor}
         titleId="project-editor-title"
         descriptionId="project-editor-description"
-        className="max-w-2xl overflow-hidden"
       >
         {draft && (
           <>
-            <div className="flex items-center justify-between px-6 py-5 border-b border-border">
-              <div>
-                <h3 id="project-editor-title" className="text-lg font-semibold text-foreground">
+            <div className="flex items-start gap-3 px-4.5 pt-4 pb-2.5">
+              <div className="min-w-0 flex-1">
+                <h3 id="project-editor-title" className="text-title text-foreground">
                   {editorMode === 'create' ? 'Neues Projekt' : 'Projekt bearbeiten'}
                 </h3>
-                <p id="project-editor-description" className="text-sm text-muted mt-1">Änderungen werden im Audit-Log gespeichert.</p>
+                <p id="project-editor-description" className="text-caption text-muted">Änderungen werden im Audit-Log gespeichert.</p>
               </div>
-              <button
-                type="button"
-                onClick={closeEditor}
-                aria-label="Dialog schließen"
-                className="inline-flex size-8 shrink-0 items-center justify-center rounded-control text-muted transition-colors hover:bg-surface-sunken hover:text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
-              >
-                <X size={16} />
-              </button>
+              <IconButton aria-label="Dialog schließen" tooltip={false} onClick={closeEditor}>
+                <X size={16} aria-hidden="true" />
+              </IconButton>
             </div>
 
-            <div className="p-6 grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-2 gap-3 px-4.5 pt-1 pb-4">
               <div className="col-span-2">
-                <label className="block text-xs font-semibold text-muted mb-1" htmlFor="projectsview-kunde-pflicht">Kunde (Pflicht)</label>
-                <select id="projectsview-kunde-pflicht"
+                <Select
+                  id="projectsview-kunde-pflicht"
+                  label="Kunde (Pflicht)"
                   value={draft.clientId ?? ''}
                   onChange={(e) => setDraft({ ...draft, clientId: e.target.value })}
                   disabled={editorMode === 'edit'}
- className="px-3 h-10 hover:border-control-border-hover w-full bg-surface border border-control-border rounded-control text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring disabled:opacity-60"
+                  hint={editorMode === 'edit' ? 'Kunden-Zuordnung ist nachträglich nicht änderbar.' : undefined}
+                  fullWidth
                 >
                   <option value="">(Bitte auswählen)</option>
                   {clients.map((c) => (
@@ -318,96 +323,84 @@ export const ProjectsView: React.FC = () => {
                       {c.company}
                     </option>
                   ))}
-                </select>
-                {editorMode === 'edit' && (
-                  <div className="mt-1 text-xs text-muted">
-                    Kunden-Zuordnung ist nachträglich nicht änderbar.
-                  </div>
-                )}
+                </Select>
               </div>
 
-              <div>
-                <label className="block text-xs font-semibold text-muted mb-1" htmlFor="projectsview-projektcode">Projektcode</label>
-                <input id="projectsview-projektcode"
-                  value={draft.code ?? ''}
-                  onChange={(e) => setDraft({ ...draft, code: e.target.value })}
-                  placeholder="Leer lassen für automatische Vergabe (z.B. PRJ-2026-001)"
- className="px-3 h-10 hover:border-control-border-hover w-full bg-surface border border-control-border rounded-control text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
-                />
-              </div>
+              <Input
+                id="projectsview-projektcode"
+                label="Projektcode"
+                value={draft.code ?? ''}
+                onChange={(e) => setDraft({ ...draft, code: e.target.value })}
+                placeholder="Leer lassen für automatische Vergabe (z.B. PRJ-2026-001)"
+                fullWidth
+              />
 
-              <div>
-                <label className="block text-xs font-semibold text-muted mb-1" htmlFor="projectsview-status">Status</label>
-                <select id="projectsview-status"
-                  value={draft.status}
-                  onChange={(e) => setDraft({ ...draft, status: e.target.value as any })}
- className="px-3 h-10 hover:border-control-border-hover w-full bg-surface border border-control-border rounded-control text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
-                >
-                  <option value="active">Aktiv</option>
-                  <option value="planned">Geplant</option>
-                  <option value="on_hold">Pausiert</option>
-                  <option value="completed">Abgeschlossen</option>
-                </select>
-              </div>
+              <Select
+                id="projectsview-status"
+                label="Status"
+                value={draft.status}
+                onChange={(e) => setDraft({ ...draft, status: e.target.value as any })}
+                fullWidth
+              >
+                <option value="active">Aktiv</option>
+                <option value="planned">Geplant</option>
+                <option value="on_hold">Pausiert</option>
+                <option value="completed">Abgeschlossen</option>
+              </Select>
 
               <div className="col-span-2">
-                <label className="block text-xs font-semibold text-muted mb-1" htmlFor="projectsview-projektname-pflicht">Projektname (Pflicht)</label>
-                <input id="projectsview-projektname-pflicht"
+                <Input
+                  id="projectsview-projektname-pflicht"
+                  label="Projektname (Pflicht)"
                   value={draft.name}
                   onChange={(e) => setDraft({ ...draft, name: e.target.value })}
- className="px-3 h-10 hover:border-control-border-hover w-full bg-surface border border-control-border rounded-control text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                  fullWidth
                 />
               </div>
 
-              <div>
-                <label className="block text-xs font-semibold text-muted mb-1" htmlFor="projectsview-start">Start</label>
-                <input id="projectsview-start"
-                  type="date"
-                  value={draft.startDate}
-                  onChange={(e) => setDraft({ ...draft, startDate: e.target.value })}
- className="px-3 h-10 hover:border-control-border-hover w-full bg-surface border border-control-border rounded-control text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
-                />
-              </div>
-              <div>
-                <label className="block text-xs font-semibold text-muted mb-1" htmlFor="projectsview-ende-optional">Ende (optional)</label>
-                <input id="projectsview-ende-optional"
-                  type="date"
-                  value={draft.endDate ?? ''}
-                  onChange={(e) => setDraft({ ...draft, endDate: e.target.value || undefined })}
- className="px-3 h-10 hover:border-control-border-hover w-full bg-surface border border-control-border rounded-control text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
-                />
-              </div>
+              <Input
+                id="projectsview-start"
+                label="Start"
+                type="date"
+                value={draft.startDate}
+                onChange={(e) => setDraft({ ...draft, startDate: e.target.value })}
+                fullWidth
+              />
+              <Input
+                id="projectsview-ende-optional"
+                label="Ende (optional)"
+                type="date"
+                value={draft.endDate ?? ''}
+                onChange={(e) => setDraft({ ...draft, endDate: e.target.value || undefined })}
+                fullWidth
+              />
 
-              <div>
-                <label className="block text-xs font-semibold text-muted mb-1" htmlFor="projectsview-budget">Budget</label>
-                <input id="projectsview-budget"
-                  type="number"
-                  value={draft.budget ?? 0}
-                  onChange={(e) => setDraft({ ...draft, budget: Number(e.target.value) })}
- className="px-3 h-10 hover:border-control-border-hover w-full bg-surface border border-control-border rounded-control text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
-                />
-              </div>
+              <Input
+                id="projectsview-budget"
+                label="Budget"
+                type="number"
+                value={draft.budget ?? 0}
+                onChange={(e) => setDraft({ ...draft, budget: Number(e.target.value) })}
+                fullWidth
+              />
 
-              <div>
-                <label className="block text-xs font-semibold text-muted mb-1">Archiviert</label>
-                <div className="w-full bg-surface-muted border border-border rounded-xl p-3 text-sm font-medium text-foreground">
-                  {draft.archivedAt ? draft.archivedAt : 'Nein'}
-                </div>
-              </div>
+              <Input label="Archiviert" readOnly value={draft.archivedAt ? draft.archivedAt : 'Nein'} fullWidth />
 
               <div className="col-span-2">
-                <label className="block text-xs font-semibold text-muted mb-1" htmlFor="projectsview-beschreibung-optional">Beschreibung (optional)</label>
-                <textarea id="projectsview-beschreibung-optional"
+                <Textarea
+                  id="projectsview-beschreibung-optional"
+                  label="Beschreibung (optional)"
                   value={draft.description ?? ''}
                   onChange={(e) => setDraft({ ...draft, description: e.target.value })}
                   rows={3}
- className="px-3 py-2.5 hover:border-control-border-hover w-full bg-surface border border-control-border rounded-control text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring resize-none"
+                  fullWidth
                 />
               </div>
 
               <div className="col-span-2">
-                <label className="block text-xs font-semibold text-muted mb-1" htmlFor="projectsview-grund-pflicht">Grund (Pflicht)</label>
-                <textarea id="projectsview-grund-pflicht"
+                <Textarea
+                  id="projectsview-grund-pflicht"
+                  label="Grund (Pflicht)"
                   value={reason}
                   onChange={(e) => {
                     setReason(e.target.value);
@@ -415,17 +408,17 @@ export const ProjectsView: React.FC = () => {
                   }}
                   rows={3}
                   placeholder="z.B. Projektstart verschoben, Code angepasst, ..."
- className="px-3 py-2.5 hover:border-control-border-hover w-full bg-surface border border-control-border rounded-control text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring resize-none"
+                  error={reasonError}
+                  fullWidth
                 />
-                {reasonError && <div className="mt-2 text-sm font-semibold text-error-text">{reasonError}</div>}
               </div>
             </div>
 
-            <div className="px-6 py-5 border-t border-border flex items-center justify-end gap-3">
+            <div className="flex flex-wrap justify-end gap-2 border-t border-border px-4.5 py-3">
               <Button variant="secondary" onClick={closeEditor}>
                 Abbrechen
               </Button>
-              <Button variant="dark" onClick={submit}>
+              <Button onClick={submit}>
                 Speichern
               </Button>
             </div>
@@ -435,53 +428,44 @@ export const ProjectsView: React.FC = () => {
 
       <Modal
         open={Boolean(archiveTarget)}
-        onClose={() => {
-          setArchiveTarget(null);
-          setArchiveReason('');
-          setArchiveError(null);
-        }}
+        onClose={closeArchive}
         titleId="project-archive-title"
         descriptionId="project-archive-description"
-        className="p-6"
       >
         {archiveTarget && (
           <>
-            <h3 id="project-archive-title" className="text-lg font-semibold text-foreground mb-1">Projekt archivieren</h3>
-            <p id="project-archive-description" className="text-sm text-muted mb-4">
-              {archiveTarget.name} wird archiviert (nicht gelöscht). Bitte Grund angeben.
-            </p>
-            <label htmlFor="project-archive-reason" className="text-xs font-semibold text-muted">Grund (Pflicht)</label>
-            <textarea
-              id="project-archive-reason"
-              value={archiveReason}
-              onChange={(e) => {
-                setArchiveReason(e.target.value);
-                if (archiveError) setArchiveError(null);
-              }}
-              rows={3}
-              className="px-3 py-2.5 hover:border-control-border-hover mt-2 w-full rounded-control border border-control-border bg-surface text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
-              placeholder="z.B. Projekt abgeschlossen, Kunde gekündigt, ..."
-            />
-            {archiveError && <div className="mt-2 text-sm font-semibold text-error-text">{archiveError}</div>}
-            <div className="mt-6 flex items-center justify-end gap-3">
-              <Button
-                variant="secondary"
-                onClick={() => {
-                  setArchiveTarget(null);
-                  setArchiveReason('');
-                  setArchiveError(null);
+            <div className="px-4.5 pt-4 pb-2.5">
+              <h3 id="project-archive-title" className="text-title text-foreground">Projekt archivieren</h3>
+              <p id="project-archive-description" className="text-caption text-muted">
+                {archiveTarget.name} wird archiviert (nicht gelöscht). Bitte Grund angeben.
+              </p>
+            </div>
+            <div className="px-4.5 pt-1 pb-4">
+              <Textarea
+                id="project-archive-reason"
+                label="Grund (Pflicht)"
+                value={archiveReason}
+                onChange={(e) => {
+                  setArchiveReason(e.target.value);
+                  if (archiveError) setArchiveError(null);
                 }}
-              >
+                rows={3}
+                placeholder="z.B. Projekt abgeschlossen, Kunde gekündigt, ..."
+                error={archiveError}
+                fullWidth
+              />
+            </div>
+            <div className="flex flex-wrap justify-end gap-2 border-t border-border px-4.5 py-3">
+              <Button variant="secondary" onClick={closeArchive}>
                 Abbrechen
               </Button>
-              <Button variant="dark" onClick={submitArchive}>
+              <Button onClick={submitArchive}>
                 Archivieren
               </Button>
             </div>
           </>
         )}
       </Modal>
-    </div>
     </div>
   );
 };

@@ -34,7 +34,7 @@ export const Sparkline: React.FC<SparklineProps> = ({ values, 'aria-label': aria
     <span
       role="img"
       aria-label={`${ariaLabel}, ${trend}`}
-      className={cn('relative inline-block h-8 w-24 shrink-0 py-0.5', inverse ? 'text-accent' : 'text-ink-500', className)}
+      className={cn('relative inline-block h-8 w-24 shrink-0 py-0.5', inverse ? 'text-accent' : 'text-foreground', className)}
     >
       <svg viewBox="0 0 100 100" preserveAspectRatio="none" className="size-full overflow-visible" aria-hidden="true">
         <polyline

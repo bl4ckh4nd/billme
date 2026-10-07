@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import type { Invoice } from '@billme/desktop-core/types';
+import type { Offer } from '@billme/desktop-core/types';
 import { ipc } from '../runtime-api';
 
 const offersKey = ['offers'] as const;
@@ -14,7 +14,7 @@ export const useOffersQuery = () => {
 export const useUpsertOfferMutation = () => {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: (vars: { offer: Invoice; reason: string }) =>
+    mutationFn: (vars: { offer: Offer; reason: string }) =>
       ipc.offers.upsert({ offer: vars.offer, reason: vars.reason }),
     onSuccess: (updated) => {
       queryClient.setQueryData(offersKey, (prev) => {

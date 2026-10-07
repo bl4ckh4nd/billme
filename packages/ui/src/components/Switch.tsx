@@ -50,7 +50,7 @@ export const Switch = React.forwardRef<HTMLButtonElement, SwitchProps>(
     return (
       <div className={cn('flex items-start justify-between gap-4', className)}>
         <span className="min-w-0">
-          <span id={labelId} className="block text-sm text-foreground">{label}</span>
+          <span id={labelId} className="block text-control text-foreground">{label}</span>
           {description && <span className="mt-0.5 block text-caption text-muted">{description}</span>}
         </span>
         {control}

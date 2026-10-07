@@ -1,6 +1,6 @@
 import type { EmbeddedConnectionResult } from '@billme/desktop-contracts/embeddedConnection';
 import { writeFileSync } from 'node:fs';
-import { exportPdf } from './pdfExport';
+import { exportEurPdf, exportPdf } from './pdfExport';
 
 type SecretKey = 'smtp.password' | 'resend.apiKey' | 'portal.apiKey';
 
@@ -21,6 +21,8 @@ export const createDesktopIntegration = (deps: {
     if (prepared?.finalize) writeFileSync(result.path, await prepared.finalize(result.bytes));
     return { path: result.path };
   },
+  renderEurPdf: (args: { taxYear: number; from?: string; to?: string }) =>
+    exportEurPdf({ ...args, userDataPath: deps.getUserDataPath() }),
 });
 
 type TickLogger = {

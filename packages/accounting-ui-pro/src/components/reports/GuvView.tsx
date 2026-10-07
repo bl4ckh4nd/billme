@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react';
 import { ChevronDown, ChevronRight } from 'lucide-react';
 import {
-  Button, EmptyState, IconButton, Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
+  Button, Card, CardHeader, EmptyState, IconButton, Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from '@billme/ui';
 import { GuvLine, GuvReport } from '../../domain/reportTypes';
 import ReportSummaryCards from './ReportSummaryCards';
@@ -76,14 +76,13 @@ export default function GuvView({ report, onSelectLine, title = 'Gewinn- und Ver
   };
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-3.5">
       <ReportSummaryCards
         cards={[
           {
             label: 'Ergebnis',
             value: euro(report.totals.result),
             tone: report.totals.result >= 0 ? 'ok' : 'danger',
-            emphasis: true,
           },
           { label: 'Umsätze', value: euro(report.totals.revenue) },
           { label: 'Aufwendungen', value: euro(report.totals.expenses) },
@@ -100,10 +99,10 @@ export default function GuvView({ report, onSelectLine, title = 'Gewinn- und Ver
       {report.quality.unmappedAccounts.length > 0 ? (
         <div
           data-testid="guv-unmapped-accounts"
-          className="rounded-2xl border border-warning-border bg-warning-bg px-4 py-3 text-sm text-warning-text"
+          className="rounded-control border border-warning-border bg-warning-bg px-3 py-2.5 text-control text-warning-text"
         >
           <div className="font-semibold">Nicht zugeordnete Konten</div>
-          <ul className="mt-1 space-y-0.5 text-xs">
+          <ul className="mt-1 space-y-0.5 text-caption">
             {report.quality.unmappedAccounts.map((account) => (
               <li key={account.accountNumber}>
                 Konto {account.accountNumber}: {euro(account.amount)}
@@ -113,22 +112,19 @@ export default function GuvView({ report, onSelectLine, title = 'Gewinn- und Ver
         </div>
       ) : null}
 
-      <div className="overflow-hidden rounded-card bg-surface shadow-xs">
-        <div className="px-4 h-12 border-b border-border-subtle flex items-center justify-between gap-3">
-          <div className="text-sm font-semibold text-foreground">{title}</div>
-          <div className="text-xs text-muted">
-            Stand: {new Date(report.quality.generatedAt).toLocaleString('de-DE')}
-          </div>
-        </div>
+      <Card padding="none" className="overflow-hidden">
+        <CardHeader
+          className="border-b border-border px-3.5 py-3"
+          title={title}
+          count={`Stand: ${new Date(report.quality.generatedAt).toLocaleString('de-DE')}`}
+        />
 
         {visibleLines.length === 0 ? (
-          <div className="p-4">
-            <EmptyState
-              title="Keine GuV-Positionen im Zeitraum"
-              description="Der Report wurde geladen, enthält für die gewählten Filter aber keine Positionen. Prüfen Sie Zeitraum und Konten-Mapping."
-              action={retryAction}
-            />
-          </div>
+          <EmptyState
+            title="Keine GuV-Positionen im Zeitraum"
+            description="Der Report wurde geladen, enthält für die gewählten Filter aber keine Positionen. Prüfen Sie Zeitraum und Konten-Mapping."
+            action={retryAction}
+          />
         ) : (
           <Table aria-label={title} bare containerClassName="max-h-[32rem]" className="table-fixed">
             <TableHeader>
@@ -143,7 +139,7 @@ export default function GuvView({ report, onSelectLine, title = 'Gewinn- und Ver
                 const expanded = effectiveExpanded.has(line.id);
                 return (
                   <TableRow key={line.id} className={line.isSubtotal ? 'bg-surface-muted' : undefined}>
-                    <TableCell className="py-2">
+                    <TableCell>
                       <div className="flex items-center gap-2" style={{ paddingLeft: `${level * 16}px` }}>
                         {hasChildren ? (
                           <IconButton
@@ -156,7 +152,7 @@ export default function GuvView({ report, onSelectLine, title = 'Gewinn- und Ver
                             {expanded ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
                           </IconButton>
                         ) : (
-                          <span className="size-8 shrink-0" aria-hidden="true" />
+                          <span className="size-7.5 shrink-0" aria-hidden="true" />
                         )}
                         <button
                           type="button"
@@ -174,7 +170,7 @@ export default function GuvView({ report, onSelectLine, title = 'Gewinn- und Ver
                             {line.label}
                           </div>
                           {line.accountRefs?.length ? (
-                            <div className="text-xs text-muted">Konten: {line.accountRefs.join(', ')}</div>
+                            <div className="text-caption text-muted">Konten: {line.accountRefs.join(', ')}</div>
                           ) : null}
                         </button>
                       </div>
@@ -188,7 +184,7 @@ export default function GuvView({ report, onSelectLine, title = 'Gewinn- und Ver
             </TableBody>
           </Table>
         )}
-      </div>
+      </Card>
     </div>
   );
 }

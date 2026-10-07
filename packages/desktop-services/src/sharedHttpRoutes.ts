@@ -53,7 +53,9 @@ const TRANSACTION_LINK_REASON = 'Zahlung automatisch mit Rechnung verknüpft';
 const TRANSACTION_UNLINK_REASON = 'Zahlungsverknüpfung aufgehoben';
 
 const SHARED_HTTP_ROUTE_KEYS = new Set<string>([
-  'invoices:list', 'invoices:upsert', 'invoices:delete',
+  'vat:getReport', 'vat:exportCsv', 'vat:exportPdf',
+  'cash:listEntries', 'cash:listReceipts', 'cash:saveEntry', 'cash:saveReceipt', 'cash:deleteEntry', 'cash:matchEntry', 'cash:unmatchEntry', 'cash:listFiles', 'cash:uploadFile', 'cash:downloadFile',
+  'invoices:list', 'invoices:upsert', 'invoices:delete', 'invoices:savePayment', 'invoices:removePayment',
   'offers:list', 'offers:upsert', 'offers:delete',
   'clients:list', 'clients:upsert', 'clients:delete',
   'projects:list', 'projects:get', 'projects:upsert', 'projects:archive',
@@ -71,10 +73,11 @@ const SHARED_HTTP_ROUTE_KEYS = new Set<string>([
   'audit:verify', 'audit:exportCsv',
   'portal:health', 'portal:publishOffer', 'portal:publishInvoice', 'portal:syncOfferStatus',
   'portal:createCustomerAccessLink', 'portal:rotateCustomerAccessLink',
-  'email:send', 'email:testConfig', 'dunning:manualRun', 'dunning:getInvoiceStatus',
+  'email:send', 'email:testConfig', 'dunning:manualRun', 'dunning:getInvoiceStatus', 'dunning:listDeliveries', 'dunning:resolveDelivery',
   'transactions:list', 'transactions:findMatches', 'transactions:link', 'transactions:unlink',
   'finance:importPreview', 'finance:importCommit', 'finance:listImportBatches',
   'finance:getImportBatchDetails', 'finance:rollbackImportBatch',
+  'cliAccess:pending', 'cliAccess:decide', 'cliAccess:list', 'cliAccess:revoke',
 ]);
 
 export const isSharedHttpRoute = (key: string): boolean => SHARED_HTTP_ROUTE_KEYS.has(key);
@@ -95,7 +98,7 @@ const serverTransactionMatchesSchema = z.object({
   })),
 });
 
-const toIsoDate = (value: Date): string => value.toISOString().split('T')[0] ?? value.toISOString();
+const toIsoDate = (value: Date): string => `${value.getFullYear()}-${String(value.getMonth() + 1).padStart(2, '0')}-${String(value.getDate()).padStart(2, '0')}`;
 
 const addDays = (value: string, days: number): string => {
   if (!days) return value;
@@ -165,6 +168,35 @@ export const createSharedHttpInvoke = ({ product, routes, reasons, transport }: 
 
   const run = async (key: IpcRouteKey, args: unknown): Promise<unknown> => {
     switch (key) {
+      case 'vat:getReport':
+      case 'vat:exportCsv':
+      case 'vat:exportPdf': {
+        const parsed = args as IpcArgs<'vat:getReport'>;
+        const endpoint = key === 'vat:getReport' ? '' : key === 'vat:exportPdf' ? '/export/pdf' : '/export/csv';
+        return requestJson('GET', `${prefix}/reports/vat${endpoint}?from=${encodeURIComponent(parsed.from)}&to=${encodeURIComponent(parsed.to)}`, resultOf(key));
+      }
+      case 'cash:listEntries': return requestJson('GET', `${prefix}/cash/entries`, resultOf(key));
+      case 'cash:listReceipts': return requestJson('GET', `${prefix}/cash/receipts`, resultOf(key));
+      case 'cash:saveEntry': return requestJson('POST', `${prefix}/cash/entries`, resultOf(key), args);
+      case 'cash:saveReceipt': return requestJson('POST', `${prefix}/cash/receipts`, resultOf(key), args);
+      case 'cash:deleteEntry': {
+        const parsed = args as IpcArgs<'cash:deleteEntry'>;
+        return requestJson('DELETE', `${prefix}/cash/entries/${encodeURIComponent(parsed.id)}`, resultOf(key), parsed);
+      }
+      case 'cash:matchEntry':
+      case 'cash:unmatchEntry': {
+        const parsed = args as IpcArgs<'cash:matchEntry'>;
+        return requestJson('POST', `${prefix}/cash/entries/${encodeURIComponent(parsed.id)}/${key === 'cash:matchEntry' ? 'match' : 'unmatch'}`, resultOf(key), parsed);
+      }
+      case 'cash:listFiles':
+      case 'cash:uploadFile': {
+        const parsed = args as IpcArgs<'cash:uploadFile'>;
+        return requestJson(key === 'cash:listFiles' ? 'GET' : 'POST', `${prefix}/cash/receipts/${encodeURIComponent(parsed.receiptId)}/files`, resultOf(key), key === 'cash:uploadFile' ? parsed : undefined);
+      }
+      case 'cash:downloadFile': {
+        const parsed = args as IpcArgs<'cash:downloadFile'>;
+        return requestJson('GET', `${prefix}/cash/files/${encodeURIComponent(parsed.id)}`, resultOf(key));
+      }
       case 'invoices:list': {
         const invoices = await requestJson('GET', `${prefix}/invoices`, z.array(serverInvoiceSchema));
         return invoices.map((invoice) => toLegacyInvoice(invoice));
@@ -172,11 +204,19 @@ export const createSharedHttpInvoke = ({ product, routes, reasons, transport }: 
       case 'invoices:upsert': {
         const parsed = args as IpcArgs<'invoices:upsert'>;
         const { tenantId: _tenantId, ...invoice } = toDomainInvoice(scope, parsed.invoice);
-        return toLegacyInvoice(await requestJson('POST', `${prefix}/invoices`, serverInvoiceSchema, { reason: parsed.reason, invoice }));
+        return toLegacyInvoice(await requestJson('POST', `${prefix}/invoices`, serverInvoiceSchema, { reason: parsed.reason, invoice, reservationId: parsed.invoice.numberReservationId }));
       }
       case 'invoices:delete': {
         const parsed = args as IpcArgs<'invoices:delete'>;
         return requestJson('DELETE', `${prefix}/invoices/${encodeURIComponent(parsed.id)}`, okSchema, { reason: parsed.reason });
+      }
+      case 'invoices:savePayment': {
+        const parsed = args as IpcArgs<'invoices:savePayment'>;
+        return toLegacyInvoice(await requestJson('POST', `${prefix}/invoices/${encodeURIComponent(parsed.invoiceId)}/payments`, serverInvoiceSchema, parsed));
+      }
+      case 'invoices:removePayment': {
+        const parsed = args as IpcArgs<'invoices:removePayment'>;
+        return toLegacyInvoice(await requestJson('POST', `${prefix}/invoices/${encodeURIComponent(parsed.invoiceId)}/payments/${encodeURIComponent(parsed.expectedPayment.id)}/reverse`, serverInvoiceSchema, parsed));
       }
       case 'offers:list': {
         const offers = await requestJson('GET', `${prefix}/offers`, z.array(serverOfferSchema));
@@ -185,7 +225,7 @@ export const createSharedHttpInvoke = ({ product, routes, reasons, transport }: 
       case 'offers:upsert': {
         const parsed = args as IpcArgs<'offers:upsert'>;
         const { tenantId: _tenantId, ...offer } = toDomainOffer(scope, parsed.offer);
-        return toLegacyOffer(await requestJson('POST', `${prefix}/offers`, serverOfferSchema, { reason: parsed.reason, offer }));
+        return toLegacyOffer(await requestJson('POST', `${prefix}/offers`, serverOfferSchema, { reason: parsed.reason, offer, reservationId: parsed.offer.numberReservationId }));
       }
       case 'offers:delete': {
         const parsed = args as IpcArgs<'offers:delete'>;
@@ -256,6 +296,14 @@ export const createSharedHttpInvoke = ({ product, routes, reasons, transport }: 
         return requestJson('GET', `${prefix}/document-templates/defaults`, resultOf(key));
       case 'documentTemplates:setDefault':
         return requestJson('PUT', `${prefix}/document-templates/defaults`, okSchema, args);
+      case 'cliAccess:pending':
+        return requestJson('GET', `${prefix}/cli-access/pending`, resultOf(key), undefined, { code: (args as IpcArgs<'cliAccess:pending'>).code });
+      case 'cliAccess:decide':
+        return requestJson('POST', `${prefix}/cli-access/decide`, okSchema, args);
+      case 'cliAccess:list':
+        return requestJson('GET', `${prefix}/cli-access/tokens`, resultOf(key));
+      case 'cliAccess:revoke':
+        return requestJson('DELETE', `${prefix}/cli-access/tokens/${encodeURIComponent((args as IpcArgs<'cliAccess:revoke'>).id)}`, okSchema);
       case 'documents:renderContext': {
         const parsed = args as IpcArgs<'documents:renderContext'>;
         const context = await requestJson(
@@ -362,6 +410,8 @@ export const createSharedHttpInvoke = ({ product, routes, reasons, transport }: 
         const { smtpPassword: _smtpPassword, resendApiKey: _resendApiKey, ...serverConfig } = args as IpcArgs<'email:testConfig'>;
         return requestJson('POST', `${prefix}/email/test-config`, resultOf(key), serverConfig);
       }
+      case 'dunning:listDeliveries': return requestJson('GET', `${prefix}/dunning/deliveries`, resultOf(key));
+      case 'dunning:resolveDelivery': return requestJson('POST', `${prefix}/dunning/deliveries/resolve`, resultOf(key), args);
       case 'dunning:manualRun':
         return requestJson('POST', `${prefix}/dunning/manual-run`, resultOf(key));
       case 'dunning:getInvoiceStatus': {
@@ -391,7 +441,7 @@ export const createSharedHttpInvoke = ({ product, routes, reasons, transport }: 
           'POST',
           `${prefix}/transactions/${encodeURIComponent(parsed.transactionId)}/link`,
           z.object({ success: z.literal(true), invoice: serverInvoiceSchema }),
-          { invoiceId: parsed.invoiceId, reason: TRANSACTION_LINK_REASON },
+          { invoiceId: parsed.invoiceId, appliedAmountCents: parsed.appliedAmountCents, reason: TRANSACTION_LINK_REASON },
         );
         return { success: result.success, invoice: toLegacyInvoice(result.invoice) };
       }

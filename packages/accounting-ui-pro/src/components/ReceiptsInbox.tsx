@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useState } from 'react';
 import type { IncomingInvoiceDocumentEntity, IncomingInvoiceEntity, VendorEntity } from '@billme/accounting-shared';
+import { Info } from 'lucide-react';
 import {
-  Badge, EmptyState, ErrorState, SegmentedControl,
+  Badge, Card, CardHeader, EmptyState, ErrorState, SegmentedControl,
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from '@billme/ui';
 import type { ProAccountingDataAdapter } from '../services/accountingDataAdapter';
@@ -75,36 +76,42 @@ export default function ReceiptsInbox({ dataAdapter, onOpenInvoice }: {
         : filter === 'posted' ? row.invoice.accountingStatus === 'posted'
           : true);
 
-  if (state === 'unavailable') return <div className="p-6 text-sm text-muted">Belege sind in dieser Verbindung nicht verfügbar.</div>;
+  if (state === 'unavailable') return <div className="text-control text-muted">Belege sind in dieser Verbindung nicht verfügbar.</div>;
   if (state === 'error') return <ErrorState title="Belege konnten nicht geladen werden" description="Eingangsrechnungen oder Dokumente sind nicht erreichbar." onRetry={() => setAttempt((n) => n + 1)} />;
 
   return (
-    <section aria-labelledby="receipts-title" className="flex min-h-0 flex-col gap-3">
-      <div className="flex flex-wrap items-center gap-3">
-        <h2 id="receipts-title" className="mr-auto text-section">Eingangsrechnungen und Originalbelege</h2>
-        <SegmentedControl
-          aria-label="Belege filtern"
-          value={filter}
-          onChange={setFilter}
-          options={[
-            { value: 'all', label: `Alle (${rows.length})` },
-            { value: 'review', label: `Zu prüfen (${counts.review})` },
-            { value: 'missing', label: `Ohne Beleg (${counts.missing})` },
-            { value: 'posted', label: `Gebucht (${counts.posted})` },
-          ]}
-        />
+    <section aria-labelledby="receipts-title" className="space-y-3.5">
+      <div className="flex items-start gap-2.5 rounded-control border border-info-border bg-info-bg px-3 py-2.5 text-control text-info-text">
+        <Info size={16} aria-hidden="true" className="mt-px shrink-0" />
+        <span className="min-w-0 flex-1">Eingangsrechnungen werden unter Offene Posten erfasst. Die Rechnungsnummer öffnet sie dort, um Originalbelege hochzuladen und zu prüfen.</span>
       </div>
-      <div className="rounded-panel bg-surface shadow-xs">
+      <Card padding="none" className="overflow-hidden">
+        <CardHeader
+          title={<span id="receipts-title">Eingangsrechnungen und Originalbelege</span>}
+          className="items-center border-b border-border px-3.5 py-3"
+          actions={
+            <SegmentedControl
+              aria-label="Belege filtern"
+              value={filter}
+              onChange={setFilter}
+              options={[
+                { value: 'all', label: `Alle (${rows.length})` },
+                { value: 'review', label: `Zu prüfen (${counts.review})` },
+                { value: 'missing', label: `Ohne Beleg (${counts.missing})` },
+                { value: 'posted', label: `Gebucht (${counts.posted})` },
+              ]}
+            />
+          }
+        />
         {state === 'loading' ? (
-          <p className="p-6 text-sm text-muted" role="status">Belege werden geladen …</p>
+          <p className="px-3.5 py-3 text-control text-muted" role="status">Belege werden geladen …</p>
         ) : visible.length === 0 ? (
           <EmptyState
             title={rows.length === 0 ? 'Noch keine Eingangsrechnungen' : 'Nichts in diesem Filter'}
             description={rows.length === 0 ? 'Eingangsrechnungen werden unter Offene Posten erfasst; ihre Originale erscheinen dann hier.' : 'Wählen Sie einen anderen Filter.'}
-            className="py-10"
           />
         ) : (
-          <Table aria-label="Belege" density="compact" bare>
+          <Table aria-label="Belege" bare>
             <TableHeader>
               <TableRow>
                 <TableHead>Rechnung</TableHead>
@@ -147,7 +154,7 @@ export default function ReceiptsInbox({ dataAdapter, onOpenInvoice }: {
             </TableBody>
           </Table>
         )}
-      </div>
+      </Card>
     </section>
   );
 }

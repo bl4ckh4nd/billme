@@ -926,7 +926,8 @@ export const accountingCommandKindSchema = z.enum([
 export const proAccountingSourceRunSchema = z.object({
   id: z.string().min(1),
   tenantId: z.string().min(1),
-  sourceType: accountingSourceTypeSchema,
+  // Settlement commands keep their command name as source type (closingSourceType on the server).
+  sourceType: accountingSourceTypeSchema.or(z.enum(['correction', 'skonto', 'bad_debt', 'advance_settlement'])),
   sourceId: z.string().min(1),
   sourceRevision: z.string().min(1),
   idempotencyKey: z.string().min(1),

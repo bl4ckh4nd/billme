@@ -4,6 +4,10 @@ import type { BusinessReportingProfile, ReportFilterState, ReportPeriodPreset } 
 const MONTH_PATTERN = /^(\d{4})-(\d{2})$/;
 
 /** EÜR is calendar-year based; both catalog years are supported by the native runtime. */
+/** Today as the local calendar day; a UTC day is yesterday shortly after midnight in Germany. */
+export const localToday = (date = new Date()): string =>
+  `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+
 export const NATIVE_EUR_2025_RANGE = Object.freeze({
   from: '2025-01-01',
   to: '2025-12-31',
@@ -84,7 +88,7 @@ export const reportPeriodRangeForPreset = (
 export const defaultReportFilters = (
   chart: 'SKR03' | 'SKR04' = 'SKR03',
   businessReportingProfile?: BusinessReportingProfile,
-  asOfDate = new Date().toISOString().slice(0, 10),
+  asOfDate = localToday(),
 ): ReportFilterState => {
   const range = reportFiscalYearRange(asOfDate, businessReportingProfile) ?? calendarYearRange(asOfDate);
   return {

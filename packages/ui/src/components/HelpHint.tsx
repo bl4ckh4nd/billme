@@ -136,7 +136,7 @@ export const HelpHint: React.FC<HelpHintProps> = ({
         aria-expanded={open}
         aria-controls={open ? popupId : undefined}
         aria-describedby={open ? popupId : undefined}
-        className="ui-press inline-flex size-6 items-center justify-center rounded-full text-muted hover:bg-surface-muted hover:text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+        className="ui-press inline-flex size-6 items-center justify-center rounded-full text-muted hover:bg-surface-sunken hover:text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
         onClick={() => (open ? requestClose() : requestOpen())}
         onMouseEnter={requestOpen}
         onMouseLeave={requestClose}
@@ -154,7 +154,7 @@ export const HelpHint: React.FC<HelpHintProps> = ({
             aria-live="polite"
             aria-atomic="true"
             className={cn(
-              'ui-enter-popover fixed z-[var(--z-dropdown)] w-80 max-w-full max-h-screen overflow-auto rounded-control bg-surface-inverse p-3 text-sm text-inverse-foreground',
+              'ui-enter-popover fixed z-[var(--z-dropdown)] w-80 max-w-full max-h-screen overflow-auto rounded-control border border-border-toast bg-surface-toast px-3 py-2.5 text-inverse-foreground shadow-lift',
               closing && popoverExitClass,
             )}
             style={{
@@ -165,7 +165,7 @@ export const HelpHint: React.FC<HelpHintProps> = ({
               '--origin': 'top left',
             } as React.CSSProperties}
           >
-            {children}
+            <div className="text-control">{children}</div>
           </div>
         </Portal>
       )}

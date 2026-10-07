@@ -24,7 +24,7 @@ export const BalanceIndicator: React.FC<BalanceIndicatorProps> = ({
       role="status"
       aria-live="polite"
       className={cn(
-        'rounded-xl border p-5',
+        'rounded-card border p-3.5',
         balanced
           ? 'border-success-border bg-success-bg'
           : 'border-error-border bg-error-bg',
@@ -33,37 +33,37 @@ export const BalanceIndicator: React.FC<BalanceIndicatorProps> = ({
     >
       <div className="flex flex-wrap items-center gap-2">
         {balanced ? (
-          <CheckCircle2 className="shrink-0 text-success-text" size={20} aria-hidden="true" />
+          <CheckCircle2 className="shrink-0 text-success-text" size={16} aria-hidden="true" />
         ) : (
-          <CircleAlert className="shrink-0 text-error-text" size={20} aria-hidden="true" />
+          <CircleAlert className="shrink-0 text-error-text" size={16} aria-hidden="true" />
         )}
-        <span className={cn('font-semibold', balanced ? 'text-success-text' : 'text-error-text')}>
+        <span className={cn('text-sm font-semibold', balanced ? 'text-success-text' : 'text-error-text')}>
           {balanced ? 'Ausgeglichen' : 'Nicht ausgeglichen'}
         </span>
       </div>
 
-      <div className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-3">
+      <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-3">
         <div>
-          <div className="text-xs font-semibold uppercase tracking-wider text-muted">Soll</div>
+          <div className="text-eyebrow uppercase text-muted">Soll</div>
           <Amount value={soll} className="mt-1 text-base font-semibold" />
         </div>
         <div>
-          <div className="text-xs font-semibold uppercase tracking-wider text-muted">Haben</div>
+          <div className="text-eyebrow uppercase text-muted">Haben</div>
           <Amount value={haben} className="mt-1 text-base font-semibold" />
         </div>
         <div>
-          <div className="text-xs font-semibold uppercase tracking-wider text-muted">Differenz</div>
+          <div className="text-eyebrow uppercase text-muted">Differenz</div>
           <Amount value={differenz} className="mt-1 text-base font-semibold" />
         </div>
       </div>
 
-      <p className="mt-4 text-sm text-foreground">
+      <p className="mt-3 text-control text-foreground">
         {balanced ? (
           'Soll und Haben sind ausgeglichen.'
         ) : (
           <>
             Bitte gleiche Soll und Haben noch an: Auf der {missingSide}-Seite fehlen{' '}
-            <Amount value={differenz} className="inline-block text-sm font-semibold" />.
+            <Amount value={differenz} className="inline-block font-semibold" />.
           </>
         )}
       </p>

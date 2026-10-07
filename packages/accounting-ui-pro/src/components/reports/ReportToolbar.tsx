@@ -1,5 +1,5 @@
 import { FileDown, FileText, RotateCcw } from 'lucide-react';
-import { Button } from '@billme/ui';
+import { Button, Input, Select } from '@billme/ui';
 import { ReportFilterState, ReportTabId } from '../../domain/reportTypes';
 import { defaultReportFilters, nativeEurRange, reportPeriodRangeForPreset } from '../../domain/reportDates';
 
@@ -63,91 +63,72 @@ export default function ReportToolbar({ filters, onChange, activeTab, onExport, 
   };
 
   return (
-    <div className="rounded-xl border border-border bg-surface px-4 py-3 space-y-2">
-      {lockNativeEurPeriod ? (
-        <p id={nativeEurPeriodDescriptionId} className="text-xs text-muted" role="status">
-          {nativeEurTaxYear === 2025 ? 'Die native EÜR ist derzeit nur für das Druckformular 2025 verfügbar. Der Zeitraum ist deshalb fest auf 01.01.2025–31.12.2025 eingestellt.' : `Die native EÜR ist für das Katalogjahr ${nativeEurTaxYear} verfügbar. Der Zeitraum ist deshalb fest auf 01.01.${nativeEurTaxYear}–31.12.${nativeEurTaxYear} eingestellt.`}
-        </p>
-      ) : null}
-      <div className="flex flex-wrap items-end gap-3">
-        <label className="text-xs font-semibold text-muted">
-          Zeitraum
-          <select
-            aria-label="Zeitraum"
-            value={filters.periodPreset ?? 'current'}
-            onChange={(event) => setPreset(event.target.value as ReportFilterState['periodPreset'])}
-            disabled={lockNativeEurPeriod}
-            aria-describedby={lockNativeEurPeriod ? nativeEurPeriodDescriptionId : undefined}
-            className="px-3 hover:border-control-border-hover mt-0.5 h-8 w-full rounded-control border border-control-border text-sm"
-          >
-            <option value="current">Aktuelle Periode</option>
-            <option value="ytd">Jahr bis heute</option>
-            <option value="prev_year">Vorjahr</option>
-          </select>
-        </label>
-        <label className="text-xs font-semibold text-muted">
-          Stichtag
-          <input
-            type="date"
-            value={filters.asOfDate}
-            onChange={(e) => setAsOfDate(e.target.value)}
-            disabled={lockNativeEurPeriod}
-            aria-describedby={lockNativeEurPeriod ? nativeEurPeriodDescriptionId : undefined}
-            className="px-3 hover:border-control-border-hover mt-0.5 h-8 w-full rounded-control border border-control-border text-sm"
-          />
-        </label>
-
-        <label className="text-xs font-semibold text-muted">
-          Periode von
-          <input
-            type="month"
-            value={filters.periodFrom}
-            onChange={(e) => onChange({ ...filters, periodFrom: e.target.value, periodFromDate: undefined, periodPreset: undefined })}
-            disabled={lockNativeEurPeriod}
-            aria-describedby={lockNativeEurPeriod ? nativeEurPeriodDescriptionId : undefined}
-            className="px-3 hover:border-control-border-hover mt-0.5 h-8 w-full rounded-control border border-control-border text-sm"
-          />
-        </label>
-
-        <label className="text-xs font-semibold text-muted">
-          Periode bis
-          <input
-            type="month"
-            value={filters.periodTo}
-            onChange={(e) => onChange({ ...filters, periodTo: e.target.value, periodToDate: undefined, periodPreset: undefined })}
-            disabled={lockNativeEurPeriod}
-            aria-describedby={lockNativeEurPeriod ? nativeEurPeriodDescriptionId : undefined}
-            className="px-3 hover:border-control-border-hover mt-0.5 h-8 w-full rounded-control border border-control-border text-sm"
-          />
-        </label>
-
-      </div>
-
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <div className="flex flex-wrap gap-1.5">
-          <button
+    <div className="space-y-2">
+      <div className="flex flex-wrap items-end gap-2">
+        <Select
+          label="Zeitraum"
+          value={filters.periodPreset ?? 'current'}
+          onChange={(event) => setPreset(event.target.value as ReportFilterState['periodPreset'])}
+          disabled={lockNativeEurPeriod}
+          aria-describedby={lockNativeEurPeriod ? nativeEurPeriodDescriptionId : undefined}
+        >
+          <option value="current">Aktuelle Periode</option>
+          <option value="ytd">Jahr bis heute</option>
+          <option value="prev_year">Vorjahr</option>
+        </Select>
+        <Input
+          label="Stichtag"
+          type="date"
+          value={filters.asOfDate}
+          onChange={(e) => setAsOfDate(e.target.value)}
+          disabled={lockNativeEurPeriod}
+          aria-describedby={lockNativeEurPeriod ? nativeEurPeriodDescriptionId : undefined}
+        />
+        <Input
+          label="Periode von"
+          type="month"
+          value={filters.periodFrom}
+          onChange={(e) => onChange({ ...filters, periodFrom: e.target.value, periodFromDate: undefined, periodPreset: undefined })}
+          disabled={lockNativeEurPeriod}
+          aria-describedby={lockNativeEurPeriod ? nativeEurPeriodDescriptionId : undefined}
+        />
+        <Input
+          label="Periode bis"
+          type="month"
+          value={filters.periodTo}
+          onChange={(e) => onChange({ ...filters, periodTo: e.target.value, periodToDate: undefined, periodPreset: undefined })}
+          disabled={lockNativeEurPeriod}
+          aria-describedby={lockNativeEurPeriod ? nativeEurPeriodDescriptionId : undefined}
+        />
+        <div className="ml-auto flex flex-wrap gap-2">
+          <Button
             type="button"
+            variant="secondary"
             onClick={() =>
               lockNativeEurPeriod ? forceNativeEurPeriod() : onChange(defaultReportFilters(filters.chart, filters.businessReportingProfile))
             }
-            className="h-7 px-2.5 rounded-lg border border-control-border text-xs font-semibold text-muted hover:bg-surface-muted inline-flex items-center gap-1 transition-colors"
           >
-            <RotateCcw size={12} />
+            <RotateCcw size={14} aria-hidden="true" />
             Reset
-          </button>
+          </Button>
           {onExport && activeTab ? (
             <>
-              <Button type="button" size="sm" variant="secondary" onClick={() => onExport('pdf')} disabled={exporting || Boolean(exportBlockedReason)}>
+              <Button type="button" variant="secondary" onClick={() => onExport('pdf')} disabled={exporting || Boolean(exportBlockedReason)}>
                 <FileText size={14} aria-hidden="true" /> PDF
               </Button>
-              <Button type="button" size="sm" variant="secondary" onClick={() => onExport('csv')} disabled={exporting || Boolean(exportBlockedReason)}>
+              <Button type="button" variant="secondary" onClick={() => onExport('csv')} disabled={exporting || Boolean(exportBlockedReason)}>
                 <FileDown size={14} aria-hidden="true" /> CSV
               </Button>
             </>
           ) : null}
         </div>
-        {exportBlockedReason ? <p className="text-xs text-error-text" role="status">{exportBlockedReason}</p> : null}
       </div>
+      {lockNativeEurPeriod ? (
+        <p id={nativeEurPeriodDescriptionId} className="text-caption text-muted" role="status">
+          {nativeEurTaxYear === 2025 ? 'Die native EÜR ist derzeit nur für das Druckformular 2025 verfügbar. Der Zeitraum ist deshalb fest auf 01.01.2025–31.12.2025 eingestellt.' : `Die native EÜR ist für das Katalogjahr ${nativeEurTaxYear} verfügbar. Der Zeitraum ist deshalb fest auf 01.01.${nativeEurTaxYear}–31.12.${nativeEurTaxYear} eingestellt.`}
+        </p>
+      ) : null}
+      {exportBlockedReason ? <p className="text-caption text-error-text" role="status">{exportBlockedReason}</p> : null}
     </div>
   );
 }

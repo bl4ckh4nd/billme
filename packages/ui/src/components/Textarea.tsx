@@ -18,6 +18,7 @@ export const Textarea = React.forwardRef<HTMLTextAreaElement, TextareaProps>(
     className,
     id,
     required,
+    readOnly,
     'aria-describedby': ariaDescribedBy,
     ...props
   }, ref) => {
@@ -28,17 +29,19 @@ export const Textarea = React.forwardRef<HTMLTextAreaElement, TextareaProps>(
       <textarea
         ref={ref}
         className={cn(
-          'bg-surface border rounded-control px-3 py-2.5 text-sm text-foreground min-h-24 resize-y hover:border-control-border-hover',
+          'bg-surface border rounded-control px-2.25 py-1.5 text-foreground text-control min-h-24 resize-y hover:border-control-border-hover',
           'transition-[border-color,box-shadow,outline-color] motion-reduce:transition-none',
           'placeholder:text-muted',
-          'focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring',
+          'focus-visible:outline-2 focus-visible:outline-offset-0 focus-visible:outline-focus-ring focus-visible:border-transparent',
           'disabled:border-disabled-foreground disabled:bg-disabled-surface disabled:text-disabled-foreground disabled:placeholder:text-disabled-foreground disabled:cursor-not-allowed disabled:opacity-100',
+          readOnly && 'bg-surface-sunken read-only:text-muted',
           error ? 'border-error' : 'border-control-border',
           fullWidth && 'w-full',
           className,
         )}
         {...props}
         required={required}
+        readOnly={readOnly}
       />
     );
 

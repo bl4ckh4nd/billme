@@ -1,4 +1,4 @@
-import { Button, EmptyState } from '@billme/ui';
+import { Badge, Button, Card, CardHeader, EmptyState } from '@billme/ui';
 import { BalanceSheetPreview, BalanceSheetPreviewLine } from '../../domain/reportTypes';
 import { displayPositionCode, positionTitle } from '../../domain/references';
 import ReportSummaryCards from './ReportSummaryCards';
@@ -16,39 +16,41 @@ interface BalanceSheetPreviewViewProps {
 function SideColumn({
   title,
   lines,
+  totalLabel,
+  total,
   onSelectLine,
 }: {
   title: string;
   lines: BalanceSheetPreviewLine[];
+  totalLabel: string;
+  total: number;
   onSelectLine: (line: BalanceSheetPreviewLine) => void;
 }) {
   return (
-    <div className="rounded-2xl border border-border bg-surface overflow-hidden">
-      <div className="px-4 py-3 border-b border-border text-sm font-semibold text-foreground">{title}</div>
-      <div className="divide-y divide-border-subtle">
-        {lines.map((line) => (
-          <button
-            key={line.id}
-            type="button"
-            onClick={() => onSelectLine(line)}
-            disabled={!line.accountRefs?.length}
-            title={line.accountRefs?.length ? 'Konten-Drilldown öffnen' : 'Kein Konten-Mapping verfügbar'}
-            aria-label={`${positionTitle(line, ' ')}${line.accountRefs?.length ? '' : ' (kein Konten-Mapping verfügbar)'}`}
-            className={`w-full text-left px-4 py-3 transition-colors disabled:cursor-not-allowed disabled:opacity-60 ${line.accountRefs?.length ? 'hover:bg-surface-muted' : ''} ${line.isSubtotal ? 'bg-surface-muted/70' : ''}`}
-          >
-            <div className="flex items-start justify-between gap-3">
-              <div className="min-w-0" style={{ paddingLeft: `${line.level * 14}px` }}>
-                {displayPositionCode(line.code) ? <div className="text-xs font-medium text-muted tabular-nums">{displayPositionCode(line.code)}</div> : null}
-                <div className={`text-sm ${line.isSubtotal ? 'font-semibold text-foreground' : 'font-medium text-foreground'}`}>
-                  {line.label}
-                </div>
-              </div>
-              <div className={`shrink-0 text-sm font-semibold tabular-nums ${line.amount < 0 ? 'text-error-text' : 'text-foreground'}`}>
-                {euro(line.amount)}
-              </div>
-            </div>
-          </button>
-        ))}
+    <div className="min-w-0">
+      <div className="px-3.5 pb-1.5 pt-3 text-eyebrow uppercase text-muted">{title}</div>
+      {lines.map((line) => (
+        <button
+          key={line.id}
+          type="button"
+          onClick={() => onSelectLine(line)}
+          disabled={!line.accountRefs?.length}
+          title={line.accountRefs?.length ? 'Konten-Drilldown öffnen' : 'Kein Konten-Mapping verfügbar'}
+          aria-label={`${positionTitle(line, ' ')}${line.accountRefs?.length ? '' : ' (kein Konten-Mapping verfügbar)'}`}
+          className={`flex w-full items-start justify-between gap-3 border-b border-border px-3.5 py-2.25 text-left text-control transition-colors motion-reduce:transition-none focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-focus-ring disabled:cursor-not-allowed disabled:opacity-60 ${line.accountRefs?.length ? 'hover:bg-surface-muted' : ''} ${line.isSubtotal ? 'bg-surface-muted' : ''}`}
+        >
+          <span className="block min-w-0" style={{ paddingLeft: `${line.level * 14}px` }}>
+            {displayPositionCode(line.code) ? <span className="block text-caption text-muted tabular-nums">{displayPositionCode(line.code)}</span> : null}
+            <span className={`block text-foreground ${line.isSubtotal ? 'font-semibold' : ''}`}>{line.label}</span>
+          </span>
+          <span className={`shrink-0 font-medium tabular-nums ${line.amount < 0 ? 'text-error-text' : 'text-foreground'}`}>
+            {euro(line.amount)}
+          </span>
+        </button>
+      ))}
+      <div className="flex items-center justify-between gap-3 px-3.5 py-3 text-control font-bold text-foreground">
+        <span>{totalLabel}</span>
+        <span className="tabular-nums">{euro(total)}</span>
       </div>
     </div>
   );
@@ -69,15 +71,16 @@ export default function BalanceSheetPreviewView({ report, onSelectLine, onRetry 
     );
   }
 
+  const statusTone = report.quality.status === 'ok' ? 'success' : report.quality.status === 'warning' ? 'warning' : 'error';
+
   return (
-    <div className="space-y-4">
+    <div className="space-y-3.5">
       <ReportSummaryCards
         cards={[
           {
             label: 'Differenz',
             value: euro(report.totals.difference),
             tone: report.totals.difference === 0 ? 'ok' : 'danger',
-            emphasis: true,
           },
           { label: 'Aktiva', value: euro(report.totals.aktiva) },
           { label: 'Passiva', value: euro(report.totals.passiva) },
@@ -90,57 +93,32 @@ export default function BalanceSheetPreviewView({ report, onSelectLine, onRetry 
         ]}
       />
 
-      <div className="rounded-2xl border border-border bg-surface p-4 space-y-2">
-        <div className="flex items-center justify-between gap-3">
-          <div>
-            <div className="text-sm font-semibold text-foreground">Bilanz (HGB)</div>
-            <div className="text-xs text-muted">Stand: {new Date(report.quality.generatedAt).toLocaleString('de-DE')}</div>
-          </div>
-          <span
-            className={`px-2.5 py-1 rounded-full text-xs font-semibold ${
-              report.quality.status === 'ok'
-                ? 'bg-success-bg text-success-text'
-                : report.quality.status === 'warning'
-                  ? 'bg-warning-bg text-warning-text'
-                  : 'bg-error-bg text-error-text'
-            }`}
-          >
-            {report.quality.status === 'ok' ? 'OK' : report.quality.status === 'warning' ? 'Prüfen' : 'Fehler'}
-          </span>
+      <Card padding="none" className="overflow-hidden">
+        <CardHeader
+          className="border-b border-border px-3.5 py-3"
+          title="Bilanz (HGB)"
+          count={`Stand: ${new Date(report.quality.generatedAt).toLocaleString('de-DE')}`}
+          actions={(
+            <Badge tone={statusTone}>
+              {report.quality.status === 'ok' ? 'OK' : report.quality.status === 'warning' ? 'Prüfen' : 'Fehler'}
+            </Badge>
+          )}
+        />
+        {report.quality.notes.length > 0 ? (
+          <ul className="space-y-1 border-b border-border px-3.5 py-3 text-control text-muted">
+            {report.quality.notes.map((note) => (
+              <li key={note} className="flex items-start gap-2">
+                <span className="mt-1.5 size-1.5 shrink-0 rounded-full bg-muted" aria-hidden="true" />
+                <span>{note}</span>
+              </li>
+            ))}
+          </ul>
+        ) : null}
+        <div className="grid grid-cols-1 divide-y divide-border-strong xl:grid-cols-2 xl:divide-x xl:divide-y-0">
+          <SideColumn title="Aktiva" lines={report.aktiva} totalLabel="Aktiva gesamt" total={report.totals.aktiva} onSelectLine={onSelectLine} />
+          <SideColumn title="Passiva" lines={report.passiva} totalLabel="Passiva gesamt" total={report.totals.passiva} onSelectLine={onSelectLine} />
         </div>
-        <ul className="space-y-1 text-sm text-muted">
-          {report.quality.notes.map((note) => (
-            <li key={note} className="flex items-start gap-2">
-              <span className="mt-1 h-1.5 w-1.5 rounded-full bg-muted" />
-              <span>{note}</span>
-            </li>
-          ))}
-        </ul>
-      </div>
-
-      <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
-        <SideColumn title="Aktiva" lines={report.aktiva} onSelectLine={onSelectLine} />
-        <SideColumn title="Passiva" lines={report.passiva} onSelectLine={onSelectLine} />
-      </div>
-
-      <div className="rounded-2xl border border-border bg-surface p-4">
-        <div className="rounded-xl border border-border-subtle bg-surface-muted px-4 py-3">
-          <div className="text-xs font-semibold uppercase tracking-wide text-muted">Differenz</div>
-          <div className={`mt-1 text-base font-semibold tabular-nums ${report.totals.difference === 0 ? 'text-success-text' : 'text-error-text'}`}>
-            {euro(report.totals.difference)}
-          </div>
-        </div>
-        <div className="mt-2 grid grid-cols-1 gap-2 md:grid-cols-2 text-sm">
-          <div className="rounded-lg border border-border-subtle px-3 py-2">
-            <div className="text-xs font-semibold text-muted">Aktiva gesamt</div>
-            <div className="mt-0.5 text-sm font-semibold tabular-nums text-foreground">{euro(report.totals.aktiva)}</div>
-          </div>
-          <div className="rounded-lg border border-border-subtle px-3 py-2">
-            <div className="text-xs font-semibold text-muted">Passiva gesamt</div>
-            <div className="mt-0.5 text-sm font-semibold tabular-nums text-foreground">{euro(report.totals.passiva)}</div>
-          </div>
-        </div>
-      </div>
+      </Card>
     </div>
   );
 }

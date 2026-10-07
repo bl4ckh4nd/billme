@@ -1,7 +1,7 @@
 import React from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Settings2 } from 'lucide-react';
-import { Button } from '@billme/ui';
+import { Button, Card, PageHeader } from '@billme/ui';
 import {
   ProAccountingWorkspace,
   NATIVE_EUR_2025_RANGE,
@@ -23,6 +23,7 @@ import {
 import { ipc } from '../ipc/client';
 import { useAccountsQuery } from '../hooks/useAccounts';
 import { useSettingsQuery } from '@billme/desktop-renderer/hooks/useSettings';
+import { localIsoDate } from '@billme/desktop-utils';
 import { useImportSkrMutation, useProLedgerAccountsQuery, useProLedgerStatsQuery } from '../hooks/useProLedger';
 import type { IpcArgs, IpcResult } from '@billme/desktop-contracts-pro/contract';
 import type {
@@ -243,8 +244,8 @@ const mapUiDraftToEntityDraft = (
     documentDate: draft.documentDate,
     bookingText: draft.bookingText,
     reference: draft.externalReference,
-    period: (draft.postingDate ?? new Date().toISOString().slice(0, 10)).slice(0, 7),
-    fiscalYear: Number((draft.postingDate ?? new Date().toISOString().slice(0, 10)).slice(0, 4)),
+    period: (draft.postingDate ?? localIsoDate()).slice(0, 7),
+    fiscalYear: Number((draft.postingDate ?? localIsoDate()).slice(0, 4)),
     lines: draft.lines.map((line) => ({
       id: line.id,
       accountNumber: line.accountId,
@@ -276,19 +277,21 @@ const mapUiDraftToEntityDraft = (
   };
 };
 
-/** Page title and subtitle per accounting area; the sidebar entry opens the area. */
-const AREA_TITLES: Record<string, [string, string]> = {
-  inbox: ['Buchen', 'Umsätze kontieren, prüfen, freigeben und buchen.'],
+/**
+ * Page title per accounting area: the label of the sidebar entry that opens it.
+ * The subtitle is only set where that entry brings none of its own (Buchen,
+ * Auswertungen, Offene Posten and Belege get theirs from the shell).
+ */
+const AREA_TITLES: Record<string, [string, string?]> = {
+  inbox: ['Buchen'],
   reconciliation: ['Bankabgleich', 'Kontoumsätze mit Vorschlägen abgleichen.'],
   exceptions: ['Ausnahmen', 'Blockierte und auffällige Vorgänge klären.'],
   assets: ['Anlagen', 'Anlagevermögen, Abschreibung und Abgang.'],
-  reports: ['Auswertungen', 'SuSa, BWA, GuV und Bilanz des Zeitraums.'],
-  opos: ['Offene Posten', 'Forderungen, Verbindlichkeiten und Eingangsrechnungen.'],
+  reports: ['Auswertungen'],
+  opos: ['Offene Posten', 'Forderungen und Verbindlichkeiten'],
   special: ['Sonderbuchungen', 'Korrekturen und Abschlussbuchungen.'],
-  receipts: ['Belege', 'Eingangsrechnungen und ihre Originalbelege prüfen.'],
+  receipts: ['Belege'],
 };
-
-const SECTIONED_AREAS = new Set(['reports', 'opos', 'special', 'receipts']);
 
 /** `view` comes from the route (`/accounting?view=`) so the shell navigation can open an area directly. */
 export const ProAccountingPage: React.FC<{ view?: unknown; onViewChange?: (view: string) => void }> = ({ view, onViewChange }) => {
@@ -406,6 +409,7 @@ export const ProAccountingPage: React.FC<{ view?: unknown; onViewChange?: (view:
       queryClient.invalidateQueries({ queryKey: ['pro-accounting', 'transactions'] }),
       queryClient.invalidateQueries({ queryKey: ['pro-accounting', 'drafts'] }),
       queryClient.invalidateQueries({ queryKey: ['pro-reports'] }),
+      queryClient.invalidateQueries({ queryKey: ['dashboard-month-result'] }),
     ]);
   }, [queryClient]);
 
@@ -766,15 +770,15 @@ export const ProAccountingPage: React.FC<{ view?: unknown; onViewChange?: (view:
 
   if (txQuery.isLoading || draftQuery.isLoading || policyQuery.isLoading) {
     return (
-      <div className="bg-surface rounded-panel p-6 lg:p-8 min-h-full shadow-xs text-sm text-muted">
+      <Card padding="lg" className="text-control text-muted">
         Lade Pro-Buchhaltungsdaten…
-      </div>
+      </Card>
     );
   }
 
   if (txQuery.isError || draftQuery.isError || policyQuery.isError || ledgerStatsError || ledgerAccountsError || bankAccountsError) {
     return (
-      <div className="bg-surface rounded-panel p-6 lg:p-8 min-h-full shadow-xs text-sm text-error-text" role="alert">
+      <div className="rounded-control border border-error-border bg-error-bg px-3 py-2.5 text-control text-error-text" role="alert">
         Pro-Buchhaltungsdaten konnten nicht geladen werden: {String(txQuery.error ?? draftQuery.error ?? policyQuery.error ?? ledgerStatsLoadError ?? ledgerAccountsLoadError ?? bankAccountsLoadError)}
       </div>
     );
@@ -782,52 +786,47 @@ export const ProAccountingPage: React.FC<{ view?: unknown; onViewChange?: (view:
 
   if ((ledgerStats?.total ?? 0) === 0) {
     return (
-      <div className="bg-surface rounded-panel p-6 lg:p-8 min-h-full shadow-xs">
-        <h2 className="text-xl font-semibold text-foreground">Pro Kontenrahmen fehlt</h2>
-        <p className="mt-2 text-sm text-muted">
+      <Card padding="lg">
+        <h2 className="text-section text-foreground">Pro Kontenrahmen fehlt</h2>
+        <p className="mt-1 text-control text-muted">
           Bitte laden Sie zuerst den SKR03/04 Kontenrahmen für die Pro-Buchhaltung.
         </p>
-        {importMessage && <div className={`mt-3 text-sm ${importFailed ? 'text-error-text' : 'text-success-text'}`} role={importFailed ? 'alert' : 'status'} aria-live={importFailed ? 'assertive' : 'polite'}>{importMessage}</div>}
+        {importMessage && <div className={`mt-3 text-control ${importFailed ? 'text-error-text' : 'text-success-text'}`} role={importFailed ? 'alert' : 'status'} aria-live={importFailed ? 'assertive' : 'polite'}>{importMessage}</div>}
         <Button
-          variant="dark"
-          size="md"
           onClick={() => void handleImportSkr()}
           disabled={importSkr.isPending}
           aria-busy={importSkr.isPending}
-          className="mt-5"
+          className="mt-4"
         >
           {importSkr.isPending ? 'Import läuft…' : 'SKR03/04 importieren'}
         </Button>
-      </div>
+      </Card>
     );
   }
 
+  const [areaTitle, areaSubtitle] = AREA_TITLES[String(view)] ?? AREA_TITLES.inbox;
+
   return (
-    <div className="flex h-full flex-col px-1 pt-2">
-      <div className="mb-3 flex shrink-0 flex-wrap items-start justify-between gap-3">
-        <div className="min-w-0">
-          <h1 className="text-title text-foreground">{(AREA_TITLES[String(view)] ?? AREA_TITLES.inbox)[0]}</h1>
-          <p className="mt-0.5 text-sm text-muted">{(AREA_TITLES[String(view)] ?? AREA_TITLES.inbox)[1]}</p>
-        </div>
-        {(view === 'inbox' || view === 'reconciliation' || view === undefined) && (
+    <div className="flex flex-col">
+      <PageHeader
+        title={areaTitle}
+        description={areaSubtitle}
+        actions={(view === 'inbox' || view === 'reconciliation' || view === undefined) ? (
           <Button variant="secondary" onClick={() => setShowRulesModal(true)}>
             <Settings2 size={16} aria-hidden="true" />
             Regeln
           </Button>
-        )}
-      </div>
+        ) : undefined}
+      />
 
-
-
-      {adapterBusy && <div className="px-1 pb-2 text-xs text-muted" aria-live="polite">Speichere Änderung…</div>}
+      {adapterBusy && <div className="pb-2 text-caption text-muted" aria-live="polite">Speichere Änderung…</div>}
       {adapterError && (
-        <div className="mb-2 rounded-lg border border-error-border bg-error-bg px-3 py-2 text-sm text-error-text" role="alert" aria-live="assertive">
+        <div className="mb-3 rounded-control border border-error-border bg-error-bg px-3 py-2.5 text-control text-error-text" role="alert" aria-live="assertive">
           {adapterError}
         </div>
       )}
-      {/* Report, OPOS and closing views bring their own section cards; the queue-based
-          areas sit in one card like the prototype's workbench. */}
-      <div className={SECTIONED_AREAS.has(String(view)) ? 'min-h-0 flex-1 overflow-hidden' : 'min-h-0 flex-1 overflow-hidden rounded-card border border-border bg-surface'}>
+      {/* Every area lays its own cards on the ground and scrolls with the page. */}
+      <div className="min-w-0">
         <ProAccountingWorkspace
           view={view}
           onViewChange={onViewChange}

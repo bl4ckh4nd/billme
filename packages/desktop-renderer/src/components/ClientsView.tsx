@@ -2,12 +2,13 @@
 
 import React, { useState } from 'react';
 import {
-    Search, Plus, MapPin, Phone, Mail, FileText, Tag, Briefcase,
-    Trash2, Edit3, X, CheckCircle, AlertCircle, LayoutGrid, List, Check, ArrowUpRight
+    Search, Plus, MapPin, Phone, Mail,
+    Trash2, Edit3, LayoutGrid, List, Check, ArrowUpRight, X
 } from 'lucide-react';
 import {
-  Avatar, Badge, Button, EMPTY_VALUE, EmptyState, ErrorState, IconButton, Input, Metric, PageHeader, SegmentedControl, Sparkline,
-  Table, TableBody, TableCell, TableHead, TableHeader, TableRow, ValidationSummary, useActionFeedback,
+  Avatar, Badge, Button, Card, CardHeader, EMPTY_VALUE, EmptyState, ErrorState, IconButton, Input, ListRow, Metric, Modal, PageHeader,
+  SegmentedControl, Select, Sparkline, Table, TableBody, TableCell, TableHead, TableHeader, TableRow, Textarea, ValidationSummary,
+  useActionFeedback,
 } from '@billme/ui';
 import type { Client, ClientAddress, ClientEmail } from '@billme/desktop-core/types';
 import { useClientsQuery, useDeleteClientMutation, useUpsertClientMutation } from '../hooks/useClients';
@@ -25,7 +26,7 @@ type ClientEditorErrors = Record<string, string>;
 const emailFieldKey = (id: string) => `email:${id}`;
 const addressFieldKey = (id: string, field: 'street' | 'zip' | 'city' | 'country') => `address:${id}:${field}`;
 
-const requiredMark = <span aria-hidden="true" className="ml-0.5 text-error-text">*</span>;
+const kpiTile = 'rounded-tile border border-border bg-surface px-4 py-3.5';
 
 const countLabel = (count: number, singular: string, plural: string) => `${count} ${count === 1 ? singular : plural}`;
 
@@ -55,7 +56,7 @@ export const ClientsView: React.FC = () => {
     const setEditingInvoice = useUiStore((s) => s.setEditingInvoice);
     const [selectedClientId, setSelectedClientId] = useState<string | null>(null);
     const [searchTerm, setSearchTerm] = useState('');
-    const [viewMode, setViewMode] = useState<'grid' | 'list'>('grid');
+    const [viewMode, setViewMode] = useState<'grid' | 'list'>('list');
     const [isEditorOpen, setIsEditorOpen] = useState(false);
     const [draft, setDraft] = useState<Client | null>(null);
     const [editorErrors, setEditorErrors] = useState<ClientEditorErrors>({});
@@ -63,7 +64,6 @@ export const ClientsView: React.FC = () => {
     const locationSearch = useRouterState({ select: (s) => s.location.search }) as Record<string, unknown>;
 
     const getInputId = (field: string) => `${editorId}-${field.replace(/[^a-zA-Z0-9_-]/g, '-')}`;
-    const getFieldErrorId = (field: string) => `${getInputId(field)}-error`;
     const getValidationTargetId = (field: string) => {
         if (field === 'email' || field === 'emails') {
             return getInputId(emailFieldKey(draft?.emails?.[0]?.id ?? ''));
@@ -223,6 +223,12 @@ export const ClientsView: React.FC = () => {
         list.find((a) => a.isDefaultBilling) ?? list.find((a) => a.kind === 'billing') ?? list[0] ?? null;
     const defaultShippingAddress = (list: ClientAddress[]) =>
         list.find((a) => a.isDefaultShipping) ?? list.find((a) => a.kind === 'shipping') ?? defaultBillingAddress(list) ?? null;
+
+    const openBalanceByClient = new Map<string, number>();
+    for (const inv of invoices) {
+        if (!inv.clientId || !['open', 'overdue'].includes(inv.status)) continue;
+        openBalanceByClient.set(inv.clientId, (openBalanceByClient.get(inv.clientId) ?? 0) + inv.amount);
+    }
 
     const saveDraft = async () => {
         if (!draft) return;
@@ -392,7 +398,7 @@ export const ClientsView: React.FC = () => {
         const sortedInvoices = [...clientInvoices].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
 
         return (
-            <div className="h-full flex flex-col gap-6 pb-8 overflow-y-auto">
+            <>
                 <PageHeader
                     className="mb-0"
                     title={selectedClient.company}
@@ -435,901 +441,806 @@ export const ClientsView: React.FC = () => {
                     }
                 />
 
-                {/* Top Section: contact details beside the one focal figure. */}
-                <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-                    <section aria-labelledby="client-contact-heading" className="flex flex-col gap-5 rounded-card bg-surface p-6 shadow-xs">
-                        <div className="flex items-center gap-3">
-                            <Avatar name={selectedClient.company} size="lg" />
-                            <h2 id="client-contact-heading" className="text-section text-foreground">Kontakt</h2>
+                {/* The question this screen answers is "was schuldet dieser
+                    Kunde mir": the outstanding balance leads the row. */}
+                {isInvoicesError ? (
+                    <ErrorState
+                        title="Rechnungsdaten konnten nicht geladen werden"
+                        description="Umsatz und offene Forderungen sind ohne die Rechnungen nicht berechenbar, deshalb werden hier keine Zahlen angezeigt."
+                        onRetry={() => void refetchInvoices()}
+                    />
+                ) : (
+                    <section aria-label="Kennzahlen" className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
+                        <div className={kpiTile}>
+                            <Metric
+                                marker="tick"
+                                tone={isLoadingInvoices ? 'neutral' : openCount > 0 ? 'error' : 'success'}
+                                label="Offene Forderungen"
+                                value={formatCurrency(outstandingAmount)}
+                                hint={isLoadingInvoices ? 'Rechnungen werden geladen …' : openCount > 0 ? `${openCount} offen` : 'Alles bezahlt'}
+                            />
                         </div>
-                        <dl className="space-y-2.5 text-sm">
-                            <div className="flex items-center gap-2 text-foreground">
-                                <dt><Mail size={14} className="text-muted" aria-label="E-Mail" /></dt>
-                                <dd className="min-w-0 truncate">{billingEmail?.email || selectedClient.email || EMPTY_VALUE}</dd>
-                            </div>
-                            <div className="flex items-center gap-2 text-foreground">
-                                <dt><Phone size={14} className="text-muted" aria-label="Telefon" /></dt>
-                                <dd className="tabular-nums">{selectedClient.phone || EMPTY_VALUE}</dd>
-                            </div>
-                            <div className="flex items-center gap-2 text-foreground">
-                                <dt><MapPin size={14} className="text-muted" aria-label="Adresse" /></dt>
-                                <dd className="min-w-0">{(billingAddress ? `${billingAddress.street}, ${billingAddress.zip} ${billingAddress.city}` : selectedClient.address) || EMPTY_VALUE}</dd>
-                            </div>
-                        </dl>
-                        {selectedClient.tags.length > 0 && (
-                            <div className="mt-auto flex flex-wrap gap-1.5">
-                                {selectedClient.tags.map((tag) => <Badge key={tag} tone="neutral">{tag}</Badge>)}
-                            </div>
-                        )}
+                        <div className={kpiTile}>
+                            <Metric
+                                marker="tick"
+                                label="Gesamtumsatz"
+                                value={formatCurrency(totalRevenue)}
+                                sparkline={paidTrend.some((value) => value > 0)
+                                    ? <Sparkline values={paidTrend} aria-label="Bezahlter Umsatz der letzten 12 Monate" />
+                                    : undefined}
+                                hint={countLabel(paidCount, 'bezahlte Rechnung', 'bezahlte Rechnungen')}
+                            />
+                        </div>
+                        <div className={kpiTile}>
+                            <Metric
+                                marker="tick"
+                                label="Aktive Projekte"
+                                value={selectedClient.projects.filter((p) => p.status === 'active').length}
+                                hint={`Insgesamt ${countLabel(selectedClient.projects.length, 'Projekt', 'Projekte')}`}
+                            />
+                        </div>
+                        <div className={kpiTile}>
+                            <Metric
+                                marker="tick"
+                                label="Letzte Aktivität"
+                                value={selectedClient.activities[0]
+                                    ? new Date(selectedClient.activities[0].date).toLocaleDateString('de-DE')
+                                    : EMPTY_VALUE}
+                                hint={<span className="block truncate">{selectedClient.activities[0]?.content ?? 'Keine Aktivitäten'}</span>}
+                            />
+                        </div>
                     </section>
+                )}
 
-                    {/* The question this screen answers is "was schuldet dieser
-                        Kunde mir": the outstanding balance is the focal metric,
-                        the rest is one compact row. */}
-                    <div className="lg:col-span-2 flex flex-col gap-4">
-                        {isInvoicesError ? (
-                            <ErrorState
-                                title="Rechnungsdaten konnten nicht geladen werden"
-                                description="Umsatz und offene Forderungen sind ohne die Rechnungen nicht berechenbar, deshalb werden hier keine Zahlen angezeigt."
-                                onRetry={() => void refetchInvoices()}
-                            />
-                        ) : (
-                          <>
-                            <div className="flex flex-wrap items-end justify-between gap-4 rounded-card bg-surface-inverse p-6">
-                                <Metric inverse size="lg" label="Offene Forderungen" value={formatCurrency(outstandingAmount)} />
-                                {isLoadingInvoices ? (
-                                    <span className="text-caption text-inverse-muted">Rechnungen werden geladen …</span>
-                                ) : openCount > 0 ? (
-                                    <Badge tone="error"><AlertCircle size={12} aria-hidden="true" /> {openCount} offen</Badge>
-                                ) : (
-                                    <Badge tone="success"><CheckCircle size={12} aria-hidden="true" /> Alles bezahlt</Badge>
-                                )}
-                            </div>
-
-                            <section aria-label="Kennzahlen" className="grid grid-cols-1 divide-y divide-border-subtle rounded-card bg-surface shadow-xs sm:grid-cols-3 sm:divide-x sm:divide-y-0">
-                                <Metric
-                                    className="p-5"
-                                    label="Gesamtumsatz"
-                                    value={formatCurrency(totalRevenue)}
-                                    sparkline={paidTrend.some((value) => value > 0)
-                                        ? <Sparkline values={paidTrend} aria-label="Bezahlter Umsatz der letzten 12 Monate" />
-                                        : undefined}
-                                    hint={countLabel(paidCount, 'bezahlte Rechnung', 'bezahlte Rechnungen')}
-                                />
-                                <Metric
-                                    className="p-5"
-                                    label="Aktive Projekte"
-                                    value={selectedClient.projects.filter((p) => p.status === 'active').length}
-                                    hint={`Insgesamt ${countLabel(selectedClient.projects.length, 'Projekt', 'Projekte')}`}
-                                />
-                                <Metric
-                                    className="p-5"
-                                    label="Letzte Aktivität"
-                                    value={selectedClient.activities[0]
-                                        ? new Date(selectedClient.activities[0].date).toLocaleDateString('de-DE')
-                                        : EMPTY_VALUE}
-                                    hint={<span className="block truncate">{selectedClient.activities[0]?.content ?? 'Keine Aktivitäten'}</span>}
-                                />
-                            </section>
-                          </>
-                        )}
-                    </div>
-                </div>
-
-                {/* Bottom Section: Invoices & History */}
-                <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-                    <section aria-labelledby="client-invoices-heading" className="self-start lg:col-span-2 rounded-card bg-surface p-6 shadow-xs">
-                        <h3 id="client-invoices-heading" className="mb-4 flex items-center gap-2 text-section text-foreground">
-                            <FileText size={16} className="text-muted" aria-hidden="true" /> Rechnungsverlauf
-                        </h3>
-                        {isInvoicesError ? (
-                            <ErrorState
-                                title="Rechnungsverlauf konnte nicht geladen werden"
-                                description="Die Rechnungen dieses Kunden sind nicht abrufbar."
-                                onRetry={() => void refetchInvoices()}
-                            />
-                        ) : isLoadingInvoices ? (
-                            <SkeletonLoader variant="list" count={3} />
-                        ) : sortedInvoices.length > 0 ? (
-                            <Table aria-label="Rechnungsverlauf" bare>
-                                <TableHeader>
-                                    <TableRow>
-                                        <TableHead>Nummer</TableHead>
-                                        <TableHead>Datum</TableHead>
-                                        <TableHead>Status</TableHead>
-                                        <TableHead numeric>Betrag</TableHead>
-                                    </TableRow>
-                                </TableHeader>
-                                <TableBody>
-                                    {sortedInvoices.map((inv) => (
-                                        <TableRow
-                                            key={inv.id}
-                                            interactive
-                                            aria-label={`${inv.number} öffnen`}
-                                            onClick={() => navigate({ to: '/documents', search: { kind: 'invoice', id: inv.id } })}
-                                        >
-                                            <TableCell className="font-medium">{inv.number}</TableCell>
-                                            <TableCell muted className="tabular-nums">{new Date(inv.date).toLocaleDateString('de-DE')}</TableCell>
-                                            <TableCell><Badge status={inv.status} /></TableCell>
-                                            <TableCell numeric className="font-medium">{formatCurrency(inv.amount)}</TableCell>
+                <div className="grid grid-cols-1 items-start gap-3 lg:grid-cols-3">
+                    <section aria-labelledby="client-invoices-heading" className="lg:col-span-2">
+                        <Card padding="none" className="overflow-hidden">
+                            <CardHeader className="border-b border-border px-3.5 py-3" title={<span id="client-invoices-heading">Rechnungsverlauf</span>} />
+                            {isInvoicesError ? (
+                                <div className="p-3.5">
+                                    <ErrorState
+                                        title="Rechnungsverlauf konnte nicht geladen werden"
+                                        description="Die Rechnungen dieses Kunden sind nicht abrufbar."
+                                        onRetry={() => void refetchInvoices()}
+                                    />
+                                </div>
+                            ) : isLoadingInvoices ? (
+                                <div className="p-3.5">
+                                    <SkeletonLoader variant="list" count={3} />
+                                </div>
+                            ) : sortedInvoices.length > 0 ? (
+                                <Table aria-label="Rechnungsverlauf" bare>
+                                    <TableHeader>
+                                        <TableRow>
+                                            <TableHead>Nummer</TableHead>
+                                            <TableHead>Datum</TableHead>
+                                            <TableHead>Status</TableHead>
+                                            <TableHead numeric>Betrag</TableHead>
                                         </TableRow>
-                                    ))}
-                                </TableBody>
-                            </Table>
-                        ) : (
-                            <EmptyState
-                                title="Noch keine Rechnungen für diesen Kunden"
-                                description='Sobald du eine Rechnung mit diesem Kunden erstellst, erscheint sie hier mit Status und Betrag. Starte sie über "Neue Rechnung" oben rechts.'
-                            />
-                        )}
-                    </section>
-
-                    <div className="flex flex-col gap-6">
-                        <section aria-labelledby="client-addresses-heading" className="rounded-card bg-surface p-6 shadow-xs">
-                            <h3 id="client-addresses-heading" className="mb-4 flex items-center gap-2 text-section text-foreground">
-                                <MapPin size={16} className="text-muted" aria-hidden="true" /> Adressen & E-Mails
-                            </h3>
-                            <dl className="space-y-3 text-sm">
-                                <div>
-                                    <dt className="text-label text-muted">Rechnungsadresse</dt>
-                                    <dd className="mt-0.5 text-foreground">{addressLines[0] || EMPTY_VALUE}</dd>
-                                </div>
-                                <div>
-                                    <dt className="text-label text-muted">Lieferadresse</dt>
-                                    <dd className="mt-0.5 text-foreground">{addressLines[1] || EMPTY_VALUE}</dd>
-                                </div>
-                                <div>
-                                    <dt className="text-label text-muted">E-Mail (Rechnung)</dt>
-                                    <dd className="mt-0.5 text-foreground">{emailLines[0] || EMPTY_VALUE}</dd>
-                                </div>
-                            </dl>
-                            <p className="mt-4 border-t border-border-subtle pt-3 text-caption text-muted tabular-nums">
-                                {countLabel(addressCount, 'Adresse', 'Adressen')} · {countLabel(emailCount, 'E-Mail', 'E-Mails')} · Pflege über „Kunde bearbeiten“
-                            </p>
-                        </section>
-
-                        <section aria-labelledby="client-projects-heading" className="rounded-card bg-surface p-6 shadow-xs">
-                            <h3 id="client-projects-heading" className="mb-3 flex items-center gap-2 text-section text-foreground">
-                                <Briefcase size={16} className="text-muted" aria-hidden="true" /> Projekte
-                            </h3>
-                            {selectedClient.projects.length > 0 ? (
-                                <ul className="-mx-2">
-                                    {selectedClient.projects.map((p) => (
-                                        <li key={p.id}>
-                                            <button
-                                                type="button"
-                                                onClick={() => navigate({ to: `/projects/${p.id}` })}
-                                                className="flex w-full items-center justify-between gap-3 rounded-control px-2 py-2 text-left transition-colors hover:bg-surface-muted focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                                    </TableHeader>
+                                    <TableBody>
+                                        {sortedInvoices.map((inv) => (
+                                            <TableRow
+                                                key={inv.id}
+                                                interactive
+                                                aria-label={`${inv.number} öffnen`}
+                                                onClick={() => navigate({ to: '/documents', search: { kind: 'invoice', id: inv.id } })}
                                             >
-                                                <span className="min-w-0">
-                                                    <span className="block truncate text-sm font-medium text-foreground">{p.name}</span>
-                                                    <span className="block text-caption text-muted tabular-nums">Budget {formatCurrency(p.budget)}</span>
-                                                </span>
-                                                <Badge tone={p.status === 'active' ? 'success' : 'neutral'}>{p.status === 'active' ? 'Aktiv' : 'Inaktiv'}</Badge>
-                                            </button>
-                                        </li>
-                                    ))}
-                                </ul>
+                                                <TableCell className="font-medium">{inv.number}</TableCell>
+                                                <TableCell muted className="tabular-nums">{new Date(inv.date).toLocaleDateString('de-DE')}</TableCell>
+                                                <TableCell><Badge status={inv.status} /></TableCell>
+                                                <TableCell numeric className="font-medium">{formatCurrency(inv.amount)}</TableCell>
+                                            </TableRow>
+                                        ))}
+                                    </TableBody>
+                                </Table>
                             ) : (
                                 <EmptyState
-                                    className="py-6"
-                                    title="Noch keine Projekte"
-                                    description="Projekte bündeln die Dokumente dieses Kunden."
-                                    action={
-                                        <Button variant="secondary" size="sm" onClick={() => navigate({ to: '/projects' })}>
-                                            Zu den Projekten
-                                        </Button>
-                                    }
+                                    title="Noch keine Rechnungen für diesen Kunden"
+                                    description='Sobald du eine Rechnung mit diesem Kunden erstellst, erscheint sie hier mit Status und Betrag. Starte sie über "Neue Rechnung" oben rechts.'
                                 />
                             )}
+                        </Card>
+                    </section>
+
+                    <div className="flex flex-col gap-3">
+                        <section aria-labelledby="client-contact-heading">
+                            <Card padding="none">
+                                <CardHeader className="border-b border-border px-3.5 py-3" title={<span id="client-contact-heading">Kontakt</span>} />
+                                <div className="flex flex-col gap-3 p-3.5">
+                                    <dl className="space-y-2 text-control">
+                                        <div className="flex items-center gap-2 text-foreground">
+                                            <dt><Mail size={14} className="text-muted" aria-label="E-Mail" /></dt>
+                                            <dd className="min-w-0 truncate">{billingEmail?.email || selectedClient.email || EMPTY_VALUE}</dd>
+                                        </div>
+                                        <div className="flex items-center gap-2 text-foreground">
+                                            <dt><Phone size={14} className="text-muted" aria-label="Telefon" /></dt>
+                                            <dd className="tabular-nums">{selectedClient.phone || EMPTY_VALUE}</dd>
+                                        </div>
+                                        <div className="flex items-center gap-2 text-foreground">
+                                            <dt><MapPin size={14} className="text-muted" aria-label="Adresse" /></dt>
+                                            <dd className="min-w-0">{(billingAddress ? `${billingAddress.street}, ${billingAddress.zip} ${billingAddress.city}` : selectedClient.address) || EMPTY_VALUE}</dd>
+                                        </div>
+                                    </dl>
+                                    {selectedClient.tags.length > 0 && (
+                                        <div className="flex flex-wrap gap-1.5">
+                                            {selectedClient.tags.map((tag) => <Badge key={tag} tone="neutral">{tag}</Badge>)}
+                                        </div>
+                                    )}
+                                </div>
+                            </Card>
                         </section>
 
-                        <section aria-labelledby="client-notes-heading" className="rounded-card bg-surface p-6 shadow-xs">
-                            <h3 id="client-notes-heading" className="mb-3 flex items-center gap-2 text-section text-foreground">
-                                <Tag size={16} className="text-muted" aria-hidden="true" /> Notizen
-                            </h3>
-                            <p className={`whitespace-pre-line text-sm leading-relaxed ${selectedClient.notes ? 'text-foreground' : 'text-muted'}`}>
-                                {selectedClient.notes || 'Keine Notizen hinterlegt.'}
-                            </p>
+                        <section aria-labelledby="client-addresses-heading">
+                            <Card padding="none">
+                                <CardHeader className="border-b border-border px-3.5 py-3" title={<span id="client-addresses-heading">Adressen & E-Mails</span>} />
+                                <div className="p-3.5">
+                                    <dl className="space-y-3 text-control">
+                                        <div>
+                                            <dt className="text-caption text-muted">Rechnungsadresse</dt>
+                                            <dd className="mt-0.5 text-foreground">{addressLines[0] || EMPTY_VALUE}</dd>
+                                        </div>
+                                        <div>
+                                            <dt className="text-caption text-muted">Lieferadresse</dt>
+                                            <dd className="mt-0.5 text-foreground">{addressLines[1] || EMPTY_VALUE}</dd>
+                                        </div>
+                                        <div>
+                                            <dt className="text-caption text-muted">E-Mail (Rechnung)</dt>
+                                            <dd className="mt-0.5 text-foreground">{emailLines[0] || EMPTY_VALUE}</dd>
+                                        </div>
+                                    </dl>
+                                    <p className="mt-3 border-t border-border pt-3 text-caption text-muted tabular-nums">
+                                        {countLabel(addressCount, 'Adresse', 'Adressen')} · {countLabel(emailCount, 'E-Mail', 'E-Mails')} · Pflege über „Kunde bearbeiten“
+                                    </p>
+                                </div>
+                            </Card>
+                        </section>
+
+                        <section aria-labelledby="client-projects-heading">
+                            <Card padding="none">
+                                <CardHeader className="border-b border-border px-3.5 py-3" title={<span id="client-projects-heading">Projekte</span>} />
+                                {selectedClient.projects.length > 0 ? (
+                                    <ul className="px-3.5">
+                                        {selectedClient.projects.map((p) => (
+                                            <li key={p.id} className="border-b border-dashed border-border last:border-b-0">
+                                                <ListRow
+                                                    title={p.name}
+                                                    subtitle={<span className="tabular-nums">Budget {formatCurrency(p.budget)}</span>}
+                                                    value={<Badge tone={p.status === 'active' ? 'success' : 'neutral'}>{p.status === 'active' ? 'Aktiv' : 'Inaktiv'}</Badge>}
+                                                    onClick={() => navigate({ to: `/projects/${p.id}` })}
+                                                />
+                                            </li>
+                                        ))}
+                                    </ul>
+                                ) : (
+                                    <EmptyState
+                                        title="Noch keine Projekte"
+                                        description="Projekte bündeln die Dokumente dieses Kunden."
+                                        action={
+                                            <Button variant="secondary" size="sm" onClick={() => navigate({ to: '/projects' })}>
+                                                Zu den Projekten
+                                            </Button>
+                                        }
+                                    />
+                                )}
+                            </Card>
+                        </section>
+
+                        <section aria-labelledby="client-notes-heading">
+                            <Card padding="none">
+                                <CardHeader className="border-b border-border px-3.5 py-3" title={<span id="client-notes-heading">Notizen</span>} />
+                                <p className={`whitespace-pre-line p-3.5 text-control ${selectedClient.notes ? 'text-foreground' : 'text-muted'}`}>
+                                    {selectedClient.notes || 'Keine Notizen hinterlegt.'}
+                                </p>
+                            </Card>
                         </section>
                     </div>
                 </div>
-            </div>
+            </>
         );
     };
 
+    const renderEditor = (draft: Client) => (
+        <Modal open onClose={closeEditor} titleId={`${editorId}-title`} dismissOnBackdrop={false} className="max-w-4xl">
+            <div className="flex items-start gap-3 px-4.5 pb-2.5 pt-4">
+                <h2 id={`${editorId}-title`} className="min-w-0 flex-1 text-title text-foreground">
+                    {clients.some((c) => c.id === draft.id) ? 'Kunde bearbeiten' : 'Neuer Kunde'}
+                </h2>
+                <IconButton size="sm" aria-label="Kundeneditor schließen" onClick={closeEditor}>
+                    <X size={16} aria-hidden="true" />
+                </IconButton>
+            </div>
+            <div className="flex max-h-[70vh] flex-col gap-3 overflow-y-auto px-4.5 pb-4 pt-1">
+            <ValidationSummary
+                errors={editorValidationIssues}
+                onJump={focusEditorField}
+            />
+            {firstEditorError && (
+                <p id={saveErrorId} className="sr-only">
+                    {firstEditorError.message}
+                </p>
+            )}
+
+            <div className="grid grid-cols-1 items-start gap-3 xl:grid-cols-2">
+                <div className="flex flex-col gap-3">
+                    <Card padding="none">
+                        <CardHeader className="border-b border-border px-3.5 py-3" title="Stammdaten" />
+                        <div className="grid grid-cols-2 gap-3 p-3.5">
+                            <Input
+                                id="clientsview-kundennummer"
+                                label="Kundennummer"
+                                value={draft.customerNumber ?? ''}
+                                onChange={(e) => setDraft({ ...draft, customerNumber: e.target.value })}
+                                placeholder="Automatisch bei leerem Feld"
+                                className="font-mono"
+                                fullWidth
+                            />
+                            <div className="col-span-2">
+                                <Input
+                                    id={getInputId('company')}
+                                    label="Firma"
+                                    value={draft.company}
+                                    onChange={(e) => setDraft({ ...draft, company: e.target.value })}
+                                    required
+                                    error={editorErrors.company}
+                                    fullWidth
+                                />
+                            </div>
+                            <Input
+                                id={getInputId('contactPerson')}
+                                label="Ansprechpartner"
+                                value={draft.contactPerson}
+                                onChange={(e) => setDraft({ ...draft, contactPerson: e.target.value })}
+                                fullWidth
+                            />
+                            <Input
+                                id="clientsview-telefon"
+                                label="Telefon"
+                                value={draft.phone}
+                                onChange={(e) => setDraft({ ...draft, phone: e.target.value })}
+                                fullWidth
+                            />
+                            <Select
+                                id="clientsview-status"
+                                label="Status"
+                                value={draft.status}
+                                onChange={(e) => setDraft({ ...draft, status: e.target.value as any })}
+                                fullWidth
+                            >
+                                <option value="active">Aktiv</option>
+                                <option value="inactive">Inaktiv</option>
+                            </Select>
+                            <Input
+                                id="clientsview-tags-komma"
+                                label="Tags (Komma)"
+                                value={(draft.tags ?? []).join(', ')}
+                                onChange={(e) =>
+                                    setDraft({
+                                        ...draft,
+                                        tags: e.target.value
+                                            .split(',')
+                                            .map((t) => t.trim())
+                                            .filter(Boolean),
+                                    })
+                                }
+                                fullWidth
+                            />
+                            <div className="col-span-2">
+                                <Textarea
+                                    id="clientsview-notizen"
+                                    label="Notizen"
+                                    value={draft.notes ?? ''}
+                                    onChange={(e) => setDraft({ ...draft, notes: e.target.value })}
+                                    rows={3}
+                                    fullWidth
+                                />
+                            </div>
+                        </div>
+                    </Card>
+
+                    <Card padding="none">
+                        <CardHeader
+                            className="border-b border-border px-3.5 py-3"
+                            title="Steuerprofil"
+                            subtitle="Wird beim Erstellen einer Rechnung als Vorschlag übernommen. Die Rechnung speichert danach ihren eigenen Snapshot."
+                        />
+                        <div className="grid grid-cols-3 gap-3 p-3.5">
+                            <Select
+                                id="clientsview-kundentyp"
+                                label="Kundentyp"
+                                value={draft.taxProfile?.type ?? 'business'}
+                                onChange={(event) => setDraft({ ...draft, taxProfile: { ...draft.taxProfile, type: event.target.value as 'business' | 'consumer' } })}
+                                fullWidth
+                            >
+                                <option value="business">Unternehmen</option>
+                                <option value="consumer">Privatkunde</option>
+                            </Select>
+                            <Input
+                                id="clientsview-land-iso"
+                                label="Land (ISO)"
+                                value={draft.taxProfile?.countryCode ?? ''}
+                                onChange={(event) => setDraft({ ...draft, taxProfile: { ...draft.taxProfile, type: draft.taxProfile?.type ?? 'business', countryCode: event.target.value.toUpperCase() } })}
+                                placeholder="DE"
+                                maxLength={2}
+                                className="uppercase"
+                                fullWidth
+                            />
+                            <Input
+                                id="clientsview-ust-idnr"
+                                label="USt-IdNr."
+                                value={draft.taxProfile?.vatId ?? ''}
+                                onChange={(event) => setDraft({ ...draft, taxProfile: { ...draft.taxProfile, type: draft.taxProfile?.type ?? 'business', vatId: event.target.value.toUpperCase(), vatIdValidation: undefined, vatIdValidationAt: undefined } })}
+                                placeholder="DE123456789"
+                                className="font-mono"
+                                hint={draft.taxProfile?.vatIdValidation ? `Status: ${draft.taxProfile.vatIdValidation}` : undefined}
+                                fullWidth
+                            />
+                        </div>
+                    </Card>
+                </div>
+
+                <div className="flex flex-col gap-3">
+                    <Card padding="none">
+                        <CardHeader
+                            className="px-3.5 py-3"
+                            title="E-Mails"
+                            subtitle="Kategorie = Zweck. Standard = wird automatisch vorausgewählt."
+                            actions={
+                                <Button
+                                    variant="secondary"
+                                    size="sm"
+                                    onClick={() =>
+                                        setDraft({
+                                            ...draft,
+                                            emails: [
+                                                ...(draft.emails ?? []),
+                                                {
+                                                    id: uuidv4(),
+                                                    clientId: draft.id,
+                                                    label: 'Neu',
+                                                    kind: 'general',
+                                                    email: '',
+                                                } as ClientEmail,
+                                            ],
+                                        })
+                                    }
+                                >
+                                    + E-Mail
+                                </Button>
+                            }
+                        />
+
+                        {(draft.emails ?? []).map((em, idx) => {
+                            const field = emailFieldKey(em.id);
+                            const errorField = editorErrors[field]
+                                ? field
+                                : idx === 0 && editorErrors.email
+                                    ? 'email'
+                                    : idx === 0 && editorErrors.emails
+                                        ? 'emails'
+                                        : undefined;
+                            const errorMessage = errorField ? editorErrors[errorField] : undefined;
+                            const hasDefaultBillingEmail = (draft.emails ?? []).some((email) => email.isDefaultBilling);
+                            const isRequiredEmail = Boolean(em.isDefaultBilling) || (!hasDefaultBillingEmail && idx === 0);
+                            return (
+                                <div key={em.id} className="flex flex-col gap-3 border-t border-border p-3.5">
+                                    <div className="grid grid-cols-2 gap-3">
+                                        <Input
+                                            label="Bezeichnung"
+                                            value={em.label}
+                                            onChange={(e) => {
+                                                const next = [...(draft.emails ?? [])];
+                                                next[idx] = { ...em, label: e.target.value };
+                                                setDraft({ ...draft, emails: next });
+                                            }}
+                                            fullWidth
+                                        />
+                                        <Select
+                                            label="Kategorie"
+                                            value={em.kind}
+                                            onChange={(e) => {
+                                                const next = [...(draft.emails ?? [])];
+                                                next[idx] = { ...em, kind: e.target.value as any };
+                                                setDraft({ ...draft, emails: next });
+                                            }}
+                                            fullWidth
+                                        >
+                                            <option value="general">{emailKindLabel.general}</option>
+                                            <option value="billing">{emailKindLabel.billing}</option>
+                                            <option value="shipping">{emailKindLabel.shipping}</option>
+                                            <option value="other">{emailKindLabel.other}</option>
+                                        </Select>
+                                        <div className="col-span-2">
+                                            <Input
+                                                id={getInputId(field)}
+                                                label="E-Mail-Adresse"
+                                                value={em.email}
+                                                required={isRequiredEmail}
+                                                error={errorMessage}
+                                                onChange={(e) => {
+                                                    const next = [...(draft.emails ?? [])];
+                                                    next[idx] = { ...em, email: e.target.value };
+                                                    setDraft({ ...draft, emails: next });
+                                                }}
+                                                fullWidth
+                                            />
+                                        </div>
+                                    </div>
+                                    <div className="flex flex-wrap items-center justify-between gap-2">
+                                        <div className="flex items-center gap-2">
+                                            <span className="text-eyebrow uppercase text-muted">Standard</span>
+                                            <Button
+                                                size="sm"
+                                                variant={em.isDefaultBilling ? 'dark' : 'secondary'}
+                                                aria-pressed={Boolean(em.isDefaultBilling)}
+                                                onClick={() => {
+                                                    const next = setOnlyOneFlag((draft.emails ?? []) as any, em.id, 'isDefaultBilling') as ClientEmail[];
+                                                    setDraft({ ...draft, emails: next });
+                                                }}
+                                            >
+                                                {em.isDefaultBilling && <Check size={14} aria-hidden="true" />}
+                                                Rechnung
+                                            </Button>
+                                            <Button
+                                                size="sm"
+                                                variant={em.isDefaultGeneral ? 'dark' : 'secondary'}
+                                                aria-pressed={Boolean(em.isDefaultGeneral)}
+                                                onClick={() => {
+                                                    const next = setOnlyOneFlag((draft.emails ?? []) as any, em.id, 'isDefaultGeneral') as ClientEmail[];
+                                                    setDraft({ ...draft, emails: next });
+                                                }}
+                                            >
+                                                {em.isDefaultGeneral && <Check size={14} aria-hidden="true" />}
+                                                Allgemein
+                                            </Button>
+                                        </div>
+                                        <Button
+                                            size="sm"
+                                            variant="danger"
+                                            onClick={() => {
+                                                const next = (draft.emails ?? []).filter((e) => e.id !== em.id);
+                                                setDraft({ ...draft, emails: next });
+                                            }}
+                                        >
+                                            <Trash2 size={14} aria-hidden="true" />
+                                            Entfernen
+                                        </Button>
+                                    </div>
+                                </div>
+                            );
+                        })}
+                    </Card>
+
+                    <Card padding="none">
+                        <CardHeader
+                            className="px-3.5 py-3"
+                            title="Adressen"
+                            subtitle="Kategorie = Zweck. Standard = wird automatisch übernommen."
+                            actions={
+                                <Button
+                                    variant="secondary"
+                                    size="sm"
+                                    onClick={() =>
+                                        setDraft({
+                                            ...draft,
+                                            addresses: [
+                                                ...(draft.addresses ?? []),
+                                                {
+                                                    id: uuidv4(),
+                                                    clientId: draft.id,
+                                                    label: 'Neu',
+                                                    kind: 'other',
+                                                    street: '',
+                                                    zip: '',
+                                                    city: '',
+                                                    country: 'DE',
+                                                } as ClientAddress,
+                                            ],
+                                        })
+                                    }
+                                >
+                                    + Adresse
+                                </Button>
+                            }
+                        />
+
+                        {(draft.addresses ?? []).map((ad, idx) => {
+                            const addressRequired = Boolean(ad.isDefaultBilling);
+                            const fieldError = (field: 'street' | 'zip' | 'city' | 'country') => {
+                                const key = addressFieldKey(ad.id, field);
+                                if (editorErrors[key]) return editorErrors[key];
+                                if (idx === 0 && field === 'street' && editorErrors.addresses) return editorErrors.addresses;
+                                return undefined;
+                            };
+                            const updateAddress = (patch: Partial<ClientAddress>) => {
+                                const next = [...(draft.addresses ?? [])];
+                                next[idx] = { ...ad, ...patch };
+                                setDraft({ ...draft, addresses: next });
+                            };
+                            return (
+                                <div key={ad.id} className="flex flex-col gap-3 border-t border-border p-3.5">
+                                    <div className="grid grid-cols-12 gap-3">
+                                        <div className="col-span-6">
+                                            <Input
+                                                label="Bezeichnung"
+                                                value={ad.label}
+                                                onChange={(e) => updateAddress({ label: e.target.value })}
+                                                fullWidth
+                                            />
+                                        </div>
+                                        <div className="col-span-6">
+                                            <Select
+                                                label="Kategorie"
+                                                value={ad.kind}
+                                                onChange={(e) => updateAddress({ kind: e.target.value as any })}
+                                                fullWidth
+                                            >
+                                                <option value="billing">{addressKindLabel.billing}</option>
+                                                <option value="shipping">{addressKindLabel.shipping}</option>
+                                                <option value="other">{addressKindLabel.other}</option>
+                                            </Select>
+                                        </div>
+                                        <div className="col-span-6">
+                                            <Input
+                                                id={getInputId(addressFieldKey(ad.id, 'street'))}
+                                                label="Straße"
+                                                value={ad.street}
+                                                required={addressRequired}
+                                                error={fieldError('street')}
+                                                onChange={(e) => updateAddress({ street: e.target.value })}
+                                                fullWidth
+                                            />
+                                        </div>
+                                        <div className="col-span-6">
+                                            <Input
+                                                label="Zusatz"
+                                                value={ad.line2 ?? ''}
+                                                onChange={(e) => updateAddress({ line2: e.target.value })}
+                                                fullWidth
+                                            />
+                                        </div>
+                                        <div className="col-span-3">
+                                            <Input
+                                                id={getInputId(addressFieldKey(ad.id, 'zip'))}
+                                                label="PLZ"
+                                                value={ad.zip}
+                                                required={addressRequired}
+                                                error={fieldError('zip')}
+                                                onChange={(e) => updateAddress({ zip: e.target.value })}
+                                                fullWidth
+                                            />
+                                        </div>
+                                        <div className="col-span-5">
+                                            <Input
+                                                id={getInputId(addressFieldKey(ad.id, 'city'))}
+                                                label="Stadt"
+                                                value={ad.city}
+                                                required={addressRequired}
+                                                error={fieldError('city')}
+                                                onChange={(e) => updateAddress({ city: e.target.value })}
+                                                fullWidth
+                                            />
+                                        </div>
+                                        <div className="col-span-4">
+                                            <Input
+                                                id={getInputId(addressFieldKey(ad.id, 'country'))}
+                                                label="Land"
+                                                value={ad.country}
+                                                required={addressRequired}
+                                                error={fieldError('country')}
+                                                onChange={(e) => updateAddress({ country: e.target.value })}
+                                                fullWidth
+                                            />
+                                        </div>
+                                    </div>
+                                    <div className="flex flex-wrap items-center justify-between gap-2">
+                                        <div className="flex flex-wrap items-center gap-2">
+                                            <Button
+                                                size="sm"
+                                                variant={ad.isDefaultBilling ? 'dark' : 'secondary'}
+                                                aria-pressed={Boolean(ad.isDefaultBilling)}
+                                                onClick={() => {
+                                                    const next = setOnlyOneFlag((draft.addresses ?? []) as any, ad.id, 'isDefaultBilling') as ClientAddress[];
+                                                    setDraft({ ...draft, addresses: next });
+                                                }}
+                                            >
+                                                {ad.isDefaultBilling && <Check size={14} aria-hidden="true" />}
+                                                Standard Rechnung
+                                            </Button>
+                                            <Button
+                                                size="sm"
+                                                variant={ad.isDefaultShipping ? 'dark' : 'secondary'}
+                                                aria-pressed={Boolean(ad.isDefaultShipping)}
+                                                onClick={() => {
+                                                    const next = setOnlyOneFlag((draft.addresses ?? []) as any, ad.id, 'isDefaultShipping') as ClientAddress[];
+                                                    setDraft({ ...draft, addresses: next });
+                                                }}
+                                            >
+                                                {ad.isDefaultShipping && <Check size={14} aria-hidden="true" />}
+                                                Standard Lieferung
+                                            </Button>
+                                        </div>
+                                        <Button
+                                            size="sm"
+                                            variant="danger"
+                                            onClick={() => {
+                                                const next = (draft.addresses ?? []).filter((a) => a.id !== ad.id);
+                                                setDraft({ ...draft, addresses: next });
+                                            }}
+                                        >
+                                            <Trash2 size={14} aria-hidden="true" />
+                                            Entfernen
+                                        </Button>
+                                    </div>
+                                </div>
+                            );
+                        })}
+                    </Card>
+                </div>
+            </div>
+            </div>
+            <div className="flex flex-wrap justify-end gap-2 border-t border-border px-4.5 py-3">
+                <Button variant="secondary" onClick={closeEditor}>
+                    Abbrechen
+                </Button>
+                <Button onClick={() => void saveDraft()} aria-describedby={firstEditorError ? saveErrorId : undefined}>
+                    Speichern
+                </Button>
+            </div>
+        </Modal>
+    );
+
+    const emptyClients = (
+        <Card padding="none">
+            <EmptyState
+                title={searchTerm.trim() ? 'Kein Kunde passt zu dieser Suche' : 'Noch keine Kunden angelegt'}
+                description={
+                    searchTerm.trim()
+                        ? `Die Suche "${searchTerm.trim()}" schließt alle ${visibleClients.length} vorhandenen Kunden aus.`
+                        : 'Kunden sind die Empfänger deiner Rechnungen und Angebote. Lege den ersten Kunden über „Neuer Kunde“ oben rechts an, um Dokumente zu erstellen.'
+                }
+                action={
+                    searchTerm.trim() ? (
+                        <Button variant="secondary" size="sm" onClick={() => setSearchTerm('')}>
+                            Suche zurücksetzen
+                        </Button>
+                    ) : undefined
+                }
+            />
+        </Card>
+    );
+
     return (
-         <div className={isEditorOpen || selectedClientId ? 'bg-surface rounded-panel p-6 lg:p-8 min-h-full shadow-xs flex flex-col overflow-hidden' : 'min-h-full px-1 pt-2 flex flex-col overflow-hidden'}>
-              {isEditorOpen && draft ? (
-                  <div className="flex flex-col flex-1 min-h-0">
-                      <div className="flex flex-col flex-1 min-h-0">
-                          <div className="p-6 border-b border-border flex items-center justify-between">
-                              <h3 className="text-2xl font-semibold">
-                                  {clients.some((c) => c.id === draft.id) ? 'Kunde bearbeiten' : 'Neuer Kunde'}
-                              </h3>
-                              <button
-                                  onClick={closeEditor}
-                                  aria-label="Kundeneditor schließen"
-                                  className="inline-flex size-8 shrink-0 items-center justify-center rounded-control text-muted transition-colors hover:bg-surface-sunken hover:text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
-                              >
-                                  <X size={16} />
-                              </button>
-                          </div>
+        <div className="flex flex-col gap-3">
+            {isEditorOpen && draft && renderEditor(draft)}
+            {selectedClientId ? (
+                <DetailView />
+            ) : (
+                <>
+                    <PageHeader
+                        className="mb-0"
+                        title="Kunden"
+                        description={isLoadingClients || isClientsError ? undefined : countLabel(visibleClients.length, 'Stammdatensatz', 'Stammdatensätze')}
+                        actions={
+                            <Button onClick={() => openEditor()}>
+                                <Plus size={16} aria-hidden="true" /> Neuer Kunde
+                            </Button>
+                        }
+                        toolbar={
+                            <>
+                                <div className="w-full sm:w-64">
+                                    <Input
+                                        type="search"
+                                        aria-label="Kunden durchsuchen"
+                                        placeholder="Kunden suchen"
+                                        value={searchTerm}
+                                        onChange={(e) => setSearchTerm(e.target.value)}
+                                        prefix={<Search size={14} aria-hidden="true" />}
+                                        fullWidth
+                                    />
+                                </div>
+                                <SegmentedControl
+                                    className="ml-auto"
+                                    aria-label="Ansicht"
+                                    value={viewMode}
+                                    onChange={setViewMode}
+                                    options={[
+                                        { value: 'list', label: <List size={16} aria-hidden="true" />, ariaLabel: 'Listenansicht' },
+                                        { value: 'grid', label: <LayoutGrid size={16} aria-hidden="true" />, ariaLabel: 'Rasteransicht' },
+                                    ]}
+                                />
+                            </>
+                        }
+                    />
 
-                         <div className="p-6 space-y-12 flex-1 overflow-y-auto">
-                              <ValidationSummary
-                                  errors={editorValidationIssues}
-                                  onJump={focusEditorField}
-                              />
-                              <section>
-                                  <h4 className="text-lg font-semibold mb-6 pb-3 border-b border-border">Stammdaten</h4>
-                                 <div className="grid grid-cols-2 gap-4">
-                                 <div>
-                                     <label className="block text-xs font-semibold text-muted mb-1" htmlFor="clientsview-kundennummer">Kundennummer</label>
-                                     <input id="clientsview-kundennummer"
-                                         value={draft.customerNumber ?? ''}
-                                         onChange={(e) => setDraft({ ...draft, customerNumber: e.target.value })}
-                                         placeholder="Automatisch bei leerem Feld"
-                                         className="px-3 h-10 hover:border-control-border-hover w-full bg-surface border border-control-border rounded-control text-sm font-mono focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring transition-colors"
-                                     />
-                                 </div>
-                                  <div className="col-span-2">
-                                      <label htmlFor={getInputId('company')} className="block text-xs font-semibold text-muted mb-1">Firma{requiredMark}</label>
-                                      <input
-                                         id={getInputId('company')}
-                                         value={draft.company}
-                                         onChange={(e) => setDraft({ ...draft, company: e.target.value })}
-                                         required
-                                         aria-required="true"
-                                         aria-invalid={editorErrors.company ? 'true' : undefined}
-                                         aria-describedby={editorErrors.company ? getFieldErrorId('company') : undefined}
-                                         className={`w-full bg-surface-muted border rounded-xl p-3 text-sm font-medium focus-visible:outline-2 focus-visible:outline-offset-2 transition-shadow ${editorErrors.company ? 'border-error focus-visible:outline-error' : 'border-control-border focus-visible:outline-focus-ring'}`}
-                                     />
-                                     {editorErrors.company && <p id={getFieldErrorId('company')} className="mt-1 text-xs font-medium text-error-text">{editorErrors.company}</p>}
-                                 </div>
-                                 <div>
-                                     <label htmlFor={getInputId('contactPerson')} className="block text-xs font-semibold text-muted mb-1">Ansprechpartner</label>
-                                     <input
-                                         id={getInputId('contactPerson')}
-                                         value={draft.contactPerson}
-                                         onChange={(e) => setDraft({ ...draft, contactPerson: e.target.value })}
-                                         className="px-3 h-10 hover:border-control-border-hover w-full bg-surface border border-control-border rounded-control text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring transition-colors"
-                                     />
-                                 </div>
-                                 <div>
-                                     <label className="block text-xs font-semibold text-muted mb-1" htmlFor="clientsview-telefon">Telefon</label>
-                                     <input id="clientsview-telefon"
-                                         value={draft.phone}
-                                         onChange={(e) => setDraft({ ...draft, phone: e.target.value })}
-                                         className="px-3 h-10 hover:border-control-border-hover w-full bg-surface border border-control-border rounded-control text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring transition-colors"
-                                     />
-                                 </div>
-                                 <div>
-                                     <label className="block text-xs font-semibold text-muted mb-1" htmlFor="clientsview-status">Status</label>
-                                     <select id="clientsview-status"
-                                         value={draft.status}
-                                         onChange={(e) => setDraft({ ...draft, status: e.target.value as any })}
-                                         className="px-3 h-10 hover:border-control-border-hover w-full bg-surface border border-control-border rounded-control text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring transition-colors"
-                                     >
-                                         <option value="active">Aktiv</option>
-                                         <option value="inactive">Inaktiv</option>
-                                     </select>
-                                 </div>
-                                 <div>
-                                     <label className="block text-xs font-semibold text-muted mb-1" htmlFor="clientsview-tags-komma">Tags (Komma)</label>
-                                     <input id="clientsview-tags-komma"
-                                         value={(draft.tags ?? []).join(', ')}
-                                         onChange={(e) =>
-                                             setDraft({
-                                                 ...draft,
-                                                 tags: e.target.value
-                                                     .split(',')
-                                                     .map((t) => t.trim())
-                                                     .filter(Boolean),
-                                             })
-                                         }
-                                         className="px-3 h-10 hover:border-control-border-hover w-full bg-surface border border-control-border rounded-control text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring transition-colors"
-                                     />
-                                 </div>
-                                 <div className="col-span-2">
-                                     <label className="block text-xs font-semibold text-muted mb-1" htmlFor="clientsview-notizen">Notizen</label>
-                                     <textarea id="clientsview-notizen"
-                                         value={draft.notes ?? ''}
-                                         onChange={(e) => setDraft({ ...draft, notes: e.target.value })}
-                                         className="px-3 py-2.5 hover:border-control-border-hover w-full bg-surface border border-control-border rounded-control text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring transition-colors"
-                                         rows={3}
-                                     />
-                                 </div>
-                              </div>
-                             </section>
+                    {isLoadingClients ? (
+                        <SkeletonLoader variant={viewMode === 'grid' ? 'card' : 'table'} count={viewMode === 'grid' ? 6 : 5} />
+                    ) : isClientsError ? (
+                        <ErrorState
+                            title="Kunden konnten nicht geladen werden"
+                            description="Die Kundenliste ist nicht abrufbar. Es werden bewusst keine Ersatzdaten angezeigt."
+                            onRetry={() => void refetchClients()}
+                        />
+                    ) : filteredClients.length === 0 ? emptyClients : viewMode === 'grid' ? (
+                        <div className="grid grid-cols-1 gap-3 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+                            {filteredClients.map((client) => (
+                                <button
+                                    key={client.id}
+                                    data-leaving={leavingIds.has(client.id) || undefined}
+                                    type="button"
+                                    onClick={() => setSelectedClientId(client.id)}
+                                    className="group flex flex-col rounded-card border border-border bg-surface p-3.5 text-left transition-colors hover:bg-surface-muted focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring motion-reduce:transition-none"
+                                >
+                                    <div className="flex items-start justify-between gap-3">
+                                        <Avatar name={client.company} size="lg" />
+                                        <ArrowUpRight size={16} aria-hidden="true" className="ui-reveal text-muted" />
+                                    </div>
 
-                              <section className="space-y-3">
-                                  <div>
-                                      <h4 className="font-semibold text-sm">Steuerprofil</h4>
-                                      <p className="text-xs text-muted mt-0.5">
-                                          Wird beim Erstellen einer Rechnung als Vorschlag übernommen. Die Rechnung speichert danach ihren eigenen Snapshot.
-                                      </p>
-                                  </div>
-                                  <div className="grid grid-cols-12 gap-4">
-                                      <div className="col-span-4">
-                                          <label className="block text-xs font-semibold text-muted mb-1" htmlFor="clientsview-kundentyp">Kundentyp</label>
-                                          <select id="clientsview-kundentyp"
-                                              value={draft.taxProfile?.type ?? 'business'}
-                                              onChange={(event) => setDraft({ ...draft, taxProfile: { ...draft.taxProfile, type: event.target.value as 'business' | 'consumer' } })}
-                                              className="px-3 h-10 hover:border-control-border-hover w-full bg-surface border border-control-border rounded-control text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring transition-colors"
-                                          >
-                                              <option value="business">Unternehmen</option>
-                                              <option value="consumer">Privatkunde</option>
-                                          </select>
-                                      </div>
-                                      <div className="col-span-4">
-                                          <label className="block text-xs font-semibold text-muted mb-1" htmlFor="clientsview-land-iso">Land (ISO)</label>
-                                          <input id="clientsview-land-iso"
-                                              value={draft.taxProfile?.countryCode ?? ''}
-                                              onChange={(event) => setDraft({ ...draft, taxProfile: { ...draft.taxProfile, type: draft.taxProfile?.type ?? 'business', countryCode: event.target.value.toUpperCase() } })}
-                                              placeholder="DE"
-                                              maxLength={2}
-                                              className="px-3 h-10 hover:border-control-border-hover w-full bg-surface border border-control-border rounded-control text-sm uppercase focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring transition-colors"
-                                          />
-                                      </div>
-                                      <div className="col-span-4">
-                                          <label className="block text-xs font-semibold text-muted mb-1" htmlFor="clientsview-ust-idnr">USt-IdNr.</label>
-                                          <input id="clientsview-ust-idnr"
-                                              value={draft.taxProfile?.vatId ?? ''}
-                                              onChange={(event) => setDraft({ ...draft, taxProfile: { ...draft.taxProfile, type: draft.taxProfile?.type ?? 'business', vatId: event.target.value.toUpperCase(), vatIdValidation: undefined, vatIdValidationAt: undefined } })}
-                                              placeholder="DE123456789"
-                                              className="px-3 h-10 hover:border-control-border-hover w-full bg-surface border border-control-border rounded-control text-sm font-mono focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring transition-colors"
-                                          />
-                                          {draft.taxProfile?.vatIdValidation ? <p className="mt-1 text-xs text-muted">Status: {draft.taxProfile.vatIdValidation}</p> : null}
-                                      </div>
-                                  </div>
-                              </section>
+                                    <h3 className="mt-3 text-section line-clamp-1">{client.company}</h3>
+                                    <p className="text-control text-muted line-clamp-1">{client.contactPerson || EMPTY_VALUE}</p>
 
-                              <section className="space-y-3">
-                                  <div className="flex items-center justify-between">
-                                      <div>
-                                          <h4 className="font-semibold text-sm">E-Mails</h4>
-                                          <p className="text-xs text-muted mt-0.5">
-                                              Kategorie = Zweck. Standard = wird automatisch vorausgewählt.
-                                          </p>
-                                      </div>
-                                      <button
-                                          onClick={() =>
-                                              setDraft({
-                                                  ...draft,
-                                                 emails: [
-                                                     ...(draft.emails ?? []),
-                                                     {
-                                                         id: uuidv4(),
-                                                         clientId: draft.id,
-                                                         label: 'Neu',
-                                                         kind: 'general',
-                                                         email: '',
-                                                     } as ClientEmail,
-                                                 ],
-                                             })
-                                         }
-                                         className="px-4 py-2 bg-surface-inverse text-inverse-foreground rounded-control text-xs font-semibold hover:bg-surface-inverse-raised transition-colors"
-                                     >
-                                         + E-Mail
-                                      </button>
-                                  </div>
-
-                                  {(draft.emails ?? []).map((em, idx) => {
-                                      const field = emailFieldKey(em.id);
-                                      const errorField = editorErrors[field]
-                                          ? field
-                                          : idx === 0 && editorErrors.email
-                                              ? 'email'
-                                              : idx === 0 && editorErrors.emails
-                                                  ? 'emails'
-                                                  : undefined;
-                                      const errorMessage = errorField ? editorErrors[errorField] : undefined;
-                                      const hasDefaultBillingEmail = (draft.emails ?? []).some((email) => email.isDefaultBilling);
-                                      const isRequiredEmail = Boolean(em.isDefaultBilling) || (!hasDefaultBillingEmail && idx === 0);
-                                      return (
-                                      <div
-                                          key={em.id}
-                                          className="p-4 rounded-2xl border border-border bg-surface-muted space-y-3"
-                                      >
-                                          <div className="grid grid-cols-12 gap-3 items-end">
-                                          <div className="col-span-3">
-                                              <label className="block text-xs font-semibold text-muted mb-1" htmlFor="clientsview-bezeichnung">Bezeichnung</label>
-                                              <input id="clientsview-bezeichnung"
-                                                  value={em.label}
-                                                 onChange={(e) => {
-                                                     const next = [...(draft.emails ?? [])];
-                                                     next[idx] = { ...em, label: e.target.value };
-                                                     setDraft({ ...draft, emails: next });
-                                                 }}
-                                                  className="px-2.5 h-8 hover:border-control-border-hover w-full bg-surface border border-control-border rounded-control text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring transition-colors"
-                                              />
-                                          </div>
-                                          <div className="col-span-2">
-                                              <label className="block text-xs font-semibold text-muted mb-1" htmlFor="clientsview-kategorie">Kategorie</label>
-                                              <select id="clientsview-kategorie"
-                                                  value={em.kind}
-                                                  onChange={(e) => {
-                                                      const next = [...(draft.emails ?? [])];
-                                                      next[idx] = { ...em, kind: e.target.value as any };
-                                                      setDraft({ ...draft, emails: next });
-                                                  }}
-                                                  className="px-2.5 h-8 hover:border-control-border-hover w-full bg-surface border border-control-border rounded-control text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring transition-colors"
-                                              >
-                                                  <option value="general">{emailKindLabel.general}</option>
-                                                  <option value="billing">{emailKindLabel.billing}</option>
-                                                  <option value="shipping">{emailKindLabel.shipping}</option>
-                                                  <option value="other">{emailKindLabel.other}</option>
-                                              </select>
-                                          </div>
-                                          <div className="col-span-5">
-                                              <label htmlFor={getInputId(field)} className="block text-xs font-semibold text-muted mb-1">E-Mail-Adresse{isRequiredEmail && requiredMark}</label>
-                                              <input
-                                                  id={getInputId(field)}
-                                                  value={em.email}
-                                                  required={isRequiredEmail}
-                                                  aria-required={isRequiredEmail ? 'true' : undefined}
-                                                  aria-invalid={errorMessage ? 'true' : undefined}
-                                                  aria-describedby={errorMessage ? getFieldErrorId(field) : undefined}
-                                                  onChange={(e) => {
-                                                      const next = [...(draft.emails ?? [])];
-                                                     next[idx] = { ...em, email: e.target.value };
-                                                     setDraft({ ...draft, emails: next });
-                                                 }}
-                                                  className={`w-full bg-surface border rounded-xl p-2 text-sm focus-visible:outline-2 focus-visible:outline-offset-2 transition-shadow ${errorMessage ? 'border-error focus-visible:outline-error' : 'border-control-border focus-visible:outline-focus-ring'}`}
-                                              />
-                                              {errorMessage && <p id={getFieldErrorId(field)} className="mt-1 text-xs font-medium text-error-text">{errorMessage}</p>}
-                                          </div>
-                                          </div>
-                                          <div className="flex flex-wrap items-center justify-between gap-2">
-                                              <div className="flex items-center gap-2">
-                                                  <span className="text-xs font-semibold text-muted uppercase tracking-wider">Standard</span>
-                                                  <button
-                                                      onClick={() => {
-                                                          const next = setOnlyOneFlag((draft.emails ?? []) as any, em.id, 'isDefaultBilling') as ClientEmail[];
-                                                          setDraft({ ...draft, emails: next });
-                                                      }}
-                                                      className={`px-3 py-1.5 rounded-control text-xs font-semibold border transition-colors ${
-                                                          em.isDefaultBilling ? 'bg-surface-inverse text-inverse-foreground border-surface-inverse' : 'bg-surface text-foreground border-control-border hover:bg-surface-muted'
-                                                      }`}
-                                                  >
-                                                      {em.isDefaultBilling && <Check size={14} className="inline-block -mt-0.5 mr-1" />}
-                                                      Rechnung
-                                                  </button>
-                                                  <button
-                                                      onClick={() => {
-                                                          const next = setOnlyOneFlag((draft.emails ?? []) as any, em.id, 'isDefaultGeneral') as ClientEmail[];
-                                                          setDraft({ ...draft, emails: next });
-                                                      }}
-                                                      className={`px-3 py-1.5 rounded-control text-xs font-semibold border transition-colors ${
-                                                          em.isDefaultGeneral ? 'bg-surface-inverse text-inverse-foreground border-surface-inverse' : 'bg-surface text-foreground border-control-border hover:bg-surface-muted'
-                                                      }`}
-                                                  >
-                                                      {em.isDefaultGeneral && <Check size={14} className="inline-block -mt-0.5 mr-1" />}
-                                                      Allgemein
-                                                  </button>
-                                              </div>
-                                              <button
-                                                  onClick={() => {
-                                                      const next = (draft.emails ?? []).filter((e) => e.id !== em.id);
-                                                      setDraft({ ...draft, emails: next });
-                                                  }}
-                                                  className="px-3 py-1.5 rounded-lg border border-error text-error-text hover:bg-error-bg text-xs font-semibold flex items-center gap-1.5 transition-colors"
-                                              >
-                                                  <Trash2 size={14} />
-                                                  Entfernen
-                                              </button>
-                                          </div>
-                                      </div>
-                                      );
-                                  })}
-                              </section>
-
-                              <section className="space-y-3">
-                                  <div className="flex items-center justify-between">
-                                      <div>
-                                          <h4 className="font-semibold text-sm">Adressen</h4>
-                                          <p className="text-xs text-muted mt-0.5">
-                                              Kategorie = Zweck. Standard = wird automatisch übernommen.
-                                          </p>
-                                      </div>
-                                      <button
-                                          onClick={() =>
-                                              setDraft({
-                                                  ...draft,
-                                                 addresses: [
-                                                     ...(draft.addresses ?? []),
-                                                     {
-                                                         id: uuidv4(),
-                                                         clientId: draft.id,
-                                                         label: 'Neu',
-                                                         kind: 'other',
-                                                         street: '',
-                                                         zip: '',
-                                                         city: '',
-                                                         country: 'DE',
-                                                     } as ClientAddress,
-                                                 ],
-                                             })
-                                         }
-                                         className="px-4 py-2 bg-surface-inverse text-inverse-foreground rounded-control text-xs font-semibold hover:bg-surface-inverse-raised transition-colors"
-                                     >
-                                         + Adresse
-                                      </button>
-                                  </div>
-
-                                  {(draft.addresses ?? []).map((ad, idx) => {
-                                      const addressRequired = Boolean(ad.isDefaultBilling);
-                                      const fieldError = (field: 'street' | 'zip' | 'city' | 'country') => {
-                                          const key = addressFieldKey(ad.id, field);
-                                          if (editorErrors[key]) return { key, message: editorErrors[key] };
-                                          if (idx === 0 && field === 'street' && editorErrors.addresses) {
-                                              return { key: 'addresses', message: editorErrors.addresses };
-                                          }
-                                          return undefined;
-                                      };
-                                      const streetError = fieldError('street');
-                                      const zipError = fieldError('zip');
-                                      const cityError = fieldError('city');
-                                      const countryError = fieldError('country');
-                                      return (
-                                      <div key={ad.id} className="p-4 bg-surface-muted rounded-2xl border border-border space-y-3">
-                                          <div className="grid grid-cols-12 gap-3">
-                                              <div className="col-span-4">
-                                                  <label className="block text-xs font-semibold text-muted mb-1" htmlFor="clientsview-bezeichnung-2">Bezeichnung</label>
-                                                  <input id="clientsview-bezeichnung-2"
-                                                     value={ad.label}
-                                                     onChange={(e) => {
-                                                         const next = [...(draft.addresses ?? [])];
-                                                         next[idx] = { ...ad, label: e.target.value };
-                                                         setDraft({ ...draft, addresses: next });
-                                                     }}
-                                                     className="px-2.5 h-8 hover:border-control-border-hover w-full bg-surface border border-control-border rounded-control text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring transition-colors"
-                                                 />
-                                              </div>
-                                              <div className="col-span-3">
-                                                  <label className="block text-xs font-semibold text-muted mb-1" htmlFor="clientsview-kategorie-2">Kategorie</label>
-                                                  <select id="clientsview-kategorie-2"
-                                                      value={ad.kind}
-                                                      onChange={(e) => {
-                                                          const next = [...(draft.addresses ?? [])];
-                                                          next[idx] = { ...ad, kind: e.target.value as any };
-                                                          setDraft({ ...draft, addresses: next });
-                                                      }}
-                                                      className="px-2.5 h-8 hover:border-control-border-hover w-full bg-surface border border-control-border rounded-control text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring transition-colors"
-                                                  >
-                                                      <option value="billing">{addressKindLabel.billing}</option>
-                                                      <option value="shipping">{addressKindLabel.shipping}</option>
-                                                      <option value="other">{addressKindLabel.other}</option>
-                                                  </select>
-                                              </div>
-                                              <div className="col-span-5 flex items-end justify-end gap-2">
-                                                  <button
-                                                      onClick={() => {
-                                                          const next = setOnlyOneFlag((draft.addresses ?? []) as any, ad.id, 'isDefaultBilling') as ClientAddress[];
-                                                          setDraft({ ...draft, addresses: next });
-                                                      }}
-                                                      className={`px-3 py-1.5 rounded-control text-xs font-semibold border transition-colors ${
-                                                          ad.isDefaultBilling ? 'bg-surface-inverse text-inverse-foreground border-surface-inverse' : 'bg-surface text-foreground border-control-border hover:bg-surface-muted'
-                                                      }`}
-                                                  >
-                                                      {ad.isDefaultBilling && <Check size={14} className="inline-block -mt-0.5 mr-1" />}
-                                                      Standard Rechnung
-                                                  </button>
-                                                  <button
-                                                      onClick={() => {
-                                                          const next = setOnlyOneFlag((draft.addresses ?? []) as any, ad.id, 'isDefaultShipping') as ClientAddress[];
-                                                          setDraft({ ...draft, addresses: next });
-                                                      }}
-                                                      className={`px-3 py-1.5 rounded-control text-xs font-semibold border transition-colors ${
-                                                          ad.isDefaultShipping ? 'bg-surface-inverse text-inverse-foreground border-surface-inverse' : 'bg-surface text-foreground border-control-border hover:bg-surface-muted'
-                                                      }`}
-                                                  >
-                                                      {ad.isDefaultShipping && <Check size={14} className="inline-block -mt-0.5 mr-1" />}
-                                                      Standard Lieferung
-                                                  </button>
-                                              </div>
-                                          </div>
-
-                                         <div className="grid grid-cols-12 gap-3">
-                                             <div className="col-span-6">
-                                                 <label htmlFor={getInputId(addressFieldKey(ad.id, 'street'))} className="block text-xs font-semibold text-muted mb-1">Straße{addressRequired && requiredMark}</label>
-                                                 <input
-                                                     id={getInputId(addressFieldKey(ad.id, 'street'))}
-                                                     value={ad.street}
-                                                     required={addressRequired}
-                                                     aria-required={addressRequired ? 'true' : undefined}
-                                                     aria-invalid={streetError ? 'true' : undefined}
-                                                     aria-describedby={streetError ? getFieldErrorId(streetError.key) : undefined}
-                                                     onChange={(e) => {
-                                                         const next = [...(draft.addresses ?? [])];
-                                                         next[idx] = { ...ad, street: e.target.value };
-                                                         setDraft({ ...draft, addresses: next });
-                                                     }}
-                                                     className={`w-full bg-surface border rounded-xl p-2 text-sm focus-visible:outline-2 focus-visible:outline-offset-2 transition-shadow ${streetError ? 'border-error focus-visible:outline-error' : 'border-control-border focus-visible:outline-focus-ring'}`}
-                                                 />
-                                                 {streetError && <p id={getFieldErrorId(streetError.key)} className="mt-1 text-xs font-medium text-error-text">{streetError.message}</p>}
-                                             </div>
-                                             <div className="col-span-6">
-                                                 <label className="block text-xs font-semibold text-muted mb-1" htmlFor="clientsview-zusatz">Zusatz</label>
-                                                 <input id="clientsview-zusatz"
-                                                     value={ad.line2 ?? ''}
-                                                     onChange={(e) => {
-                                                         const next = [...(draft.addresses ?? [])];
-                                                         next[idx] = { ...ad, line2: e.target.value };
-                                                         setDraft({ ...draft, addresses: next });
-                                                     }}
-                                                     className="px-2.5 h-8 hover:border-control-border-hover w-full bg-surface border border-control-border rounded-control text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring transition-colors"
-                                                 />
-                                             </div>
-                                             <div className="col-span-3">
-                                                 <label htmlFor={getInputId(addressFieldKey(ad.id, 'zip'))} className="block text-xs font-semibold text-muted mb-1">PLZ{addressRequired && requiredMark}</label>
-                                                 <input
-                                                     id={getInputId(addressFieldKey(ad.id, 'zip'))}
-                                                     value={ad.zip}
-                                                     required={addressRequired}
-                                                     aria-required={addressRequired ? 'true' : undefined}
-                                                     aria-invalid={zipError ? 'true' : undefined}
-                                                     aria-describedby={zipError ? getFieldErrorId(zipError.key) : undefined}
-                                                     onChange={(e) => {
-                                                         const next = [...(draft.addresses ?? [])];
-                                                         next[idx] = { ...ad, zip: e.target.value };
-                                                         setDraft({ ...draft, addresses: next });
-                                                     }}
-                                                     className={`w-full bg-surface border rounded-xl p-2 text-sm focus-visible:outline-2 focus-visible:outline-offset-2 transition-shadow ${zipError ? 'border-error focus-visible:outline-error' : 'border-control-border focus-visible:outline-focus-ring'}`}
-                                                 />
-                                                 {zipError && <p id={getFieldErrorId(zipError.key)} className="mt-1 text-xs font-medium text-error-text">{zipError.message}</p>}
-                                             </div>
-                                             <div className="col-span-5">
-                                                 <label htmlFor={getInputId(addressFieldKey(ad.id, 'city'))} className="block text-xs font-semibold text-muted mb-1">Stadt{addressRequired && requiredMark}</label>
-                                                 <input
-                                                     id={getInputId(addressFieldKey(ad.id, 'city'))}
-                                                     value={ad.city}
-                                                     required={addressRequired}
-                                                     aria-required={addressRequired ? 'true' : undefined}
-                                                     aria-invalid={cityError ? 'true' : undefined}
-                                                     aria-describedby={cityError ? getFieldErrorId(cityError.key) : undefined}
-                                                     onChange={(e) => {
-                                                         const next = [...(draft.addresses ?? [])];
-                                                         next[idx] = { ...ad, city: e.target.value };
-                                                         setDraft({ ...draft, addresses: next });
-                                                     }}
-                                                     className={`w-full bg-surface border rounded-xl p-2 text-sm focus-visible:outline-2 focus-visible:outline-offset-2 transition-shadow ${cityError ? 'border-error focus-visible:outline-error' : 'border-control-border focus-visible:outline-focus-ring'}`}
-                                                 />
-                                                 {cityError && <p id={getFieldErrorId(cityError.key)} className="mt-1 text-xs font-medium text-error-text">{cityError.message}</p>}
-                                             </div>
-                                             <div className="col-span-4">
-                                                 <label htmlFor={getInputId(addressFieldKey(ad.id, 'country'))} className="block text-xs font-semibold text-muted mb-1">Land{addressRequired && requiredMark}</label>
-                                                 <input
-                                                     id={getInputId(addressFieldKey(ad.id, 'country'))}
-                                                     value={ad.country}
-                                                     required={addressRequired}
-                                                     aria-required={addressRequired ? 'true' : undefined}
-                                                     aria-invalid={countryError ? 'true' : undefined}
-                                                     aria-describedby={countryError ? getFieldErrorId(countryError.key) : undefined}
-                                                     onChange={(e) => {
-                                                         const next = [...(draft.addresses ?? [])];
-                                                         next[idx] = { ...ad, country: e.target.value };
-                                                         setDraft({ ...draft, addresses: next });
-                                                     }}
-                                                     className={`w-full bg-surface border rounded-xl p-2 text-sm focus-visible:outline-2 focus-visible:outline-offset-2 transition-shadow ${countryError ? 'border-error focus-visible:outline-error' : 'border-control-border focus-visible:outline-focus-ring'}`}
-                                                 />
-                                                 {countryError && <p id={getFieldErrorId(countryError.key)} className="mt-1 text-xs font-medium text-error-text">{countryError.message}</p>}
-                                             </div>
-                                         </div>
-
-                                         <div className="flex justify-end">
-                                             <button
-                                                 onClick={() => {
-                                                     const next = (draft.addresses ?? []).filter((a) => a.id !== ad.id);
-                                                     setDraft({ ...draft, addresses: next });
-                                                 }}
-                                                 className="px-3 py-1.5 rounded-lg border border-error text-error-text hover:bg-error-bg text-xs font-semibold flex items-center gap-1.5 transition-colors"
-                                             >
-                                                 <Trash2 size={14} />
-                                                 Entfernen
-                                             </button>
-                                         </div>
-                                      </div>
-                                      );
-                                  })}
-                              </section>
-                          </div>
-
-                          <div className="p-6 border-t border-border bg-surface-muted rounded-b-2xl">
-                              {firstEditorError && (
-                                  <p id={saveErrorId} className="mb-3 text-right text-xs font-medium text-error-text">
-                                      {firstEditorError.message}
-                                  </p>
-                              )}
-                              <div className="flex justify-end gap-3">
-                              <button
-                                  onClick={closeEditor}
-                                  className="px-4 py-2 bg-surface border border-control-border text-foreground rounded-control text-xs font-semibold hover:bg-surface-muted transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
-                              >
-                                  Abbrechen
-                              </button>
-                              <button
-                                  onClick={() => void saveDraft()}
-                                  aria-describedby={firstEditorError ? saveErrorId : undefined}
-                                  className="px-4 py-2 bg-surface-inverse text-inverse-foreground rounded-control text-xs font-semibold hover:bg-surface-inverse-raised transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring-dark"
-                              >
-                                  Speichern
-                              </button>
-                              </div>
-                          </div>
-                      </div>
-                  </div>
-              ) : (
-                  <>
-             {selectedClientId ? (
-                 <DetailView />
-             ) : (
-             <>
-             <PageHeader
-               title="Kunden"
-               actions={
-                 <Button onClick={() => openEditor()}>
-                   <Plus size={16} aria-hidden="true" /> Neuer Kunde
-                 </Button>
-               }
-               toolbar={
-                 <>
-                   <div className="w-full sm:w-64">
-                     <Input
-                       type="search"
-                       aria-label="Kunden durchsuchen"
-                       placeholder="Kunden suchen"
-                       value={searchTerm}
-                       onChange={(e) => setSearchTerm(e.target.value)}
-                       prefix={<Search size={14} aria-hidden="true" />}
-                       fullWidth
-                     />
-                   </div>
-                   <SegmentedControl
-                     className="ml-auto"
-                     aria-label="Ansicht"
-                     value={viewMode}
-                     onChange={setViewMode}
-                     options={[
-                       { value: 'grid', label: <LayoutGrid size={16} aria-hidden="true" />, ariaLabel: 'Rasteransicht' },
-                       { value: 'list', label: <List size={16} aria-hidden="true" />, ariaLabel: 'Listenansicht' },
-                     ]}
-                   />
-                 </>
-               }
-             />
-             <div className="min-h-0 flex-1 rounded-card border border-border bg-surface p-5 lg:p-6 flex flex-col overflow-hidden">
-
-             {viewMode === 'grid' ? (
-                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3 overflow-y-auto p-0.5 pb-4">
-                     {isLoadingClients ? (
-                       <SkeletonLoader variant="card" count={6} />
-                     ) : isClientsError ? (
-                       <div className="col-span-full">
-                         <ErrorState
-                           title="Kunden konnten nicht geladen werden"
-                           description="Die Kundenliste ist nicht abrufbar. Es werden bewusst keine Ersatzdaten angezeigt."
-                           onRetry={() => void refetchClients()}
-                         />
-                       </div>
-                     ) : filteredClients.length === 0 ? (
-                       <EmptyState
-                         className="col-span-full"
-                         title={searchTerm.trim() ? 'Kein Kunde passt zu dieser Suche' : 'Noch keine Kunden angelegt'}
-                         description={
-                           searchTerm.trim()
-                             ? `Die Suche "${searchTerm.trim()}" schließt alle ${visibleClients.length} vorhandenen Kunden aus.`
-                             : 'Kunden sind die Empfänger deiner Rechnungen und Angebote. Lege den ersten Kunden über „Neuer Kunde“ oben rechts an, um Dokumente zu erstellen.'
-                         }
-                         action={
-                           searchTerm.trim() ? (
-                             <Button variant="secondary" size="sm" onClick={() => setSearchTerm('')}>
-                               Suche zurücksetzen
-                             </Button>
-                           ) : undefined
-                         }
-                       />
-                     ) : filteredClients.map((client) => (
-                         <button
-                            key={client.id}
-                            data-leaving={leavingIds.has(client.id) || undefined}
-                            type="button"
-                            onClick={() => setSelectedClientId(client.id)}
-                            className="group flex flex-col rounded-card bg-surface p-5 text-left shadow-xs transition-shadow hover:shadow-md focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
-                         >
-                             <div className="flex items-start justify-between gap-3">
-                                 <Avatar name={client.company} size="lg" />
-                                 <ArrowUpRight size={16} aria-hidden="true" className="ui-reveal text-muted" />
-                             </div>
-
-                             <h3 className="mt-4 text-section line-clamp-1">{client.company}</h3>
-                             <p className="text-sm text-muted line-clamp-1">{client.contactPerson || EMPTY_VALUE}</p>
-
-                             <div className="mt-4 flex items-center gap-2">
-                                 <Badge tone={client.status === 'active' ? 'success' : 'neutral'}>
-                                     {client.status === 'active' ? 'Aktiv' : 'Inaktiv'}
-                                 </Badge>
-                                 <span className="text-caption text-muted tabular-nums">
-                                     {countLabel(client.projects.length, 'Projekt', 'Projekte')}
-                                 </span>
-                             </div>
-                         </button>
-                     ))}
-                 </div>
-             ) : (
-                 <div className="flex-1 pb-4">
-                     {isLoadingClients ? (
-                       <SkeletonLoader variant="list" count={5} />
-                     ) : isClientsError ? (
-                       <ErrorState
-                         title="Kunden konnten nicht geladen werden"
-                         description="Die Kundenliste ist nicht abrufbar. Es werden bewusst keine Ersatzdaten angezeigt."
-                         onRetry={() => void refetchClients()}
-                       />
-                     ) : filteredClients.length === 0 ? (
-                       <EmptyState
-                         title={searchTerm.trim() ? 'Kein Kunde passt zu dieser Suche' : 'Noch keine Kunden angelegt'}
-                         description={
-                           searchTerm.trim()
-                             ? `Die Suche "${searchTerm.trim()}" schließt alle ${visibleClients.length} vorhandenen Kunden aus.`
-                             : 'Kunden sind die Empfänger deiner Rechnungen und Angebote. Lege den ersten Kunden über „Neuer Kunde“ oben rechts an, um Dokumente zu erstellen.'
-                         }
-                         action={
-                           searchTerm.trim() ? (
-                             <Button variant="secondary" size="sm" onClick={() => setSearchTerm('')}>
-                               Suche zurücksetzen
-                             </Button>
-                           ) : undefined
-                         }
-                       />
-                     ) : (
-                       <Table aria-label="Kunden">
-                         <TableHeader>
-                           <TableRow>
-                             <TableHead>Firma</TableHead>
-                             <TableHead className="hidden md:table-cell">E-Mail</TableHead>
-                             <TableHead className="hidden lg:table-cell">Telefon</TableHead>
-                             <TableHead>Status</TableHead>
-                             <TableHead numeric>Projekte</TableHead>
-                             <TableHead className="w-10"><span className="sr-only">Öffnen</span></TableHead>
-                           </TableRow>
-                         </TableHeader>
-                         <TableBody>
-                           {filteredClients.map((client) => (
-                             <TableRow key={client.id} data-leaving={leavingIds.has(client.id) || undefined} interactive aria-label={`${client.company} öffnen`} onClick={() => setSelectedClientId(client.id)}>
-                               <TableCell>
-                                 <div className="flex items-center gap-3">
-                                   <Avatar name={client.company} size="sm" />
-                                   <div className="min-w-0">
-                                     <h3 className="truncate font-medium">{client.company}</h3>
-                                     <p className="truncate text-caption text-muted">{client.contactPerson || EMPTY_VALUE}</p>
-                                   </div>
-                                 </div>
-                               </TableCell>
-                               <TableCell muted className="hidden max-w-56 truncate md:table-cell">{client.email || EMPTY_VALUE}</TableCell>
-                               <TableCell muted className="hidden tabular-nums lg:table-cell">{client.phone || EMPTY_VALUE}</TableCell>
-                               <TableCell>
-                                 <Badge tone={client.status === 'active' ? 'success' : 'neutral'}>
-                                   {client.status === 'active' ? 'Aktiv' : 'Inaktiv'}
-                                 </Badge>
-                               </TableCell>
-                               <TableCell numeric muted>{client.projects.length}</TableCell>
-                               <TableCell className="text-right">
-                                 <ArrowUpRight size={16} aria-hidden="true" className="ui-reveal inline text-muted" />
-                               </TableCell>
-                             </TableRow>
-                           ))}
-                         </TableBody>
-                       </Table>
-                     )}
-                 </div>
-              )}
-             </div>
-             </>
-             )}
-                  </>
-              )}
+                                    <div className="mt-3 flex items-center gap-2">
+                                        <Badge tone={client.status === 'active' ? 'success' : 'neutral'}>
+                                            {client.status === 'active' ? 'Aktiv' : 'Inaktiv'}
+                                        </Badge>
+                                        <span className="text-caption text-muted tabular-nums">
+                                            {countLabel(client.projects.length, 'Projekt', 'Projekte')}
+                                        </span>
+                                    </div>
+                                </button>
+                            ))}
+                        </div>
+                    ) : (
+                        <Table aria-label="Kunden">
+                            <TableHeader>
+                                <TableRow>
+                                    <TableHead>Name</TableHead>
+                                    <TableHead>Ort</TableHead>
+                                    <TableHead className="hidden lg:table-cell">E-Mail</TableHead>
+                                    <TableHead className="hidden md:table-cell">USt-IdNr.</TableHead>
+                                    <TableHead numeric>Offener Saldo</TableHead>
+                                    <TableHead>Steuer</TableHead>
+                                </TableRow>
+                            </TableHeader>
+                            <TableBody>
+                                {filteredClients.map((client) => {
+                                    const billing = defaultBillingAddress(client.addresses ?? []);
+                                    const place = billing ? [billing.zip, billing.city].filter(Boolean).join(' ') : '';
+                                    const country = (client.taxProfile?.countryCode || billing?.country || '').trim().toUpperCase();
+                                    const openBalance = openBalanceByClient.get(client.id) ?? 0;
+                                    return (
+                                        <TableRow key={client.id} data-leaving={leavingIds.has(client.id) || undefined} interactive aria-label={`${client.company} öffnen`} onClick={() => setSelectedClientId(client.id)}>
+                                            <TableCell>
+                                                <span className="flex items-center gap-2">
+                                                    <span className="truncate font-medium">{client.company}</span>
+                                                    {client.status !== 'active' && <Badge tone="neutral">Inaktiv</Badge>}
+                                                </span>
+                                            </TableCell>
+                                            <TableCell className="max-w-56 truncate">{place || client.address || EMPTY_VALUE}</TableCell>
+                                            <TableCell muted className="hidden max-w-56 truncate lg:table-cell">{client.email || EMPTY_VALUE}</TableCell>
+                                            <TableCell className="hidden tabular-nums md:table-cell">
+                                                {client.taxProfile?.vatId || <span className="text-caption text-muted">nicht hinterlegt</span>}
+                                            </TableCell>
+                                            <TableCell numeric>
+                                                {isLoadingInvoices || isInvoicesError
+                                                    ? EMPTY_VALUE
+                                                    : openBalance > 0
+                                                        ? formatCurrency(openBalance)
+                                                        : <span className="text-caption text-muted">ausgeglichen</span>}
+                                            </TableCell>
+                                            <TableCell>
+                                                {country.length === 2
+                                                    ? <Badge tone={country === 'DE' ? 'neutral' : 'info'}>{country === 'DE' ? 'Inland' : country}</Badge>
+                                                    : EMPTY_VALUE}
+                                            </TableCell>
+                                        </TableRow>
+                                    );
+                                })}
+                            </TableBody>
+                        </Table>
+                    )}
+                </>
+            )}
         </div>
     );
 };

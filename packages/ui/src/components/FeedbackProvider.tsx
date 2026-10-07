@@ -46,10 +46,10 @@ const getDuration = (kind: FeedbackKind, options: FeedbackOptions): number | nul
 const normalizedScope = (scope: string): string => scope.trim() || 'global';
 
 const FeedbackIcon: React.FC<{ kind: FeedbackKind }> = ({ kind }) => {
-  if (kind === 'progress') return <LoaderCircle size={16} className="shrink-0 text-inverse-muted motion-safe:animate-spin motion-reduce:animate-none" aria-hidden="true" />;
-  if (kind === 'error') return <XCircle size={16} className="shrink-0 text-error-inverse" aria-hidden="true" />;
-  if (kind === 'info') return <Info size={16} className="shrink-0 text-info-inverse" aria-hidden="true" />;
-  return <CheckCircle2 size={16} className="shrink-0 text-accent" aria-hidden="true" />;
+  if (kind === 'progress') return <LoaderCircle size={16} className="mt-px shrink-0 text-inverse-muted motion-safe:animate-spin motion-reduce:animate-none" aria-hidden="true" />;
+  if (kind === 'error') return <XCircle size={16} className="mt-px shrink-0 text-error-inverse" aria-hidden="true" />;
+  if (kind === 'info') return <Info size={16} className="mt-px shrink-0 text-info-inverse" aria-hidden="true" />;
+  return <CheckCircle2 size={16} className="mt-px shrink-0 text-accent" aria-hidden="true" />;
 };
 
 export const FeedbackProvider: React.FC<React.PropsWithChildren> = ({ children }) => {
@@ -209,7 +209,7 @@ export const FeedbackProvider: React.FC<React.PropsWithChildren> = ({ children }
                 className="pointer-events-auto w-full"
               >
                 <FeedbackIcon kind={entry.kind} />
-                <span className="min-w-0 flex-1 text-sm font-medium">{entry.message}</span>
+                <span className="min-w-0 flex-1 text-control font-medium">{entry.message}</span>
               </Toast>
             ))}
           </div>

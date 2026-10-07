@@ -39,13 +39,13 @@ export const ValidationSummary: React.FC<ValidationSummaryProps> = ({
   return (
     <div
       // Live-region contract: this summary is the single assertive form-error region; status feedback stays polite.
-      className={cn('mb-3 rounded-lg border border-error-border bg-error-bg p-3 text-sm text-error-text', className)}
+      className={cn('mb-3 rounded-control border border-error-border bg-error-bg px-3 py-2.5 text-error-text', className)}
       role="alert"
       aria-live="assertive"
       aria-atomic="true"
     >
-      <p className="font-semibold">{title}</p>
-      <ul className="mt-2 space-y-1">
+      <p className="text-control font-semibold">{title}</p>
+      <ul className="mt-1.5 space-y-0.5 text-control">
         {errors.map((error) => (
           <li key={error.id}>
             <button

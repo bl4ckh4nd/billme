@@ -1,6 +1,7 @@
 import { useState, type ReactElement } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
-import { Button, formatEmptyValue } from '@billme/ui';
+import { Button, Card, CardHeader, Select, formatEmptyValue } from '@billme/ui';
+import { useSettingsQuery } from '@billme/desktop-renderer/hooks/useSettings';
 import { AccountsView as SharedAccountsView } from '@billme/desktop-renderer/components/AccountsView';
 import { BankAccountModal } from './BankAccountModal';
 import { useAccountsQuery, useDeleteAccountMutation, useUpsertAccountMutation } from '../hooks/useAccounts';
@@ -9,6 +10,9 @@ import type { Account } from '../types';
 
 export function AccountsView(): ReactElement {
   const queryClient = useQueryClient();
+  // The nav entry that opens /accounts: "Bankabgleich" for EÜR, "Konten" otherwise (DashboardLayout).
+  const { data: settings } = useSettingsQuery();
+  const title = settings?.businessReportingProfile?.profitDetermination === 'eur' ? 'Bankabgleich' : 'Konten';
   const upsertAccount = useUpsertAccountMutation();
   const [mappingSaveAccountId, setMappingSaveAccountId] = useState<string | null>(null);
   const activeChart = useProActiveChart();
@@ -26,7 +30,7 @@ export function AccountsView(): ReactElement {
       const warningSuffix = result.warnings.length > 0 ? ` Hinweise: ${result.warnings[0]}` : '';
       setImportNotice(`SKR-Import abgeschlossen: ${result.inserted} neu, ${result.updated} aktualisiert.${warningSuffix}`);
     } catch (error) {
-      setImportNotice(`SKR-Import konnte nicht verarbeitet werden: ${String(error)}`);
+      setImportNotice(`SKR-Import konnte nicht verarbeitet werden: ${error instanceof Error ? error.message : String(error)}`);
     }
   };
 
@@ -43,7 +47,7 @@ export function AccountsView(): ReactElement {
       await upsertAccount.mutateAsync({ ...account, defaultSkrAccountNumber: nextNumber });
       await queryClient.invalidateQueries({ queryKey: ['accounts'] });
     } catch (error) {
-      reportError(`SKR-Zuordnung konnte nicht gespeichert werden: ${String(error)}`);
+      reportError(`SKR-Zuordnung konnte nicht gespeichert werden: ${error instanceof Error ? error.message : String(error)}`);
     } finally {
       setMappingSaveAccountId(null);
     }
@@ -51,23 +55,24 @@ export function AccountsView(): ReactElement {
 
   return (
     <SharedAccountsView<Account>
+      title={title}
       useAccountsQuery={useAccountsQuery}
       useDeleteAccountMutation={useDeleteAccountMutation}
       BankAccountModal={BankAccountModal}
       renderImportAccountMeta={(account) => (
-        <span className="text-sm text-muted">
+        <span className="text-control text-muted">
           Standard-SKR <span className="font-mono text-foreground">{formatEmptyValue(account.defaultSkrAccountNumber)}</span>
         </span>
       )}
       extraColumn={{
         header: `Standard-SKR (${activeChart})`,
         render: (account, reportError) => (
-          <select
+          <Select
             aria-label={`Standard-SKR-Konto für ${account.name}`}
             value={account.defaultSkrAccountNumber}
             disabled={ledgerAccounts.length === 0 || mappingSaveAccountId === account.id}
             onChange={(e) => void saveMapping(account, e.target.value, reportError)}
-            className="px-2.5 h-8 hover:border-control-border-hover rounded-control border border-control-border bg-surface text-xs font-mono tabular-nums disabled:opacity-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+            className="font-mono tabular-nums"
           >
             {ledgerAccounts.length === 0 ? (
               <option value={account.defaultSkrAccountNumber}>
@@ -79,26 +84,29 @@ export function AccountsView(): ReactElement {
                 {row.accountNumber}
               </option>
             ))}
-          </select>
+          </Select>
         ),
       }}
       footer={(
-        <section className="mt-8 rounded-card bg-surface-muted p-4" aria-labelledby="skr-import-heading">
-          <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
-            <div>
-              <h3 id="skr-import-heading" className="text-section text-foreground">SKR03/04 Kontenrahmen</h3>
-              <p className="mt-1 text-sm text-muted">Lädt den vollständigen Kontenrahmen in die Pro-Datenbank.</p>
-              <p className="mt-2 text-xs text-muted tabular-nums">{ledgerChartText}</p>
-            </div>
-            <Button variant="secondary" onClick={() => void handleImportSkr()} disabled={importSkr.isPending} aria-busy={importSkr.isPending}>
-              {importSkr.isPending ? 'Import läuft…' : (ledgerStats?.total ?? 0) > 0 ? 'Kontenrahmen aktualisieren' : 'SKR jetzt importieren'}
-            </Button>
-          </div>
-          {importNotice ? (
-            <p role="status" className={`mt-3 text-sm ${importSkr.isError ? 'text-error-text' : 'text-foreground'}`}>
-              {importNotice}
-            </p>
-          ) : null}
+        <section aria-labelledby="skr-import-heading">
+          <Card>
+            <CardHeader
+              as="h2"
+              title={<span id="skr-import-heading">SKR03/04 Kontenrahmen</span>}
+              subtitle="Lädt den vollständigen Kontenrahmen in die Pro-Datenbank."
+              actions={
+                <Button variant="secondary" size="sm" onClick={() => void handleImportSkr()} disabled={importSkr.isPending} aria-busy={importSkr.isPending}>
+                  {importSkr.isPending ? 'Import läuft…' : (ledgerStats?.total ?? 0) > 0 ? 'Kontenrahmen aktualisieren' : 'SKR jetzt importieren'}
+                </Button>
+              }
+            />
+            <p className="mt-2 text-caption text-muted tabular-nums">{ledgerChartText}</p>
+            {importNotice ? (
+              <p role="status" className={`mt-2 text-control ${importSkr.isError ? 'text-error-text' : 'text-foreground'}`}>
+                {importNotice}
+              </p>
+            ) : null}
+          </Card>
         </section>
       )}
     />

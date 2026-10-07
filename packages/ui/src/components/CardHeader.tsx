@@ -11,16 +11,18 @@ export interface CardHeaderProps {
   actions?: React.ReactNode;
   /** Heading level; cards on a page are sections, so h2 by default. */
   as?: 'h2' | 'h3';
+  /** lg: the 17px title of an overview card (Übersicht). */
+  size?: 'md' | 'lg';
   className?: string;
 }
 
-export const CardHeader: React.FC<CardHeaderProps> = ({ title, subtitle, count, actions, as: Heading = 'h2', className }) => (
+export const CardHeader: React.FC<CardHeaderProps> = ({ title, subtitle, count, actions, as: Heading = 'h2', size = 'md', className }) => (
   <div className={cn('flex flex-wrap items-start gap-x-3 gap-y-2', className)}>
     <div className="min-w-[12rem] flex-1">
-      <Heading className="text-section text-foreground">{title}</Heading>
+      <Heading className={size === 'lg' ? 'text-heading text-foreground' : 'text-section text-foreground'}>{title}</Heading>
       {subtitle && <p className="mt-0.5 text-caption text-muted">{subtitle}</p>}
     </div>
-    {count && <span className="shrink-0 whitespace-nowrap pt-0.5 text-label text-muted">{count}</span>}
+    {count && <span className="shrink-0 whitespace-nowrap pt-0.5 text-control text-muted">{count}</span>}
     {actions && <div className="flex shrink-0 items-center gap-1.5">{actions}</div>}
   </div>
 );

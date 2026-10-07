@@ -1,4 +1,5 @@
 import React from 'react';
+import { clsx } from 'clsx';
 import { cn } from '../utils/cn';
 
 export interface StepperProps {
@@ -16,13 +17,13 @@ export const Stepper: React.FC<StepperProps> = ({ steps, current, label, classNa
       <li
         key={step}
         aria-current={i === current ? 'step' : undefined}
-        className={cn(
-          'whitespace-nowrap rounded-full border px-2 py-0.5 text-caption font-medium',
+        className={clsx(
+          'whitespace-nowrap rounded-full border px-2 py-0.75 text-micro',
           i === current
             ? 'border-selected bg-selected font-semibold text-selected-foreground'
             : i < current
-              ? 'border-control-border bg-surface-sunken text-foreground'
-              : 'border-border bg-surface-sunken text-muted',
+              ? 'border-border-strong bg-surface-sunken font-medium text-foreground-secondary'
+              : 'border-border bg-surface-sunken font-medium text-muted',
         )}
       >
         {step}
@@ -48,7 +49,7 @@ export const Timeline: React.FC<{ entries: TimelineEntry[]; label: string; class
         <span aria-hidden="true" className={cn('ml-[3px] mt-[5px] size-[7px] rounded-full', dotTone[e.tone ?? 'neutral'])} />
         <span className="min-w-0">
           <span className="block text-caption text-foreground">{e.title}</span>
-          {e.meta && <span className="block text-[0.6875rem] text-muted">{e.meta}</span>}
+          {e.meta && <span className="block text-micro text-muted">{e.meta}</span>}
         </span>
       </li>
     ))}

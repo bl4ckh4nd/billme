@@ -64,6 +64,10 @@ export function shouldRetryNetworkError(error: unknown): boolean {
 export function isRetryableEmailError(error: unknown): boolean {
   if (error instanceof Error) {
     const msg = error.message.toLowerCase();
+    const responseCode = (error as Error & { responseCode?: number }).responseCode
+      ?? Number(msg.match(/\b([45]\d{2})\b/)?.[1]);
+    if (responseCode >= 400 && responseCode < 500) return true;
+    if (responseCode >= 500 && responseCode < 600) return false;
 
     if (msg.includes('timeout')) return true;
     if (msg.includes('econnrefused')) return true;
@@ -71,13 +75,11 @@ export function isRetryableEmailError(error: unknown): boolean {
     if (msg.includes('etimedout')) return true;
     if (msg.includes('network')) return true;
     if (msg.includes('socket')) return true;
-    if (msg.includes('5')) return true;
 
     if (msg.includes('authentication')) return false;
     if (msg.includes('credentials')) return false;
     if (msg.includes('invalid email')) return false;
     if (msg.includes('recipient')) return false;
-    if (msg.includes('4')) return false;
   }
 
   return false;

@@ -1,23 +1,23 @@
 import React, { useState, useRef } from 'react';
 import {
   Search, Plus, FileText,
-  Clock, ArrowLeft,
-  Share2, Check,
-  ChevronDown, ArrowUpRight,
+  ArrowLeft, Share2, ArrowUpRight,
   AlertTriangle, Mail, Gavel, CheckCircle, X,
-  Download, Printer, Send, Paperclip, MoreHorizontal, Calendar, User, RefreshCw, Link, ExternalLink, Trash2, LayoutTemplate, Edit3, Euro, ArrowRight
+  Download, Printer, Send, Paperclip, MoreHorizontal, RefreshCw, Link, ExternalLink, Trash2, LayoutTemplate, Edit3, Euro, ArrowRight
 } from 'lucide-react';
 import {
-  Badge, Button, Checkbox, ConfirmDialog, EMPTY_VALUE, EmptyState, ErrorState, IconButton, Input, Modal, PageHeader, SegmentedControl,
-  Table, TableBody, TableCell, TableHead, TableHeader, TableRow, formatEmptyValue, nextSort, useActionFeedback, type SortDirection,
+  Badge, Button, Card, CardHeader, Checkbox, ConfirmDialog, EMPTY_VALUE, EmptyState, ErrorState, HatchedProgress, IconButton, Input, Menu, Modal,
+  PageHeader, SegmentedControl, Select, Table, TableBody, TableCell, TableHead, TableHeader, TableRow, Textarea, Timeline, formatEmptyValue, nextSort,
+  cn, useActionFeedback, type SortDirection,
 } from '@billme/ui';
 import {
   getInvoiceDocumentLabel,
   isBillingDocumentKind,
   type Invoice,
+  type Offer,
   type InvoiceStatus,
 } from '@billme/desktop-core/types';
-import { useDeleteInvoiceMutation, useInvoicesQuery, useUpsertInvoiceMutation } from '../hooks/useInvoices';
+import { useDeleteInvoiceMutation, useInvoicesQuery, useUpsertInvoiceMutation, useInvoicePaymentMutation } from '../hooks/useInvoices';
 import { useDeleteOfferMutation, useOffersQuery, useUpsertOfferMutation } from '../hooks/useOffers';
 import { useSettingsQuery } from '../hooks/useSettings';
 import { formatDocumentHistoryAction } from '../documentHistory';
@@ -25,6 +25,7 @@ import { getRendererRuntime, ipc } from '../runtime-api';
 import type { IpcArgs } from '@billme/desktop-contracts/contract';
 import { useQueryClient } from '@tanstack/react-query';
 import { v4 as uuidv4 } from 'uuid';
+import { localIsoDate } from '@billme/desktop-utils';
 import { SkeletonLoader } from '../ui/components/SkeletonLoader';
 import {
   calculateDaysOverdue,
@@ -68,7 +69,7 @@ const getDunningBadge = (level: number | undefined) => {
 interface DocumentsViewProps {
   onOpenTemplates: () => void;
   onOpenRecurring: () => void;
-  onEditInvoice: (invoice: Invoice, type: 'invoice' | 'offer') => void;
+  onEditInvoice: (invoice: Invoice | Offer, type: 'invoice' | 'offer') => void;
   onCreateInvoice: (type: 'invoice' | 'offer') => void;
   initialDocumentType?: 'invoice' | 'offer';
   initialSelectedId?: string;
@@ -146,31 +147,10 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
   const [bulkDeleteReason, setBulkDeleteReason] = useState('');
   const [isBulkDeleting, setIsBulkDeleting] = useState(false);
 
-  // Detail toolbar overflow menu
-  const [isToolbarOverflowOpen, setIsToolbarOverflowOpen] = useState(false);
-  const toolbarOverflowRef = React.useRef<HTMLDivElement | null>(null);
-  React.useEffect(() => {
-    if (!isToolbarOverflowOpen) return;
-    const handler = (e: MouseEvent) => {
-      if (toolbarOverflowRef.current && !toolbarOverflowRef.current.contains(e.target as Node)) {
-        setIsToolbarOverflowOpen(false);
-      }
-    };
-    const keyHandler = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') setIsToolbarOverflowOpen(false);
-    };
-    document.addEventListener('mousedown', handler);
-    document.addEventListener('keydown', keyHandler);
-    return () => {
-      document.removeEventListener('mousedown', handler);
-      document.removeEventListener('keydown', keyHandler);
-    };
-  }, [isToolbarOverflowOpen]);
-
-
   // Payments (Invoice detail)
   const [isPaymentModalOpen, setIsPaymentModalOpen] = useState(false);
   const [editingPaymentId, setEditingPaymentId] = useState<string | null>(null);
+  const [newPaymentId, setNewPaymentId] = useState('');
   const [paymentForm, setPaymentForm] = useState({ date: '', amount: '', method: 'Überweisung' });
   const [paymentReason, setPaymentReason] = useState('');
   const [paymentError, setPaymentError] = useState<string | null>(null);
@@ -195,6 +175,7 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
     refetch: refetchInvoices,
   } = useInvoicesQuery();
   const upsertInvoice = useUpsertInvoiceMutation();
+  const invoicePayment = useInvoicePaymentMutation();
   const deleteInvoice = useDeleteInvoiceMutation();
   const {
     data: offers = [],
@@ -223,10 +204,18 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
   const dunningSettings = settings?.dunning;
   const portalSettings = settings?.portal;
 
-  const selectedDocument = currentData.find(i => i.id === selectedId);
+  const selectedInvoice = documentType === 'invoice' ? invoices.find(i => i.id === selectedId) : undefined;
+  const selectedOffer = documentType === 'offer' ? offers.find(i => i.id === selectedId) : undefined;
+  const selectedDocument = selectedInvoice ?? selectedOffer;
   React.useEffect(() => setNoteDraft(''), [selectedId]);
   const selectedChain = React.useMemo(() => {
-    if (documentType !== 'invoice' || !selectedDocument) return [];
+    if (!selectedDocument) return [];
+    if (documentType === 'offer') {
+      const roots = new Set(invoices
+        .filter((invoice) => invoice.sourceDocumentId === selectedDocument.id)
+        .map((invoice) => invoice.rootDocumentId ?? invoice.id));
+      return invoices.filter((invoice) => roots.has(invoice.rootDocumentId ?? invoice.id));
+    }
     const rootId = selectedDocument.rootDocumentId ?? selectedDocument.id;
     return invoices
       .filter((invoice) => (invoice.rootDocumentId ?? invoice.id) === rootId)
@@ -296,7 +285,7 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
     : [];
   const dueDunningCount = dunningPreview.filter((entry) => entry.due).length;
 
-  const sumPayments = (doc: Invoice | undefined) => {
+  const sumPayments = (doc: Pick<Invoice, 'payments'> | undefined) => {
     if (!doc) return 0;
     return (doc.payments ?? []).reduce((acc, p) => acc + (Number(p.amount) || 0), 0);
   };
@@ -344,7 +333,7 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
         await navigator.clipboard.writeText(url);
         notify('success', 'Zahllink kopiert!');
       } catch (error) {
-        notify('error', `Kopieren fehlgeschlagen: ${String(error)}`);
+        notify('error', `Kopieren fehlgeschlagen: ${error instanceof Error ? error.message : String(error)}`);
       }
     })();
   };
@@ -441,7 +430,7 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
     if (!selectedDocument || chainIssuePending) return;
     void (async () => {
       try {
-        const today = new Date().toISOString().split('T')[0] ?? '';
+        const today = localIsoDate();
         const reasonByAction: Record<ChainAction, string> = {
           order_confirmation: 'Auftragsbestätigung aus angenommenem Angebot erstellt',
           delivery_note: 'Lieferschein aus Auftragsbestätigung erstellt',
@@ -495,7 +484,7 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
           setChainIssuePending(false);
         }
       } catch (error) {
-        notify('error', `Dokument konnte nicht erstellt werden: ${String(error)}`);
+        notify('error', `Dokument konnte nicht erstellt werden: ${error instanceof Error ? error.message : String(error)}`);
       }
     })();
   };
@@ -579,22 +568,22 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
 
           // Update document history
           const historyEntry = {
-              date: new Date().toISOString().split('T')[0],
+              date: localIsoDate(),
               action: `Per E-Mail gesendet an ${emailData.to}`
           };
 
-          if (documentType === 'invoice') {
+          if (selectedInvoice) {
             upsertInvoice.mutate({
               invoice: {
-                ...selectedDocument,
+                ...selectedInvoice,
                 history: [historyEntry, ...(selectedDocument.history ?? [])],
               },
               reason: 'email_sent',
             });
-          } else {
+          } else if (selectedOffer) {
             upsertOffer.mutate({
               offer: {
-                ...selectedDocument,
+                ...selectedOffer,
                 history: [historyEntry, ...(selectedDocument.history ?? [])],
               },
               reason: 'email_sent',
@@ -612,7 +601,7 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
       if (!selectedDocument || documentType !== 'invoice' || selectedDocument.status !== 'draft') return;
 
       const historyEntry = {
-          date: new Date().toISOString().split('T')[0] ?? '',
+          date: localIsoDate(),
           action: 'Rechnung gestellt (Status: Offen)',
       };
 
@@ -630,7 +619,7 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
             notify('success', 'Rechnung als gestellt markiert');
           },
           onError: (error) => {
-            notify('error', `Finalisieren fehlgeschlagen: ${String(error)}`);
+            notify('error', `Finalisieren fehlgeschlagen: ${error instanceof Error ? error.message : String(error)}`);
           },
         },
       );
@@ -663,7 +652,7 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
             : summary,
         );
       } catch (error) {
-        notify('error', `Mahnlauf fehlgeschlagen: ${String(error)}`);
+        notify('error', `Mahnlauf fehlgeschlagen: ${error instanceof Error ? error.message : String(error)}`);
       } finally {
         setIsDunningProcessing(false);
       }
@@ -677,37 +666,37 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
       // history entry keeps runtimes that store history as-is in step.
       const reason = `${NOTE_PREFIX}${text}`;
       const history = [
-        { date: new Date().toISOString().split('T')[0] ?? '', action: reason },
+        { date: localIsoDate(), action: reason },
         ...(selectedDocument.history ?? []),
       ];
       const onSuccess = () => {
         setNoteDraft('');
         notify('success', 'Notiz im Verlauf gespeichert.');
       };
-      const onError = (error: unknown) => notify('error', `Notiz konnte nicht gespeichert werden: ${String(error)}`);
-      if (documentType === 'invoice') {
-        upsertInvoice.mutate({ invoice: { ...selectedDocument, history }, reason }, { onSuccess, onError });
-      } else {
-        upsertOffer.mutate({ offer: { ...selectedDocument, history }, reason }, { onSuccess, onError });
+      const onError = (error: unknown) => notify('error', `Notiz konnte nicht gespeichert werden: ${error instanceof Error ? error.message : String(error)}`);
+      if (selectedInvoice) {
+        upsertInvoice.mutate({ invoice: { ...selectedInvoice, history }, reason }, { onSuccess, onError });
+      } else if (selectedOffer) {
+        upsertOffer.mutate({ offer: { ...selectedOffer, history }, reason }, { onSuccess, onError });
       }
   };
 
   // Customers also accept by phone or mail; record that decision without the portal.
   const handleRecordOfferDecision = (decision: 'accepted' | 'declined') => {
-      if (!selectedDocument || documentType !== 'offer') return;
+      if (!selectedOffer) return;
       const reason = decision === 'accepted' ? 'Angebot manuell als angenommen markiert' : 'Angebot manuell als abgelehnt markiert';
       upsertOffer.mutate(
         {
           offer: {
-            ...selectedDocument,
+            ...selectedOffer,
             shareDecision: decision,
-            acceptedAt: decision === 'accepted' ? new Date().toISOString() : selectedDocument.acceptedAt,
+            acceptedAt: decision === 'accepted' ? new Date().toISOString() : selectedOffer.acceptedAt,
           },
           reason,
         },
         {
           onSuccess: () => notify('success', decision === 'accepted' ? 'Angebot als angenommen markiert.' : 'Angebot als abgelehnt markiert.'),
-          onError: (error: unknown) => notify('error', `Entscheidung konnte nicht gespeichert werden: ${String(error)}`),
+          onError: (error: unknown) => notify('error', `Entscheidung konnte nicht gespeichert werden: ${error instanceof Error ? error.message : String(error)}`),
         },
       );
   };
@@ -737,7 +726,7 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
       setIsCreatingReminder(true);
       const nextLevel = Math.min((invoice.dunningLevel || 0) + 1, 3);
       const historyEntry = {
-          date: new Date().toISOString().split('T')[0] ?? '',
+          date: localIsoDate(),
           action: `${reminderConfirmation.levelName} erstellt (+${formatCurrency(reminderConfirmation.fee)})`,
       };
       try {
@@ -752,7 +741,7 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
         setReminderConfirmation(null);
         notify('success', `${reminderConfirmation.levelName} für ${invoice.number} erstellt.`);
       } catch (error) {
-        notify('error', `Mahnung konnte nicht erstellt werden: ${String(error)}`);
+        notify('error', `Mahnung konnte nicht erstellt werden: ${error instanceof Error ? error.message : String(error)}`);
       } finally {
         setIsCreatingReminder(false);
       }
@@ -767,65 +756,58 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
         titleId="dunning-modal-title"
         descriptionId="dunning-modal-description"
         ariaBusy={isDunningProcessing}
-        className="max-w-2xl overflow-hidden flex flex-col max-h-[90vh]"
+        className="flex max-h-[84vh] flex-col overflow-hidden"
       >
-          <div className="p-6 border-b border-border flex justify-between items-center bg-surface-muted">
-              <div>
-                <h3 id="dunning-modal-title" className="text-xl font-semibold">Mahnlauf starten</h3>
-                <p id="dunning-modal-description" className="text-sm text-muted tabular-nums">{dueDunningCount} von {overdueInvoices.length} überfälligen Rechnungen erreichen eine neue Mahnstufe</p>
-              </div>
-              <button
-                type="button"
-                onClick={() => setIsDunningModalOpen(false)}
-                aria-label="Dialog schließen"
-                className="p-2 hover:bg-border-subtle rounded-full transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
-              >
-                <X size={20}/>
-              </button>
+          <div className="flex items-start gap-3 px-4.5 pt-4 pb-2.5">
+            <div className="min-w-0 flex-1">
+              <h3 id="dunning-modal-title" className="text-title text-foreground">Mahnlauf starten</h3>
+              <p id="dunning-modal-description" className="text-caption text-muted">{dueDunningCount} von {overdueInvoices.length} überfälligen Rechnungen erreichen eine neue Mahnstufe</p>
+            </div>
+            <IconButton aria-label="Dialog schließen" tooltip={false} onClick={() => setIsDunningModalOpen(false)}>
+              <X size={16} aria-hidden="true" />
+            </IconButton>
           </div>
 
-          <div className="p-6 overflow-y-auto flex-1 space-y-3">
+          <div className="flex-1 overflow-y-auto flex flex-col gap-3 px-4.5 pt-1 pb-4">
                {!settings?.automation.dunningEnabled && (
-                   <p role="alert" className="p-4 rounded-xl bg-warning-bg text-warning-text text-sm">
+                   <p role="alert" className="rounded-control border border-warning-border bg-warning-bg px-3 py-2.5 text-control text-warning-text">
                        Das Mahnwesen ist ausgeschaltet. Schalte es unter Einstellungen › Mahnwesen ein, dann versendet der Mahnlauf die Mahnungen per E-Mail.
                    </p>
                )}
                {dunningPreview.map(({ inv, level, due }) => (
-                   <div key={inv.id} className={`p-4 rounded-xl border-2 ${due ? 'border-foreground bg-surface-muted' : 'border-border bg-surface'}`}>
-                       <div className="flex justify-between items-center mb-2">
-                           <div className="flex items-center gap-3">
-                                <span className="font-semibold">{inv.number}</span>
-                                <span className="text-sm text-muted">{inv.client}</span>
+                   <div key={inv.id} className={`rounded-control border px-3 py-2.5 ${due ? 'border-border-strong bg-surface-muted' : 'border-border bg-surface'}`}>
+                       <div className="flex items-center justify-between gap-3">
+                           <div className="flex min-w-0 items-center gap-2">
+                                <span className="text-control font-semibold tabular-nums">{inv.number}</span>
+                                <span className="truncate text-caption text-muted">{inv.client}</span>
                            </div>
-                           <span className="font-semibold tabular-nums">{formatCurrency(inv.amount)}</span>
+                           <span className="text-control font-semibold tabular-nums">{formatCurrency(inv.amount)}</span>
                        </div>
-                       <div className="flex flex-wrap items-center gap-2 text-xs">
-                           <span className="bg-error-bg text-error-text px-2 py-1 rounded-sm font-semibold tabular-nums">Fällig seit {new Date(inv.dueDate).toLocaleDateString('de-DE')}</span>
+                       <div className="mt-1.5 flex flex-wrap items-center gap-2">
+                           <Badge tone="error">Fällig seit {new Date(inv.dueDate).toLocaleDateString('de-DE')}</Badge>
                            {due && level ? (
-                             <span className="bg-dark-base text-inverse-foreground px-2 py-1 rounded-sm font-semibold">{level.name}{level.fee > 0 ? ` (+${formatCurrency(level.fee)})` : ''} an {inv.clientEmail || 'keine E-Mail-Adresse'}</span>
+                             <Badge tone="warning">{level.name}{level.fee > 0 ? ` (+${formatCurrency(level.fee)})` : ''} an {inv.clientEmail || 'keine E-Mail-Adresse'}</Badge>
                            ) : (
-                             <span className="text-muted">{level ? `${level.name} bereits versendet` : 'Noch keine Mahnstufe erreicht'}</span>
+                             <span className="text-caption text-muted">{level ? `${level.name} bereits versendet` : 'Noch keine Mahnstufe erreicht'}</span>
                            )}
                        </div>
                    </div>
                ))}
                {overdueInvoices.length === 0 && (
                    <EmptyState
-                     className="rounded-xl bg-surface-muted border-0"
                      title="Keine überfälligen Rechnungen"
                      description="Der Mahnlauf kann nur Rechnungen anmahnen, deren Fälligkeit überschritten ist."
                    />
                )}
           </div>
 
-          <div className="p-6 border-t border-border bg-surface-muted flex justify-end gap-3">
+          <div className="flex flex-wrap justify-end gap-2 border-t border-border px-4.5 py-3">
               <Button variant="secondary" onClick={() => setIsDunningModalOpen(false)}>
                 Abbrechen
               </Button>
               <Button
                 onClick={() => void handleProcessDunningRun()}
                 disabled={dueDunningCount === 0 || !settings?.automation.dunningEnabled || isDunningProcessing}
-                size="md"
               >
                   {isDunningProcessing ? 'Wird gesendet ...' : `${dueDunningCount} ${dueDunningCount === 1 ? 'Mahnung' : 'Mahnungen'} per E-Mail senden`}
               </Button>
@@ -839,59 +821,47 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
       open={isEmailModalOpen}
       onClose={() => setIsEmailModalOpen(false)}
       titleId="email-modal-title"
-      className="max-w-lg overflow-hidden flex flex-col"
     >
-        <div className="p-6 border-b border-border flex justify-between items-center bg-surface-muted">
-            <h3 id="email-modal-title" className="text-lg font-semibold flex items-center gap-2"><Mail size={16}/> Per E-Mail senden</h3>
-            <button
-              type="button"
-              onClick={() => setIsEmailModalOpen(false)}
-              aria-label="Dialog schließen"
-              className="p-2 hover:bg-border-subtle rounded-full focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
-            >
-              <X size={16}/>
-            </button>
+        <div className="flex items-start gap-3 px-4.5 pt-4 pb-2.5">
+            <h3 id="email-modal-title" className="flex min-w-0 flex-1 items-center gap-2 text-title text-foreground"><Mail size={16} aria-hidden="true" /> Per E-Mail senden</h3>
+            <IconButton aria-label="Dialog schließen" tooltip={false} onClick={() => setIsEmailModalOpen(false)}>
+              <X size={16} aria-hidden="true" />
+            </IconButton>
         </div>
-        <div className="p-6 space-y-4">
-            <div>
-                <label htmlFor="email-recipient" className="block text-xs font-semibold text-muted mb-1">Empfänger</label>
-                <input
-                    id="email-recipient"
-                    type="email"
-                    value={emailData.to}
-                    onChange={e => setEmailData({...emailData, to: e.target.value})}
-                    className="px-3 h-10 hover:border-control-border-hover w-full bg-surface border border-control-border rounded-control text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
-                />
-            </div>
-            <div>
-                <label htmlFor="email-subject" className="block text-xs font-semibold text-muted mb-1">Betreff</label>
-                <input
-                    id="email-subject"
-                    type="text"
-                    value={emailData.subject}
-                    onChange={e => setEmailData({...emailData, subject: e.target.value})}
-                    className="px-3 h-10 hover:border-control-border-hover w-full bg-surface border border-control-border rounded-control text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
-                />
-            </div>
-            <div>
-                <label htmlFor="email-message" className="block text-xs font-semibold text-muted mb-1">Nachricht</label>
-                <textarea
-                    id="email-message"
-                    rows={6}
-                    value={emailData.message}
-                    onChange={e => setEmailData({...emailData, message: e.target.value})}
-                    className="px-3 py-2.5 hover:border-control-border-hover w-full bg-surface border border-control-border rounded-control text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring resize-none"
-                />
-            </div>
-            <div className="flex items-center gap-2 text-xs text-muted bg-surface-muted p-3 rounded-lg border border-border">
-                <Paperclip size={14} />
+        <div className="flex flex-col gap-3 px-4.5 pt-1 pb-4">
+            <Input
+                id="email-recipient"
+                label="Empfänger"
+                type="email"
+                fullWidth
+                value={emailData.to}
+                onChange={e => setEmailData({...emailData, to: e.target.value})}
+            />
+            <Input
+                id="email-subject"
+                label="Betreff"
+                type="text"
+                fullWidth
+                value={emailData.subject}
+                onChange={e => setEmailData({...emailData, subject: e.target.value})}
+            />
+            <Textarea
+                id="email-message"
+                label="Nachricht"
+                rows={6}
+                fullWidth
+                value={emailData.message}
+                onChange={e => setEmailData({...emailData, message: e.target.value})}
+            />
+            <div className="flex items-center gap-2 rounded-control border border-border bg-surface-muted px-3 py-2.5 text-caption text-muted">
+                <Paperclip size={14} aria-hidden="true" />
                 <span>Angehängt: {selectedDocument?.number}.pdf</span>
             </div>
         </div>
-        <div className="p-6 border-t border-border bg-surface-muted flex justify-end gap-3">
+        <div className="flex flex-wrap justify-end gap-2 border-t border-border px-4.5 py-3">
             <Button variant="secondary" onClick={() => setIsEmailModalOpen(false)}>Abbrechen</Button>
-            <Button onClick={handleSendEmail} size="md">
-                <Send size={16} /> Senden
+            <Button onClick={handleSendEmail}>
+                <Send size={16} aria-hidden="true" /> Senden
             </Button>
         </div>
     </Modal>
@@ -899,6 +869,7 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
 
   const renderPaymentModal = () => {
     const closePaymentModal = () => {
+      if (invoicePayment.isPending) return;
       setIsPaymentModalOpen(false);
       setEditingPaymentId(null);
       setPaymentError(null);
@@ -910,86 +881,76 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
         onClose={closePaymentModal}
         titleId="payment-modal-title"
         descriptionId="payment-modal-description"
-        className="max-w-lg overflow-hidden"
       >
-          <div className="flex items-center justify-between px-6 py-5 border-b border-border">
-            <div>
-              <h3 id="payment-modal-title" className="text-lg font-semibold text-foreground">
+          <div className="flex items-start gap-3 px-4.5 pt-4 pb-2.5">
+            <div className="min-w-0 flex-1">
+              <h3 id="payment-modal-title" className="text-title text-foreground">
                 {editingPaymentId ? 'Zahlung bearbeiten' : 'Zahlung erfassen'}
               </h3>
-              <p id="payment-modal-description" className="text-sm text-muted mt-1">Wird im Audit-Log gespeichert (GoBD).</p>
+              <p id="payment-modal-description" className="text-caption text-muted">Wird im Audit-Log gespeichert (GoBD).</p>
             </div>
-            <button
-              type="button"
-              onClick={closePaymentModal}
-              className="inline-flex size-8 shrink-0 items-center justify-center rounded-control text-muted transition-colors hover:bg-surface-sunken hover:text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
-              aria-label="Dialog schließen"
-            >
-              <X size={16} />
-            </button>
+            <IconButton aria-label="Dialog schließen" tooltip={false} onClick={closePaymentModal}>
+              <X size={16} aria-hidden="true" />
+            </IconButton>
           </div>
 
-          <div className="p-6 space-y-4">
-            <div className="grid grid-cols-2 gap-4">
-              <div>
-                <label className="block text-xs font-semibold text-muted mb-1" htmlFor="invoicesview-datum">Datum</label>
-                <input id="invoicesview-datum"
-                  type="date"
-                  value={paymentForm.date}
-                  onChange={(e) => setPaymentForm((p) => ({ ...p, date: e.target.value }))}
- className="px-3 h-10 hover:border-control-border-hover w-full bg-surface border border-control-border rounded-control text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
-                />
-              </div>
-              <div>
-                <label className="block text-xs font-semibold text-muted mb-1" htmlFor="invoicesview-betrag-eur">Betrag (EUR)</label>
-                <input id="invoicesview-betrag-eur"
-                  inputMode="decimal"
-                  value={paymentForm.amount}
-                  onChange={(e) => setPaymentForm((p) => ({ ...p, amount: e.target.value }))}
-                  placeholder="z.B. 250,00"
- className="px-3 h-10 hover:border-control-border-hover w-full bg-surface border border-control-border rounded-control text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
-                />
-              </div>
-            </div>
-
-            <div>
-              <label className="block text-xs font-semibold text-muted mb-1" htmlFor="invoicesview-methode">Methode</label>
-              <select id="invoicesview-methode"
-                value={paymentForm.method}
-                onChange={(e) => setPaymentForm((p) => ({ ...p, method: e.target.value }))}
- className="px-3 h-10 hover:border-control-border-hover w-full bg-surface border border-control-border rounded-control text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
-              >
-                <option value="Überweisung">Überweisung</option>
-                <option value="PayPal">PayPal</option>
-                <option value="Karte">Karte</option>
-                <option value="Bar">Bar</option>
-                <option value="Sonstiges">Sonstiges</option>
-              </select>
-            </div>
-
-            <div>
-              <label className="block text-xs font-semibold text-muted mb-1" htmlFor="invoicesview-grund-pflicht">Grund (Pflicht)</label>
-              <textarea id="invoicesview-grund-pflicht"
-                value={paymentReason}
-                onChange={(e) => {
-                  setPaymentReason(e.target.value);
-                  if (paymentError) setPaymentError(null);
-                }}
-                rows={3}
-                placeholder="z.B. Zahlungseingang Kontoauszug, Teilzahlung, ..."
- className="px-3 py-2.5 hover:border-control-border-hover w-full bg-surface border border-control-border rounded-control text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring resize-none"
+          <div className="flex flex-col gap-3 px-4.5 pt-1 pb-4">
+            <div className="grid grid-cols-2 gap-3">
+              <Input
+                id="invoicesview-datum"
+                label="Datum"
+                type="date"
+                fullWidth
+                value={paymentForm.date}
+                onChange={(e) => setPaymentForm((p) => ({ ...p, date: e.target.value }))}
+              />
+              <Input
+                id="invoicesview-betrag-eur"
+                label="Betrag (EUR)"
+                inputMode="decimal"
+                fullWidth
+                value={paymentForm.amount}
+                onChange={(e) => setPaymentForm((p) => ({ ...p, amount: e.target.value }))}
+                placeholder="z.B. 250,00"
               />
             </div>
 
-            {paymentError && <div className="text-sm font-semibold text-error-text">{paymentError}</div>}
+            <Select
+              id="invoicesview-methode"
+              label="Methode"
+              fullWidth
+              value={paymentForm.method}
+              onChange={(e) => setPaymentForm((p) => ({ ...p, method: e.target.value }))}
+            >
+              <option value="Überweisung">Überweisung</option>
+              <option value="PayPal">PayPal</option>
+              <option value="Karte">Karte</option>
+              <option value="Bar">Bar</option>
+              <option value="Sonstiges">Sonstiges</option>
+            </Select>
+
+            <Textarea
+              id="invoicesview-grund-pflicht"
+              label="Grund (Pflicht)"
+              fullWidth
+              value={paymentReason}
+              onChange={(e) => {
+                setPaymentReason(e.target.value);
+                if (paymentError) setPaymentError(null);
+              }}
+              rows={3}
+              placeholder="z.B. Zahlungseingang Kontoauszug, Teilzahlung, ..."
+            />
+
+            {paymentError && <div className="text-caption font-medium text-error-text">{paymentError}</div>}
           </div>
 
-          <div className="px-6 py-5 border-t border-border flex items-center justify-end gap-3">
-            <Button variant="secondary" onClick={closePaymentModal}>
+          <div className="flex flex-wrap justify-end gap-2 border-t border-border px-4.5 py-3">
+            <Button variant="secondary" disabled={invoicePayment.isPending} onClick={closePaymentModal}>
               Abbrechen
             </Button>
             <Button
-              variant="dark"
+              disabled={invoicePayment.isPending}
               onClick={() => {
                 if (!selectedDocument || documentType !== 'invoice') return;
 
@@ -1007,8 +968,8 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
 
                 const normalized = paymentForm.amount.replace(/\s/g, '').replace(',', '.');
                 const amount = Number(normalized);
-                if (!Number.isFinite(amount) || amount <= 0) {
-                  setPaymentError('Bitte einen gültigen Betrag > 0 eingeben.');
+                if (!Number.isFinite(amount) || amount === 0) {
+                  setPaymentError('Bitte einen Betrag ungleich null eingeben. Rückzahlungen sind negativ.');
                   return;
                 }
 
@@ -1017,23 +978,11 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
                   return;
                 }
 
-                const next: Invoice = {
-                  ...selectedDocument,
-                  payments: editingPaymentId
-                    ? (selectedDocument.payments ?? []).map((p) =>
-                        p.id === editingPaymentId
-                          ? { ...p, date, amount, method: paymentForm.method || 'Überweisung' }
-                          : p,
-                      )
-                    : [
-                        ...(selectedDocument.payments ?? []),
-                        { id: uuidv4(), date, amount, method: paymentForm.method || 'Überweisung' },
-                      ],
-                };
-
-                upsertInvoice.mutate(
-                  { invoice: next, reason: trimmedReason },
+                if (invoicePayment.isPending) return;
+                invoicePayment.mutate(
+                  { operation: 'save', args: { invoiceId: selectedDocument.id, payment: { id: editingPaymentId ?? newPaymentId, date, amount, method: paymentForm.method || 'Überweisung' }, expectedPayment: selectedDocument.payments?.find((payment) => payment.id === editingPaymentId), reason: trimmedReason } },
                   {
+                    onError: (error) => setPaymentError(error.message),
                     onSuccess: () => {
                       setIsPaymentModalOpen(false);
                       setEditingPaymentId(null);
@@ -1060,35 +1009,34 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
         onClose={cancelChainAmount}
         titleId="chain-amount-title"
         descriptionId="chain-amount-description"
-        className="max-w-md overflow-hidden"
       >
-          <div className="flex items-center justify-between border-b border-border px-6 py-5">
-            <div>
-              <h3 id="chain-amount-title" className="text-lg font-semibold text-foreground">{label} erstellen</h3>
-              <p id="chain-amount-description" className="mt-1 text-sm text-muted">Der Betrag wird als eigener, verknüpfter Beleg gespeichert.</p>
+          <div className="flex items-start gap-3 px-4.5 pt-4 pb-2.5">
+            <div className="min-w-0 flex-1">
+              <h3 id="chain-amount-title" className="text-title text-foreground">{label} erstellen</h3>
+              <p id="chain-amount-description" className="text-caption text-muted">Der Betrag wird als eigener, verknüpfter Beleg gespeichert.</p>
             </div>
-            <button type="button" onClick={cancelChainAmount} className="inline-flex size-8 shrink-0 items-center justify-center rounded-control text-muted transition-colors hover:bg-surface-sunken hover:text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring" aria-label="Dialog schließen">
-              <X size={16} />
-            </button>
+            <IconButton aria-label="Dialog schließen" tooltip={false} onClick={cancelChainAmount}>
+              <X size={16} aria-hidden="true" />
+            </IconButton>
           </div>
           <form onSubmit={(event) => { event.preventDefault(); confirmChainAmount(); }}>
-            <div className="space-y-2 p-6">
-              <label htmlFor="chain-amount" className="block text-xs font-semibold text-muted">Betrag (EUR)</label>
-              <input
+            <div className="flex flex-col gap-3 px-4.5 pt-1 pb-4">
+              <Input
                 id="chain-amount"
+                label="Betrag (EUR)"
                 autoFocus
                 inputMode="decimal"
+                fullWidth
                 value={chainAmountInput}
                 onChange={(event) => { setChainAmountInput(event.target.value); setChainAmountError(null); }}
                 aria-invalid={Boolean(chainAmountError)}
                 aria-describedby={chainAmountError ? 'chain-amount-error' : undefined}
-                className="px-3 h-10 hover:border-control-border-hover w-full rounded-control border border-control-border bg-surface text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
               />
-              {chainAmountError && <p id="chain-amount-error" role="alert" className="text-sm font-medium text-error-text">{chainAmountError}</p>}
+              {chainAmountError && <p id="chain-amount-error" role="alert" className="text-caption font-medium text-error-text">{chainAmountError}</p>}
             </div>
-            <div className="flex justify-end gap-3 border-t border-border bg-surface-muted p-6">
+            <div className="flex flex-wrap justify-end gap-2 border-t border-border px-4.5 py-3">
               <Button variant="secondary" type="button" onClick={cancelChainAmount}>Abbrechen</Button>
-              <Button type="submit" size="md">{label} erstellen</Button>
+              <Button type="submit">{label} erstellen</Button>
             </div>
           </form>
       </Modal>
@@ -1097,6 +1045,7 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
 
   const renderPaymentDeleteModal = () => {
     const closePaymentDelete = () => {
+      if (invoicePayment.isPending) return;
       setIsPaymentDeleteOpen(false);
       setDeletingPaymentId(null);
       setPaymentDeleteReason('');
@@ -1109,28 +1058,33 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
         onClose={closePaymentDelete}
         titleId="payment-delete-title"
         descriptionId="payment-delete-description"
-        className="max-w-lg p-6"
       >
-          <h3 id="payment-delete-title" className="text-lg font-semibold text-foreground mb-1">Zahlung löschen</h3>
-          <p id="payment-delete-description" className="text-sm text-muted mb-4">
-            Die Zahlung wird entfernt. Bitte Begründung angeben (GoBD).
-          </p>
+          <div className="flex items-start gap-3 px-4.5 pt-4 pb-2.5">
+            <div className="min-w-0 flex-1">
+              <h3 id="payment-delete-title" className="text-title text-foreground">Zahlung löschen</h3>
+              <p id="payment-delete-description" className="text-caption text-muted">
+                Die Zahlung wird entfernt. Bitte Begründung angeben (GoBD).
+              </p>
+            </div>
+          </div>
 
-          <label htmlFor="payment-delete-reason" className="text-xs font-semibold text-muted">Grund (Pflicht)</label>
-          <textarea
-            id="payment-delete-reason"
-            value={paymentDeleteReason}
-            onChange={(e) => {
-              setPaymentDeleteReason(e.target.value);
-              if (paymentDeleteError) setPaymentDeleteError(null);
-            }}
-            rows={3}
-            className="px-3 py-2.5 hover:border-control-border-hover mt-2 w-full rounded-control border border-control-border bg-surface text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
-            placeholder="z.B. falsch erfasst, Doppelbuchung, ..."
-          />
-          {paymentDeleteError && <div className="mt-2 text-sm font-semibold text-error-text">{paymentDeleteError}</div>}
+          <div className="flex flex-col gap-3 px-4.5 pt-1 pb-4">
+            <Textarea
+              id="payment-delete-reason"
+              label="Grund (Pflicht)"
+              fullWidth
+              value={paymentDeleteReason}
+              onChange={(e) => {
+                setPaymentDeleteReason(e.target.value);
+                if (paymentDeleteError) setPaymentDeleteError(null);
+              }}
+              rows={3}
+              placeholder="z.B. falsch erfasst, Doppelbuchung, ..."
+            />
+            {paymentDeleteError && <div className="text-caption font-medium text-error-text">{paymentDeleteError}</div>}
+          </div>
 
-          <div className="mt-6 flex items-center justify-end gap-3">
+          <div className="flex flex-wrap justify-end gap-2 border-t border-border px-4.5 py-3">
             <Button variant="secondary" onClick={closePaymentDelete}>
               Abbrechen
             </Button>
@@ -1152,14 +1106,11 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
                   return;
                 }
 
-                const next: Invoice = {
-                  ...selectedDocument,
-                  payments: (selectedDocument.payments ?? []).filter((p) => p.id !== deletingPaymentId),
-                };
-
-                upsertInvoice.mutate(
-                  { invoice: next, reason: trimmed },
+                if (invoicePayment.isPending) return;
+                invoicePayment.mutate(
+                  { operation: 'remove', args: { invoiceId: selectedDocument.id, expectedPayment: selectedDocument.payments!.find((payment) => payment.id === deletingPaymentId)!, reason: trimmed } },
                   {
+                    onError: (error) => setPaymentDeleteError(error.message),
                     onSuccess: () => {
                       setIsPaymentDeleteOpen(false);
                       setDeletingPaymentId(null);
@@ -1178,17 +1129,17 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
   };
 
   const renderSettingsGate = () => (
-    <div className="bg-surface rounded-panel p-6 lg:p-8 min-h-full shadow-xs flex flex-col">
-      {isSettingsError ? (
+    isSettingsError ? (
+      <Card padding="none">
         <ErrorState
           title="Einstellungen konnten nicht geladen werden"
           description="Steuersätze, Mahnstufen und Unternehmensdaten kommen aus den Einstellungen. Ohne sie können Rechnungen nicht korrekt berechnet werden."
           onRetry={() => void refetchSettings()}
         />
-      ) : (
-        <SkeletonLoader variant="list" count={5} />
-      )}
-    </div>
+      </Card>
+    ) : (
+      <SkeletonLoader variant="list" count={5} />
+    )
   );
 
   // --- Detail View ---
@@ -1198,157 +1149,163 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
   if (!settings) {
       return renderSettingsGate();
   }
-
   if (viewMode === 'detail' && selectedDocument) {
+      const paid = sumPayments(selectedDocument);
+      const grossAmount = Number(selectedDocumentTax?.grossAmount ?? selectedDocument.amount) || 0;
+      const remaining = Math.max(0, grossAmount - paid);
       return (
-          <div className="min-h-full px-1 pt-2 relative flex flex-col">
+          <div className="flex min-h-full flex-col">
 
               {renderEmailModal()}
               {renderPaymentModal()}
               {renderPaymentDeleteModal()}
               {renderChainAmountDialog()}
 
-              {/* Navigation & Title */}
-              <div className="flex flex-col xl:flex-row xl:items-center justify-between gap-6 mb-8 border-b border-border pb-8">
-                  <div className="flex items-start gap-4">
-                      <button
-                        onClick={() => setViewMode('list')}
-                        aria-label="Zurück zur Liste"
-                        className="inline-flex size-8 shrink-0 items-center justify-center rounded-control text-muted transition-colors hover:bg-surface-sunken hover:text-foreground shrink-0 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
-                      >
-                          <ArrowLeft size={16} />
-                      </button>
-                      <div>
-                           <div className="flex items-center gap-3 mb-1">
-                                <h1 className="text-title">
-                                    {selectedDocument.number}
-                                </h1>
-                                {getDunningBadge(selectedDocument.dunningLevel)}
-                           </div>
-                           <div className="flex items-center gap-3">
-                                <Badge status={selectedDocument.status} />
-                                {documentType === 'offer' ? (
-                                    <span className="bg-info-bg text-info-text px-2.5 py-1 rounded-full text-xs font-semibold uppercase tracking-wider">Angebot</span>
-                                ) : (
-                                    <span className="bg-surface-muted text-foreground px-2.5 py-1 rounded-full text-xs font-semibold uppercase tracking-wider">
-                                      {getInvoiceDocumentLabel(selectedDocument.documentKind)}
-                                    </span>
-                                )}
-                           </div>
-                      </div>
-                  </div>
+              <PageHeader
+                title={selectedDocument.number}
+                description={selectedDocument.client === MISSING_COUNTERPARTY ? undefined : selectedDocument.client}
+                back={{ label: 'Zurück zur Liste', onClick: () => setViewMode('list') }}
+                actions={
+                  <>
+                    <Menu
+                      aria-label="Weitere Aktionen"
+                      align="end"
+                      trigger={(props) => (
+                        <IconButton {...props} aria-label="Weitere Aktionen">
+                          <MoreHorizontal size={16} aria-hidden="true" />
+                        </IconButton>
+                      )}
+                      items={[
+                        {
+                          id: 'print',
+                          label: 'Drucken / PDF öffnen',
+                          icon: <Printer size={14} />,
+                          onSelect: () => {
+                            void (async () => {
+                              try {
+                                notify('progress', 'PDF wird erstellt...');
+                                const res = await ipc.pdf.export({ kind: documentType, id: selectedDocument.id });
+                                await ipc.shell.openPath({ path: res.path });
+                                notify('success', 'PDF geöffnet');
+                              } catch (e) {
+                                notify('error', `PDF Fehler: ${String(e)}`);
+                              }
+                            })();
+                          },
+                        },
+                        ...(documentType === 'invoice'
+                          ? [{ id: 'payment-link', label: 'Zahlungslink kopieren', icon: <Share2 size={14} />, onSelect: handleSharePaymentLink }]
+                          : []),
+                      ]}
+                    />
+                    <Button variant="secondary" onClick={() => onEditInvoice(selectedDocument, documentType)}>
+                      <Edit3 size={16} aria-hidden="true" /> Bearbeiten
+                    </Button>
+                    <Button variant="secondary" onClick={handleDownloadPdf} title="PDF herunterladen">
+                      <Download size={16} aria-hidden="true" /> PDF
+                    </Button>
+                    <Button onClick={handleOpenEmail}>
+                      <Mail size={16} aria-hidden="true" /> Senden
+                    </Button>
+                  </>
+                }
+                toolbar={
+                  <>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <Badge status={selectedDocument.status} />
+                      {documentType === 'offer' ? (
+                        <Badge tone="info">Angebot</Badge>
+                      ) : (
+                        <Badge tone="neutral">{getInvoiceDocumentLabel(selectedDocument.documentKind)}</Badge>
+                      )}
+                      {getDunningBadge(selectedDocument.dunningLevel)}
+                    </div>
 
-                  {/* Actions toolbar, tiered: primary, secondary, overflow */}
-                  <div className="flex flex-wrap items-center gap-2">
+                    <div className="ml-auto flex flex-wrap items-center gap-2">
                       {documentType === 'offer' && !selectedDocument.shareDecision && (
                         <>
-                          <Button variant="secondary" onClick={() => handleRecordOfferDecision('accepted')} size="md" disabled={upsertOffer.isPending} title="Kunde hat das Angebot angenommen (z. B. per Telefon oder E-Mail)">
-                            <CheckCircle size={16} /> Angenommen
+                          <Button variant="secondary" onClick={() => handleRecordOfferDecision('accepted')} disabled={upsertOffer.isPending} title="Kunde hat das Angebot angenommen (z. B. per Telefon oder E-Mail)">
+                            <CheckCircle size={16} aria-hidden="true" /> Angenommen
                           </Button>
-                          <Button variant="secondary" onClick={() => handleRecordOfferDecision('declined')} size="md" disabled={upsertOffer.isPending} title="Kunde hat das Angebot abgelehnt">
+                          <Button variant="secondary" onClick={() => handleRecordOfferDecision('declined')} disabled={upsertOffer.isPending} title="Kunde hat das Angebot abgelehnt">
                             Abgelehnt
                           </Button>
-                          <div className="w-px h-6 bg-border-subtle mx-1" />
                         </>
                       )}
 
-                      {/* Convert to invoice: the prominent CTA for accepted offers */}
                       {documentType === 'offer' && selectedDocument.shareDecision === 'accepted' && (
                         <>
                           <Button
                             variant="secondary"
                             onClick={() => handleCreateChainDocument('order_confirmation')}
-                            size="md"
                             disabled={chainIssuePending}
                             title="Auftragsbestätigung aus angenommenem Angebot erstellen"
                           >
-                            <FileText size={16} />
+                            <FileText size={16} aria-hidden="true" />
                             Auftragsbestätigung
                           </Button>
                           <Button
                             variant="secondary"
                             onClick={handleConvertOfferToInvoice}
-                            size="md"
                             title="Angebot in Rechnung umwandeln"
                           >
-                            <ArrowRight size={16} />
+                            <ArrowRight size={16} aria-hidden="true" />
                             In Rechnung umwandeln
                           </Button>
-                          <div className="w-px h-6 bg-border-subtle mx-1" />
                         </>
                       )}
 
                       {documentType === 'invoice' && selectedDocument.documentKind === 'order_confirmation' && (
                         <>
-                          <Button variant="secondary" onClick={() => handleCreateChainDocument('delivery_note')} size="md" disabled={chainIssuePending} title="Lieferschein aus Auftragsbestätigung erstellen">
-                            <FileText size={16} /> Lieferschein
+                          <Button variant="secondary" onClick={() => handleCreateChainDocument('delivery_note')} disabled={chainIssuePending} title="Lieferschein aus Auftragsbestätigung erstellen">
+                            <FileText size={16} aria-hidden="true" /> Lieferschein
                           </Button>
-                          <Button variant="secondary" onClick={() => handleCreateChainDocument('advance_invoice')} size="md" disabled={chainIssuePending} title="Abschlagsrechnung erstellen">
-                            <Euro size={16} /> Abschlag
+                          <Button variant="secondary" onClick={() => handleCreateChainDocument('advance_invoice')} disabled={chainIssuePending} title="Abschlagsrechnung erstellen">
+                            <Euro size={16} aria-hidden="true" /> Abschlag
                           </Button>
-                          <Button variant="secondary" onClick={() => handleCreateChainDocument('partial_invoice')} size="md" disabled={chainIssuePending} title="Teilrechnung erstellen">
-                            <Euro size={16} /> Teilrechnung
+                          <Button variant="secondary" onClick={() => handleCreateChainDocument('partial_invoice')} disabled={chainIssuePending} title="Teilrechnung erstellen">
+                            <Euro size={16} aria-hidden="true" /> Teilrechnung
                           </Button>
-                          <Button variant="secondary" onClick={() => handleCreateChainDocument('final_invoice')} size="md" disabled={chainIssuePending} title="Schlussrechnung erstellen">
-                            <CheckCircle size={16} /> Schlussrechnung
+                          <Button variant="secondary" onClick={() => handleCreateChainDocument('final_invoice')} disabled={chainIssuePending} title="Schlussrechnung erstellen">
+                            <CheckCircle size={16} aria-hidden="true" /> Schlussrechnung
                           </Button>
-                          <div className="w-px h-6 bg-border-subtle mx-1" />
                         </>
                       )}
 
                       {documentType === 'invoice' && isBillingDocumentKind(selectedDocument.documentKind) && selectedDocument.status !== 'draft' && (
                         <>
-                          <Button variant="secondary" onClick={() => handleCreateChainDocument('credit_note')} size="md" disabled={chainIssuePending} title="Gutschrift aus dieser Rechnung erstellen">
-                            <ArrowLeft size={16} /> Gutschrift
+                          <Button variant="secondary" onClick={() => handleCreateChainDocument('credit_note')} disabled={chainIssuePending} title="Gutschrift aus dieser Rechnung erstellen">
+                            <ArrowLeft size={16} aria-hidden="true" /> Gutschrift
                           </Button>
-                          <Button variant="secondary" onClick={() => handleCreateChainDocument('cancellation_invoice')} size="md" disabled={chainIssuePending} title="Stornorechnung aus dieser Rechnung erstellen">
-                            <RefreshCw size={16} /> Storno
+                          <Button variant="secondary" onClick={() => handleCreateChainDocument('cancellation_invoice')} disabled={chainIssuePending} title="Stornorechnung aus dieser Rechnung erstellen">
+                            <RefreshCw size={16} aria-hidden="true" /> Storno
                           </Button>
-                          <Button variant="secondary" onClick={() => handleCreateChainDocument('revision')} size="md" disabled={chainIssuePending} title="Neue Revision aus dieser Rechnung erstellen">
-                            <FileText size={16} /> Revision
+                          <Button variant="secondary" onClick={() => handleCreateChainDocument('revision')} disabled={chainIssuePending} title="Neue Revision aus dieser Rechnung erstellen">
+                            <FileText size={16} aria-hidden="true" /> Revision
                           </Button>
-                          <div className="w-px h-6 bg-border-subtle mx-1" />
                         </>
                       )}
 
-                      {/* PRIMARY: labeled action buttons */}
-                      <Button variant="secondary" onClick={() => onEditInvoice(selectedDocument, documentType)}>
-                        <Edit3 size={16} aria-hidden="true" /> Bearbeiten
-                      </Button>
-                      <Button onClick={handleOpenEmail} size="md">
-                        <Mail size={16} /> Senden
-                      </Button>
-                      <Button variant="secondary" onClick={handleDownloadPdf} title="PDF herunterladen">
-                        <Download size={16} aria-hidden="true" /> PDF
-                      </Button>
-
-                      {/* SECONDARY: icon buttons */}
-                      <div className="w-px h-6 bg-border-subtle mx-1" />
-
                       {documentType === 'invoice' && selectedDocument.status === 'draft' && (
-                        <button
+                        <IconButton
+                          variant="secondary"
                           onClick={handleFinalizeDraftInvoice}
-                          className="inline-flex size-8 shrink-0 items-center justify-center rounded-control text-muted transition-colors hover:bg-surface-sunken hover:text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
-                          title="Als gestellt markieren (Entwurf → Offen)"
+                          tooltip="Als gestellt markieren (Entwurf → Offen)"
                           aria-label="Als gestellt markieren (Entwurf zu Offen)"
                         >
-                          <CheckCircle size={16} />
-                        </button>
+                          <CheckCircle size={16} aria-hidden="true" />
+                        </IconButton>
                       )}
 
                       {documentType === 'offer' && getRendererRuntime().shell !== 'web' && (
-                        <>
-                          {!selectedDocument.shareToken ? (
-                            <button
-                              onClick={handlePublishOffer}
-                              className="h-10 px-3 bg-surface-inverse text-inverse-foreground rounded-control font-semibold text-xs transition-colors flex items-center gap-1.5 hover:bg-surface-inverse-raised"
-                              title="Öffentlichen Link erzeugen"
-                            >
-                              <Link size={14} /> Veröffentlichen
-                            </button>
-                          ) : (
-                            <>
-                              <button
+                        !selectedDocument.shareToken ? (
+                          <Button variant="secondary" onClick={handlePublishOffer} title="Öffentlichen Link erzeugen">
+                            <Link size={16} aria-hidden="true" /> Veröffentlichen
+                          </Button>
+                        ) : (
+                          <>
+                            <IconButton
+                              variant="secondary"
                                 onClick={async () => {
                                   if (!selectedDocument.shareToken) return;
                                   const baseUrl = portalSettings?.baseUrl?.trim();
@@ -1360,193 +1317,131 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
                                     await navigator.clipboard.writeText(`${baseUrl.replace(/\/+$/, '')}/offers/${selectedDocument.shareToken}`);
                                     notify('success', 'Link kopiert!');
                                   } catch (error) {
-                                    notify('error', `Kopieren fehlgeschlagen: ${String(error)}`);
+                                    notify('error', `Kopieren fehlgeschlagen: ${error instanceof Error ? error.message : String(error)}`);
                                   }
                                 }}
-                                className="inline-flex size-8 shrink-0 items-center justify-center rounded-control text-muted transition-colors hover:bg-surface-sunken hover:text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
-                                title="Link kopieren"
-                                aria-label="Angebotslink kopieren"
-                              >
-                                <Link size={16} />
-                              </button>
-                              <button
-                                onClick={handleOpenOfferLink}
-                                className="inline-flex size-8 shrink-0 items-center justify-center rounded-control text-muted transition-colors hover:bg-surface-sunken hover:text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
-                                title="Im Browser öffnen"
-                                aria-label="Angebot im Browser öffnen"
-                              >
-                                <ExternalLink size={16} />
-                              </button>
-                              <button
-                                onClick={handleSyncOfferDecision}
-                                className="inline-flex size-8 shrink-0 items-center justify-center rounded-control text-muted transition-colors hover:bg-surface-sunken hover:text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
-                                title="Portal-Status synchronisieren"
-                                aria-label="Portal-Status synchronisieren"
-                              >
-                                <RefreshCw size={16} />
-                              </button>
-                            </>
-                          )}
-                        </>
+                              tooltip="Link kopieren"
+                              aria-label="Angebotslink kopieren"
+                            >
+                              <Link size={16} aria-hidden="true" />
+                            </IconButton>
+                            <IconButton
+                              variant="secondary"
+                              onClick={handleOpenOfferLink}
+                              tooltip="Im Browser öffnen"
+                              aria-label="Angebot im Browser öffnen"
+                            >
+                              <ExternalLink size={16} aria-hidden="true" />
+                            </IconButton>
+                            <IconButton
+                              variant="secondary"
+                              onClick={handleSyncOfferDecision}
+                              aria-label="Portal-Status synchronisieren"
+                            >
+                              <RefreshCw size={16} aria-hidden="true" />
+                            </IconButton>
+                          </>
+                        )
                       )}
+                    </div>
+                  </>
+                }
+              />
 
-                      {/* OVERFLOW: rarely-used actions */}
-                      <div ref={toolbarOverflowRef} className="relative">
-                        <button
-                          onClick={() => setIsToolbarOverflowOpen((v) => !v)}
-                          aria-expanded={isToolbarOverflowOpen}
-                          className="inline-flex size-8 shrink-0 items-center justify-center rounded-control text-muted transition-colors hover:bg-surface-sunken hover:text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
-                          title="Weitere Aktionen"
-                          aria-haspopup="menu"
-                          aria-label="Weitere Aktionen"
-                        >
-                          <MoreHorizontal size={16} />
-                        </button>
-                        {isToolbarOverflowOpen && (
-                          <div role="menu" aria-label="Weitere Aktionen" className="absolute right-0 top-full mt-1 bg-surface rounded-2xl shadow-xl p-1.5 z-[var(--z-dropdown)] min-w-[180px]">
-                            <button role="menuitem"
-                              onClick={() => {
-                                setIsToolbarOverflowOpen(false);
-                                if (!selectedDocument) return;
-                                void (async () => {
-                                  try {
-                                    notify('progress', 'PDF wird erstellt...');
-                                    const res = await ipc.pdf.export({ kind: documentType, id: selectedDocument.id });
-                                    await ipc.shell.openPath({ path: res.path });
-                                    notify('success', 'PDF geöffnet');
-                                  } catch (e) {
-                                    notify('error', `PDF Fehler: ${String(e)}`);
-                                  }
-                                })();
-                              }}
-                              className="w-full text-left px-3 py-2 text-sm text-foreground hover:bg-surface-muted rounded-xl flex items-center gap-2 transition-colors"
-                            >
-                              <Printer size={14} /> Drucken / PDF öffnen
-                            </button>
-                            {documentType === 'invoice' && (
-                            <button role="menuitem"
-                              onClick={() => { setIsToolbarOverflowOpen(false); handleSharePaymentLink(); }}
-                              className="w-full text-left px-3 py-2 text-sm text-foreground hover:bg-surface-muted rounded-xl flex items-center gap-2 transition-colors"
-                            >
-                              <Share2 size={14} /> Zahlungslink kopieren
-                            </button>
-                            )}
+              <div className="grid grid-cols-1 items-start gap-3.5 xl:grid-cols-[minmax(0,1.5fr)_minmax(0,1fr)]">
+
+                  {/* Left column: document summary */}
+                  <Card padding="none" className="min-w-0">
+                      <div className="flex flex-col justify-between gap-4 border-b border-border p-3.5 md:flex-row">
+                          <div className="min-w-0">
+                              <p className="text-eyebrow uppercase text-muted">Empfänger</p>
+                              <p className="mt-1 text-section text-foreground">{selectedDocument.client}</p>
+                              <p className="mt-0.5 whitespace-pre-line text-control text-muted">
+                                  {selectedDocument.clientAddress || selectedDocument.clientEmail}
+                              </p>
                           </div>
-                        )}
-                      </div>
-                  </div>
-              </div>
-      <div className="min-h-0 flex-1 rounded-card border border-border bg-surface p-5 lg:p-6 relative">
-
-              {/* Main Content Layout */}
-              <div className="grid grid-cols-1 xl:grid-cols-3 gap-8">
-
-                  {/* Left Column: Document Preview */}
-                  <div className="xl:col-span-2 space-y-6">
-                       <div className="bg-surface-muted rounded-xl p-8 border border-border">
-
-                          {/* Meta Header */}
-                          <div className="flex flex-col md:flex-row justify-between gap-8 mb-10 pb-8 border-b border-border border-dashed">
+                          <div className="flex gap-6">
                               <div>
-                                  <p className="text-xs font-semibold text-muted uppercase tracking-widest mb-2 flex items-center gap-1">
-                                      <User size={12}/> Empfänger
-                                  </p>
-                                  <p className="font-semibold text-foreground text-lg">{selectedDocument.client}</p>
-                                  <p className="text-sm text-muted whitespace-pre-line leading-relaxed mt-1">
-                                      {selectedDocument.clientAddress || selectedDocument.clientEmail}
+                                  <p className="text-eyebrow uppercase text-muted">Datum</p>
+                                  <p className="mt-1 text-control font-semibold tabular-nums text-foreground">{formatDate(selectedDocument.date)}</p>
+                              </div>
+                              <div>
+                                  <p className="text-eyebrow uppercase text-muted">{documentType === 'offer' ? 'Gültig bis' : 'Fällig'}</p>
+                                  <p className={`mt-1 text-control font-semibold tabular-nums ${selectedDocument.status === 'overdue' ? 'text-error-text' : 'text-foreground'}`}>
+                                      {formatDate(selectedDocument.dueDate)}
                                   </p>
                               </div>
-                              <div className="flex gap-8">
-                                  <div>
-                                      <p className="text-xs font-semibold text-muted uppercase tracking-widest mb-2 flex items-center gap-1">
-                                          <Calendar size={12}/> Datum
-                                      </p>
-                                      <p className="tabular-nums font-semibold text-foreground">{formatDate(selectedDocument.date)}</p>
-                                  </div>
-                                  <div>
-                                      <p className="text-xs font-semibold text-muted uppercase tracking-widest mb-2 flex items-center gap-1">
-                                          <Clock size={12}/> {documentType === 'offer' ? 'Gültig bis' : 'Fällig'}
-                                      </p>
-                                      <p className={`tabular-nums font-semibold ${selectedDocument.status === 'overdue' ? 'text-error-text' : 'text-foreground'}`}>
-                                          {formatDate(selectedDocument.dueDate)}
-                                      </p>
-                                  </div>
-                              </div>
                           </div>
+                      </div>
 
-                          {/* Items Table */}
-                          <div className="mb-8">
-                              <Table aria-label="Positionen" bare>
-                                  <TableHeader>
-                                      <TableRow>
-                                          <TableHead>Beschreibung</TableHead>
-                                          <TableHead numeric>Menge</TableHead>
-                                          <TableHead numeric>Einzel</TableHead>
-                                          <TableHead numeric>Gesamt</TableHead>
-                                      </TableRow>
-                                  </TableHeader>
-                                  <TableBody>
-                                      {selectedDocument.items.map((item, i) => (
-                                          <TableRow key={i}>
-                                              <TableCell className="font-medium">{item.description}</TableCell>
-                                              <TableCell numeric muted>{item.quantity}</TableCell>
-                                              <TableCell numeric muted>{formatCurrency(item.price)}</TableCell>
-                                              <TableCell numeric className="font-medium">{formatCurrency(item.total)}</TableCell>
-                                          </TableRow>
-                                      ))}
-                                  </TableBody>
-                              </Table>
-                          </div>
+                      <Table aria-label="Positionen" bare>
+                          <TableHeader>
+                              <TableRow>
+                                  <TableHead>Beschreibung</TableHead>
+                                  <TableHead numeric>Menge</TableHead>
+                                  <TableHead numeric>Einzel</TableHead>
+                                  <TableHead numeric>Gesamt</TableHead>
+                              </TableRow>
+                          </TableHeader>
+                          <TableBody>
+                              {selectedDocument.items.map((item, i) => (
+                                  <TableRow key={i}>
+                                      <TableCell className="font-medium">{item.description}</TableCell>
+                                      <TableCell numeric muted>{item.quantity}</TableCell>
+                                      <TableCell numeric muted>{formatCurrency(item.price)}</TableCell>
+                                      <TableCell numeric className="font-medium">{formatCurrency(item.total)}</TableCell>
+                                  </TableRow>
+                              ))}
+                          </TableBody>
+                      </Table>
 
-                          {/* Totals & Notes */}
-                          <div className="flex flex-col md:flex-row justify-between items-start gap-8 border-t border-border border-dashed pt-8">
-                               <div className="flex-1">
-                                   <p className="text-xs font-semibold text-foreground mb-2">Hinweis</p>
-                                   <p className="text-xs text-muted leading-relaxed max-w-sm">
-                                       {documentType === 'offer'
-                                         ? `Dieses Angebot ist gültig bis ${formatDate(selectedDocument.dueDate)}.`
-                                         : `Bitte überweisen Sie den fälligen Betrag bis ${formatDate(selectedDocument.dueDate)} auf das unten angegebene Konto.`}
-                                   </p>
+                      <div className="flex flex-col items-start justify-between gap-4 border-t border-border p-3.5 md:flex-row">
+                           <div className="min-w-0 flex-1">
+                               <p className="text-eyebrow uppercase text-muted">Hinweis</p>
+                               <p className="mt-1 max-w-sm text-caption text-muted">
+                                   {documentType === 'offer'
+                                     ? `Dieses Angebot ist gültig bis ${formatDate(selectedDocument.dueDate)}.`
+                                     : `Bitte überweisen Sie den fälligen Betrag bis ${formatDate(selectedDocument.dueDate)} auf das unten angegebene Konto.`}
+                               </p>
+                           </div>
+                           <div className="flex w-full flex-col gap-1.5 md:w-64">
+                               <div className="flex justify-between text-control text-muted">
+                                   <span>Netto</span>
+                                   <span className="tabular-nums">{formatCurrency(selectedDocumentTax?.netAmount ?? 0)}</span>
                                </div>
-                               <div className="w-full md:w-64 space-y-2">
-                                   <div className="flex justify-between text-sm text-muted">
-                                       <span>Netto</span>
-                                       <span className="tabular-nums">{formatCurrency(selectedDocumentTax?.netAmount ?? 0)}</span>
-                                   </div>
-                                   <div className="flex justify-between text-sm text-muted">
-                                       <span>USt {(selectedDocumentTax?.vatRateApplied ?? 0)}%</span>
-                                       <span className="tabular-nums">{formatCurrency(selectedDocumentTax?.vatAmount ?? 0)}</span>
-                                   </div>
-                                   <div className="flex justify-between text-xl font-semibold text-foreground border-t border-border pt-3 mt-1">
-                                       <span>Gesamt</span>
-                                       <span className="tabular-nums">{formatCurrency(selectedDocumentTax?.grossAmount ?? selectedDocument.amount)}</span>
-                                   </div>
+                               {(selectedDocumentTax?.vatBreakdown?.length
+                                 ? selectedDocumentTax.vatBreakdown
+                                 : [{ rate: selectedDocumentTax?.vatRateApplied ?? 0, netAmount: selectedDocumentTax?.netAmount ?? 0, vatAmount: selectedDocumentTax?.vatAmount ?? 0 }]
+                               ).map((entry) => (
+                                 <div key={entry.rate} className="flex justify-between text-control text-muted">
+                                   <span>USt {entry.rate}% auf {formatCurrency(entry.netAmount)}</span>
+                                   <span className="tabular-nums">{formatCurrency(entry.vatAmount)}</span>
+                                 </div>
+                               ))}
+                               <div className="flex items-baseline justify-between border-t border-border-strong pt-2 text-foreground">
+                                   <span className="text-control font-semibold">Gesamt</span>
+                                   <span className="text-heading font-bold tabular-nums">{formatCurrency(selectedDocumentTax?.grossAmount ?? selectedDocument.amount)}</span>
                                </div>
-                          </div>
-                       </div>
-                  </div>
+                           </div>
+                      </div>
+                  </Card>
 
-                  {/* Right Column: Sidebar */}
-                  <div className="space-y-6">
+                  {/* Right column */}
+                  <div className="flex min-w-0 flex-col gap-3.5">
 
                       {/* Shared document-chain/revision relationship */}
                       {selectedChain.length > 0 && (
-                        <div
-                          className="bg-surface-muted border border-border rounded-3xl p-6"
+                        <section
+                          className="rounded-card border border-border bg-surface"
                           data-testid="document-chain-panel"
                         >
-                          <div className="flex items-start justify-between gap-3 mb-4">
-                            <div>
-                              <h4 className="font-semibold text-sm text-foreground flex items-center gap-2">
-                                <Link size={16} className="text-muted" /> Dokumentkette
-                              </h4>
-                              <p className="text-xs text-muted mt-1">Auftrag, Abrechnung und Revisionen</p>
-                            </div>
-                            <span className="text-xs font-semibold uppercase tracking-wider text-muted">
-                              {selectedChain.length} Dokumente
-                            </span>
-                          </div>
-                          <div className="space-y-2">
+                          <CardHeader
+                            className="border-b border-border px-3.5 py-3"
+                            title="Dokumentkette"
+                            subtitle="Auftrag, Abrechnung und Revisionen"
+                            count={`${selectedChain.length} Dokumente`}
+                          />
+                          <div className="flex flex-col gap-2 p-3.5">
                             {selectedChain.map((document) => {
                               const isCurrent = document.id === selectedDocument.id;
                               const relationLabel = isCurrent
@@ -1561,56 +1456,50 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
                                   key={document.id}
                                   type="button"
                                   data-testid={`document-chain-item-${document.id}`}
-                                  onClick={() => setSelectedId(document.id)}
-                                  className={`w-full text-left rounded-2xl border px-3 py-2.5 transition-colors ${
+                                  onClick={() => {
+                                    setDocumentType('invoice');
+                                    setSelectedId(document.id);
+                                  }}
+                                  className={`w-full rounded-control border px-3 py-2 text-left transition-colors motion-reduce:transition-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring ${
                                     isCurrent
-                                      ? 'border-foreground bg-surface'
-                                      : 'border-control-border bg-surface/60 hover:bg-surface hover:border-control-border'
+                                      ? 'border-border-strong bg-accent-50'
+                                      : 'border-border bg-surface hover:bg-surface-muted'
                                   }`}
                                 >
-                                  <div className="flex items-center justify-between gap-2">
-                                    <span className="text-xs font-semibold text-foreground truncate">
+                                  <span className="flex items-center justify-between gap-2">
+                                    <span className="truncate text-control font-semibold text-foreground">
                                       {getInvoiceDocumentLabel(document.documentKind)} · {document.number}
                                     </span>
-                                    <span className="text-xs font-semibold uppercase tracking-wide text-muted shrink-0">
+                                    <span className="shrink-0 text-micro text-muted">
                                       {relationLabel}
                                     </span>
-                                  </div>
-                                  <div className="flex items-center justify-between gap-2 mt-1 text-xs text-muted">
+                                  </span>
+                                  <span className="mt-0.5 flex items-center justify-between gap-2 text-caption text-muted tabular-nums">
                                     <span>{formatDate(document.date)}</span>
                                     <span>{formatCurrency(document.amount)}</span>
-                                  </div>
+                                  </span>
                                 </button>
                               );
                             })}
                           </div>
-                        </div>
+                        </section>
                       )}
 
-                      {/* Status Card */}
-                      <div className="bg-surface border border-border rounded-3xl p-6">
-                          <h4 className="font-semibold text-sm text-foreground mb-4 flex items-center gap-2">
-                              <CheckCircle size={16} className="text-foreground" /> Status
-                          </h4>
+                      <Card padding="none">
+                          <CardHeader className="border-b border-border px-3.5 py-3" title="Status" />
+                          <div className="flex flex-col gap-3 p-3.5">
                           {selectedDocument.status === 'overdue' && (
-                              <div className="bg-error-bg rounded-xl p-4 mb-4 border border-error-border">
-                                  <div className="flex items-start gap-3">
-                                      <AlertTriangle size={16} className="text-error-text mt-0.5" />
-                                      <div>
-                                          <p className="text-xs font-semibold text-error-text mb-1">Zahlung überfällig</p>
-                                          <button
-                                            onClick={handleCreateReminder}
-                                            className="text-xs font-semibold bg-surface border border-error-border text-error-text px-2 py-1 rounded-sm hover:bg-error-bg transition-colors"
-                                          >
-                                              Mahnung erstellen
-                                          </button>
-                                      </div>
-                                  </div>
+                              <div className="flex items-center gap-2.5 rounded-control border border-error-border bg-error-bg px-3 py-2.5 text-control text-error-text">
+                                  <AlertTriangle size={16} className="shrink-0" aria-hidden="true" />
+                                  <p className="min-w-0 flex-1 font-medium">Zahlung überfällig</p>
+                                  <Button variant="secondary" size="sm" onClick={handleCreateReminder}>
+                                      Mahnung erstellen
+                                  </Button>
                               </div>
                           )}
-                          <div className="mb-2 flex items-center gap-2">
+                          <div className="flex items-center gap-2">
                                <Badge status={selectedDocument.status} />
-                               <span className="text-xs text-muted">
+                               <span className="text-caption text-muted">
                                {selectedDocument.status === 'paid'
                                  ? (() => {
                                      const lastPayment = (selectedDocument.payments ?? [])
@@ -1625,92 +1514,77 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
                                    : 'Noch nicht bezahlt'}
                                </span>
                           </div>
-                          <div className="mt-3 border-t border-border pt-3">
-                            <p className="text-xs font-semibold text-muted uppercase tracking-wider mb-2">Steuerbehandlung</p>
-                            <div className="inline-flex items-center gap-2 px-2.5 py-1.5 rounded-lg border border-border bg-surface-muted text-xs font-semibold text-foreground">
-                              <span className="w-1.5 h-1.5 rounded-full bg-muted" />
-                              {selectedTaxDefinition?.label ?? 'Regelbesteuerung'}
-                            </div>
+                          <div className="border-t border-border pt-3">
+                            <p className="mb-1.5 text-eyebrow uppercase text-muted">Steuerbehandlung</p>
+                            <Badge tone="neutral">{selectedTaxDefinition?.label ?? 'Regelbesteuerung'}</Badge>
                             {selectedTaxExemptionReason && (
-                              <p className="mt-2 text-xs text-muted leading-relaxed">{selectedTaxExemptionReason}</p>
+                              <p className="mt-2 text-caption text-muted">{selectedTaxExemptionReason}</p>
                             )}
                           </div>
-                      </div>
+                          </div>
+                      </Card>
 
                       {/* Payments (Invoices only) */}
                       {documentType === 'invoice' && (
-                        <div className="bg-surface border border-border rounded-3xl p-6">
-                          <div className="flex items-center justify-between mb-4">
-                            <h4 className="font-semibold text-sm text-foreground flex items-center gap-2">
-                              <Euro size={16} className="text-muted" /> Zahlungen
-                            </h4>
-                            <button
+                        <Card padding="none">
+                          <CardHeader
+                            className="border-b border-border px-3.5 py-3"
+                            title="Zahlungen"
+                            actions={
+                              <Button
+                                variant="secondary"
+                                size="sm"
+                                disabled={selectedDocument.status === 'draft' || invoicePayment.isPending}
                               onClick={() => {
-                                const today = new Date().toISOString().split('T')[0] ?? '';
+                                const today = localIsoDate();
                                 setEditingPaymentId(null);
+                                setNewPaymentId(uuidv4());
                                 const openAmount = Math.max(0, (Number(selectedDocumentTax?.grossAmount ?? selectedDocument.amount) || 0) - sumPayments(selectedDocument));
                                 setPaymentForm({ date: today, amount: openAmount > 0 ? openAmount.toFixed(2) : '', method: 'Überweisung' });
                                 setPaymentReason('Zahlung erfasst');
                                 setPaymentError(null);
                                 setIsPaymentModalOpen(true);
                               }}
-                              className="px-3 py-2 rounded-xl bg-surface-muted border border-control-border hover:bg-border-subtle text-foreground font-semibold text-sm inline-flex items-center gap-2"
-                            >
-                              <Plus size={16} /> Zahlung
-                            </button>
-                          </div>
+                              >
+                                <Plus size={14} aria-hidden="true" /> Zahlung
+                              </Button>
+                            }
+                          />
+                          <div className="flex flex-col gap-2 p-3.5">
+                            <div className="flex items-center justify-between text-caption text-muted">
+                              <span>Bezahlt</span>
+                              <span className="tabular-nums font-semibold text-foreground">{formatCurrency(paid)}</span>
+                            </div>
+                            <HatchedProgress size="sm" label="Bezahlt" value={grossAmount > 0 ? paid / grossAmount : 0} />
+                            <div className="flex items-center justify-between text-caption text-muted">
+                              <span>Noch offen</span>
+                              <span className="tabular-nums font-semibold text-foreground">{formatCurrency(remaining)}</span>
+                            </div>
 
-                          {(() => {
-                            const paid = sumPayments(selectedDocument);
-                            const grossAmount = Number(selectedDocumentTax?.grossAmount ?? selectedDocument.amount) || 0;
-                            const remaining = Math.max(0, grossAmount - paid);
-                            const pct =
-                              grossAmount > 0
-                                ? Math.min(1, paid / grossAmount)
-                                : 0;
-
-                            return (
-                              <>
-                                <div className="mb-4">
-                                  <div className="flex items-center justify-between text-xs text-muted mb-2">
-                                    <span>Bezahlt</span>
-                                    <span className="tabular-nums font-semibold text-foreground">{formatCurrency(paid)}</span>
-                                  </div>
-                                  <div className="w-full h-2 rounded-full bg-surface-muted border border-control-border overflow-hidden">
+                            {(selectedDocument.payments ?? []).length === 0 ? (
+                              <p className="text-caption text-muted">Noch keine Zahlungen erfasst.</p>
+                            ) : (
+                              <div className="border-t border-border">
+                                {(selectedDocument.payments ?? [])
+                                  .slice()
+                                  .sort((a, b) => (b.date ?? '').localeCompare(a.date ?? ''))
+                                  .map((p) => (
                                     <div
-                                      className="h-full bg-surface-inverse"
-                                      style={{ width: `${Math.round(pct * 100)}%` }}
-                                    />
-                                  </div>
-                                  <div className="flex items-center justify-between text-xs text-muted mt-2">
-                                    <span>Noch offen</span>
-                                    <span className="tabular-nums font-semibold text-foreground">{formatCurrency(remaining)}</span>
-                                  </div>
-                                </div>
-
-                                {(selectedDocument.payments ?? []).length === 0 ? (
-                                  <p className="text-xs text-muted">Noch keine Zahlungen erfasst.</p>
-                                ) : (
-                                  <div className="space-y-2">
-                                    {(selectedDocument.payments ?? [])
-                                      .slice()
-                                      .sort((a, b) => (b.date ?? '').localeCompare(a.date ?? ''))
-                                      .map((p) => (
-                                        <div
-                                          key={p.id}
-                                          className="flex items-center justify-between p-3 bg-surface-muted rounded-2xl border border-border"
-                                        >
-                                          <div>
-                                            <p className="text-xs font-semibold text-foreground">{formatDate(p.date)}</p>
-                                            <p className="text-xs text-muted font-semibold uppercase tracking-wide">
-                                              {p.method}
-                                            </p>
-                                          </div>
-                                          <div className="flex items-center gap-2">
-                                            <div className="tabular-nums font-semibold text-foreground min-w-[120px] text-right">
-                                              {formatCurrency(p.amount)}
-                                            </div>
-                                            <button
+                                      key={p.id}
+                                      className="flex items-center justify-between gap-3 border-b border-dashed border-border py-2.5 last:border-b-0 last:pb-0"
+                                    >
+                                      <div className="min-w-0">
+                                        <p className="text-control font-semibold tabular-nums text-foreground">{formatDate(p.date)}</p>
+                                        <p className="text-caption text-muted">{p.method}{p.id.startsWith('transaction-payment:') || p.id.startsWith('tx:') ? ' · Änderungen im Bankabgleich' : ''}</p>
+                                      </div>
+                                      <div className="flex items-center gap-1">
+                                        <div className="mr-1 text-right text-control font-semibold tabular-nums text-foreground">
+                                          {formatCurrency(p.amount)}
+                                        </div>
+                                        <IconButton
+                                          size="sm"
+                                          aria-label="Zahlung bearbeiten"
+                                          disabled={invoicePayment.isPending || p.id.startsWith('transaction-payment:') || p.id.startsWith('tx:')}
                                               onClick={() => {
                                                 setEditingPaymentId(p.id);
                                                 setPaymentForm({
@@ -1722,77 +1596,72 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
                                                 setPaymentError(null);
                                                 setIsPaymentModalOpen(true);
                                               }}
-                                              className="w-9 h-9 rounded-xl bg-surface border border-control-border hover:bg-surface-muted flex items-center justify-center"
-                                              title="Bearbeiten"
-                                            >
-                                              <Edit3 size={16} className="text-foreground" />
-                                            </button>
-                                            <button
+                                        >
+                                          <Edit3 size={14} aria-hidden="true" />
+                                        </IconButton>
+                                        <IconButton
+                                          size="sm"
+                                          aria-label="Zahlung löschen"
+                                          disabled={invoicePayment.isPending || p.id.startsWith('transaction-payment:') || p.id.startsWith('tx:')}
                                               onClick={() => {
                                                 setDeletingPaymentId(p.id);
                                                 setPaymentDeleteReason('');
                                                 setPaymentDeleteError(null);
                                                 setIsPaymentDeleteOpen(true);
                                               }}
-                                              className="w-9 h-9 rounded-xl bg-surface border border-control-border hover:bg-surface-muted flex items-center justify-center"
-                                              title="Löschen"
-                                            >
-                                              <Trash2 size={16} className="text-foreground" />
-                                            </button>
-                                          </div>
-                                        </div>
-                                      ))}
-                                  </div>
-                                )}
-                              </>
-                            );
-                          })()}
-                        </div>
+                                        >
+                                          <Trash2 size={14} aria-hidden="true" />
+                                        </IconButton>
+                                      </div>
+                                    </div>
+                                  ))}
+                              </div>
+                            )}
+                          </div>
+                        </Card>
                       )}
 
-                      {/* Internal Notes */}
-                      <div className="bg-warning-bg border border-warning-border rounded-3xl p-6">
-                          <h4 className="font-semibold text-sm text-foreground mb-3 flex items-center gap-2">
-                              Interne Notiz
-                          </h4>
-                          <textarea
-                              id="document-internal-note"
-                              aria-label="Interne Notiz"
-                              value={noteDraft}
-                              onChange={(event) => setNoteDraft(event.target.value)}
- className="w-full bg-surface border border-warning-border rounded-xl p-3 text-xs text-muted resize-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring transition-shadow"
-                              rows={3}
-                              placeholder="Notiz zu diesem Vorgang..."
-                          />
-                          <div className="mt-2 flex justify-end">
-                            <Button size="sm" onClick={handleAddNote} disabled={!noteDraft.trim()}>
-                              Notiz im Verlauf speichern
-                            </Button>
+                      <Card padding="none">
+                          <CardHeader className="border-b border-border px-3.5 py-3" title="Interne Notiz" />
+                          <div className="flex flex-col gap-2 p-3.5">
+                            <Textarea
+                                id="document-internal-note"
+                                aria-label="Interne Notiz"
+                                fullWidth
+                                value={noteDraft}
+                                onChange={(event) => setNoteDraft(event.target.value)}
+                                rows={3}
+                                placeholder="Notiz zu diesem Vorgang..."
+                            />
+                            <div className="flex justify-end">
+                              <Button variant="secondary" size="sm" onClick={handleAddNote} disabled={!noteDraft.trim()}>
+                                Notiz im Verlauf speichern
+                              </Button>
+                            </div>
                           </div>
-                      </div>
+                      </Card>
 
-                      {/* Timeline */}
-                      <div className="bg-surface border border-border rounded-3xl p-6">
-                          <h4 className="font-semibold text-sm text-foreground mb-4 flex items-center gap-2">
-                              <Clock size={16} className="text-muted" /> Verlauf
-                          </h4>
-                          <div className="space-y-4 relative pl-2 border-l border-border ml-1">
-                              {selectedDocument.history && selectedDocument.history.length > 0 ? selectedDocument.history.map((h, i) => (
-                                  <div key={i} className="pl-4 relative">
-                                      <div className="absolute -left-[5px] top-1.5 w-2 h-2 rounded-full bg-border border-2 border-surface"></div>
-                                      <p className="text-xs font-semibold text-muted uppercase tracking-wide">{formatDate(h.date)}</p>
-                                      <p className="text-xs font-medium text-foreground">{formatDocumentHistoryAction(h.action)}</p>
-                                  </div>
-                              )) : (
-                                <p className="text-xs text-muted pl-4">Entwurf erstellt.</p>
+                      <Card padding="none">
+                          <CardHeader className="border-b border-border px-3.5 py-3" title="Verlauf" />
+                          <div className="p-3.5">
+                              {selectedDocument.history && selectedDocument.history.length > 0 ? (
+                                <Timeline
+                                  label="Verlauf"
+                                  entries={selectedDocument.history.map((h, i) => ({
+                                    key: String(i),
+                                    title: formatDocumentHistoryAction(h.action),
+                                    meta: <span className="tabular-nums">{formatDate(h.date)}</span>,
+                                  }))}
+                                />
+                              ) : (
+                                <p className="text-caption text-muted">Entwurf erstellt.</p>
                               )}
                           </div>
-                      </div>
+                      </Card>
                   </div>
 
               </div>
           </div>
-    </div>
       );
   }
 
@@ -1811,41 +1680,33 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
         titleId="bulk-delete-title"
         descriptionId="bulk-delete-description"
         ariaBusy={isBulkDeleting}
-        className="max-w-xl overflow-hidden flex flex-col"
       >
-          <div className="p-6 border-b border-border flex justify-between items-center bg-surface-muted">
-            <div>
-              <h3 id="bulk-delete-title" className="text-lg font-semibold">Löschen bestätigen</h3>
-              <p id="bulk-delete-description" className="text-sm text-muted tabular-nums">{count} Einträge ausgewählt</p>
+          <div className="flex items-start gap-3 px-4.5 pt-4 pb-2.5">
+            <div className="min-w-0 flex-1">
+              <h3 id="bulk-delete-title" className="text-title text-foreground">Löschen bestätigen</h3>
+              <p id="bulk-delete-description" className="text-caption text-muted">{count} Einträge ausgewählt</p>
             </div>
-            <button
-              type="button"
-              onClick={closeBulkDelete}
-              aria-label="Dialog schließen"
-              className="p-2 hover:bg-border-subtle rounded-full transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
-            >
-              <X size={20} />
-            </button>
+            <IconButton aria-label="Dialog schließen" tooltip={false} onClick={closeBulkDelete}>
+              <X size={16} aria-hidden="true" />
+            </IconButton>
           </div>
 
-          <div className="p-6 space-y-4">
-            <div className="bg-error-bg border border-error-border rounded-2xl p-4 text-sm text-error-text">
+          <div className="flex flex-col gap-3 px-4.5 pt-1 pb-4">
+            <div className="rounded-control border border-error-border bg-error-bg px-3 py-2.5 text-control text-error-text">
               Diese Aktion kann nicht rückgängig gemacht werden. Es wird ein Audit-Eintrag geschrieben.
             </div>
-            <div>
-              <label htmlFor="bulk-delete-reason" className="block text-xs font-semibold text-muted mb-1">Grund (Pflicht)</label>
-              <textarea
-                id="bulk-delete-reason"
-                value={bulkDeleteReason}
-                onChange={(e) => setBulkDeleteReason(e.target.value)}
-                rows={4}
-                placeholder="z.B. Duplikat, Testdaten, Kunde hat storniert ..."
-                className="px-3 py-2.5 hover:border-control-border-hover w-full bg-surface border border-control-border rounded-control text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring resize-none"
-              />
-            </div>
+            <Textarea
+              id="bulk-delete-reason"
+              label="Grund (Pflicht)"
+              fullWidth
+              value={bulkDeleteReason}
+              onChange={(e) => setBulkDeleteReason(e.target.value)}
+              rows={4}
+              placeholder="z.B. Duplikat, Testdaten, Kunde hat storniert ..."
+            />
           </div>
 
-          <div className="p-6 border-t border-border bg-surface-muted flex justify-end gap-3">
+          <div className="flex flex-wrap justify-end gap-2 border-t border-border px-4.5 py-3">
             <Button variant="secondary" onClick={closeBulkDelete} disabled={isBulkDeleting}>
               Abbrechen
             </Button>
@@ -1880,7 +1741,7 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
               }}
               disabled={isBulkDeleting || bulkDeleteReason.trim().length === 0}
             >
-              <Trash2 size={16} /> Löschen
+              <Trash2 size={16} aria-hidden="true" /> Löschen
             </Button>
           </div>
       </Modal>
@@ -1910,9 +1771,12 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
       }
     })();
   };
+  const previewDocument = wide
+    ? (sortedDocuments.find((candidate) => candidate.id === previewId) ?? sortedDocuments[0])
+    : undefined;
 
   return (
-    <div className="min-h-full px-1 pt-2 flex flex-col relative">
+    <div className="flex min-h-full flex-col">
       {renderDunningModal()}
       {renderEmailModal()}
       {renderPaymentModal()}
@@ -1932,7 +1796,7 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
       )}
 
       <PageHeader
-        title="Dokumente"
+        title="Rechnungen & Angebote"
         description={`${filteredDocuments.length} von ${currentData.length} ${documentType === 'invoice' ? 'Rechnungen' : 'Angeboten'}`}
         actions={
           <>
@@ -1941,7 +1805,7 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
                 variant="secondary"
                 onClick={handleStartDunningRun}
                 title={`Mahnlauf starten (${overdueInvoices.length} überfällige Rechnungen)`}
-                className="text-error-text tabular-nums"
+                className="text-error-text"
               >
                 <Gavel size={16} aria-hidden="true" />
                 Mahnlauf ({overdueInvoices.length})
@@ -1975,6 +1839,7 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
               onChange={setFilter}
               options={[
                 { value: 'all', label: 'Alle' },
+                { value: 'draft', label: 'Entwurf' },
                 { value: 'open', label: 'Offen' },
                 { value: 'paid', label: 'Bezahlt' },
                 { value: 'overdue', label: 'Überfällig' },
@@ -1994,72 +1859,58 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
           </>
         }
       />
-      <div className="min-h-0 flex-1 rounded-card border border-border bg-surface p-5 lg:p-6 flex flex-col relative">
 
        {isSelecting && (
-         <div className="mb-4 flex flex-col gap-3 rounded-card bg-surface-inverse px-4 py-2.5 text-inverse-foreground shadow-lg md:flex-row md:items-center md:justify-between">
-           <div className="flex items-center gap-3 text-sm">
-             <span className="inline-flex h-6 min-w-6 items-center justify-center rounded-full bg-accent px-1.5 text-caption font-semibold text-accent-foreground tabular-nums">
-               {selectedIds.size}
-             </span>
-             <span className="font-medium">
-               {documentType === 'invoice' ? 'Rechnungen' : 'Angebote'} ausgewählt
-             </span>
-           </div>
-           <div className="flex flex-wrap items-center gap-1">
-             <button
-               type="button"
-               onClick={toggleSelectAllFiltered}
-               className="h-8 rounded-control px-3 text-label text-inverse-muted transition-colors hover:bg-surface-inverse-overlay hover:text-inverse-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring-dark"
-               title="Alle in der aktuellen Liste auswählen"
-             >
-               Alle auswählen
-             </button>
-             <button
-               type="button"
-               onClick={clearSelection}
-               className="h-8 rounded-control px-3 text-label text-inverse-muted transition-colors hover:bg-surface-inverse-overlay hover:text-inverse-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring-dark"
-             >
-               Aufheben
-             </button>
-             <div className="mx-1 h-5 w-px bg-border-inverse" aria-hidden="true" />
-             <button
-               type="button"
-               onClick={() => handleBulkExport({ openFolderAfter: false })}
-               className="inline-flex h-8 items-center gap-1.5 rounded-control px-3 text-label text-inverse-foreground transition-colors hover:bg-surface-inverse-overlay focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring-dark"
-               title="PDFs exportieren (in App-Exports)"
-             >
-               <Download size={14} aria-hidden="true" /> Export
-             </button>
-             <Button
-               onClick={() => handleBulkExport({ openFolderAfter: true })}
-               size="sm"
-               title="PDFs erstellen und Export-Ordner öffnen"
-             >
-               <Printer size={14} aria-hidden="true" /> Drucken
-             </Button>
-             <button
-               type="button"
-               onClick={() => setIsBulkDeleteOpen(true)}
-               className="inline-flex h-8 items-center gap-1.5 rounded-control px-3 text-label text-error-inverse transition-colors hover:bg-surface-inverse-overlay focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring-dark"
-               title="Ausgewählte Einträge löschen"
-             >
-               <Trash2 size={14} aria-hidden="true" /> Löschen
-             </button>
-           </div>
+         <div className="mb-3.5 flex flex-wrap items-center gap-2 rounded-card border border-border bg-surface px-3.5 py-2">
+           <Badge tone="accent">{selectedIds.size}</Badge>
+           <span className="mr-auto text-control font-medium text-foreground">
+             {documentType === 'invoice' ? 'Rechnungen' : 'Angebote'} ausgewählt
+           </span>
+           <Button variant="ghost" size="sm" onClick={toggleSelectAllFiltered} title="Alle in der aktuellen Liste auswählen">
+             Alle auswählen
+           </Button>
+           <Button variant="ghost" size="sm" onClick={clearSelection}>
+             Aufheben
+           </Button>
+           <Button
+             variant="secondary"
+             size="sm"
+             onClick={() => handleBulkExport({ openFolderAfter: false })}
+             title="PDFs exportieren (in App-Exports)"
+           >
+             <Download size={14} aria-hidden="true" /> Export
+           </Button>
+           <Button
+             variant="secondary"
+             size="sm"
+             onClick={() => handleBulkExport({ openFolderAfter: true })}
+             title="PDFs erstellen und Export-Ordner öffnen"
+           >
+             <Printer size={14} aria-hidden="true" /> Drucken
+           </Button>
+           <Button
+             variant="danger"
+             size="sm"
+             onClick={() => setIsBulkDeleteOpen(true)}
+             title="Ausgewählte Einträge löschen"
+           >
+             <Trash2 size={14} aria-hidden="true" /> Löschen
+           </Button>
          </div>
        )}
 
-       <div className={wide && sortedDocuments.some((doc) => doc.id === previewId) ? 'grid flex-1 items-start gap-4 grid-cols-[minmax(0,1fr)_340px]' : 'flex-1'}>
+       <div className={previewDocument ? 'grid grid-cols-[minmax(0,1.5fr)_minmax(0,1fr)] items-start gap-3.5' : undefined}>
        <div className="min-w-0">
            {isLoading ? (
              <SkeletonLoader variant="list" count={5} />
            ) : isCurrentDataError ? (
-             <ErrorState
-               title={documentType === 'invoice' ? 'Rechnungen konnten nicht geladen werden' : 'Angebote konnten nicht geladen werden'}
-               description="Die Liste ist nicht abrufbar. Eine leere Liste würde hier fälschlich als 'keine Dokumente' gelesen."
-               onRetry={refetchCurrentData}
-             />
+             <Card padding="none">
+               <ErrorState
+                 title={documentType === 'invoice' ? 'Rechnungen konnten nicht geladen werden' : 'Angebote konnten nicht geladen werden'}
+                 description="Die Liste ist nicht abrufbar. Eine leere Liste würde hier fälschlich als 'keine Dokumente' gelesen."
+                 onRetry={refetchCurrentData}
+               />
+             </Card>
            ) : sortedDocuments.length > 0 ? (
              <Table aria-label={documentType === 'invoice' ? 'Rechnungen' : 'Angebote'}>
                <TableHeader>
@@ -2074,7 +1925,7 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
                    </TableHead>
                    <TableHead sort={sortFor('number')} onSort={() => setSort((current) => nextSort(current, 'number'))}>Nummer</TableHead>
                    <TableHead sort={sortFor('client')} onSort={() => setSort((current) => nextSort(current, 'client'))}>Kunde</TableHead>
-                   <TableHead className="hidden lg:table-cell" sort={sortFor('date')} onSort={() => setSort((current) => nextSort(current, 'date'))}>Datum</TableHead>
+                   <TableHead className={previewDocument ? 'hidden' : 'hidden lg:table-cell'} sort={sortFor('date')} onSort={() => setSort((current) => nextSort(current, 'date'))}>Datum</TableHead>
                    <TableHead className="hidden lg:table-cell" sort={sortFor('dueDate')} onSort={() => setSort((current) => nextSort(current, 'dueDate'))}>
                      {documentType === 'offer' ? 'Gültig bis' : 'Fällig'}
                    </TableHead>
@@ -2090,7 +1941,7 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
                      <TableRow
                        key={doc.id}
                        interactive
-                       selected={selected || (wide && previewId === doc.id)}
+                       selected={selected || previewDocument?.id === doc.id}
                        aria-label={`${getInvoiceDocumentLabel(doc.documentKind)} ${doc.number} öffnen`}
                        onClick={() => {
                          if (isSelecting) toggleSelected(doc.id);
@@ -2106,25 +1957,23 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
                            onChange={() => toggleSelected(doc.id)}
                          />
                        </TableCell>
-                       <TableCell>
-                         <div className="flex items-center gap-2">
-                           <span className="font-medium">{doc.number}</span>
+                       <TableCell className="whitespace-nowrap">
+                         <span className="inline-flex items-center gap-2">
+                           <span className="font-semibold tabular-nums">{doc.number}</span>
+                           <span className={cn('text-caption text-muted', previewDocument && 'hidden')}>
+                             {documentType === 'offer' ? 'Angebot' : getInvoiceDocumentLabel(doc.documentKind)}
+                           </span>
                            {getDunningBadge(doc.dunningLevel)}
-                         </div>
-                         <div className="text-caption text-muted">
-                           {documentType === 'offer' ? 'Angebot' : getInvoiceDocumentLabel(doc.documentKind)}
-                         </div>
+                         </span>
                        </TableCell>
                        <TableCell className="max-w-64 truncate">
                          {doc.client === MISSING_COUNTERPARTY ? EMPTY_VALUE : formatEmptyValue(doc.client)}
                        </TableCell>
-                       <TableCell muted className="hidden tabular-nums lg:table-cell">{formatDate(doc.date)}</TableCell>
-                       <TableCell className={`hidden tabular-nums lg:table-cell ${doc.status === 'overdue' ? 'font-medium text-error-text' : 'text-muted'}`}>
-                         {formatDate(doc.dueDate)}
-                       </TableCell>
-                       <TableCell numeric className="font-medium">{formatCurrency(doc.amount)}</TableCell>
+                       <TableCell muted className={cn('hidden tabular-nums', !previewDocument && 'lg:table-cell')}>{formatDate(doc.date)}</TableCell>
+                       <TableCell className="hidden tabular-nums lg:table-cell">{formatDate(doc.dueDate)}</TableCell>
+                       <TableCell numeric>{formatCurrency(doc.amount)}</TableCell>
                        <TableCell><Badge status={doc.status} /></TableCell>
-                       <TableCell className="text-right">
+                       <TableCell className="py-0 text-right">
                          <IconButton
                            size="sm"
                            className="ui-reveal"
@@ -2144,6 +1993,7 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
                </TableBody>
              </Table>
            ) : (
+             <Card padding="none">
               <EmptyState
                 title={
                   searchTerm.trim() || filter !== 'all'
@@ -2170,55 +2020,59 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
                   ) : undefined
                 }
               />
+             </Card>
           )}
       </div>
-      {wide && (() => {
-        const doc = sortedDocuments.find((candidate) => candidate.id === previewId);
-        if (!doc) return null;
+      {previewDocument && (() => {
+        const doc = previewDocument;
         const net = doc.taxSnapshot?.netAmount ?? (doc.items ?? []).reduce((sum, item) => sum + (Number(item.total) || 0), 0);
         const gross = doc.taxSnapshot?.grossAmount ?? (Number(doc.amount) || 0);
         const open = Math.max(0, gross - sumPayments(doc));
         return (
-          <aside aria-label={`Übersicht ${doc.number}`} className="sticky top-0 rounded-card border border-border bg-surface p-5">
-            <div className="flex items-start justify-between gap-3">
-              <div className="min-w-0">
+          <aside aria-label={`Übersicht ${doc.number}`} className="sticky top-0 min-w-0">
+            <Card padding="none">
+            <div className="flex items-center gap-3 border-b border-border px-3.5 py-3">
+              <div className="min-w-0 flex-1">
                 <h2 className="truncate text-section tabular-nums text-foreground">{doc.number}</h2>
-                <p className="text-caption text-muted">{getInvoiceDocumentLabel(doc.documentKind)}</p>
+                <p className="text-caption text-muted">{documentType === 'offer' ? 'Angebot' : getInvoiceDocumentLabel(doc.documentKind)}</p>
               </div>
               <Badge status={doc.status} />
             </div>
+            <div className="flex flex-col gap-3 p-3.5">
             {/* T-Konto: one figure split into net and gross. */}
-            <div className="mt-4 grid grid-cols-[1fr_1px_1fr] border-t border-control-border pt-2">
-              <div className="pr-3">
-                <div className="text-caption text-muted">Netto</div>
-                <div className="text-sm font-semibold tabular-nums">{formatCurrency(net)}</div>
+            <div className="grid grid-cols-[1fr_1px_1fr]">
+              <div className="pr-3.5">
+                <div className="text-eyebrow uppercase text-muted">Netto</div>
+                <div className="text-label tabular-nums">{formatCurrency(net)}</div>
               </div>
-              <div className="bg-control-border" aria-hidden="true" />
-              <div className="pl-3 text-right">
-                <div className="text-caption text-muted">Brutto</div>
-                <div className="text-lg font-bold tabular-nums">{formatCurrency(gross)}</div>
+              <div className="bg-border-strong" aria-hidden="true" />
+              <div className="pl-3.5 text-right">
+                <div className="text-eyebrow uppercase text-muted">Brutto</div>
+                <div className="text-heading font-bold tabular-nums">{formatCurrency(gross)}</div>
               </div>
             </div>
-            <dl className="mt-4 grid grid-cols-[auto_1fr] gap-x-4 gap-y-1.5 text-sm">
+            <dl className="grid grid-cols-[auto_1fr] gap-x-3.5 gap-y-1.5 text-control">
               <dt className="text-caption text-muted">Kunde</dt><dd className="truncate">{doc.client || '–'}</dd>
               <dt className="text-caption text-muted">Datum</dt><dd className="tabular-nums">{doc.date ? formatDate(doc.date) : '–'}</dd>
-              <dt className="text-caption text-muted">Fällig</dt><dd className="tabular-nums">{doc.dueDate ? formatDate(doc.dueDate) : '–'}</dd>
+              <dt className="text-caption text-muted">{documentType === 'offer' ? 'Gültig bis' : 'Fällig'}</dt><dd className="tabular-nums">{doc.dueDate ? formatDate(doc.dueDate) : '–'}</dd>
+              <dt className="text-caption text-muted">Steuer</dt><dd className="truncate">{getInvoiceTaxModeDefinition(resolveInvoiceTaxMode(doc.taxMode, settings)).label}</dd>
               {documentType === 'invoice' && (<><dt className="text-caption text-muted">Offen</dt><dd className="tabular-nums font-semibold">{formatCurrency(open)}</dd></>)}
             </dl>
+            <div className="flex flex-wrap gap-2">
+              <Button size="sm" variant="secondary" onClick={() => handleOpenDetail(doc.id)}>Öffnen</Button>
+              <Button size="sm" variant="secondary" onClick={() => onEditInvoice(doc, documentType)}>Bearbeiten</Button>
+            </div>
             {doc.status === 'overdue' && (
-              <p className="mt-4 rounded-control border border-warning-border bg-warning-bg px-3 py-2 text-caption text-warning-text" role="note">
+              <p className="rounded-control border border-warning-border bg-warning-bg px-3 py-2.5 text-control text-warning-text" role="note">
                 Seit {doc.dueDate ? formatDate(doc.dueDate) : 'Fälligkeit'} überfällig. Mahnung, Folgebeleg und Portal-Link stehen in der Detailansicht.
               </p>
             )}
-            <div className="mt-4 flex flex-wrap gap-2">
-              <Button size="sm" onClick={() => handleOpenDetail(doc.id)}>Öffnen</Button>
-              <Button size="sm" variant="secondary" onClick={() => onEditInvoice(doc, documentType)}>Bearbeiten</Button>
             </div>
+            </Card>
           </aside>
         );
       })()}
       </div>
-    </div>
     </div>
   );
 };

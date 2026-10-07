@@ -1,9 +1,10 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { Button, formatEmptyValue } from '@billme/ui';
+import { Button, Card, CardHeader, EmptyState, Field, Input, Select, Stepper, Textarea, formatEmptyValue } from '@billme/ui';
 import { JournalEntryDetailModal } from './JournalEntryDetail';
 import { userFacingReference } from '../domain/references';
 import type { UserRole } from '../types';
 import { permissionContextForRole } from '../domain/permissions';
+import { localToday } from '../domain/reportDates';
 import type { ProAccountingDataAdapter } from '../services/accountingDataAdapter';
 import type {
   AccountingCommandInput,
@@ -15,6 +16,9 @@ import type {
 } from '../sourceRuns';
 
 void React;
+
+const bannerClass = 'rounded-control border px-3 py-2.5 text-control';
+const cardHeadClass = 'border-b border-border px-3.5 py-3';
 
 type WorkflowOption = { value: AccountingCommandKind; label: string; group: string; description: string };
 
@@ -126,7 +130,8 @@ const domainTemplate = (kind: AccountingCommandKind, sourceId: string, date: str
     case 'skonto':
       return { taxBreakdown, skontoAmount: 11.9 };
     case 'bad_debt':
-      return { taxBreakdown, writeOffGrossAmount: 119, badDebtExpenseAccount: '2400', facts: { legalBasis: '§17 UStG', reason: 'bad_debt', originalDocumentId: 'invoice-id', originalDocumentNumber: 'RE-0001', originalTaxEffectiveDate: date, adjustmentDate: date, evidenceReference: 'evidence-reference' } };
+      // The original (id, number, invoice date) comes from the Quellbeleg; placeholders here would override it.
+      return { taxBreakdown, writeOffGrossAmount: 119, badDebtExpenseAccount: '2400', facts: { legalBasis: '§17 UStG', reason: 'bad_debt', adjustmentDate: date, evidenceReference: 'evidence-reference' } };
     case 'advance_settlement':
       return { finalInvoice: { grossAmount: 119, taxBreakdown }, advances: [{ id: 'advance-id', kind: 'advance', grossAmount: 59.5 }], advanceClearingReceivable: '1593', advanceClearingPayable: '1518' };
     case 'fiscal_close':
@@ -160,7 +165,7 @@ const initialForm = (): FormState => {
   // Der Quellbeleg ist die fachliche Belegnummer des Nutzers. Eine generierte
   // technische ID (Präfix + Zeitstempel) gehört nicht ins Belegfeld.
   const sourceId = '';
-  const date = new Date().toISOString().slice(0, 10);
+  const date = localToday();
   return { kind: 'correction', sourceId, date, domainFacts: formatFacts('correction', sourceId, date), reason: '' };
 };
 
@@ -177,12 +182,25 @@ const domainErrorMessage = (error: { code: string; message: string; field?: stri
   return `${error.message}${error.field ? ` (${error.field})` : ''}`;
 };
 
+/** Server codes of the settlement checks, in the words of the form. */
+const SETTLEMENT_ERROR_TEXT: Record<string, string> = {
+  ORIGINAL_DOCUMENT_REQUIRED: 'Bitte als Quellbeleg die Rechnung angeben, auf die sich die Buchung bezieht.',
+  ORIGINAL_DOCUMENT_NOT_FOUND: 'Zum Quellbeleg wurde keine Rechnung gefunden.',
+  ORIGINAL_CHANGED: 'Quellbeleg und angegebene Rechnungsnummer passen nicht zusammen.',
+  DOCUMENT_NOT_POSTED: 'Die Rechnung des Quellbelegs ist noch nicht gebucht.',
+  OPEN_ITEM_NOT_FOUND: 'Zur Rechnung des Quellbelegs gibt es keinen offenen Posten.',
+  SETTLEMENT_EXCEEDS_OPEN_ITEM: 'Der Betrag ist höher als der noch offene Rest der Rechnung.',
+  INVALID_FACTS: 'Die Fachdaten der Buchung sind unvollständig oder passen nicht zusammen',
+};
+
 const caughtDomainErrorMessage = (error: unknown): string => {
   const message = error instanceof Error ? error.message : String(error);
   if (message.includes('ACCOUNTING_SOURCE_RUN_CONFLICT')) {
     return 'Konflikt beim Quelllauf. Bitte Quellbeleg und Revision prüfen oder den bestehenden Lauf in der Historie öffnen.';
   }
-  return message;
+  const code = Object.keys(SETTLEMENT_ERROR_TEXT).find((candidate) => message.includes(candidate));
+  if (code === 'INVALID_FACTS') return `${SETTLEMENT_ERROR_TEXT[code]} (${message.slice(message.indexOf('INVALID_FACTS') + 'INVALID_FACTS:'.length).trim()}).`;
+  return code ? SETTLEMENT_ERROR_TEXT[code]! : message;
 };
 
 const HISTORY_LOAD_FALLBACK = 'Bitte versuche es erneut.';
@@ -442,104 +460,96 @@ export default function SonderbuchungenWorkspace({ dataAdapter, role = 'admin' }
   };
 
   return (
-    <div className="h-full overflow-y-auto p-4 sm:p-6 space-y-5" data-testid="sonderbuchungen-workspace">
-      <header className="max-w-3xl">
-        <h2 className="sr-only">Sonderbuchungen &amp; Abschluss</h2>
-        <p className="mt-1 text-sm text-muted text-pretty">Vorgang auswählen, Angaben prüfen und erst danach verbindlich buchen. Die Buchungszeilen erzeugt der geprüfte Fachworkflow.</p>
-      </header>
+    <div className="space-y-3.5" data-testid="sonderbuchungen-workspace">
+      <h2 className="sr-only">Sonderbuchungen &amp; Abschluss</h2>
 
-      <ol className="grid max-w-3xl grid-cols-3 gap-2" aria-label="Buchungsablauf">
-        {['Vorgang', 'Angaben', 'Prüfen & buchen'].map((step, index) => <li key={step} className="flex min-h-10 items-center gap-2 rounded-xl border border-border-subtle bg-surface-muted px-3 text-xs font-semibold text-foreground"><span className="flex size-5 shrink-0 items-center justify-center rounded-full bg-dark-base text-xs text-inverse-foreground">{index + 1}</span><span className="hidden sm:inline">{step}</span></li>)}
-      </ol>
-
-      {!dataAdapter?.postAccountingCommand ? <p className="rounded-xl border border-border bg-surface-muted p-3 text-sm text-muted" role="status">Sonderbuchungen sind in dieser Verbindung nur lesbar.</p> : null}
-      {!canMutate ? <p className="rounded-lg border border-border bg-surface-muted p-3 text-sm text-muted" role="status">Diese Rolle darf Sonderbuchungen nur lesen.</p> : null}
-      <section className="rounded-xl border border-border bg-surface p-4 space-y-3" aria-labelledby="special-entry-form-heading">
-        <div>
-          <h2 id="special-entry-form-heading" className="text-base font-semibold">1. Vorgang und Angaben</h2>
-          <p className="mt-1 text-sm text-muted">{selectedWorkflow.description}</p>
-        </div>
-        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-          <label className="flex flex-col gap-1 text-xs font-semibold">Workflow
-            <select aria-label="Workflow" value={form.kind} onChange={(event) => selectWorkflow(event.target.value as AccountingCommandKind)} disabled={!canMutate || busy} className="px-2.5 hover:border-control-border-hover min-h-10 rounded-control border border-control-border bg-surface text-sm font-normal focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring">
-              {workflowGroups.map((group) => <optgroup key={group} label={group}>{workflows.filter((workflow) => workflow.group === group).map((workflow) => <option key={workflow.value} value={workflow.value}>{workflow.label}</option>)}</optgroup>)}
-            </select>
-          </label>
-          <label className="flex flex-col gap-1 text-xs font-semibold">Quellbeleg
-            <input id="source-id" aria-label="Quellbeleg" required aria-invalid={Boolean(shownErrors.sourceId)} aria-describedby={shownErrors.sourceId ? 'source-id-error' : undefined} value={form.sourceId} onChange={(event) => update('sourceId', event.target.value)} onBlur={() => touch('sourceId')} disabled={!canMutate || busy} placeholder="z. B. RE-2026-10-42" className="px-2.5 hover:border-control-border-hover min-h-10 rounded-control border border-control-border text-sm font-normal focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring" />
-            {shownErrors.sourceId ? <span id="source-id-error" className="text-xs font-normal text-error-text">{shownErrors.sourceId}</span> : null}
-          </label>
-          <label className="flex flex-col gap-1 text-xs font-semibold">Buchungsdatum
-            <input id="booking-date" aria-label="Buchungsdatum" type="date" required aria-invalid={Boolean(shownErrors.date)} aria-describedby={shownErrors.date ? 'booking-date-error' : undefined} value={form.date} onChange={(event) => update('date', event.target.value)} onBlur={() => touch('date')} disabled={!canMutate || busy} className="px-2.5 hover:border-control-border-hover min-h-10 rounded-control border border-control-border text-sm font-normal focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring" />
-            {shownErrors.date ? <span id="booking-date-error" className="text-xs font-normal text-error-text">{shownErrors.date}</span> : null}
-          </label>
-          <label className="flex flex-col gap-1 text-xs font-semibold sm:col-span-2 lg:col-span-1">Audit-Grund (Pflicht)
-            <input id="audit-reason" aria-label="Audit-Grund" required aria-invalid={Boolean(shownErrors.reason)} aria-describedby={shownErrors.reason ? 'audit-reason-error' : undefined} value={form.reason} onChange={(event) => update('reason', event.target.value)} onBlur={() => touch('reason')} disabled={!canMutate || busy} placeholder="Warum wird diese Buchung vorgenommen?" className="px-2.5 hover:border-control-border-hover min-h-10 rounded-control border border-control-border text-sm font-normal focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring" />
-            {shownErrors.reason ? <span id="audit-reason-error" className="text-xs font-normal text-error-text">{shownErrors.reason}</span> : null}
-          </label>
-        </div>
-        <details className="rounded-xl border border-border-subtle bg-surface-muted p-3">
-          <summary className="min-h-10 cursor-pointer select-none py-2 text-sm font-semibold text-foreground">Fachdaten für Experten bearbeiten</summary>
-          <label className="mt-2 flex flex-col gap-1 text-xs font-semibold">Fachdaten (JSON)
-            <textarea id="domain-facts" aria-label="Domain-Fakten (JSON)" required aria-invalid={preview.length > 0} aria-describedby="domain-facts-help" value={form.domainFacts} onChange={(event) => update('domainFacts', event.target.value)} disabled={!canMutate || busy} rows={12} spellCheck={false} className="px-2.5 py-2 hover:border-control-border-hover rounded-control border border-control-border bg-surface font-mono text-xs font-normal focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring" />
-            <span id="domain-facts-help" className="font-normal text-muted">Nur für fachkundige Bearbeitung. Konten und Beträge werden vor der Buchung erneut validiert.</span>
-          </label>
-        </details>
-        {preview.length && pristine ? (
-          <div className="rounded-xl border border-border bg-surface-muted p-3" role="status">
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <h3 className="text-sm font-semibold text-foreground">2. Angaben ergänzen</h3>
-              {parsedFacts ? <span className="text-xs tabular-nums text-muted">Periode {String(parsedFacts.period ?? periodOf(form.date))}</span> : null}
+      {!dataAdapter?.postAccountingCommand ? <p className={`border-border bg-surface-muted text-muted ${bannerClass}`} role="status">Sonderbuchungen sind in dieser Verbindung nur lesbar.</p> : null}
+      {!canMutate ? <p className={`border-border bg-surface-muted text-muted ${bannerClass}`} role="status">Diese Rolle darf Sonderbuchungen nur lesen.</p> : null}
+      <section aria-labelledby="special-entry-form-heading">
+        <Card padding="none">
+          <CardHeader className={cardHeadClass} title={<span id="special-entry-form-heading">1. Vorgang und Angaben</span>} subtitle={selectedWorkflow.description} />
+          <div className="flex flex-col gap-3 p-3.5">
+            <p className="max-w-3xl text-caption text-muted text-pretty">Vorgang auswählen, Angaben prüfen und erst danach verbindlich buchen. Die Buchungszeilen erzeugt der geprüfte Fachworkflow.</p>
+            <Stepper label="Buchungsablauf" steps={['Vorgang', 'Angaben', 'Prüfen & buchen']} current={preview.length > 0 ? 1 : 2} />
+            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+              <Select label="Workflow" aria-label="Workflow" fullWidth value={form.kind} onChange={(event) => selectWorkflow(event.target.value as AccountingCommandKind)} disabled={!canMutate || busy}>
+                {workflowGroups.map((group) => <optgroup key={group} label={group}>{workflows.filter((workflow) => workflow.group === group).map((workflow) => <option key={workflow.value} value={workflow.value}>{workflow.label}</option>)}</optgroup>)}
+              </Select>
+              <Input id="source-id" label="Quellbeleg" aria-label="Quellbeleg" required fullWidth aria-invalid={Boolean(shownErrors.sourceId)} error={shownErrors.sourceId ?? undefined} value={form.sourceId} onChange={(event) => update('sourceId', event.target.value)} onBlur={() => touch('sourceId')} disabled={!canMutate || busy} placeholder="z. B. RE-2026-10-42" />
+              <Input id="booking-date" label="Buchungsdatum" aria-label="Buchungsdatum" type="date" required fullWidth aria-invalid={Boolean(shownErrors.date)} error={shownErrors.date ?? undefined} value={form.date} onChange={(event) => update('date', event.target.value)} onBlur={() => touch('date')} disabled={!canMutate || busy} />
+              <Field id="audit-reason" label="Audit-Grund (Pflicht)" className="sm:col-span-2 lg:col-span-3">
+                <Input aria-label="Audit-Grund" required fullWidth aria-invalid={Boolean(shownErrors.reason)} error={shownErrors.reason ?? undefined} value={form.reason} onChange={(event) => update('reason', event.target.value)} onBlur={() => touch('reason')} disabled={!canMutate || busy} placeholder="Warum wird diese Buchung vorgenommen?" />
+              </Field>
             </div>
-            <ul className="mt-2 list-disc space-y-1 pl-4 text-sm text-muted">{preview.map((error) => <li key={error}>{error}</li>)}</ul>
+            <details className="border-t border-border pt-1">
+              <summary className="cursor-pointer select-none py-2 text-label text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring">Fachdaten für Experten bearbeiten</summary>
+              <Textarea id="domain-facts" label="Fachdaten (JSON)" aria-label="Domain-Fakten (JSON)" required fullWidth aria-invalid={preview.length > 0} hint="Nur für fachkundige Bearbeitung. Konten und Beträge werden vor der Buchung erneut validiert." value={form.domainFacts} onChange={(event) => update('domainFacts', event.target.value)} disabled={!canMutate || busy} rows={12} spellCheck={false} className="font-mono" />
+            </details>
+            {preview.length && pristine ? (
+              <div className={`border-border bg-surface-muted ${bannerClass}`} role="status">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <h3 className="text-label text-foreground">2. Angaben ergänzen</h3>
+                  {parsedFacts ? <span className="text-caption tabular-nums text-muted">Periode {String(parsedFacts.period ?? periodOf(form.date))}</span> : null}
+                </div>
+                <ul className="mt-1.5 list-disc space-y-0.5 pl-4 text-muted">{preview.map((error) => <li key={error}>{error}</li>)}</ul>
+              </div>
+            ) : (
+              <div className={`${preview.length ? 'border-error-border bg-error-bg' : 'border-success-border bg-success-bg'} ${bannerClass}`} role={preview.length ? 'alert' : 'status'}>
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <h3 className={`text-label ${preview.length ? 'text-error-text' : 'text-success-text'}`}>2. {preview.length ? 'Angaben noch unvollständig' : 'Angaben vollständig'}</h3>
+                  {parsedFacts ? <span className="text-caption tabular-nums text-muted">Periode {String(parsedFacts.period ?? periodOf(form.date))}</span> : null}
+                </div>
+                {preview.length ? <ul className="mt-1.5 list-disc space-y-0.5 pl-4 text-error-text">{preview.map((error) => <li key={error}>{error}</li>)}</ul> : <p className="mt-1 text-success-text">{selectedWorkflow.label} · {formatEmptyValue(userFacingReference(form.sourceId))} · {form.date}</p>}
+              </div>
+            )}
           </div>
-        ) : (
-          <div className={`rounded-xl border p-3 ${preview.length ? 'border-error-border bg-error-bg' : 'border-success-border bg-success-bg'}`} role={preview.length ? 'alert' : 'status'}>
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <h3 className={`text-sm font-semibold ${preview.length ? 'text-error-text' : 'text-success-text'}`}>2. {preview.length ? 'Angaben noch unvollständig' : 'Angaben vollständig'}</h3>
-              {parsedFacts ? <span className="text-xs tabular-nums text-muted">Periode {String(parsedFacts.period ?? periodOf(form.date))}</span> : null}
-            </div>
-            {preview.length ? <ul className="mt-2 list-disc space-y-1 pl-4 text-sm text-error-text">{preview.map((error) => <li key={error}>{error}</li>)}</ul> : <p className="mt-1 text-sm text-success-text">{selectedWorkflow.label} · {formatEmptyValue(userFacingReference(form.sourceId))} · {form.date}</p>}
+          <div className="flex flex-wrap items-center justify-end gap-3 border-t border-border px-3.5 py-3">
+            {feedback ? <p data-testid="sonderbuchungen-feedback" className={`min-w-0 flex-1 text-control ${feedback.kind === 'error' ? 'text-error-text' : 'text-success-text'}`} role={feedback.kind === 'error' ? 'alert' : 'status'} aria-live={feedback.kind === 'error' ? 'assertive' : 'polite'}>{feedback.text}</p> : null}
+            <Button type="button" variant="dark" onClick={() => void submit()} disabled={busy || preview.length > 0 || !canMutate || !dataAdapter?.postAccountingCommand} aria-busy={busy}>{busy ? 'Buchung läuft…' : 'Prüfen & verbindlich buchen'}</Button>
           </div>
-        )}
-        <div className="flex flex-wrap items-center justify-end gap-2 border-t border-border-subtle pt-3">
-          <Button type="button" onClick={() => void submit()} disabled={busy || preview.length > 0 || !canMutate || !dataAdapter?.postAccountingCommand} aria-busy={busy}>{busy ? 'Buchung läuft…' : 'Prüfen & verbindlich buchen'}</Button>
-        </div>
-        {feedback ? <p data-testid="sonderbuchungen-feedback" className={feedback.kind === 'error' ? 'text-sm text-error-text' : 'text-sm text-success-text'} role={feedback.kind === 'error' ? 'alert' : 'status'} aria-live={feedback.kind === 'error' ? 'assertive' : 'polite'}>{feedback.text}</p> : null}
+        </Card>
       </section>
 
-      <section className="rounded-xl border border-border bg-surface p-4 space-y-3" aria-labelledby="tax-preparation-heading">
-        <div>
-          <h2 id="tax-preparation-heading" className="text-sm font-semibold">Steuerliche Vorbereitung / Export</h2>
-          <p className="text-xs text-muted">Vorbereitung und Export sind keine offizielle Übermittlung. Der Provider bleibt nicht verfügbar.</p>
-        </div>
-        <div className="flex flex-wrap items-end gap-3">
-          <label className="flex flex-col gap-1 text-xs font-semibold">Meldung
-            <select aria-label="Steuervorbereitung" value={taxKind} onChange={(event) => { setPreparedArtifact(null); setTaxError(null); setTaxKind(event.target.value as TaxPreparationKind); }} disabled={taxBusy} className="px-2.5 h-8 hover:border-control-border-hover rounded-control border border-control-border text-sm font-normal">
-              {taxPreparations.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}
-            </select>
-          </label>
-          <label className="flex flex-col gap-1 text-xs font-semibold">Zeitraum
-            <input id="tax-period" aria-label="Steuerzeitraum" type="month" required aria-invalid={Boolean(taxPeriodError)} aria-describedby={taxPeriodError ? 'tax-period-error' : undefined} value={taxPeriod} onChange={(event) => { setPreparedArtifact(null); setTaxError(null); setTaxPeriod(event.target.value); }} disabled={taxBusy} className="px-2.5 h-8 hover:border-control-border-hover rounded-control border border-control-border text-sm font-normal" />
-            {taxPeriodError ? <span id="tax-period-error" className="text-xs font-normal text-error-text">{taxPeriodError}</span> : null}
-          </label>
-          <label className="flex min-w-60 flex-1 flex-col gap-1 text-xs font-semibold">Audit-Grund (Pflicht)
-            <input id="tax-audit-reason" aria-label="Audit-Grund Steuerexport" required aria-invalid={Boolean(shownTaxReasonError)} aria-describedby={shownTaxReasonError ? 'tax-audit-reason-error' : undefined} value={taxReason} onBlur={() => setTaxReasonTouched(true)} onChange={(event) => setTaxReason(event.target.value)} disabled={taxBusy} className="px-2.5 h-8 hover:border-control-border-hover rounded-control border border-control-border text-sm font-normal" />
-            {shownTaxReasonError ? <span id="tax-audit-reason-error" className="text-xs font-normal text-error-text">{shownTaxReasonError}</span> : null}
-          </label>
-          <Button type="button" variant="secondary" onClick={() => void prepareTax()} disabled={taxBusy || !dataAdapter?.prepareTaxExport} aria-busy={taxBusy}>{taxBusy ? 'Bereite vor…' : 'Vorbereitung erstellen'}</Button>
-        </div>
-        {taxError ? <p className="text-sm text-error-text" role="alert" aria-live="assertive">{taxError}</p> : null}
-        {preparedArtifact ? <div className="flex flex-wrap items-center gap-2"><p className={`text-sm ${preparedArtifact.rowCount === 0 ? 'text-muted' : 'text-success-text'}`} role="status" aria-live="polite">{preparedArtifact.rowCount === 0 ? `${taxPreparations.find((item) => item.value === preparedArtifact.kind)?.label ?? preparedArtifact.kind}: Keine meldepflichtigen Vorgänge (keine meldepflichtigen Zeilen).` : `${taxPreparations.find((item) => item.value === preparedArtifact.kind)?.label ?? preparedArtifact.kind} vorbereitet (${preparedArtifact.status}) – keine offizielle Übermittlung.`}</p>{preparedArtifact.id && dataAdapter?.exportTaxArtifact ? <Button type="button" size="sm" variant="secondary" onClick={() => void exportTax()} disabled={exportBusy} aria-busy={exportBusy}>{exportBusy ? 'Export läuft…' : 'Vorbereitungs-Export'}</Button> : null}</div> : null}
-        <div className="grid gap-2 sm:grid-cols-2">
-          <p className="rounded-lg border border-border-subtle bg-surface-muted p-3 text-sm text-muted"><strong>E-Bilanz:</strong> Vorbereitung möglich, offizieller Provider nicht verfügbar.</p>
-          <p className="rounded-lg border border-border-subtle bg-surface-muted p-3 text-sm text-muted"><strong>Unternehmensregister:</strong> Vorbereitung möglich, offizieller Provider nicht verfügbar.</p>
-        </div>
+      <section aria-labelledby="tax-preparation-heading">
+        <Card padding="none">
+          <CardHeader className={cardHeadClass} title={<span id="tax-preparation-heading">Steuerliche Vorbereitung / Export</span>} subtitle="Vorbereitung und Export sind keine offizielle Übermittlung. Der Provider bleibt nicht verfügbar." />
+          <div className="flex flex-col gap-3 p-3.5">
+            <div className="flex flex-wrap items-end gap-3">
+              <Select label="Meldung" aria-label="Steuervorbereitung" value={taxKind} onChange={(event) => { setPreparedArtifact(null); setTaxError(null); setTaxKind(event.target.value as TaxPreparationKind); }} disabled={taxBusy}>
+                {taxPreparations.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}
+              </Select>
+              <Input id="tax-period" label="Zeitraum" aria-label="Steuerzeitraum" type="month" required aria-invalid={Boolean(taxPeriodError)} error={taxPeriodError ?? undefined} value={taxPeriod} onChange={(event) => { setPreparedArtifact(null); setTaxError(null); setTaxPeriod(event.target.value); }} disabled={taxBusy} />
+              <Field id="tax-audit-reason" label="Audit-Grund (Pflicht)" className="min-w-60 flex-1">
+                <Input aria-label="Audit-Grund Steuerexport" required fullWidth aria-invalid={Boolean(shownTaxReasonError)} error={shownTaxReasonError ?? undefined} value={taxReason} onBlur={() => setTaxReasonTouched(true)} onChange={(event) => setTaxReason(event.target.value)} disabled={taxBusy} />
+              </Field>
+              <Button type="button" variant="secondary" onClick={() => void prepareTax()} disabled={taxBusy || !dataAdapter?.prepareTaxExport} aria-busy={taxBusy}>{taxBusy ? 'Bereite vor…' : 'Vorbereitung erstellen'}</Button>
+            </div>
+            {taxError ? <p className="text-control text-error-text" role="alert" aria-live="assertive">{taxError}</p> : null}
+            {preparedArtifact ? <div className="flex flex-wrap items-center gap-2"><p className={`text-control ${preparedArtifact.rowCount === 0 ? 'text-muted' : 'text-success-text'}`} role="status" aria-live="polite">{preparedArtifact.rowCount === 0 ? `${taxPreparations.find((item) => item.value === preparedArtifact.kind)?.label ?? preparedArtifact.kind}: Keine meldepflichtigen Vorgänge (keine meldepflichtigen Zeilen).` : `${taxPreparations.find((item) => item.value === preparedArtifact.kind)?.label ?? preparedArtifact.kind} vorbereitet (${preparedArtifact.status}) – keine offizielle Übermittlung.`}</p>{preparedArtifact.id && dataAdapter?.exportTaxArtifact ? <Button type="button" size="sm" variant="secondary" onClick={() => void exportTax()} disabled={exportBusy} aria-busy={exportBusy}>{exportBusy ? 'Export läuft…' : 'Vorbereitungs-Export'}</Button> : null}</div> : null}
+          </div>
+          <div className="grid gap-x-6 gap-y-1 border-t border-border px-3.5 py-3 text-caption text-muted sm:grid-cols-2">
+            <p><strong className="font-semibold text-foreground-secondary">E-Bilanz:</strong> Vorbereitung möglich, offizieller Provider nicht verfügbar.</p>
+            <p><strong className="font-semibold text-foreground-secondary">Unternehmensregister:</strong> Vorbereitung möglich, offizieller Provider nicht verfügbar.</p>
+          </div>
+        </Card>
       </section>
 
-      <section className="rounded-xl border border-border bg-surface p-4" aria-labelledby="source-run-history-heading">
-        <h2 id="source-run-history-heading" className="text-base font-semibold">Letzte Buchungsläufe</h2>
-        {historyError ? <div className="mt-2 flex flex-wrap items-center gap-2" role="alert"><p className="text-sm text-error-text">Buchungshistorie konnte nicht geladen werden: {historyError}</p><Button type="button" size="sm" variant="secondary" onClick={() => void refetchHistory().catch(() => undefined)}>Erneut versuchen</Button></div> : history.length === 0 ? <p className="mt-2 text-sm text-muted">Noch keine Sonderbuchung vorhanden.</p> : <ul className="mt-3 space-y-2">{history.map((run) => <li key={run.id} className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-border-subtle bg-surface-muted p-3 text-sm"><span className="min-w-0"><strong className="block truncate text-foreground">{formatEmptyValue(userFacingReference(run.sourceId))}</strong><span className="text-xs text-muted">{runStatusLabel[run.status]} · {new Date(run.createdAt).toLocaleString('de-DE')}</span></span>{run.journalEntryId ? <button type="button" className="min-h-10 rounded-lg px-3 py-2 font-semibold text-foreground underline underline-offset-2 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring" onClick={() => setSelectedJournalEntryId(run.journalEntryId ?? null)}>Journal öffnen</button> : null}</li>)}</ul>}
+      <section aria-labelledby="source-run-history-heading">
+        <Card padding="none" className="overflow-hidden">
+          <CardHeader className={cardHeadClass} title={<span id="source-run-history-heading">Letzte Buchungsläufe</span>} />
+          {historyError ? (
+            <div className="flex flex-wrap items-center gap-2 p-3.5" role="alert"><p className="text-control text-error-text">Buchungshistorie konnte nicht geladen werden: {historyError}</p><Button type="button" size="sm" variant="secondary" onClick={() => void refetchHistory().catch(() => undefined)}>Erneut versuchen</Button></div>
+          ) : history.length === 0 ? <EmptyState title="Noch keine Sonderbuchung vorhanden." /> : (
+            <ul className="divide-y divide-border">
+              {history.map((run) => (
+                <li key={run.id} className="flex flex-wrap items-center justify-between gap-3 px-3.5 py-2.5 text-control">
+                  <span className="min-w-0"><strong className="block truncate font-semibold text-foreground">{formatEmptyValue(userFacingReference(run.sourceId))}</strong><span className="text-caption text-muted">{runStatusLabel[run.status]} · {new Date(run.createdAt).toLocaleString('de-DE')}</span></span>
+                  {run.journalEntryId ? <Button type="button" size="sm" variant="secondary" onClick={() => setSelectedJournalEntryId(run.journalEntryId ?? null)}>Journal öffnen</Button> : null}
+                </li>
+              ))}
+            </ul>
+          )}
+        </Card>
       </section>
       <JournalEntryDetailModal entryId={selectedJournalEntryId} dataAdapter={dataAdapter} onClose={() => setSelectedJournalEntryId(null)} />
     </div>

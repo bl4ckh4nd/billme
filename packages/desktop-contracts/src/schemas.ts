@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import {
+  offerStatusSchema,
   documentLayoutSchema,
   documentTemplateBodySchema,
   documentTemplateDefaultsSchema,
@@ -133,6 +134,8 @@ export const invoiceSchema = z.object({
   layout: documentLayoutSchema.optional(),
 });
 
+export const offerSchema = invoiceSchema.extend({ status: offerStatusSchema });
+
 export const upsertPayloadSchema = z.object({
   reason: z.string().min(1),
   invoice: invoiceSchema,
@@ -140,7 +143,7 @@ export const upsertPayloadSchema = z.object({
 
 export const upsertOfferPayloadSchema = z.object({
   reason: z.string().min(1),
-  offer: invoiceSchema,
+  offer: offerSchema,
 });
 
 export const activitySchema = z.object({
@@ -224,12 +227,12 @@ export const clientSchema = z.object({
 export const articleSchema = z.object({
   id: z.string(),
   sku: z.string().optional(),
-  title: z.string(),
+  title: z.string().trim().min(1),
   description: z.string(),
   price: z.number(),
   unit: z.string(),
   category: z.string(),
-  taxRate: z.number(),
+  taxRate: z.number().min(0).max(100),
 });
 
 export const transactionSchema = z.object({
@@ -240,6 +243,7 @@ export const transactionSchema = z.object({
   counterparty: z.string(),
   purpose: z.string(),
   linkedInvoiceId: z.string().optional(),
+  matchedManualEntryId: z.string().optional(), appliedAmountCents: z.number().int().optional(), unallocatedAmountCents: z.number().int().optional(),
   status: z.enum(['pending', 'booked', 'open', 'matched']),
   accountId: z.string().optional(),
   dedupHash: z.string().optional(),
@@ -260,7 +264,7 @@ export const eurLineSchema = z.object({
 
 export const eurClassificationSchema = z.object({
   id: z.string(),
-  sourceType: z.enum(['transaction', 'invoice']),
+  sourceType: z.enum(['transaction', 'invoice', 'manual']),
   sourceId: z.string(),
   taxYear: z.number().int(),
   eurLineId: z.string().optional(),
@@ -307,7 +311,7 @@ export const eurListItemsArgsSchema = z.object({
   from: z.string().optional(),
   to: z.string().optional(),
   onlyUnclassified: z.boolean().optional(),
-  sourceType: z.enum(['transaction', 'invoice']).optional(),
+  sourceType: z.enum(['transaction', 'invoice', 'manual']).optional(),
   flowType: z.enum(['income', 'expense']).optional(),
   status: z.enum(['all', 'unclassified', 'classified', 'excluded']).optional(),
   search: z.string().optional(),
@@ -317,7 +321,7 @@ export const eurListItemsArgsSchema = z.object({
 });
 
 export const eurListItemSchema = z.object({
-  sourceType: z.enum(['transaction', 'invoice']),
+  sourceType: z.enum(['transaction', 'invoice', 'manual']),
   sourceId: z.string(),
   date: z.string(),
   amountGross: z.number(),
@@ -341,7 +345,7 @@ export const eurGetReportArgsSchema = z.object({
 });
 
 export const eurUpsertClassificationArgsSchema = z.object({
-  sourceType: z.enum(['transaction', 'invoice']),
+  sourceType: z.enum(['transaction', 'invoice', 'manual']),
   sourceId: z.string().min(1),
   taxYear: z.number().int().min(2025),
   reason: z.string().trim().min(1),
@@ -426,8 +430,8 @@ export const dunningLevelSchema = z.object({
   id: z.number(),
   name: z.string(),
   enabled: z.boolean(),
-  daysAfterDueDate: z.number(),
-  fee: z.number(),
+  daysAfterDueDate: z.number().nonnegative(),
+  fee: z.number().nonnegative(),
   subject: z.string(),
   text: z.string(),
 });
@@ -468,6 +472,19 @@ export const businessReportingProfileSchema = z
     }
   });
 
+const isValidIban = (value: string): boolean => {
+  const iban = value.replace(/\s/g, '').toUpperCase();
+  if (!iban) return true;
+  if (!/^[A-Z]{2}\d{2}[A-Z0-9]{11,30}$/.test(iban)) return false;
+  const rearranged = iban.slice(4) + iban.slice(0, 4);
+  let remainder = 0;
+  for (const char of rearranged) {
+    const digits = /[A-Z]/.test(char) ? String(char.charCodeAt(0) - 55) : char;
+    for (const digit of digits) remainder = (remainder * 10 + Number(digit)) % 97;
+  }
+  return remainder === 1;
+};
+
 const appSettingsBaseSchema = z.object({
   businessReportingProfile: businessReportingProfileSchema.optional(),
   company: z.object({
@@ -492,31 +509,31 @@ const appSettingsBaseSchema = z.object({
     .default({ categories: [] }),
   finance: z.object({
     bankName: z.string(),
-    iban: z.string(),
-    bic: z.string(),
+    iban: z.string().refine(isValidIban, 'Ungültige IBAN.'),
+    bic: z.string().refine((value) => !value.trim() || /^[A-Z]{6}[A-Z0-9]{2}([A-Z0-9]{3})?$/.test(value.trim()), 'Ungültige BIC.'),
     taxId: z.string(),
     vatId: z.string(),
     registerCourt: z.string(),
   }),
   numbers: z.object({
     invoicePrefix: z.string(),
-    nextInvoiceNumber: z.number(),
-    numberLength: z.number(),
+    nextInvoiceNumber: z.number().int().min(1),
+    numberLength: z.number().int().min(1).max(10),
     offerPrefix: z.string(),
-    nextOfferNumber: z.number(),
+    nextOfferNumber: z.number().int().min(1),
     customerPrefix: z.string().default('KD-'),
-    nextCustomerNumber: z.number().default(1),
-    customerNumberLength: z.number().default(4),
+    nextCustomerNumber: z.number().int().min(1).default(1),
+    customerNumberLength: z.number().int().min(1).max(10).default(4),
   }),
   dunning: z.object({
     levels: z.array(dunningLevelSchema),
   }),
   legal: z.object({
     smallBusinessRule: z.boolean(),
-    defaultVatRate: z.number(),
+    defaultVatRate: z.number().min(0).max(100),
     countryCode: z.enum(['DE', 'AT', 'CH']).optional(),
     taxAccountingMethod: z.enum(['soll', 'ist']).default('soll'),
-    paymentTermsDays: z.number(),
+    paymentTermsDays: z.number().nonnegative(),
     defaultIntroText: z.string(),
     defaultFooterText: z.string(),
   }),
@@ -650,7 +667,9 @@ export const csvMappingSchema = z.object({
 });
 
 export const financeImportPreviewSchema = z.object({
-  path: z.string().min(1),
+  path: z.string().min(1).optional(),
+  fileName: z.string().optional(),
+  contentBase64: z.string().optional(),
   profile: csvProfileSchema.optional(),
   mapping: csvMappingSchema.optional(),
   encoding: z.enum(['utf8', 'win1252']).optional(),

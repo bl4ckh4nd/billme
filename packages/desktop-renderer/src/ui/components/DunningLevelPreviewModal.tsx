@@ -1,6 +1,6 @@
 import { X } from 'lucide-react';
 import { useId } from 'react';
-import { Modal } from '@billme/ui';
+import { Avatar, Button, IconButton, Modal } from '@billme/ui';
 
 export interface DunningPreviewSender {
   name?: string;
@@ -58,8 +58,6 @@ export const DunningLevelPreviewModal = ({
   const recipientName = recipient?.name?.trim() || SAMPLE_COMPANY;
   const recipientEmail = recipient?.email?.trim() || SAMPLE_EMAIL;
   const hasSampleIdentity = !sender?.name?.trim() || !recipient?.name?.trim();
-  const senderInitials = senderName.split(/\s+/).filter(Boolean).slice(0, 2)
-    .map((part) => part.charAt(0).toUpperCase()).join('') || 'IF';
 
   const previewText = text
     .replace(/%N/g, 'RE-2024-001')
@@ -78,67 +76,56 @@ export const DunningLevelPreviewModal = ({
       open={isOpen}
       onClose={onClose}
       titleId={titleId}
-      className="flex max-h-[90vh] max-w-4xl flex-col overflow-hidden"
+      className="flex max-h-[84vh] max-w-4xl flex-col overflow-hidden"
     >
-      {/* Header */}
-      <div className="flex items-center justify-between border-b border-border bg-surface-muted px-6 py-4">
-        <div>
-          <h2 id={titleId} className="text-lg font-semibold text-foreground">
+      <div className="flex items-start gap-3 px-4.5 pt-4 pb-2.5">
+        <div className="min-w-0 flex-1">
+          <h2 id={titleId} className="text-title text-foreground">
             E-Mail Vorschau – Mahnstufe {levelNumber}
           </h2>
-          <p className="mt-0.5 text-xs text-muted">
+          <p className="text-caption text-muted">
             Beispielhafte Darstellung im E-Mail-Client
           </p>
           {hasSampleIdentity ? (
-            <p className="mt-0.5 text-xs text-muted">
+            <p className="text-caption text-muted">
               Absender und Empfänger sind Beispielwerte.
             </p>
           ) : null}
         </div>
-        <button
-          type="button"
-          aria-label="Dialog schließen"
-          onClick={onClose}
-          className="rounded-lg p-2 text-muted transition-colors hover:bg-border focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
-        >
-          <X size={20} aria-hidden="true" />
-        </button>
+        <IconButton aria-label="Dialog schließen" tooltip={false} onClick={onClose}>
+          <X size={16} aria-hidden="true" />
+        </IconButton>
       </div>
 
-      {/* Content */}
-      <div className="flex-1 overflow-y-auto bg-surface-sunken p-8">
+      <div className="flex flex-1 flex-col gap-3 overflow-y-auto px-4.5 pt-1 pb-4">
         {/* Email preview */}
-        <div className="mx-auto max-w-3xl overflow-hidden rounded-lg shadow-xl">
-          {/* Email header */}
-          <div className="border-b border-border bg-surface-muted px-6 py-3">
-            <div className="mb-1 text-xs font-semibold uppercase tracking-wider text-muted">Betreff</div>
-            <div className="text-base font-semibold text-foreground">{previewSubject || '(Kein Betreff)'}</div>
+        <div className="mx-auto w-full max-w-3xl overflow-hidden rounded-card border border-border">
+          <div className="border-b border-border bg-surface-muted px-3.5 py-3">
+            <div className="text-eyebrow uppercase text-muted">Betreff</div>
+            <div className="text-section text-foreground">{previewSubject || '(Kein Betreff)'}</div>
           </div>
 
-          {/* Email metadata */}
-          <div className="border-b border-border-subtle bg-surface px-6 py-4">
-            <div className="mb-3 flex items-start justify-between">
+          <div className="border-b border-border bg-surface px-3.5 py-3">
+            <div className="mb-2 flex items-start justify-between gap-3">
               <div className="flex items-start gap-3">
-                <div className="flex h-10 w-10 items-center justify-center rounded-full bg-surface-muted text-sm font-semibold text-foreground">
-                  {senderInitials}
-                </div>
+                <Avatar name={senderName} />
                 <div>
-                  <div className="text-sm font-semibold text-foreground">{senderName}</div>
-                  <div className="text-xs text-muted">{senderEmail}</div>
+                  <div className="text-control font-semibold text-foreground">{senderName}</div>
+                  <div className="text-caption text-muted">{senderEmail}</div>
                 </div>
               </div>
-              <div className="text-xs text-muted">
+              <div className="text-caption text-muted">
                 {new Date().toLocaleDateString('de-DE', { day: '2-digit', month: 'short', year: 'numeric' })}
               </div>
             </div>
-            <div className="text-xs text-muted">
+            <div className="text-caption text-muted">
               <span className="font-medium">An: </span>
               {recipientName} &lt;{recipientEmail}&gt;
             </div>
           </div>
 
           {/* Email body */}
-          <div className="bg-surface px-6 py-8" style={{ fontFamily: 'ui-sans-serif, system-ui, sans-serif' }}>
+          <div className="bg-surface px-3.5 py-6" style={{ fontFamily: 'ui-sans-serif, system-ui, sans-serif' }}>
             <div className="space-y-4">
               {previewText.split('\n').map((paragraph, idx) => (
                 <p key={idx} className="text-base leading-relaxed text-foreground">
@@ -147,11 +134,10 @@ export const DunningLevelPreviewModal = ({
               ))}
             </div>
 
-            {/* Signature */}
             <div className="mt-8 border-t border-border pt-6">
               <p className="text-sm text-foreground">Mit freundlichen Grüßen</p>
               <p className="mt-2 text-sm font-semibold text-foreground">{senderName}</p>
-              <div className="mt-3 space-y-0.5 text-xs text-muted">
+              <div className="mt-3 space-y-0.5 text-caption text-muted">
                 <p>{senderStreet}</p>
                 <p>{senderCity}</p>
                 <p className="mt-2">
@@ -161,47 +147,27 @@ export const DunningLevelPreviewModal = ({
             </div>
           </div>
 
-          {/* Email footer */}
-          <div className="border-t border-border bg-surface-muted px-6 py-3">
-            <p className="text-xs leading-tight text-muted">
+          <div className="border-t border-border bg-surface-muted px-3.5 py-3">
+            <p className="text-caption text-muted">
               Diese E-Mail wurde automatisch generiert. Bitte antworten Sie nicht auf diese Nachricht.
             </p>
           </div>
         </div>
 
         {/* Placeholder reference */}
-        <div className="mx-auto mt-6 max-w-3xl rounded-lg border border-info-border bg-info-bg p-4">
-          <div className="mb-2 text-xs font-semibold text-info-text">Verwendete Platzhalter:</div>
-          <div className="grid grid-cols-2 gap-2 text-xs">
-            <div className="flex items-baseline gap-2">
-              <code className="rounded-sm bg-info-bg px-1.5 py-1 font-mono font-semibold text-info-text">%N</code>
-              <span className="text-info-text">= RE-2024-001</span>
-            </div>
-            <div className="flex items-baseline gap-2">
-              <code className="rounded-sm bg-info-bg px-1.5 py-1 font-mono font-semibold text-info-text">%D</code>
-              <span className="text-info-text">= 15.01.2024</span>
-            </div>
-            <div className="flex items-baseline gap-2">
-              <code className="rounded-sm bg-info-bg px-1.5 py-1 font-mono font-semibold text-info-text">%A</code>
-              <span className="text-info-text">= 1.250,00 €</span>
-            </div>
-            <div className="flex items-baseline gap-2">
-              <code className="rounded-sm bg-info-bg px-1.5 py-1 font-mono font-semibold text-info-text">%C</code>
-              <span className="text-info-text">= {recipientName}</span>
-            </div>
+        <div className="mx-auto w-full max-w-3xl rounded-control border border-info-border bg-info-bg px-3 py-2.5 text-control text-info-text">
+          <div className="mb-1.5 font-semibold">Verwendete Platzhalter:</div>
+          <div className="grid grid-cols-2 gap-x-3 gap-y-1">
+            <div><code className="font-mono font-semibold">%N</code> = RE-2024-001</div>
+            <div><code className="font-mono font-semibold">%D</code> = 15.01.2024</div>
+            <div><code className="font-mono font-semibold">%A</code> = 1.250,00 €</div>
+            <div><code className="font-mono font-semibold">%C</code> = {recipientName}</div>
           </div>
         </div>
       </div>
 
-      {/* Footer */}
-      <div className="flex items-center justify-end gap-3 border-t border-border bg-surface-muted px-6 py-4">
-        <button
-          type="button"
-          onClick={onClose}
-          className="rounded-lg bg-dark-base px-6 py-2.5 text-sm font-semibold text-inverse-foreground shadow-sm transition-colors hover:bg-dark-1 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring-dark"
-        >
-          Schließen
-        </button>
+      <div className="flex flex-wrap justify-end gap-2 border-t border-border px-4.5 py-3">
+        <Button variant="secondary" onClick={onClose}>Schließen</Button>
       </div>
     </Modal>
   );

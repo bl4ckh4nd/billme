@@ -1,10 +1,14 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent } from 'react';
 import { Search } from 'lucide-react';
-import { Button, EMPTY_VALUE, formatEmptyValue } from '@billme/ui';
+import {
+  Badge, Button, Card, CardHeader, Checkbox, EmptyState, Field, Input, Metric, Select, Table, TableBody, TableCell, TableHead, TableHeader, TableRow, Textarea,
+  EMPTY_VALUE, cn, formatEmptyValue, type BadgeTone,
+} from '@billme/ui';
 import type { AssetDepreciationScheduleEntry, AssetItem, AssetStatus } from '../domain/assetTypes';
 import type { ProAccountingDataAdapter } from '../services/accountingDataAdapter';
 import type { AssetUpsertInput } from '../domain/assetTypes';
 import { permissionContextForRole } from '../domain/permissions';
+import { localToday } from '../domain/reportDates';
 import { toAccountingActorRole, type UserRole } from '../types';
 
 const mockAssets: AssetItem[] = [
@@ -105,16 +109,19 @@ function euro(value: number) {
   return new Intl.NumberFormat('de-DE', { style: 'currency', currency: 'EUR' }).format(value);
 }
 
-function statusPill(status: AssetStatus) {
-  const map: Record<AssetStatus, { label: string; className: string }> = {
-    entwurf: { label: 'Entwurf', className: 'bg-warning-bg text-warning-text' },
-    aktiv: { label: 'Aktiv', className: 'bg-success-bg text-success-text' },
-    voll_abgeschrieben: { label: 'Voll abgeschrieben', className: 'bg-border-subtle text-foreground' },
-    verkauft: { label: 'Verkauft', className: 'bg-info-bg text-info-text' },
-    stillgelegt: { label: 'Stillgelegt', className: 'bg-error-bg text-error-text' },
-  };
-  return map[status];
-}
+const statusBadge: Record<AssetStatus, { label: string; tone: BadgeTone }> = {
+  entwurf: { label: 'Entwurf', tone: 'warning' },
+  aktiv: { label: 'Aktiv', tone: 'success' },
+  voll_abgeschrieben: { label: 'Voll abgeschrieben', tone: 'neutral' },
+  verkauft: { label: 'Verkauft', tone: 'info' },
+  stillgelegt: { label: 'Stillgelegt', tone: 'error' },
+};
+
+const bannerClass = 'rounded-control border px-3 py-2.5 text-control';
+const cardHeadClass = 'border-b border-border px-3.5 py-3';
+
+// ponytail: the star sits inside the label because the specs address fields as 'Audit-Grund *'; use Field's required mark once those names drop the star.
+const requiredLabel = (text: string) => <>{text} <span className="text-error-text">*</span></>;
 
 type AssetFormState = {
   id?: string;
@@ -136,7 +143,7 @@ type AssetFormState = {
 };
 
 function today() {
-  return new Date().toISOString().slice(0, 10);
+  return localToday();
 }
 
 function formFromAsset(asset?: AssetItem, activate = false): AssetFormState {
@@ -178,85 +185,71 @@ function AssetEditor({ form, busy, onChange, onSubmit, onCancel }: AssetEditorPr
   };
 
   return (
-    <div className="min-h-0 flex-1 overflow-y-auto p-6">
+    <Card padding="none" className="max-w-4xl">
       <form
-        className="mx-auto max-w-4xl rounded-2xl border border-border bg-surface p-5 space-y-5"
         noValidate
         onSubmit={(event) => { event.preventDefault(); onSubmit(); }}
         aria-busy={busy}
       >
-        <div>
-          <h2 className="text-base font-semibold text-foreground">{form.id ? 'Anlage bearbeiten' : 'Neue Anlage'}</h2>
-          <p className="mt-1 text-sm text-muted">Speichern und Aktivieren erzeugen jeweils einen nachvollziehbaren Audit-Eintrag.</p>
+        <CardHeader className={cardHeadClass} title={form.id ? 'Anlage bearbeiten' : 'Neue Anlage'} subtitle="Speichern und Aktivieren erzeugen jeweils einen nachvollziehbaren Audit-Eintrag." />
+        <div className="flex flex-col gap-3 p-3.5">
+          <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+            {([
+              ['assetNumber', 'Anlagennummer', 'z. B. ANL-2026-010'],
+              ['name', 'Bezeichnung', 'z. B. Server'],
+              ['assetClass', 'Anlagenklasse', 'z. B. IT-Hardware'],
+              ['costCenter', 'Kostenstelle', 'z. B. ADM-01'],
+              ['location', 'Standort', 'z. B. Berlin HQ'],
+              ['assetAccountNumber', 'Anlagenkonto', 'z. B. 0440'],
+              ['supplier', 'Lieferant', 'Optional'],
+              ['invoiceRef', 'Rechnungsreferenz', 'Optional'],
+            ] as const).map(([key, label, placeholder]) => {
+              const required = ['assetNumber', 'name', 'assetClass', 'costCenter', 'location', 'assetAccountNumber'].includes(key);
+              return (
+                <Field key={key} id={`asset-${key}`} label={required ? requiredLabel(label) : label}>
+                  <Input fullWidth value={form[key] as string} onChange={input(key)} placeholder={placeholder} required={required} />
+                </Field>
+              );
+            })}
+            <Field id="asset-activation-date" label={requiredLabel('Aktivierungsdatum')}>
+              <Input fullWidth type="date" value={form.activationDate} onChange={input('activationDate')} required />
+            </Field>
+            <Field id="asset-acquisition-cost" label={requiredLabel('Anschaffungskosten netto')}>
+              <Input fullWidth type="number" min="0" step="0.01" value={form.acquisitionCost} onChange={input('acquisitionCost')} required />
+            </Field>
+            <Input label="Nutzungsdauer in Jahren" fullWidth type="number" min="1" step="1" value={form.usefulLifeYears} onChange={input('usefulLifeYears')} />
+            <Field id="asset-depreciation-method" label={requiredLabel('Abschreibungsmethode')}>
+              <Select fullWidth value={form.depreciationMethod} onChange={input('depreciationMethod')} required>
+                <option value="linear">Linear</option>
+                <option value="gwg">GWG</option>
+                <option value="pool">Pool</option>
+              </Select>
+            </Field>
+            <Field
+              id="asset-status"
+              label={requiredLabel('Status')}
+              hint={accountingOwned ? 'Gebuchte Anlagen behalten ihren Accounting-Status. Für eine Korrektur bitte den Anlagen-Korrekturfluss verwenden.' : undefined}
+            >
+              <Select fullWidth value={form.status} onChange={input('status')} required disabled={accountingOwned}>
+                <option value="entwurf">Entwurf</option>
+                <option value="aktiv">Aktiv</option>
+                <option value="voll_abgeschrieben">Voll abgeschrieben</option>
+                <option value="verkauft">Verkauft</option>
+                <option value="stillgelegt">Stillgelegt</option>
+              </Select>
+            </Field>
+          </div>
+          <Checkbox label="Beleg ist verknüpft" checked={form.receiptLinked} onChange={input('receiptLinked')} />
+          <Field id="asset-reason" label={requiredLabel('Audit-Grund')}>
+            <Textarea fullWidth value={form.reason} onChange={input('reason')} required minLength={1} rows={2} placeholder="Warum wird die Anlage geändert?" />
+          </Field>
         </div>
-        <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-          {([
-            ['assetNumber', 'Anlagennummer', 'z. B. ANL-2026-010'],
-            ['name', 'Bezeichnung', 'z. B. Server'],
-            ['assetClass', 'Anlagenklasse', 'z. B. IT-Hardware'],
-            ['costCenter', 'Kostenstelle', 'z. B. ADM-01'],
-            ['location', 'Standort', 'z. B. Berlin HQ'],
-            ['assetAccountNumber', 'Anlagenkonto', 'z. B. 0440'],
-            ['supplier', 'Lieferant', 'Optional'],
-            ['invoiceRef', 'Rechnungsreferenz', 'Optional'],
-          ] as const).map(([key, label, placeholder]) => (
-            <label key={key} className="space-y-1 text-sm font-semibold text-foreground">
-              <span>{label}{['assetNumber', 'name', 'assetClass', 'costCenter', 'location', 'assetAccountNumber'].includes(key) ? ' *' : ''}</span>
-              <input
-                value={form[key] as string}
-                onChange={input(key)}
-                placeholder={placeholder}
-                required={['assetNumber', 'name', 'assetClass', 'costCenter', 'location', 'assetAccountNumber'].includes(key)}
-                className="px-3 hover:border-control-border-hover h-9 w-full rounded-control border border-control-border bg-surface text-sm"
-              />
-            </label>
-          ))}
-          <label className="space-y-1 text-sm font-semibold text-foreground">
-            <span>Aktivierungsdatum *</span>
-            <input type="date" value={form.activationDate} onChange={input('activationDate')} required className="px-3 hover:border-control-border-hover h-9 w-full rounded-control border border-control-border bg-surface text-sm" />
-          </label>
-          <label className="space-y-1 text-sm font-semibold text-foreground">
-            <span>Anschaffungskosten netto *</span>
-            <input type="number" min="0" step="0.01" value={form.acquisitionCost} onChange={input('acquisitionCost')} required className="px-3 hover:border-control-border-hover h-9 w-full rounded-control border border-control-border bg-surface text-sm" />
-          </label>
-          <label className="space-y-1 text-sm font-semibold text-foreground">
-            <span>Nutzungsdauer in Jahren</span>
-            <input type="number" min="1" step="1" value={form.usefulLifeYears} onChange={input('usefulLifeYears')} className="px-3 hover:border-control-border-hover h-9 w-full rounded-control border border-control-border bg-surface text-sm" />
-          </label>
-          <label className="space-y-1 text-sm font-semibold text-foreground">
-            <span>Abschreibungsmethode *</span>
-            <select value={form.depreciationMethod} onChange={input('depreciationMethod')} required className="px-3 hover:border-control-border-hover h-9 w-full rounded-control border border-control-border bg-surface text-sm">
-              <option value="linear">Linear</option>
-              <option value="gwg">GWG</option>
-              <option value="pool">Pool</option>
-            </select>
-          </label>
-          <label htmlFor="asset-status" className="space-y-1 text-sm font-semibold text-foreground">
-            <span>Status *</span>
-            <select id="asset-status" value={form.status} onChange={input('status')} required disabled={accountingOwned} aria-describedby={accountingOwned ? 'asset-status-ownership-note' : undefined} className="px-3 hover:border-control-border-hover h-9 w-full rounded-control border border-control-border bg-surface text-sm disabled:cursor-not-allowed disabled:opacity-60">
-              <option value="entwurf">Entwurf</option>
-              <option value="aktiv">Aktiv</option>
-              <option value="voll_abgeschrieben">Voll abgeschrieben</option>
-              <option value="verkauft">Verkauft</option>
-              <option value="stillgelegt">Stillgelegt</option>
-            </select>
-            {accountingOwned && <span id="asset-status-ownership-note" className="block text-xs font-medium text-muted">Gebuchte Anlagen behalten ihren Accounting-Status. Für eine Korrektur bitte den Anlagen-Korrekturfluss verwenden.</span>}
-          </label>
-        </div>
-        <label className="flex items-center gap-2 text-sm font-semibold text-foreground">
-          <input type="checkbox" checked={form.receiptLinked} onChange={input('receiptLinked')} className="h-4 w-4 rounded-sm border-control-border" />
-          Beleg ist verknüpft
-        </label>
-        <label className="block space-y-1 text-sm font-semibold text-foreground">
-          <span>Audit-Grund *</span>
-          <textarea value={form.reason} onChange={input('reason')} required minLength={1} rows={2} placeholder="Warum wird die Anlage geändert?" className="px-2.5 py-2 hover:border-control-border-hover w-full rounded-control border border-control-border bg-surface text-sm" />
-        </label>
-        <div className="flex flex-wrap justify-end gap-2">
-          <Button type="button" onClick={onCancel} disabled={busy} variant="secondary" size="sm" className="h-9 px-4">Abbrechen</Button>
-          <Button type="submit" disabled={busy} variant="dark" size="sm" className="h-9 px-4">{busy ? 'Speichere…' : 'Anlage speichern'}</Button>
+        <div className="flex flex-wrap justify-end gap-2 border-t border-border px-3.5 py-3">
+          <Button type="button" onClick={onCancel} disabled={busy} variant="secondary">Abbrechen</Button>
+          <Button type="submit" disabled={busy} variant="dark">{busy ? 'Speichere…' : 'Anlage speichern'}</Button>
         </div>
       </form>
-    </div>
+    </Card>
   );
 }
 
@@ -552,138 +545,117 @@ export default function AssetManagementView({ dataAdapter, role = 'admin' }: { d
     };
   }, [assets]);
 
+  const selectedStatus = selected ? statusBadge[selected.status] : null;
+  const scheduleRows = schedule.length || dataAdapter || !selected ? schedule : [{
+    id: 'fallback',
+    assetId: selected.id,
+    year: Number(selected.activationDate.slice(0, 4)),
+    amount: selected.annualDepreciation,
+    months: 12,
+    status: 'planned' as const,
+  }];
+
   return (
-    <div className="flex h-full min-w-0 flex-col overflow-hidden xl:flex-row">
-      <div className="flex min-h-0 flex-col border-b border-border xl:w-96 xl:min-w-96 xl:max-w-96 xl:border-b-0 xl:border-r">
-        <div className="px-4 py-3 border-b border-border space-y-2.5">
-          <div className="flex items-center gap-2.5">
-
-            <div className="flex-1 min-w-0">
-              <div className="flex items-center justify-between gap-2">
-                <h2 className="sr-only">Anlagenverwaltung</h2>
-                {!dataAdapter ? (
-                  <span
-                    className="rounded-full border border-warning-border bg-warning-bg px-2 py-0.5 text-xs font-semibold text-warning-text"
-                    role="status"
-                    title="Ohne verbundenes Anlagen-Backend zeigt diese Ansicht einen Demo-Datensatz."
-                  >
-                    Beispieldaten
-                  </span>
-                ) : null}
-                {canMutate && dataAdapter?.upsertAsset && (
-                  <Button
-                    type="button"
-                    onClick={() => { if (busyAction !== null) return; setFeedback(null); setEditForm(formFromAsset()); }}
-                    disabled={busyAction !== null}
-                    variant="dark"
-                    size="sm"
-                    className="h-7 px-2.5 text-xs"
-                  >
-                    Neue Anlage
-                  </Button>
-                )}
-              </div>
-              <p className="sr-only">Übersicht, Aktivierung und Abschreibung.</p>
+    <div className="flex h-full min-w-0 flex-col gap-3.5 overflow-hidden xl:flex-row">
+      <Card padding="none" className="flex min-h-0 flex-col overflow-hidden xl:w-96 xl:shrink-0">
+        <div className="space-y-3 border-b border-border p-3.5">
+          <h2 className="sr-only">Anlagenverwaltung</h2>
+          <p className="sr-only">Übersicht, Aktivierung und Abschreibung.</p>
+          {!dataAdapter || (canMutate && dataAdapter.upsertAsset) ? (
+            <div className="flex items-center justify-between gap-2">
+              {!dataAdapter ? (
+                <span className="inline-flex" role="status" title="Ohne verbundenes Anlagen-Backend zeigt diese Ansicht einen Demo-Datensatz.">
+                  <Badge tone="warning">Beispieldaten</Badge>
+                </span>
+              ) : <span />}
+              {canMutate && dataAdapter?.upsertAsset && (
+                <Button
+                  type="button"
+                  onClick={() => { if (busyAction !== null) return; setFeedback(null); setEditForm(formFromAsset()); }}
+                  disabled={busyAction !== null}
+                  variant="dark"
+                >
+                  Neue Anlage
+                </Button>
+              )}
             </div>
-          </div>
+          ) : null}
 
-          <div className="rounded-lg border border-border bg-surface px-3 py-2">
-            <div className="text-xs font-semibold uppercase tracking-wide text-muted">Restbuchwert</div>
-            <div className="mt-0.5 text-base font-semibold tabular-nums text-foreground">{euro(totals.totalResidual)}</div>
+          <Metric marker="tick" label="Restbuchwert" value={euro(totals.totalResidual)} />
+          <div className="grid grid-cols-2 gap-3">
+            <Metric label="Anlagen gesamt" value={totals.totalAssets} hint={`${totals.activeAssets} aktiv`} />
+            <Metric label="Anschaffungskosten" value={euro(totals.totalAcquisition)} />
           </div>
 
           <div className="grid grid-cols-2 gap-2">
-            <div className="rounded-lg border border-border-subtle px-3 py-2">
-              <div className="text-xs font-semibold text-muted">Anlagen gesamt</div>
-              <div className="mt-0.5 text-sm font-semibold tabular-nums text-foreground">{totals.totalAssets} <span className="text-xs font-medium text-muted">({totals.activeAssets} aktiv)</span></div>
-            </div>
-            <div className="rounded-lg border border-border-subtle px-3 py-2">
-              <div className="text-xs font-semibold text-muted">Anschaffungskosten</div>
-              <div className="mt-0.5 text-sm font-semibold tabular-nums text-foreground">{euro(totals.totalAcquisition)}</div>
-            </div>
-          </div>
-
-          <div className="grid grid-cols-2 gap-2">
-            <div className="relative">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-muted" size={14} />
-              <input
-                type="text"
-                value={query}
-                onChange={(e) => setQuery(e.target.value)}
-                placeholder="Anlage suchen (Nr., Name, Klasse, KSt.)"
-                className="px-2.5 hover:border-control-border-hover w-full h-8 rounded-control border border-control-border pl-8 pr-3 text-xs"
-              />
-            </div>
-            <div className="flex items-center gap-1.5">
-              <select
-                value={statusFilter}
-                onChange={(e) => setStatusFilter(e.target.value as 'alle' | AssetStatus)}
-                className="px-2.5 hover:border-control-border-hover h-8 rounded-control border border-control-border text-xs"
-              >
-                <option value="alle">Alle Status</option>
-                <option value="entwurf">Entwurf</option>
-                <option value="aktiv">Aktiv</option>
-                <option value="voll_abgeschrieben">Voll abgeschrieben</option>
-                <option value="verkauft">Verkauft</option>
-                <option value="stillgelegt">Stillgelegt</option>
-              </select>
-            </div>
+            <Input
+              type="text"
+              fullWidth
+              prefix={<Search size={14} />}
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder="Anlage suchen (Nr., Name, Klasse, KSt.)"
+            />
+            <Select fullWidth value={statusFilter} onChange={(e) => setStatusFilter(e.target.value as 'alle' | AssetStatus)}>
+              <option value="alle">Alle Status</option>
+              <option value="entwurf">Entwurf</option>
+              <option value="aktiv">Aktiv</option>
+              <option value="voll_abgeschrieben">Voll abgeschrieben</option>
+              <option value="verkauft">Verkauft</option>
+              <option value="stillgelegt">Stillgelegt</option>
+            </Select>
           </div>
         </div>
 
-        <div className="min-h-0 flex-1 overflow-y-auto p-4 space-y-2">
-          {assetsLoading ? <div className="rounded-xl border border-border bg-surface p-6 text-sm text-muted" role="status" aria-live="polite" aria-busy="true">Anlagen werden geladen…</div> : null}
+        <div className="min-h-0 flex-1 overflow-y-auto">
+          {assetsLoading ? <div className="p-3.5 text-control text-muted" role="status" aria-live="polite" aria-busy="true">Anlagen werden geladen…</div> : null}
           {!assetsLoading && filtered.map((asset) => {
-            const pill = statusPill(asset.status);
-            const selectedCard = selected?.id === asset.id;
+            const status = statusBadge[asset.status];
             return (
               <button
                 key={asset.id}
+                type="button"
                 onClick={() => setSelectedId(asset.id)}
-                className={`w-full text-left rounded-xl border p-4 transition-colors ${
-                  selectedCard ? 'border-dark-base bg-surface-muted' : 'border-border bg-surface hover:bg-surface-muted'
-                }`}
+                className={cn(
+                  'block w-full border-b border-border px-3.5 py-3 text-left transition-colors last:border-b-0 hover:bg-surface-muted motion-reduce:transition-none',
+                  'focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-focus-ring',
+                  selected?.id === asset.id && 'bg-accent-50 hover:bg-accent-50',
+                )}
               >
                 <div className="flex items-start justify-between gap-3">
                   <div className="min-w-0">
-                    <div className="text-xs text-muted font-semibold">{asset.assetNumber}</div>
-                    <div className="font-semibold text-foreground truncate">{asset.name}</div>
-                    <div className="text-xs text-muted mt-0.5">
+                    <div className="text-caption tabular-nums text-muted">{asset.assetNumber}</div>
+                    <div className="truncate text-control font-semibold text-foreground">{asset.name}</div>
+                    <div className="mt-0.5 text-caption text-muted">
                       {asset.assetClass} • {asset.costCenter} • {asset.location}
                     </div>
                   </div>
-                  <span className={`px-2 py-1 rounded-full text-xs font-semibold whitespace-nowrap ${pill.className}`}>
-                    {pill.label}
-                  </span>
+                  <Badge tone={status.tone} className="shrink-0 whitespace-nowrap">{status.label}</Badge>
                 </div>
-                <div className="mt-3 grid grid-cols-3 gap-2 text-xs">
+                <div className="mt-2 grid grid-cols-3 gap-2 text-caption">
                   <div>
-                    <div className="text-muted font-semibold uppercase tracking-wide">AK</div>
-                    <div className="text-foreground font-semibold tabular-nums">{euro(asset.acquisitionCost)}</div>
+                    <div className="text-eyebrow uppercase text-muted">AK</div>
+                    <div className="font-medium tabular-nums text-foreground">{euro(asset.acquisitionCost)}</div>
                   </div>
                   <div>
-                    <div className="text-muted font-semibold uppercase tracking-wide">RBW</div>
-                    <div className="text-foreground font-semibold tabular-nums">{euro(asset.residualValue)}</div>
+                    <div className="text-eyebrow uppercase text-muted">RBW</div>
+                    <div className="font-medium tabular-nums text-foreground">{euro(asset.residualValue)}</div>
                   </div>
                   <div>
-                    <div className="text-muted font-semibold uppercase tracking-wide">Nächste AfA</div>
-                    <div className="text-foreground font-semibold tabular-nums">{asset.nextDepreciation}</div>
+                    <div className="text-eyebrow uppercase text-muted">Nächste AfA</div>
+                    <div className="font-medium tabular-nums text-foreground">{asset.nextDepreciation}</div>
                   </div>
                 </div>
               </button>
             );
           })}
-          {assetsError && <div className="flex flex-wrap items-center gap-3 rounded-xl border border-error-border bg-error-bg p-4 text-sm text-error-text" role="alert" aria-live="assertive"><span>{assetsError}</span><Button type="button" size="sm" variant="secondary" onClick={() => void loadAssets()}>Erneut versuchen</Button></div>}
-          {!assetsLoading && filtered.length === 0 && !assetsError && (
-            <div className="rounded-xl border border-border bg-surface p-6 text-sm text-muted">
-              Keine Anlagen gefunden.
-            </div>
-          )}
+          {assetsError && <div className={`m-3.5 flex flex-wrap items-center gap-3 border-error-border bg-error-bg text-error-text ${bannerClass}`} role="alert" aria-live="assertive"><span>{assetsError}</span><Button type="button" size="sm" variant="secondary" onClick={() => void loadAssets()}>Erneut versuchen</Button></div>}
+          {!assetsLoading && filtered.length === 0 && !assetsError && <EmptyState title="Keine Anlagen gefunden." />}
         </div>
-      </div>
+      </Card>
 
-      <div className="flex min-h-0 flex-1 min-w-0 flex-col">
-        {feedback ? <div data-testid="asset-mutation-feedback" className={`mx-6 mt-4 rounded-xl border p-3 text-sm ${feedback.kind === 'error' ? 'border-error-border bg-error-bg text-error-text' : 'border-success-border bg-success-bg text-success-text'}`} role={feedback.kind === 'error' ? 'alert' : 'status'} aria-live={feedback.kind === 'error' ? 'assertive' : 'polite'}>{feedback.text}</div> : null}
+      <div className="min-h-0 min-w-0 flex-1 space-y-3.5 overflow-y-auto">
+        {feedback ? <div data-testid="asset-mutation-feedback" className={`${feedback.kind === 'error' ? 'border-error-border bg-error-bg text-error-text' : 'border-success-border bg-success-bg text-success-text'} ${bannerClass}`} role={feedback.kind === 'error' ? 'alert' : 'status'} aria-live={feedback.kind === 'error' ? 'assertive' : 'polite'}>{feedback.text}</div> : null}
         {editForm ? (
           <AssetEditor
             form={editForm}
@@ -692,179 +664,180 @@ export default function AssetManagementView({ dataAdapter, role = 'admin' }: { d
             onSubmit={() => { void submitAsset(); }}
             onCancel={() => setEditForm(null)}
           />
-        ) : !selected ? (
-          <div className="flex min-h-0 flex-1 items-center justify-center p-12 text-muted">Keine Anlage ausgewählt.</div>
+        ) : !selected || !selectedStatus ? (
+          <Card padding="none"><EmptyState title="Keine Anlage ausgewählt." /></Card>
         ) : (
           <>
-            <div className="px-4 py-3 border-b border-border space-y-2.5">
-              <div className="flex items-start justify-between gap-3">
+            <Card padding="none">
+              <div className="flex flex-wrap items-start justify-between gap-3 px-3.5 py-3">
                 <div className="min-w-0">
-                  <div className="flex items-center gap-1.5 flex-wrap">
-                    <span className="text-xs font-semibold text-muted">{selected.assetNumber}</span>
-                    <span className={`px-2 py-0.5 rounded-full text-xs font-semibold ${statusPill(selected.status).className}`}>
-                      {statusPill(selected.status).label}
-                    </span>
-                    <span className={`px-2 py-0.5 rounded-full text-xs font-semibold ${selected.receiptLinked ? 'bg-success-bg text-success-text' : 'bg-warning-bg text-warning-text'}`}>
-                      {selected.receiptLinked ? 'Beleg verknüpft' : 'Beleg fehlt'}
-                    </span>
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    <span className="text-caption tabular-nums text-muted">{selected.assetNumber}</span>
+                    <Badge tone={selectedStatus.tone}>{selectedStatus.label}</Badge>
+                    <Badge tone={selected.receiptLinked ? 'success' : 'warning'}>{selected.receiptLinked ? 'Beleg verknüpft' : 'Beleg fehlt'}</Badge>
                   </div>
-                  <h2 className="text-base font-semibold text-foreground tracking-tight mt-0.5">{selected.name}</h2>
-                  <p className="text-xs text-muted font-medium">
+                  <h2 className="mt-1 text-section text-foreground">{selected.name}</h2>
+                  <p className="text-caption text-muted">
                     {selected.assetClass} • {selected.costCenter} • {selected.location}
                   </p>
                 </div>
                 {canMutate && dataAdapter?.upsertAsset && ['entwurf', 'aktiv'].includes(selected.status) && (
                   <div className="flex flex-wrap justify-end gap-2">
-                    <Button type="button" onClick={() => { if (busyAction !== null) return; setFeedback(null); setEditForm(formFromAsset(selected)); }} disabled={busyAction !== null} variant="secondary" size="sm" className="h-8 px-3 text-xs">Bearbeiten</Button>
-                    {selected.status === 'entwurf' && <Button type="button" onClick={() => { if (busyAction !== null) return; setFeedback(null); setEditForm(formFromAsset(selected, true)); }} disabled={busyAction !== null} variant="dark" size="sm" className="h-8 px-3 text-xs">Aktivieren</Button>}
+                    <Button type="button" onClick={() => { if (busyAction !== null) return; setFeedback(null); setEditForm(formFromAsset(selected)); }} disabled={busyAction !== null} variant="secondary" size="sm">Bearbeiten</Button>
+                    {selected.status === 'entwurf' && <Button type="button" onClick={() => { if (busyAction !== null) return; setFeedback(null); setEditForm(formFromAsset(selected, true)); }} disabled={busyAction !== null} variant="dark" size="sm">Aktivieren</Button>}
                   </div>
                 )}
               </div>
 
-              <div className="rounded-lg border border-border px-3 py-2 bg-surface">
-                <div className="text-xs font-semibold uppercase tracking-wide text-muted">Restbuchwert</div>
-                <div className="mt-0.5 text-base font-semibold tabular-nums text-foreground">{euro(selected.residualValue)}</div>
+              <div className="grid grid-cols-2 gap-x-6 gap-y-3 border-t border-border px-3.5 py-3 sm:grid-cols-4">
+                <Metric label="Restbuchwert" value={euro(selected.residualValue)} />
+                <Metric label="AK" value={euro(selected.acquisitionCost)} />
+                <Metric label="AfA p.a." value={euro(selected.annualDepreciation)} />
+                <Metric label="Nächste AfA" value={selected.nextDepreciation} />
               </div>
 
-              <div className="grid grid-cols-3 gap-2">
-                <div className="rounded-lg border border-border-subtle px-3 py-2 bg-surface-muted">
-                  <div className="text-xs font-semibold text-muted">AK</div>
-                  <div className="mt-0.5 text-sm font-semibold tabular-nums text-foreground">{euro(selected.acquisitionCost)}</div>
-                </div>
-                <div className="rounded-lg border border-border-subtle px-3 py-2 bg-surface-muted">
-                  <div className="text-xs font-semibold text-muted">AfA p.a.</div>
-                  <div className="mt-0.5 text-sm font-semibold tabular-nums text-foreground">{euro(selected.annualDepreciation)}</div>
-                </div>
-                <div className="rounded-lg border border-border-subtle px-3 py-2 bg-surface-muted">
-                  <div className="text-xs font-semibold text-muted">Nächste AfA</div>
-                  <div className="mt-0.5 text-sm font-semibold tabular-nums text-foreground">{selected.nextDepreciation}</div>
-                </div>
-              </div>
-
-              <div className="flex flex-wrap gap-1.5">
+              <div className="flex flex-wrap gap-1 border-t border-border px-3.5 py-2.5">
                 {tabs.map((tab) => (
-                  <button
+                  <Button
                     key={tab}
+                    size="sm"
+                    variant={activeTab === tab ? 'secondary' : 'ghost'}
+                    aria-pressed={activeTab === tab}
+                    className={activeTab === tab ? undefined : 'text-muted'}
                     onClick={() => setActiveTab(tab)}
-                    className={`h-7 px-3 rounded-lg text-xs font-semibold border ${
-                      activeTab === tab
-                        ? 'bg-surface-inverse text-inverse-foreground border-surface-inverse'
-                        : 'bg-surface text-muted border-border hover:bg-surface-muted'
-                    }`}
                   >
                     {tab}
-                  </button>
+                  </Button>
                 ))}
               </div>
-            </div>
+            </Card>
 
-            <div className="min-h-0 flex-1 overflow-y-auto p-6 grid grid-cols-1 gap-6 xl:grid-cols-2">
-              <section className="min-w-0 space-y-4">
-                <div className="rounded-2xl border border-border bg-surface p-5">
-                  <div className="text-sm font-semibold text-foreground mb-3">{activeTab}</div>
+            <div className="grid grid-cols-1 items-start gap-3.5 xl:grid-cols-2">
+              <Card padding="none" className="min-w-0 overflow-hidden">
+                <CardHeader as="h3" className={cardHeadClass} title={activeTab} />
 
-                  {activeTab === 'Übersicht' && (
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
-                      <div className="space-y-2">
-                        <div className="flex justify-between gap-3"><span className="text-muted">Lieferant</span><span className="font-semibold text-foreground">{formatEmptyValue(selected.supplier)}</span></div>
-                        <div className="flex justify-between gap-3"><span className="text-muted">Rechnung</span><span className="font-semibold text-foreground">{formatEmptyValue(selected.invoiceRef)}</span></div>
-                        <div className="flex justify-between gap-3"><span className="text-muted">Aktivierung</span><span className="font-semibold tabular-nums text-foreground">{selected.activationDate}</span></div>
-                        <div className="flex justify-between gap-3"><span className="text-muted">Kostenstelle</span><span className="font-semibold text-foreground">{selected.costCenter}</span></div>
+                {activeTab === 'Übersicht' && (
+                  <dl className="grid grid-cols-1 gap-x-6 gap-y-2 p-3.5 text-control md:grid-flow-col md:grid-cols-2 md:grid-rows-4">
+                    {([
+                      ['Lieferant', formatEmptyValue(selected.supplier)],
+                      ['Rechnung', formatEmptyValue(selected.invoiceRef)],
+                      ['Aktivierung', selected.activationDate],
+                      ['Kostenstelle', selected.costCenter],
+                      ['Standort', selected.location],
+                      ['Status', selectedStatus.label],
+                      ['Beleg', selected.receiptLinked ? 'Verknüpft' : 'Offen'],
+                      ['Nächste AfA', selected.nextDepreciation],
+                    ] as const).map(([label, value]) => (
+                      <div key={label} className="flex justify-between gap-3">
+                        <dt className="text-muted">{label}</dt>
+                        <dd className="font-medium tabular-nums text-foreground">{value}</dd>
                       </div>
-                      <div className="space-y-2">
-                        <div className="flex justify-between gap-3"><span className="text-muted">Standort</span><span className="font-semibold text-foreground">{selected.location}</span></div>
-                        <div className="flex justify-between gap-3"><span className="text-muted">Status</span><span className="font-semibold text-foreground">{statusPill(selected.status).label}</span></div>
-                        <div className="flex justify-between gap-3"><span className="text-muted">Beleg</span><span className="font-semibold text-foreground">{selected.receiptLinked ? 'Verknüpft' : 'Offen'}</span></div>
-                        <div className="flex justify-between gap-3"><span className="text-muted">Nächste AfA</span><span className="font-semibold tabular-nums text-foreground">{selected.nextDepreciation}</span></div>
-                      </div>
-                    </div>
-                  )}
+                    ))}
+                  </dl>
+                )}
 
-                  {activeTab === 'Abschreibungsplan' && (
-                    <div className="space-y-3">
-                      {scheduleLoading ? <div className="rounded-lg border border-border bg-surface-muted p-3 text-sm text-muted" role="status" aria-live="polite" aria-busy="true">Abschreibungsplan wird geladen…</div> : null}
-                      {scheduleError && <div className="flex flex-wrap items-center gap-3 rounded-lg border border-error-border bg-error-bg p-3 text-sm text-error-text" role="alert"><span>{scheduleError}</span><Button type="button" size="sm" variant="secondary" onClick={() => { if (selected) void loadScheduleForAsset(selected.id); }}>Erneut versuchen</Button></div>}
-                      {!scheduleLoading && !dataAdapter ? (
-                        <p className="text-xs text-warning-text" role="status">Beispieldaten: Der Abschreibungsplan ist ohne verbundenes Anlagen-Backend abgeleitet.</p>
-                      ) : null}
-                      {!scheduleLoading && (schedule.length ? schedule : dataAdapter ? [] : [{
-                        id: 'fallback',
-                        assetId: selected.id,
-                        year: Number(selected.activationDate.slice(0, 4)),
-                        amount: selected.annualDepreciation,
-                        months: 12,
-                        status: 'planned' as const,
-                      }]).map((period, index, rows) => {
-                        const depreciated = rows.slice(0, index + 1).reduce((sum, row) => sum + row.amount, 0);
-                        return (
-                        <div key={period.id} className="grid grid-cols-4 gap-3 rounded-lg border border-border p-3 text-sm">
-                          <div><div className="text-xs text-muted font-semibold">Jahr</div><div className="font-semibold tabular-nums text-foreground">{period.year}</div></div>
-                          <div><div className="text-xs text-muted font-semibold">AfA</div><div className="font-semibold tabular-nums text-foreground">{euro(period.amount)}</div></div>
-                          <div><div className="text-xs text-muted font-semibold">Status</div><div className="font-semibold text-foreground">{period.status === 'posted' ? 'Gebucht' : period.status === 'cancelled' ? 'Storniert' : 'Geplant'}</div></div>
-                          <div><div className="text-xs text-muted font-semibold">RBW danach</div><div className="font-semibold tabular-nums text-foreground">{euro(Math.max(selected.acquisitionCost - depreciated, 0))}</div></div>
-                        </div>
-                      );})}
-                    </div>
-                  )}
+                {activeTab === 'Abschreibungsplan' && (
+                  <>
+                    {scheduleLoading ? <div className="p-3.5 text-control text-muted" role="status" aria-live="polite" aria-busy="true">Abschreibungsplan wird geladen…</div> : null}
+                    {scheduleError && <div className={`m-3.5 flex flex-wrap items-center gap-3 border-error-border bg-error-bg text-error-text ${bannerClass}`} role="alert"><span>{scheduleError}</span><Button type="button" size="sm" variant="secondary" onClick={() => { if (selected) void loadScheduleForAsset(selected.id); }}>Erneut versuchen</Button></div>}
+                    {!scheduleLoading && !dataAdapter ? (
+                      <p className="px-3.5 py-2.5 text-caption text-warning-text" role="status">Beispieldaten: Der Abschreibungsplan ist ohne verbundenes Anlagen-Backend abgeleitet.</p>
+                    ) : null}
+                    {!scheduleLoading && scheduleRows.length > 0 && (
+                      <Table aria-label="Abschreibungsplan" bare containerClassName={dataAdapter ? undefined : 'border-t border-border'}>
+                        <TableHeader><TableRow><TableHead>Jahr</TableHead><TableHead numeric>AfA</TableHead><TableHead>Status</TableHead><TableHead numeric>RBW danach</TableHead></TableRow></TableHeader>
+                        <TableBody>
+                          {scheduleRows.map((period, index, rows) => {
+                            const depreciated = rows.slice(0, index + 1).reduce((sum, row) => sum + row.amount, 0);
+                            return (
+                              <TableRow key={period.id}>
+                                <TableCell className="tabular-nums">{period.year}</TableCell>
+                                <TableCell numeric>{euro(period.amount)}</TableCell>
+                                <TableCell><Badge tone={period.status === 'posted' ? 'success' : 'neutral'}>{period.status === 'posted' ? 'Gebucht' : period.status === 'cancelled' ? 'Storniert' : 'Geplant'}</Badge></TableCell>
+                                <TableCell numeric>{euro(Math.max(selected.acquisitionCost - depreciated, 0))}</TableCell>
+                              </TableRow>
+                            );
+                          })}
+                        </TableBody>
+                      </Table>
+                    )}
+                  </>
+                )}
 
-                  {activeTab === 'Bewegungen' && (
-                    <div className="space-y-3">
-                      {!schedule.length && dataAdapter ? <div className="text-sm text-muted">Kein Abschreibungsplan vorhanden.</div> : null}
-                      <div className="rounded-xl border border-border bg-surface-muted/60 p-4">
-                        <div className="font-semibold text-foreground">Zugang / Aktivierung</div>
-                        <div className="text-sm text-muted mt-1">
-                          {selected.activationDate} • Anschaffung <span className="tabular-nums">{euro(selected.acquisitionCost)}</span> • Status {statusPill(selected.status).label}
-                        </div>
-                      </div>
-                    </div>
-                  )}
-
-                  {!['Übersicht', 'Abschreibungsplan', 'Bewegungen'].includes(activeTab) && (
-                    <div className="rounded-xl border border-dashed border-border p-6 text-sm text-muted">
-                      Für diesen Bereich liegen noch keine Daten vor.
-                    </div>
-                  )}
-                </div>
-              </section>
-
-              <section className="min-w-0 space-y-4">
-                {canMutate && dataAdapter?.runDepreciation && selected.status === 'aktiv' && (
-                  <form className="rounded-2xl border border-border bg-surface p-5 space-y-4" noValidate onSubmit={(event) => { event.preventDefault(); void postDepreciation(); }} aria-busy={busyAction === 'depreciation'}>
+                {activeTab === 'Bewegungen' && (
+                  <div className="space-y-3 p-3.5">
+                    {!schedule.length && dataAdapter ? <div className="text-control text-muted">Kein Abschreibungsplan vorhanden.</div> : null}
                     <div>
-                      <h3 className="text-sm font-semibold text-foreground">Abschreibung buchen</h3>
-                      <p className="mt-1 text-xs text-muted">Die Buchung wird erst nach erfolgreicher Antwort in Liste und Plan übernommen.</p>
+                      <div className="text-label text-foreground">Zugang / Aktivierung</div>
+                      <div className="mt-1 text-control text-muted">
+                        {selected.activationDate} • Anschaffung <span className="tabular-nums">{euro(selected.acquisitionCost)}</span> • Status {selectedStatus.label}
+                      </div>
                     </div>
-                    <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                      <label className="space-y-1 text-sm font-semibold text-foreground"><span>Geschäftsjahr *</span><input type="number" min="2000" step="1" value={depreciationYear} onChange={(event) => setDepreciationYear(event.target.value)} required className="px-3 hover:border-control-border-hover h-9 w-full rounded-control border border-control-border bg-surface text-sm" /></label>
-                      <label className="space-y-1 text-sm font-semibold text-foreground"><span>Buchungsdatum *</span><input type="date" value={postingDate} onChange={(event) => setPostingDate(event.target.value)} required className="px-3 hover:border-control-border-hover h-9 w-full rounded-control border border-control-border bg-surface text-sm" /></label>
-                    </div>
-                    <label className="block space-y-1 text-sm font-semibold text-foreground"><span>Audit-Grund *</span><textarea value={depreciationReason} onChange={(event) => setDepreciationReason(event.target.value)} required rows={2} placeholder="Warum wird die AfA jetzt gebucht?" className="px-2.5 py-2 hover:border-control-border-hover w-full rounded-control border border-control-border bg-surface text-sm" /></label>
-                    <Button type="submit" disabled={busyAction !== null} variant="dark" size="sm" className="h-9 px-4">{busyAction === 'depreciation' ? 'Buche…' : 'AfA buchen'}</Button>
-                  </form>
+                  </div>
+                )}
+
+                {!['Übersicht', 'Abschreibungsplan', 'Bewegungen'].includes(activeTab) && (
+                  <EmptyState title="Für diesen Bereich liegen noch keine Daten vor." />
+                )}
+              </Card>
+
+              <section className="min-w-0 space-y-3.5">
+                {canMutate && dataAdapter?.runDepreciation && selected.status === 'aktiv' && (
+                  <Card padding="none">
+                    <form noValidate onSubmit={(event) => { event.preventDefault(); void postDepreciation(); }} aria-busy={busyAction === 'depreciation'}>
+                      <CardHeader as="h3" className={cardHeadClass} title="Abschreibung buchen" subtitle="Die Buchung wird erst nach erfolgreicher Antwort in Liste und Plan übernommen." />
+                      <div className="flex flex-col gap-3 p-3.5">
+                        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                          <Field id="asset-depreciation-year" label={requiredLabel('Geschäftsjahr')}>
+                            <Input fullWidth type="number" min="2000" step="1" value={depreciationYear} onChange={(event) => setDepreciationYear(event.target.value)} required />
+                          </Field>
+                          <Field id="asset-depreciation-date" label={requiredLabel('Buchungsdatum')}>
+                            <Input fullWidth type="date" value={postingDate} onChange={(event) => setPostingDate(event.target.value)} required />
+                          </Field>
+                        </div>
+                        <Field id="asset-depreciation-reason" label={requiredLabel('Audit-Grund')}>
+                          <Textarea fullWidth value={depreciationReason} onChange={(event) => setDepreciationReason(event.target.value)} required rows={2} placeholder="Warum wird die AfA jetzt gebucht?" />
+                        </Field>
+                      </div>
+                      <div className="flex justify-end border-t border-border px-3.5 py-3">
+                        <Button type="submit" disabled={busyAction !== null} variant="dark">{busyAction === 'depreciation' ? 'Buche…' : 'AfA buchen'}</Button>
+                      </div>
+                    </form>
+                  </Card>
                 )}
 
                 {canMutate && dataAdapter?.disposeAsset && !['verkauft', 'stillgelegt'].includes(selected.status) && (
-                  <form className="rounded-2xl border border-border bg-surface p-5 space-y-4" noValidate onSubmit={(event) => { event.preventDefault(); void dispose(); }} aria-busy={busyAction === 'disposal'}>
-                    <div>
-                      <h3 className="text-sm font-semibold text-foreground">Anlage ausbuchen</h3>
-                      <p className="mt-1 text-xs text-muted">Verkaufserlös 0,00 € führt zur Stilllegung; ein Erlös führt zum Verkauf.</p>
-                    </div>
-                    <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                      <label className="space-y-1 text-sm font-semibold text-foreground"><span>Ausbuchungsdatum *</span><input type="date" value={disposalDate} onChange={(event) => setDisposalDate(event.target.value)} required className="px-3 hover:border-control-border-hover h-9 w-full rounded-control border border-control-border bg-surface text-sm" /></label>
-                      <label className="space-y-1 text-sm font-semibold text-foreground"><span>Verkaufserlös netto *</span><input type="number" min="0" step="0.01" value={disposalProceeds} onChange={(event) => setDisposalProceeds(event.target.value)} required className="px-3 hover:border-control-border-hover h-9 w-full rounded-control border border-control-border bg-surface text-sm" /></label>
-                      <label className="space-y-1 text-sm font-semibold text-foreground"><span>Umsatzsteuersatz *</span><select value={disposalTaxRate} onChange={(event) => setDisposalTaxRate(event.target.value as '0' | '7' | '19')} required className="px-3 hover:border-control-border-hover h-9 w-full rounded-control border border-control-border bg-surface text-sm"><option value="0">0 %</option><option value="7">7 %</option><option value="19">19 %</option></select></label>
-                      <label className="space-y-1 text-sm font-semibold text-foreground"><span>Erlöskonto / Zahlungskonto</span><input value={proceedsAccountNumber} onChange={(event) => setProceedsAccountNumber(event.target.value)} placeholder="Optional, z. B. 1200" className="px-3 hover:border-control-border-hover h-9 w-full rounded-control border border-control-border bg-surface text-sm" /></label>
-                    </div>
-                    <label className="block space-y-1 text-sm font-semibold text-foreground"><span>Audit-Grund *</span><textarea value={disposalReason} onChange={(event) => setDisposalReason(event.target.value)} required rows={2} placeholder="Warum wird die Anlage ausgebucht?" className="px-2.5 py-2 hover:border-control-border-hover w-full rounded-control border border-control-border bg-surface text-sm" /></label>
-                    <label className="flex items-start gap-2 text-sm text-foreground"><input type="checkbox" checked={disposalConfirmed} onChange={(event) => setDisposalConfirmed(event.target.checked)} className="mt-0.5 h-4 w-4 rounded-sm border-control-border" /><span>Ich bestätige die Ausbuchung und die daraus folgende Journalbuchung.</span></label>
-                    <Button type="submit" disabled={busyAction !== null || !disposalConfirmed} variant="dark" size="sm" className="h-9 px-4">{busyAction === 'disposal' ? 'Buche…' : 'Ausbuchung bestätigen'}</Button>
-                  </form>
+                  <Card padding="none">
+                    <form noValidate onSubmit={(event) => { event.preventDefault(); void dispose(); }} aria-busy={busyAction === 'disposal'}>
+                      <CardHeader as="h3" className={cardHeadClass} title="Anlage ausbuchen" subtitle="Verkaufserlös 0,00 € führt zur Stilllegung; ein Erlös führt zum Verkauf." />
+                      <div className="flex flex-col gap-3 p-3.5">
+                        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                          <Field id="asset-disposal-date" label={requiredLabel('Ausbuchungsdatum')}>
+                            <Input fullWidth type="date" value={disposalDate} onChange={(event) => setDisposalDate(event.target.value)} required />
+                          </Field>
+                          <Field id="asset-disposal-proceeds" label={requiredLabel('Verkaufserlös netto')}>
+                            <Input fullWidth type="number" min="0" step="0.01" value={disposalProceeds} onChange={(event) => setDisposalProceeds(event.target.value)} required />
+                          </Field>
+                          <Field id="asset-disposal-tax-rate" label={requiredLabel('Umsatzsteuersatz')}>
+                            <Select fullWidth value={disposalTaxRate} onChange={(event) => setDisposalTaxRate(event.target.value as '0' | '7' | '19')} required><option value="0">0 %</option><option value="7">7 %</option><option value="19">19 %</option></Select>
+                          </Field>
+                          <Input label="Erlöskonto / Zahlungskonto" fullWidth value={proceedsAccountNumber} onChange={(event) => setProceedsAccountNumber(event.target.value)} placeholder="Optional, z. B. 1200" />
+                        </div>
+                        <Field id="asset-disposal-reason" label={requiredLabel('Audit-Grund')}>
+                          <Textarea fullWidth value={disposalReason} onChange={(event) => setDisposalReason(event.target.value)} required rows={2} placeholder="Warum wird die Anlage ausgebucht?" />
+                        </Field>
+                        <Checkbox label="Ich bestätige die Ausbuchung und die daraus folgende Journalbuchung." checked={disposalConfirmed} onChange={(event) => setDisposalConfirmed(event.target.checked)} />
+                      </div>
+                      <div className="flex justify-end border-t border-border px-3.5 py-3">
+                        <Button type="submit" disabled={busyAction !== null || !disposalConfirmed} variant="dark">{busyAction === 'disposal' ? 'Buche…' : 'Ausbuchung bestätigen'}</Button>
+                      </div>
+                    </form>
+                  </Card>
                 )}
 
-                {!dataAdapter && <div className="rounded-2xl border border-dashed border-border bg-surface-muted p-5 text-sm text-muted">Mutationen sind im Demo-Modus deaktiviert.</div>}
-                {dataAdapter && !dataAdapter.upsertAsset && !dataAdapter.runDepreciation && !dataAdapter.disposeAsset && <div className="rounded-2xl border border-dashed border-border bg-surface-muted p-5 text-sm text-muted">Anlagen-Mutationen sind für diese Verbindung nicht verfügbar.</div>}
+                {!dataAdapter && <Card><p className="text-control text-muted">Mutationen sind im Demo-Modus deaktiviert.</p></Card>}
+                {dataAdapter && !dataAdapter.upsertAsset && !dataAdapter.runDepreciation && !dataAdapter.disposeAsset && <Card><p className="text-control text-muted">Anlagen-Mutationen sind für diese Verbindung nicht verfügbar.</p></Card>}
               </section>
-
             </div>
           </>
         )}

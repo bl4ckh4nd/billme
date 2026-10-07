@@ -372,8 +372,19 @@ const inferCustomerLabel = (snapshot: unknown): string | null => {
   return typeof value === 'string' && value.trim() ? value.trim() : null;
 };
 
+const expiryTimestamp = (value: string): number => {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return Date.parse(value);
+  const nextDay = new Date(Date.parse(value) + 24 * 60 * 60 * 1000);
+  if (!Number.isFinite(nextDay.getTime())) return NaN;
+  const parts = new Intl.DateTimeFormat('en-GB', {
+    timeZone: 'Europe/Berlin', hour: '2-digit', hourCycle: 'h23',
+  }).formatToParts(nextDay);
+  const offsetHours = Number(parts.find((part) => part.type === 'hour')!.value);
+  return nextDay.getTime() - offsetHours * 60 * 60 * 1000 - 1;
+};
+
 const normalizeDocStatus = (item: PortalDocumentListItem) => {
-  const expired = Date.parse(item.expiresAt) < Date.now();
+  const expired = expiryTimestamp(item.expiresAt) < Date.now();
   if (item.kind === 'offer') {
     if (expired) return 'Abgelaufen';
     if (item.decision?.decision === 'accepted') return 'Angenommen';
@@ -497,6 +508,13 @@ const checkPublishAuth = (
 
 export const createApp = (deps: { store: OfferStore; pdf: PdfStore; config: PortalConfig }) => {
   const app = new Hono();
+  app.onError((error, c) => {
+    if (error instanceof z.ZodError || error instanceof SyntaxError) {
+      return c.json({ error: 'Ungültige Anfrage.' }, 400);
+    }
+    console.error('Portal-Anfrage fehlgeschlagen', error);
+    return c.json({ error: 'Interner Portal-Fehler.' }, 500);
+  });
   const publicBase = (() => {
     const base = deps.config.publicBaseUrl?.trim();
     if (!base) return null;
@@ -792,7 +810,7 @@ export const createApp = (deps: { store: OfferStore; pdf: PdfStore; config: Port
     const access = await deps.store.getCustomerAccessByTokenHash(sha256(token));
     if (!access) return c.json({ error: 'not found' }, 404);
     if (access.revokedAt) return c.json({ error: 'revoked' }, 403);
-    if (Date.parse(access.expiresAt) < Date.now()) return c.json({ error: 'expired' }, 410);
+    if (expiryTimestamp(access.expiresAt) < Date.now()) return c.json({ error: 'expired' }, 410);
 
     const query = historyQuerySchema.parse(c.req.query());
     const result = await deps.store.listDocumentsByCustomerRef({
@@ -834,7 +852,7 @@ export const createApp = (deps: { store: OfferStore; pdf: PdfStore; config: Port
     const access = await deps.store.getCustomerAccessByTokenHash(sha256(token));
     if (!access) return c.html(renderPortalErrorPage('unknown'), 404);
     if (access.revokedAt) return c.html(renderPortalErrorPage('revoked'), 403);
-    if (Date.parse(access.expiresAt) < Date.now()) return c.html(renderPortalErrorPage('expired'), 410);
+    if (expiryTimestamp(access.expiresAt) < Date.now()) return c.html(renderPortalErrorPage('expired'), 410);
 
     const query = historyQuerySchema.parse(c.req.query());
     const result = await deps.store.listDocumentsByCustomerRef({
@@ -929,7 +947,7 @@ ${nextLink}`,
     const documentId = parsedDocumentId.data.documentId;
     const rec = await deps.store.getDocumentById(documentId);
     if (!rec) return wantsHtml ? c.html(renderPortalErrorPage('unknown'), 404) : c.json({ error: 'not found' }, 404);
-    const expired = Date.parse(rec.expiresAt) < Date.now();
+    const expired = expiryTimestamp(rec.expiresAt) < Date.now();
     const snapshot = looksLikeDocSnapshot(rec.snapshotJson) ? rec.snapshotJson : null;
     if (!wantsHtml) {
       return c.json({
@@ -1080,7 +1098,7 @@ ${pdfSection}`,
     }
     const rec = await deps.store.getDocumentById(documentId);
     if (!rec || rec.kind !== 'offer') return c.json({ error: 'not found' }, 404);
-    if (Date.parse(rec.expiresAt) < Date.now()) return decisionError('expired', `/d/${encodeURIComponent(documentId)}`, 410);
+    if (expiryTimestamp(rec.expiresAt) < Date.now()) return decisionError('expired', `/d/${encodeURIComponent(documentId)}`, 410);
     const contentType = c.req.header('content-type') ?? '';
     const isForm =
       contentType.includes('application/x-www-form-urlencoded') || contentType.includes('multipart/form-data');
@@ -1132,7 +1150,7 @@ ${pdfSection}`,
     const rec = await deps.store.getOfferByTokenHash(tokenHash);
     if (!rec) return wantsHtml ? c.html(renderPortalErrorPage('unknown'), 404) : c.json({ error: 'not found' }, 404);
     const document = await deps.store.getDocumentByTokenHash(tokenHash);
-    const expired = Date.parse(rec.expiresAt) < Date.now();
+    const expired = expiryTimestamp(rec.expiresAt) < Date.now();
 
     if (!wantsHtml) {
       return c.json({
@@ -1310,7 +1328,7 @@ ${
     const rec = await deps.store.getInvoiceByTokenHash(sha256(token));
     if (!rec) return wantsHtml ? c.html(renderPortalErrorPage('unknown'), 404) : c.json({ error: 'not found' }, 404);
     const document = await deps.store.getDocumentByTokenHash(sha256(token));
-    const expired = Date.parse(rec.expiresAt) < Date.now();
+    const expired = expiryTimestamp(rec.expiresAt) < Date.now();
 
     if (!wantsHtml) {
       return c.json({
@@ -1445,7 +1463,7 @@ ${
     if (!rec) return c.json({ error: 'not found' }, 404);
     const document = await deps.store.getDocumentByTokenHash(tokenHash);
 
-    const expired = Date.parse(rec.expiresAt) < Date.now();
+    const expired = expiryTimestamp(rec.expiresAt) < Date.now();
     if (expired) return legacyError('expired', `/offers/${encodeURIComponent(token)}`, 410);
 
     const contentType = c.req.header('content-type') ?? '';

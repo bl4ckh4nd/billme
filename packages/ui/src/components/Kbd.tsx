@@ -9,7 +9,7 @@ export interface KbdProps {
 export const Kbd: React.FC<KbdProps> = ({ children, className }) => (
   <kbd
     className={cn(
-      'inline-flex h-5 min-w-5 items-center justify-center rounded-xs border border-border bg-surface px-1 font-sans text-caption font-medium text-muted',
+      'inline-flex min-w-5 items-center justify-center rounded-xs border border-b-2 border-border-strong bg-surface px-1 py-px font-mono text-muted text-micro',
       className,
     )}
   >

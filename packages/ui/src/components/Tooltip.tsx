@@ -128,7 +128,7 @@ export const Tooltip: React.FC<TooltipProps> = ({ content, children, side = 'top
             role="tooltip"
             style={{ position: 'fixed', top: coords.top, left: coords.left }}
             className={cn(
-              'ui-enter-popover pointer-events-none z-[var(--z-dropdown)] -translate-x-1/2 whitespace-nowrap rounded-sm bg-surface-inverse px-2 py-1 text-caption font-medium text-inverse-foreground',
+              'ui-enter-popover pointer-events-none z-[var(--z-dropdown)] -translate-x-1/2 whitespace-nowrap rounded-sm border border-border-toast bg-surface-toast px-2 py-1 text-caption font-medium text-inverse-foreground',
               coords.side === 'top' ? '-translate-y-full [--origin:bottom_center]' : '[--origin:top_center]',
               closing && popoverExitClass,
               className,

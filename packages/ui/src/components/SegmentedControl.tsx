@@ -23,8 +23,8 @@ export interface SegmentedControlProps<T extends string> {
 }
 
 const itemSize: Record<SegmentedSize, string> = {
-  sm: 'h-7 px-2.5',
-  md: 'h-8 px-3',
+  sm: 'h-5.5 px-2',
+  md: 'h-6.5 px-2.5',
 };
 
 /**
@@ -86,7 +86,7 @@ export function SegmentedControl<T extends string>({
       role="radiogroup"
       aria-label={ariaLabel}
       className={cn(
-        'relative isolate inline-flex items-center rounded-control bg-surface-sunken p-0.5',
+        'relative isolate inline-flex items-center gap-0.5 rounded-control border border-border bg-surface-sunken p-0.5',
         fullWidth && 'flex w-full',
         className,
       )}
@@ -104,7 +104,7 @@ export function SegmentedControl<T extends string>({
         <span
           aria-hidden="true"
           className={cn(
-            'absolute inset-y-0.5 left-0 -z-10 rounded-sm bg-surface shadow-sm',
+            'absolute inset-y-0.5 left-0 -z-10 rounded-sm bg-surface shadow-thumb',
             animate && 'transition-[translate,width] duration-(--dur-micro) ease-out-strong motion-reduce:transition-none',
           )}
           style={{ width: thumb.width, translate: `${thumb.left}px 0` }}
@@ -126,11 +126,11 @@ export function SegmentedControl<T extends string>({
             tabIndex={selected ? 0 : -1}
             onClick={() => onChange(option.value)}
             className={cn(
-              'inline-flex items-center justify-center gap-1.5 whitespace-nowrap rounded-sm text-label transition-colors motion-reduce:transition-none',
+              'inline-flex items-center justify-center gap-1.5 whitespace-nowrap rounded-sm text-caption transition-colors motion-reduce:transition-none',
               'focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-focus-ring',
               itemSize[size],
               fullWidth && 'flex-1',
-              selected ? 'text-foreground' : 'text-muted hover:text-foreground',
+              selected ? 'font-semibold text-foreground' : 'font-medium text-muted hover:text-foreground',
             )}
           >
             {option.icon}

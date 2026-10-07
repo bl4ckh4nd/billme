@@ -1,21 +1,20 @@
 import { useEffect, useMemo, useState, type ComponentType, type ReactElement, type ReactNode } from 'react';
-import { AlertCircle, Download, History, Link2, MoreHorizontal, Plus, Trash2, Upload } from 'lucide-react';
+import { AlertCircle, Download, History, MoreHorizontal, Plus, Trash2, Upload } from 'lucide-react';
 import { useQuery, useQueryClient, type UseMutationResult, type UseQueryResult } from '@tanstack/react-query';
 import {
-  Button, ConfirmDialog, EMPTY_VALUE, EmptyState, ErrorState, IconButton, Menu, PageHeader,
-  Table, TableBody, TableCell, TableHead, TableHeader, TableRow, formatEmptyValue, useActionFeedback,
+  Badge, Button, Card, ConfirmDialog, EMPTY_VALUE, EmptyState, ErrorState, HatchedProgress, IconButton, Menu, PageHeader,
+  Select, Table, TableBody, TableCell, TableHead, TableHeader, TableRow, formatEmptyValue, useActionFeedback,
 } from '@billme/ui';
 import { DEFAULT_EUR_TAX_YEAR, TransactionMatchingView } from './TransactionMatchingView';
 import { ImportHistoryModal } from './ImportHistoryModal';
 import { useDeferredDelete } from '../hooks/useDeferredDelete';
 import { ipc } from '../runtime-api';
 
-type ViewMode = 'accounts' | 'matching';
-type MatchingEntryTab = 'matching' | 'eur';
-
 export type AccountsViewAccount = { id: string; name: string; iban?: string; balance: number };
 
 export interface AccountsViewProps<TAccount extends AccountsViewAccount> {
+  /** The label of the nav entry that opens the page. */
+  title: string;
   /** The product's account hooks (`createAccountHooks`), typed to its own account model. */
   useAccountsQuery: () => UseQueryResult<TAccount[]>;
   useDeleteAccountMutation: () => UseMutationResult<unknown, Error, string>;
@@ -33,11 +32,11 @@ export interface AccountsViewProps<TAccount extends AccountsViewAccount> {
 
 const euro = (value: number) => new Intl.NumberFormat('de-DE', { style: 'currency', currency: 'EUR' }).format(value);
 
-const actionCard =
-  'relative overflow-hidden rounded-card bg-surface p-5 text-left shadow-xs transition-shadow hover:shadow-md focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring';
+const banner = 'flex items-start gap-2.5 rounded-control border px-3 py-2.5 text-control';
 
-/** Bank accounts, CSV import and the entry into matching; shared by Lite and Pro. */
+/** Bank matching, CSV import and the bank accounts; shared by Lite and Pro. */
 export function AccountsView<TAccount extends AccountsViewAccount>({
+  title,
   useAccountsQuery,
   useDeleteAccountMutation,
   BankAccountModal,
@@ -46,8 +45,6 @@ export function AccountsView<TAccount extends AccountsViewAccount>({
   footer,
 }: AccountsViewProps<TAccount>): ReactElement {
   const queryClient = useQueryClient();
-  const [viewMode, setViewMode] = useState<ViewMode>('accounts');
-  const [matchingEntryTab, setMatchingEntryTab] = useState<MatchingEntryTab>('matching');
   const [showImportHistory, setShowImportHistory] = useState(false);
   const [isBankAccountModalOpen, setIsBankAccountModalOpen] = useState(false);
   const [pageError, setPageError] = useState<string | null>(null);
@@ -77,6 +74,12 @@ export function AccountsView<TAccount extends AccountsViewAccount>({
     queryFn: () => ipc.transactions.list({ type: 'income', unlinkedOnly: true }),
   });
 
+  // Same key and call as the matching list with "Alle anzeigen", so both follow the same invalidations.
+  const { data: incomeTransactions } = useQuery({
+    queryKey: ['transactions', { unlinkedOnly: false }],
+    queryFn: () => ipc.transactions.list({ type: 'income', unlinkedOnly: false }),
+  });
+
   const { data: unclassifiedEurTransactions = [], isError: unclassifiedEurError } = useQuery({
     queryKey: ['eur', 'accounts-unclassified-transactions', DEFAULT_EUR_TAX_YEAR],
     queryFn: () => ipc.eur.listItems({ taxYear: DEFAULT_EUR_TAX_YEAR, sourceType: 'transaction', status: 'unclassified' }),
@@ -84,6 +87,8 @@ export function AccountsView<TAccount extends AccountsViewAccount>({
 
   const unmatchedCount = unmatchedTransactions.length;
   const unclassifiedEurCount = unclassifiedEurTransactions.length;
+  const incomeCount = unmatchedError ? 0 : incomeTransactions?.length ?? 0;
+  const matchedCount = Math.max(0, incomeCount - unmatchedCount);
   const unmatchedPluralSuffix = unmatchedCount !== 1 ? 'en' : '';
   const unmatchedDescription = unmatchedError
     ? 'Offene Transaktionen konnten nicht geladen werden'
@@ -119,11 +124,13 @@ export function AccountsView<TAccount extends AccountsViewAccount>({
         return;
       }
       const result = await ipc.dialog.pickCsv({ title: 'CSV-Datei auswählen' });
-      if (!result.path) return; // User cancelled
+      if (!result.path && !result.contentBase64) return;
 
       // Preview with bank/PayPal/Stripe format detection; nothing is written until confirmed.
       const preview = await ipc.finance.importPreview({
-        path: result.path,
+        path: result.path ?? undefined,
+        fileName: result.fileName,
+        contentBase64: result.contentBase64,
         profile: 'auto',
         accountIdForDedupHash: selectedImportAccountId,
       });
@@ -134,7 +141,7 @@ export function AccountsView<TAccount extends AccountsViewAccount>({
       setCsvPreview(preview);
     } catch (error) {
       console.error('CSV import failed:', error);
-      setPageError('CSV-Import fehlgeschlagen. Prüfe Datei und Spaltenzuordnung.');
+      setPageError(error instanceof Error ? error.message : 'CSV-Import fehlgeschlagen. Prüfe Datei und Spaltenzuordnung.');
     }
   };
 
@@ -155,6 +162,8 @@ export function AccountsView<TAccount extends AccountsViewAccount>({
         await Promise.all([
           queryClient.invalidateQueries({ queryKey: ['transactions'] }),
           queryClient.invalidateQueries({ queryKey: ['accounts'] }),
+          queryClient.invalidateQueries({ queryKey: ['pro-accounting', 'transactions'] }),
+          queryClient.invalidateQueries({ queryKey: ['pro-accounting', 'drafts'] }),
         ]);
       }
     } catch (error) {
@@ -168,14 +177,10 @@ export function AccountsView<TAccount extends AccountsViewAccount>({
 
   const csvProfileLabel: Record<string, string> = { fints: 'Bank (FinTS-Export)', paypal: 'PayPal', stripe: 'Stripe', generic: 'Allgemeines CSV' };
 
-  if (viewMode === 'matching') {
-    return <TransactionMatchingView onBack={() => setViewMode('accounts')} initialTab={matchingEntryTab} />;
-  }
-
   return (
-    <div className="min-h-full px-1 pt-2 flex flex-col">
+    <div className="flex flex-col gap-3.5">
       <PageHeader
-        title="Konten & Transaktionen"
+        title={title}
         description="Verwalten Sie Ihre Konten und ordnen Sie Transaktionen zu."
         actions={
           <Button onClick={() => setIsBankAccountModalOpen(true)}>
@@ -184,102 +189,171 @@ export function AccountsView<TAccount extends AccountsViewAccount>({
           </Button>
         }
       />
-      <div className="min-h-0 flex-1 rounded-card border border-border bg-surface p-5 lg:p-6">
 
-      <div className="mb-6 rounded-card bg-surface-muted p-4">
-        <label htmlFor="import-account" className="text-label text-foreground">Import-Konto</label>
-        <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-2">
-          <select
-            id="import-account"
-            value={selectedImportAccountId}
-            onChange={(e) => setSelectedImportAccountId(e.target.value)}
-            className="px-2.5 h-8 hover:border-control-border-hover min-w-56 flex-1 rounded-control border border-control-border bg-surface text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
-          >
-            <option value="">Konto auswählen</option>
-            {visibleAccounts.map((account) => (
-              <option key={account.id} value={account.id}>{account.name}</option>
-            ))}
-          </select>
-          {selectedImportAccount && (
-            <>
-              <span className="text-sm text-muted">
-                Saldo <span className="font-medium text-foreground tabular-nums">{euro(selectedImportAccount.balance)}</span>
-              </span>
-              {renderImportAccountMeta?.(selectedImportAccount)}
-            </>
+      {pageError && (
+        <div role="alert" className={`${banner} border-error-border bg-error-bg text-error-text`}>
+          <AlertCircle size={16} className="mt-px shrink-0" aria-hidden="true" />
+          <span className="min-w-0 flex-1">{pageError}</span>
+        </div>
+      )}
+
+      {!unmatchedError && unmatchedCount > 0 && (
+        <div className={`${banner} border-warning-border bg-warning-bg text-warning-text`}>
+          <AlertCircle size={16} className="mt-px shrink-0" aria-hidden="true" />
+          <span className="min-w-0 flex-1">
+            <strong className="font-semibold">Sie haben {unmatchedCount} unzugeordnete Transaktion{unmatchedPluralSuffix}.</strong>{' '}
+            Ordnen Sie Transaktionen Ihren Rechnungen zu, um den Zahlungsstatus automatisch zu aktualisieren.
+          </span>
+        </div>
+      )}
+
+      <Card>
+        <div className="flex flex-col gap-2.5">
+          <div className="flex flex-wrap items-start justify-between gap-x-3 gap-y-2">
+            <div className="min-w-0">
+              <h2 className="text-section text-foreground">
+                {incomeCount > 0 ? `${matchedCount} von ${incomeCount} Transaktionen zugeordnet` : unmatchedDescription}
+              </h2>
+              <p className="text-caption text-muted">
+                {incomeCount > 0 ? `${unmatchedDescription} · ${unclassifiedEurDescription}` : unclassifiedEurDescription}
+              </p>
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <Button variant="secondary" size="sm" onClick={() => setShowImportHistory(true)}>
+                <History size={14} aria-hidden="true" />
+                Import-Historie
+              </Button>
+              <Button variant="secondary" size="sm" onClick={handleCsvImport}>
+                <Download size={14} aria-hidden="true" />
+                CSV importieren
+              </Button>
+            </div>
+          </div>
+          {incomeCount > 0 && (
+            <HatchedProgress
+              size="sm"
+              flat
+              value={matchedCount / incomeCount}
+              label="Zugeordnete Transaktionen"
+              valueText={`${matchedCount} von ${incomeCount} Transaktionen zugeordnet`}
+            />
           )}
         </div>
-      </div>
+      </Card>
 
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-3 mb-8">
-        <button
-          type="button"
-          onClick={() => {
-            setMatchingEntryTab('matching');
-            setViewMode('matching');
-          }}
-          className={actionCard}
-        >
-          {!unmatchedError && unmatchedCount > 0 && (
-            <div className="absolute right-4 top-4">
-              <div className="flex h-8 min-w-8 items-center justify-center rounded-full border border-error-border bg-error-bg px-2 text-xs font-semibold text-error-text tabular-nums">
-                {unmatchedCount}
+      <TransactionMatchingView />
+
+      <section aria-labelledby="accounts-heading">
+        <Card padding="none" className="overflow-hidden">
+          <div className="border-b border-border px-3.5 py-3">
+            <h2 id="accounts-heading" className="text-section text-foreground">Ihre Konten</h2>
+          </div>
+          <div className="flex flex-wrap items-end gap-x-4 gap-y-2 border-b border-border px-3.5 py-3">
+            <Select
+              id="import-account"
+              label="Import-Konto"
+              value={selectedImportAccountId}
+              onChange={(e) => setSelectedImportAccountId(e.target.value)}
+              className="min-w-56"
+            >
+              <option value="">Konto auswählen</option>
+              {visibleAccounts.map((account) => (
+                <option key={account.id} value={account.id}>{account.name}</option>
+              ))}
+            </Select>
+            {selectedImportAccount && (
+              <div className="flex min-h-8.5 flex-wrap items-center gap-x-4 gap-y-1">
+                <span className="text-control text-muted">
+                  Saldo <span className="font-medium text-foreground tabular-nums">{euro(selectedImportAccount.balance)}</span>
+                </span>
+                {renderImportAccountMeta?.(selectedImportAccount)}
               </div>
-            </div>
+            )}
+          </div>
+          {accountsLoading ? (
+            <p className="py-10 text-center text-control text-muted">Konten werden geladen…</p>
+          ) : accountsError ? (
+            <ErrorState
+              title="Konten konnten nicht geladen werden"
+              description="Die Liste ist deshalb leer, nicht weil keine Konten vorhanden sind."
+              onRetry={() => void refetchAccounts()}
+              className="m-3.5"
+            />
+          ) : visibleAccounts.length === 0 ? (
+            <EmptyState
+              title="Noch keine Konten vorhanden"
+              description="Legen Sie ein Konto an, um Transaktionen zu importieren und zuzuordnen."
+              action={
+                <Button variant="secondary" size="sm" onClick={() => setIsBankAccountModalOpen(true)}>
+                  Neues Konto anlegen
+                </Button>
+              }
+            />
+          ) : (
+            <Table aria-label="Ihre Konten" bare>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Konto</TableHead>
+                  <TableHead className="hidden md:table-cell">IBAN</TableHead>
+                  {extraColumn ? <TableHead>{extraColumn.header}</TableHead> : null}
+                  <TableHead numeric>Saldo</TableHead>
+                  <TableHead className="w-12"><span className="sr-only">Aktionen</span></TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {visibleAccounts.map((account) => {
+                  const isImportAccount = account.id === selectedImportAccountId;
+                  return (
+                    <TableRow key={account.id} selected={isImportAccount} data-leaving={leavingAccountIds.has(account.id) || undefined}>
+                      <TableCell>
+                        <span className="flex flex-wrap items-center gap-2">
+                          <span className="font-medium">{account.name}</span>
+                          {isImportAccount ? <Badge tone="neutral">Import-Konto</Badge> : null}
+                        </span>
+                      </TableCell>
+                      <TableCell muted className="hidden font-mono text-caption md:table-cell">{account.iban || EMPTY_VALUE}</TableCell>
+                      {extraColumn ? <TableCell>{extraColumn.render(account, setPageError)}</TableCell> : null}
+                      <TableCell numeric className="font-medium">{euro(account.balance)}</TableCell>
+                      <TableCell className="py-0 text-right">
+                        <Menu
+                          aria-label={`Aktionen für ${account.name}`}
+                          align="end"
+                          trigger={(props) => (
+                            <IconButton {...props} size="sm" tooltip="Aktionen" aria-label={`Aktionen für ${account.name}`}>
+                              <MoreHorizontal size={16} aria-hidden="true" />
+                            </IconButton>
+                          )}
+                          items={[
+                            {
+                              id: 'import',
+                              label: 'Als Import-Konto verwenden',
+                              icon: <Upload size={14} />,
+                              disabled: isImportAccount,
+                              onSelect: () => setSelectedImportAccountId(account.id),
+                            },
+                            {
+                              id: 'delete',
+                              label: 'Löschen',
+                              icon: <Trash2 size={14} />,
+                              tone: 'danger',
+                              separated: true,
+                              onSelect: () => {
+                                requestDelete([account.id]);
+                                if (isImportAccount) setSelectedImportAccountId('');
+                              },
+                            },
+                          ]}
+                        />
+                      </TableCell>
+                    </TableRow>
+                  );
+                })}
+              </TableBody>
+            </Table>
           )}
-          <div className="mb-4 flex size-9 items-center justify-center rounded-control bg-surface-sunken text-foreground">
-            <Link2 size={16} aria-hidden="true" />
-          </div>
-          <div className="mb-1 text-section text-foreground">Transaktionen zuordnen</div>
-          <div className="text-sm text-muted">{unmatchedDescription}</div>
-        </button>
-
-        <button
-          type="button"
-          onClick={() => {
-            setMatchingEntryTab('eur');
-            setViewMode('matching');
-          }}
-          className={actionCard}
-        >
-          {!unclassifiedEurError && unclassifiedEurCount > 0 && (
-            <div className="absolute right-4 top-4">
-              <div className="flex h-8 min-w-8 items-center justify-center rounded-full border border-warning-border bg-warning-bg px-2 text-xs font-semibold text-warning-text tabular-nums">
-                {unclassifiedEurCount}
-              </div>
-            </div>
-          )}
-          <div className="mb-4 flex size-9 items-center justify-center rounded-control bg-surface-sunken text-foreground">
-            <Link2 size={16} aria-hidden="true" />
-          </div>
-          <div className="mb-1 text-section text-foreground">EÜR direkt klassifizieren</div>
-          <div className="text-sm text-muted">{unclassifiedEurDescription}</div>
-        </button>
-
-        <button type="button" onClick={handleCsvImport} className={actionCard}>
-          <div className="mb-4 flex size-9 items-center justify-center rounded-control bg-surface-sunken text-foreground">
-            <Download size={16} aria-hidden="true" />
-          </div>
-          <div className="mb-1 text-section text-foreground">CSV importieren</div>
-          <div className="text-sm text-muted">Importieren Sie Transaktionen aus Ihrer Bank</div>
-        </button>
-
-        <button type="button" onClick={() => setShowImportHistory(true)} className={actionCard}>
-          <div className="mb-4 flex size-9 items-center justify-center rounded-control bg-surface-sunken text-foreground">
-            <History size={16} aria-hidden="true" />
-          </div>
-          <div className="mb-1 text-section text-foreground">Import-Historie</div>
-          <div className="text-sm text-muted">Vergangene Importe einsehen und rückgängig machen</div>
-        </button>
-
-        <button type="button" onClick={() => setIsBankAccountModalOpen(true)} className={actionCard}>
-          <div className="mb-4 flex size-9 items-center justify-center rounded-control bg-surface-sunken text-foreground">
-            <Plus size={16} aria-hidden="true" />
-          </div>
-          <div className="mb-1 text-section text-foreground">Konten verwalten</div>
-          <div className="text-sm text-muted">Erstellen und bearbeiten Sie Ihre Konten</div>
-        </button>
-      </div>
+        </Card>
+      </section>
+      {footer}
 
       <ConfirmDialog
         open={csvPreview !== null}
@@ -306,113 +380,8 @@ export function AccountsView<TAccount extends AccountsViewAccount>({
           </Table>
         ) : undefined}
       />
-      {pageError && (
-        <div role="alert" className="mb-8 flex items-start gap-3 rounded-card border border-error-border bg-error-bg p-4">
-          <AlertCircle size={20} className="text-error-text flex-shrink-0 mt-0.5" aria-hidden="true" />
-          <p className="text-sm font-medium text-error-text">{pageError}</p>
-        </div>
-      )}
-
-      {!unmatchedError && unmatchedCount > 0 && (
-        <div className="flex items-start gap-3 rounded-card border border-warning-border bg-warning-bg p-4">
-          <AlertCircle size={20} className="text-warning-text flex-shrink-0 mt-0.5" aria-hidden="true" />
-          <div>
-            <p className="text-sm font-semibold text-warning-text">
-              Sie haben {unmatchedCount} unzugeordnete Transaktion{unmatchedPluralSuffix}
-            </p>
-            <p className="text-sm text-warning-text mt-1">
-              Ordnen Sie Transaktionen Ihren Rechnungen zu, um den Zahlungsstatus automatisch zu aktualisieren.
-            </p>
-          </div>
-        </div>
-      )}
-
-      <section className="mt-8" aria-labelledby="accounts-heading">
-        <h3 id="accounts-heading" className="text-section text-foreground mb-4">Ihre Konten</h3>
-        {accountsLoading ? (
-          <p className="py-12 text-center text-sm text-muted">Konten werden geladen…</p>
-        ) : accountsError ? (
-          <ErrorState
-            title="Konten konnten nicht geladen werden"
-            description="Die Liste ist deshalb leer, nicht weil keine Konten vorhanden sind."
-            onRetry={() => void refetchAccounts()}
-          />
-        ) : visibleAccounts.length === 0 ? (
-          <EmptyState
-            title="Noch keine Konten vorhanden"
-            description="Legen Sie ein Konto an, um Transaktionen zu importieren und zuzuordnen."
-            action={
-              <Button variant="dark" size="sm" onClick={() => setIsBankAccountModalOpen(true)}>
-                Neues Konto anlegen
-              </Button>
-            }
-          />
-        ) : (
-          <Table aria-label="Ihre Konten">
-            <TableHeader>
-              <TableRow>
-                <TableHead>Konto</TableHead>
-                <TableHead className="hidden md:table-cell">IBAN</TableHead>
-                {extraColumn ? <TableHead>{extraColumn.header}</TableHead> : null}
-                <TableHead numeric>Saldo</TableHead>
-                <TableHead className="w-12"><span className="sr-only">Aktionen</span></TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {visibleAccounts.map((account) => {
-                const isImportAccount = account.id === selectedImportAccountId;
-                return (
-                  <TableRow key={account.id} selected={isImportAccount} data-leaving={leavingAccountIds.has(account.id) || undefined}>
-                    <TableCell>
-                      <div className="font-medium">{account.name}</div>
-                      {isImportAccount ? <div className="text-caption text-muted">Import-Konto</div> : null}
-                    </TableCell>
-                    <TableCell muted className="hidden font-mono text-xs md:table-cell">{account.iban || EMPTY_VALUE}</TableCell>
-                    {extraColumn ? <TableCell>{extraColumn.render(account, setPageError)}</TableCell> : null}
-                    <TableCell numeric className="font-medium">{euro(account.balance)}</TableCell>
-                    <TableCell className="text-right">
-                      <Menu
-                        aria-label={`Aktionen für ${account.name}`}
-                        align="end"
-                        trigger={(props) => (
-                          <IconButton {...props} size="sm" tooltip="Aktionen" aria-label={`Aktionen für ${account.name}`}>
-                            <MoreHorizontal size={16} aria-hidden="true" />
-                          </IconButton>
-                        )}
-                        items={[
-                          {
-                            id: 'import',
-                            label: 'Als Import-Konto verwenden',
-                            icon: <Upload size={14} />,
-                            disabled: isImportAccount,
-                            onSelect: () => setSelectedImportAccountId(account.id),
-                          },
-                          {
-                            id: 'delete',
-                            label: 'Löschen',
-                            icon: <Trash2 size={14} />,
-                            tone: 'danger',
-                            separated: true,
-                            onSelect: () => {
-                              requestDelete([account.id]);
-                              if (isImportAccount) setSelectedImportAccountId('');
-                            },
-                          },
-                        ]}
-                      />
-                    </TableCell>
-                  </TableRow>
-                );
-              })}
-            </TableBody>
-          </Table>
-        )}
-      </section>
-      {footer}
-
       <ImportHistoryModal isOpen={showImportHistory} onClose={() => setShowImportHistory(false)} />
       <BankAccountModal isOpen={isBankAccountModalOpen} onClose={() => setIsBankAccountModalOpen(false)} />
-    </div>
     </div>
   );
 }

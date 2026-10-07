@@ -68,25 +68,27 @@ export const ConfirmDialog: React.FC<ConfirmDialogProps> = ({
       initialFocusRef={reason?.required ? reasonInputRef : undefined}
       dismissOnBackdrop={dismissOnBackdrop}
       ariaBusy={busy}
-      className="max-w-md overflow-hidden"
+      className="overflow-hidden"
     >
       <form onSubmit={handleSubmit}>
-        <div className="p-6">
-          <h2 id={titleId} className="text-base font-semibold text-foreground">
+        <div className="px-4.5 pt-4 pb-2.5">
+          <h2 id={titleId} className="text-title text-foreground">
             {title}
           </h2>
+        </div>
+        <div className="flex flex-col gap-3 px-4.5 pt-1 pb-4">
           {description ? (
-            <div id={descriptionId} className="mt-2 text-sm leading-6 text-muted">
+            <div id={descriptionId} className="text-control text-muted">
               {description}
             </div>
           ) : null}
           {details !== undefined && details !== null ? (
-            <div className="mt-4 border-y border-border-subtle py-4 text-sm text-foreground">
+            <div className="border-y border-border py-3 text-control text-foreground">
               {details}
             </div>
           ) : null}
           {reason ? (
-            <div className="mt-5">
+            <div>
               <Input
                 ref={reasonInputRef}
                 label={reason.label}
@@ -106,7 +108,7 @@ export const ConfirmDialog: React.FC<ConfirmDialogProps> = ({
             </div>
           ) : null}
         </div>
-        <div className="flex justify-end gap-3 border-t border-border-subtle bg-surface-muted p-4">
+        <div className="flex flex-wrap justify-end gap-2 border-t border-border px-4.5 py-3">
           <Button
             type="button"
             variant="ghost"

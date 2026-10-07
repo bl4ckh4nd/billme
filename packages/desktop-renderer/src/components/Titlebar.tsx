@@ -86,7 +86,7 @@ export const Titlebar: React.FC<TitlebarProps> = ({ logoSrc }) => {
 
   return (
     <div
-      className="drag-region h-10 shrink-0 bg-surface-sunken flex items-center justify-between pl-3 pr-1 select-none no-print"
+      className="drag-region h-10 shrink-0 bg-rail flex items-center justify-between pl-3 pr-1 select-none no-print"
       onDoubleClick={toggleMaximize}
     >
       <div className="flex items-center gap-2 min-w-0">

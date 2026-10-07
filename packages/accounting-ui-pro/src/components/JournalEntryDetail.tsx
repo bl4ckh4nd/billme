@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { formatEmptyValue, Modal } from '@billme/ui';
+import { Badge, Button, formatEmptyValue, Modal } from '@billme/ui';
 import type { JournalEntryEntity } from '@billme/accounting-shared';
 import type { ProAccountingDataAdapter } from '../services/accountingDataAdapter';
 
@@ -61,54 +61,54 @@ export default function JournalEntryDetail({ entryId, dataAdapter }: JournalEntr
   }, [dataAdapter, entryId, retry]);
 
   if (!entryId) {
-    return <div className="rounded-xl border border-border bg-surface-muted p-4 text-sm text-muted" role="status">Keine Journalbuchung ausgewählt.</div>;
+    return <div className="text-control text-muted" role="status">Keine Journalbuchung ausgewählt.</div>;
   }
 
   if (loading) {
-    return <div className="rounded-xl border border-border bg-surface p-4 text-sm text-muted" role="status" aria-busy="true">Journal wird geladen…</div>;
+    return <div className="text-control text-muted" role="status" aria-busy="true">Journal wird geladen…</div>;
   }
 
   if (error) {
     return (
-      <div className="rounded-xl border border-error-border bg-error-bg p-4 text-sm text-error-text" role="alert" aria-live="assertive">
-        <div>{error}</div>
-        <button type="button" className="mt-3 rounded-lg border border-error-border px-3 py-1.5 font-semibold" onClick={() => setRetry((value) => value + 1)}>
+      <div className="flex flex-wrap items-center gap-2.5 rounded-control border border-error-border bg-error-bg px-3 py-2.5 text-control text-error-text" role="alert" aria-live="assertive">
+        <div className="min-w-0 flex-1">{error}</div>
+        <Button variant="secondary" size="sm" onClick={() => setRetry((value) => value + 1)}>
           Erneut versuchen
-        </button>
+        </Button>
       </div>
     );
   }
 
   if (!entry) {
-    return <div className="rounded-xl border border-border bg-surface-muted p-4 text-sm text-muted" role="status">Journalbuchung nicht gefunden.</div>;
+    return <div className="text-control text-muted" role="status">Journalbuchung nicht gefunden.</div>;
   }
 
   return (
-    <section className="rounded-xl border border-border bg-surface p-4" aria-labelledby="journal-entry-detail-heading">
+    <section aria-labelledby="journal-entry-detail-heading">
       <div className="flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <h2 id="journal-entry-detail-heading" className="text-base font-semibold text-foreground">Journal {entry.entryNumber}</h2>
-          <p className="mt-1 text-sm text-muted">{entry.bookingText}</p>
+        <div className="min-w-0">
+          <h2 id="journal-entry-detail-heading" className="text-section text-foreground">Journal {entry.entryNumber}</h2>
+          <p className="text-caption text-muted">{entry.bookingText}</p>
         </div>
-        <span className="rounded-full border border-border px-2.5 py-1 text-xs font-semibold text-muted">
+        <Badge tone={entry.status === 'reversed' ? 'error' : 'success'}>
           {entry.status === 'reversed' ? 'Storniert' : 'Gebucht'}
-        </span>
+        </Badge>
       </div>
 
-      <dl className="mt-4 grid gap-3 text-sm sm:grid-cols-3">
-        <div><dt className="text-muted">Buchungsdatum</dt><dd className="font-semibold text-foreground">{date.format(new Date(entry.postingDate))}</dd></div>
-        <div><dt className="text-muted">Periode</dt><dd className="font-semibold text-foreground">{entry.period}</dd></div>
-        <div><dt className="text-muted">Referenz</dt><dd className="font-semibold text-foreground">{formatEmptyValue(entry.reference)}</dd></div>
+      <dl className="mt-3 grid gap-3 text-control sm:grid-cols-3">
+        <div><dt className="text-caption text-muted">Buchungsdatum</dt><dd className="font-medium text-foreground">{date.format(new Date(entry.postingDate))}</dd></div>
+        <div><dt className="text-caption text-muted">Periode</dt><dd className="font-medium text-foreground">{entry.period}</dd></div>
+        <div><dt className="text-caption text-muted">Referenz</dt><dd className="font-medium text-foreground">{formatEmptyValue(entry.reference)}</dd></div>
       </dl>
 
-      <div className="mt-4 space-y-2" aria-label="Buchungszeilen">
+      <div className="mt-3 divide-y divide-border rounded-control border border-border" aria-label="Buchungszeilen">
         {entry.lines.map((line) => {
           const isDebit = line.debitAmount > 0;
           const amount = isDebit ? line.debitAmount : line.creditAmount;
           return (
-            <div key={line.id} className="flex items-center justify-between gap-3 rounded-lg border border-border-subtle bg-surface-muted px-3 py-2 text-sm">
-              <span className="font-semibold text-foreground">{isDebit ? 'Soll' : 'Haben'} · Konto {line.accountNumber}</span>
-              <span className="font-semibold tabular-nums text-foreground">{euro.format(amount)}</span>
+            <div key={line.id} className="flex items-center justify-between gap-3 px-3 py-2.25 text-control">
+              <span className="font-medium text-foreground">{isDebit ? 'Soll' : 'Haben'} · Konto {line.accountNumber}</span>
+              <span className="font-mono font-semibold tabular-nums text-foreground">{euro.format(amount)}</span>
             </div>
           );
         })}
@@ -125,13 +125,17 @@ export function JournalEntryDetailModal({ entryId, dataAdapter, onClose }: Journ
       open
       onClose={onClose}
       titleId="journal-entry-dialog-heading"
-      className="max-w-3xl rounded-2xl border border-border p-4 sm:p-6"
+      className="max-w-3xl"
     >
-      <div className="mb-4 flex items-center justify-between gap-3">
-        <h2 id="journal-entry-dialog-heading" className="text-lg font-semibold text-foreground">Journalbuchung</h2>
-        <button type="button" className="min-h-10 rounded-lg border border-control-border px-3 py-2 text-sm font-semibold text-foreground hover:bg-surface-muted" aria-label="Journalansicht schließen" onClick={onClose}>Schließen</button>
+      <div className="flex items-start gap-3 px-4.5 pb-2.5 pt-4">
+        <h2 id="journal-entry-dialog-heading" className="min-w-0 flex-1 text-title text-foreground">Journalbuchung</h2>
       </div>
-      <JournalEntryDetail entryId={entryId} dataAdapter={dataAdapter} />
+      <div className="px-4.5 pb-4 pt-1">
+        <JournalEntryDetail entryId={entryId} dataAdapter={dataAdapter} />
+      </div>
+      <div className="flex flex-wrap justify-end gap-2 border-t border-border px-4.5 py-3">
+        <Button variant="secondary" aria-label="Journalansicht schließen" onClick={onClose}>Schließen</Button>
+      </div>
     </Modal>
   );
 }

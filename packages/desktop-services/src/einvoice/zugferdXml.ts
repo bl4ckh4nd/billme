@@ -50,14 +50,37 @@ export const buildZugferdXml = (doc: NormalizedEinvoice): string => {
     current.netLineTotal += line.netLineTotal;
     taxGroupsByKey.set(key, current);
   });
+  for (const allowance of doc.allowances ?? []) {
+    const key = `${allowance.taxCategoryCode}:${allowance.taxRate}`;
+    const group = taxGroupsByKey.get(key) ?? {
+      lineId: '', name: allowance.reason, quantity: 0, unitCode: 'C62', netUnitPrice: 0,
+      netLineTotal: 0, taxRate: allowance.taxRate, taxCategoryCode: allowance.taxCategoryCode,
+      taxExemptionReason: allowance.taxExemptionReason, lineKind: 'item' as const,
+    };
+    group.netLineTotal -= allowance.amount;
+    taxGroupsByKey.set(key, group);
+  }
+  const allowanceTotal = (doc.allowances ?? []).reduce((total, allowance) => total + allowance.amount, 0);
+  const allowancesXml = (doc.allowances ?? []).map((allowance) => `
+      <ram:SpecifiedTradeAllowanceCharge>
+        <ram:ChargeIndicator><udt:Indicator>false</udt:Indicator></ram:ChargeIndicator>
+        <ram:ActualAmount>${formatAmount(allowance.amount)}</ram:ActualAmount>
+        <ram:Reason>${xmlEscape(allowance.reason)}</ram:Reason>
+        <ram:CategoryTradeTax>
+          <ram:TypeCode>VAT</ram:TypeCode>
+          <ram:CategoryCode>${allowance.taxCategoryCode}</ram:CategoryCode>
+          <ram:RateApplicablePercent>${formatAmount(allowance.taxRate)}</ram:RateApplicablePercent>
+        </ram:CategoryTradeTax>
+      </ram:SpecifiedTradeAllowanceCharge>`).join('');
   const taxGroups = [...taxGroupsByKey.values()];
   const taxGroupsXml = taxGroups.map((group) => `
       <ram:ApplicableTradeTax>
         <ram:CalculatedAmount>${formatAmount(group.taxCategoryCode === 'S' ? group.netLineTotal * group.taxRate / 100 : 0)}</ram:CalculatedAmount>
         <ram:TypeCode>VAT</ram:TypeCode>
+        ${group.taxExemptionReason ? `<ram:ExemptionReason>${xmlEscape(group.taxExemptionReason)}</ram:ExemptionReason>` : ''}
         <ram:BasisAmount>${formatAmount(group.netLineTotal)}</ram:BasisAmount>
         <ram:CategoryCode>${group.taxCategoryCode}</ram:CategoryCode>
-        <ram:RateApplicablePercent>${formatAmount(group.taxRate)}</ram:RateApplicablePercent>${group.taxExemptionReason ? `<ram:ExemptionReason>${xmlEscape(group.taxExemptionReason)}</ram:ExemptionReason>` : ''}
+        <ram:RateApplicablePercent>${formatAmount(group.taxRate)}</ram:RateApplicablePercent>
       </ram:ApplicableTradeTax>`).join('');
 
   return `<?xml version="1.0" encoding="UTF-8"?>
@@ -107,9 +130,11 @@ ${linesXml}
     <ram:ApplicableHeaderTradeSettlement>
       <ram:InvoiceCurrencyCode>${doc.currency}</ram:InvoiceCurrencyCode>
       <ram:SpecifiedTradeSettlementPaymentMeans>
-        <ram:TypeCode>58</ram:TypeCode>
+        <ram:TypeCode>${doc.seller.iban ? '58' : '1'}</ram:TypeCode>
+        ${doc.seller.iban ? `<ram:PayeePartyCreditorFinancialAccount><ram:IBANID>${xmlEscape(doc.seller.iban)}</ram:IBANID></ram:PayeePartyCreditorFinancialAccount>` : ''}
       </ram:SpecifiedTradeSettlementPaymentMeans>
 ${taxGroupsXml}
+${allowancesXml}
       <ram:SpecifiedTradePaymentTerms>
         <ram:DueDateDateTime>
           <udt:DateTimeString format="102">${doc.dueDate.replaceAll('-', '')}</udt:DateTimeString>
@@ -117,7 +142,8 @@ ${taxGroupsXml}
       </ram:SpecifiedTradePaymentTerms>
       <ram:SpecifiedTradeSettlementHeaderMonetarySummation>
         <ram:LineTotalAmount>${formatAmount(doc.totals.lineNetTotal)}</ram:LineTotalAmount>
-        <ram:TaxBasisTotalAmount>${formatAmount(doc.totals.lineNetTotal)}</ram:TaxBasisTotalAmount>
+        ${allowanceTotal ? `<ram:AllowanceTotalAmount>${formatAmount(allowanceTotal)}</ram:AllowanceTotalAmount>` : ''}
+        <ram:TaxBasisTotalAmount>${formatAmount(doc.totals.lineNetTotal - allowanceTotal)}</ram:TaxBasisTotalAmount>
         <ram:TaxTotalAmount currencyID="${doc.currency}">${formatAmount(doc.totals.taxTotal)}</ram:TaxTotalAmount>
         <ram:GrandTotalAmount>${formatAmount(doc.totals.grandTotal)}</ram:GrandTotalAmount>
         <ram:DuePayableAmount>${formatAmount(doc.totals.grandTotal)}</ram:DuePayableAmount>

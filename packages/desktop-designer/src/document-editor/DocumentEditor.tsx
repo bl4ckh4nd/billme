@@ -14,7 +14,7 @@ import {
   recommendInvoiceTaxMode,
   resolveInvoiceTaxMode,
 } from '@billme/server-core/services';
-import { ConfirmDialog, ValidationSummary } from '@billme/ui';
+import { Badge, Button, ConfirmDialog, IconButton, Select, ValidationSummary } from '@billme/ui';
 import { useHistory } from '../hooks/useHistory';
 import type { ArticleLike, ClientLike, DocumentDraft, ProjectLike, SettingsLike } from './types';
 
@@ -22,6 +22,7 @@ export interface DocumentEditorProps {
   document: DocumentDraft;
   templateType: 'invoice' | 'offer';
   mode: 'create' | 'edit';
+  accountingEvidenceRequired?: boolean;
   clients: ClientLike[];
   articles: ArticleLike[];
   projects: ProjectLike[];
@@ -45,6 +46,7 @@ interface FieldErrors {
   number?: string;
   date?: string;
   client?: string;
+  positions?: string;
   buyerVatId?: string;
   taxRule?: string;
   destinationVatRate?: string;
@@ -76,6 +78,7 @@ const getValidationErrors = (errors: FieldErrors): DocumentValidationError[] => 
     ['number', 'Nummer', 'document-field-number'],
     ['date', 'Datum', 'document-field-date'],
     ['client', 'Kunde', 'document-field-client'],
+    ['positions', 'Positionen', 'document-field-positions'],
     ['buyerVatId', 'Käufer-USt-IdNr.', 'document-field-buyer-vat-id'],
     ['taxRule', 'Umsatzsteuer-Modell', 'document-field-tax-rule'],
     ['taxCountry', 'DATEV-Land', 'document-field-tax-country'],
@@ -135,10 +138,14 @@ const parseAddressText = (value: string, company: string, previous: unknown): Re
   };
 };
 
+// ponytail: two aria-pressed buttons instead of SegmentedControl; tests and E2E address them by role button, switch once they target radios.
+const viewButtonClass = (selected: boolean) => `inline-flex h-6.5 items-center gap-1.5 whitespace-nowrap rounded-sm px-2.5 text-caption focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-focus-ring ${selected ? 'bg-surface font-semibold text-foreground shadow-thumb' : 'font-medium text-muted hover:text-foreground'}`;
+
 export const DocumentEditor: React.FC<DocumentEditorProps> = ({
   document,
   templateType,
   mode,
+  accountingEvidenceRequired = true,
   clients,
   articles,
   projects,
@@ -221,8 +228,8 @@ export const DocumentEditor: React.FC<DocumentEditorProps> = ({
   // the backend resolves them to the corresponding tax-case key.
   const requiresTaxCountry = ['intra_eu_supply_6a', 'intra_eu_service_reverse_charge', 'export_third_country', 'non_taxable_outside_scope'].includes(resolvedTaxMode);
   const requiresDestinationRate = ['intra_eu_supply_6a', 'intra_eu_service_reverse_charge'].includes(resolvedTaxMode);
-  const requiresDatevEvidence = ['small_business_19_ustg', 'reverse_charge_13b', 'intra_eu_supply_6a', 'intra_eu_service_reverse_charge', 'export_third_country', 'vat_exempt_4_ustg', 'non_taxable_outside_scope'].includes(resolvedTaxMode);
-  const requiresDatevSachverhaltLl = ['reverse_charge_13b', 'intra_eu_service_reverse_charge', 'non_taxable_outside_scope'].includes(resolvedTaxMode);
+  const requiresDatevEvidence = accountingEvidenceRequired && ['small_business_19_ustg', 'reverse_charge_13b', 'intra_eu_supply_6a', 'intra_eu_service_reverse_charge', 'export_third_country', 'vat_exempt_4_ustg', 'non_taxable_outside_scope'].includes(resolvedTaxMode);
+  const requiresDatevSachverhaltLl = accountingEvidenceRequired && ['reverse_charge_13b', 'intra_eu_service_reverse_charge', 'non_taxable_outside_scope'].includes(resolvedTaxMode);
   const requiresBuyerVatId = getInvoiceTaxModeDefinition(resolvedTaxMode).requiresBuyerVatId;
   const sellerCountryCode = effectiveSettings.legal.countryCode ?? 'DE';
   const buyerCountryCode = normalizeCountry(
@@ -367,6 +374,7 @@ export const DocumentEditor: React.FC<DocumentEditorProps> = ({
     if (!formData.number.trim()) errors.number = 'Nummer ist erforderlich.';
     if (!formData.date.trim()) errors.date = 'Datum ist erforderlich.';
     if (!formData.client.trim()) errors.client = 'Kunde ist erforderlich.';
+    if (formData.items.length === 0) errors.positions = 'Mindestens eine Position ist erforderlich.';
     formData.items.forEach((item, index) => {
       if (!item.description.trim()) errors.items[index] = 'Beschreibung ist erforderlich.';
     });
@@ -410,7 +418,7 @@ export const DocumentEditor: React.FC<DocumentEditorProps> = ({
 
   const handleSave = useCallback(() => {
     const errors = validate();
-    if (errors.number || errors.date || errors.client || errors.buyerVatId || errors.taxRule || errors.taxCountry || errors.destinationVatRate || errors.datevEvidenceType || errors.datevEvidenceReference || errors.datevSachverhaltLl || Object.keys(errors.items).length > 0) {
+    if (getValidationErrors(errors).length > 0) {
       setSaveError('Bitte korrigiere die markierten Pflichtfelder.');
       setView('edit');
       focusValidationError(errors);
@@ -539,45 +547,52 @@ export const DocumentEditor: React.FC<DocumentEditorProps> = ({
   const firstValidationError = validationErrors[0]?.message;
 
   return (
-    <div className="flex h-full w-full flex-col overflow-hidden bg-surface">
-      <header className="flex min-h-14 shrink-0 items-center gap-2 border-b border-border bg-surface px-3 sm:px-5">
-        <button type="button" onClick={handleCancel} className="inline-flex h-9 items-center gap-1.5 rounded-lg px-2 text-sm font-semibold text-muted hover:bg-surface-muted hover:text-foreground" aria-label="Zurück">
-          <ArrowLeft size={16} /> <span className="hidden sm:inline">Zurück</span>
-        </button>
-        <div className="min-w-0 flex-1 border-l border-border pl-3">
-          <h1 className="truncate text-sm font-bold text-foreground">{title} {mode === 'create' ? 'erstellen' : 'bearbeiten'}</h1>
-          <p className="truncate text-xs text-muted">{formData.number || 'Ohne Nummer'}</p>
+    <div className="flex h-full w-full flex-col overflow-hidden bg-ground">
+      <header className="flex shrink-0 items-center gap-3 border-b border-border bg-surface px-3 py-2.5 sm:px-5">
+        <Button variant="ghost" size="sm" onClick={handleCancel} aria-label="Zurück">
+          <ArrowLeft size={14} aria-hidden="true" />
+          <span className="hidden sm:inline">Zurück</span>
+        </Button>
+        <div className="min-w-0 flex-1">
+          <h1 className="truncate text-title text-foreground">{title} {mode === 'create' ? 'erstellen' : 'bearbeiten'}</h1>
+          <p className="truncate text-caption text-muted">{formData.number || 'Ohne Nummer'}</p>
         </div>
-        <button type="button" onClick={history.undo} disabled={!history.canUndo} className="rounded-lg p-2 text-muted hover:bg-surface-muted hover:text-foreground disabled:opacity-40" aria-label="Rückgängig"><Undo2 size={16} /></button>
-        <button type="button" onClick={history.redo} disabled={!history.canRedo} className="rounded-lg p-2 text-muted hover:bg-surface-muted hover:text-foreground disabled:opacity-40" aria-label="Wiederholen"><Redo2 size={16} /></button>
-        <label className="hidden items-center gap-1.5 text-xs font-semibold text-muted lg:flex">
-          Vorlage
-          <select
+        <div className="flex items-center gap-1">
+          <IconButton onClick={history.undo} disabled={!history.canUndo} aria-label="Rückgängig"><Undo2 size={16} aria-hidden="true" /></IconButton>
+          <IconButton onClick={history.redo} disabled={!history.canRedo} aria-label="Wiederholen"><Redo2 size={16} aria-hidden="true" /></IconButton>
+        </div>
+        <div className="hidden items-center gap-2 lg:flex">
+          <label htmlFor="document-template" className="text-caption font-medium text-foreground-secondary">Vorlage</label>
+          <Select
+            id="document-template"
             aria-label="Vorlage"
             value={knownTemplateId ?? ''}
             onChange={(event) => setFormData((previous) => ({
               ...previous,
               layout: { ...previous.layout, templateId: event.target.value || undefined },
             }))}
-            className="h-8 max-w-48 rounded-lg border border-border bg-surface px-2 text-xs font-semibold text-foreground focus-visible:outline-2 focus-visible:outline-focus-ring"
+            className="max-w-48"
           >
             <option value="">Standard ({defaultTemplateName})</option>
             {templateOptions.map((option) => <option key={option.id} value={option.id}>{option.name}</option>)}
-          </select>
-        </label>
-        {dirty ? <span className="hidden items-center gap-1 text-xs font-semibold text-warning md:flex"><span className="h-1.5 w-1.5 rounded-full bg-warning" />Ungespeichert</span> : null}
-        <div className="flex rounded-lg border border-border bg-surface-muted p-0.5" role="group" aria-label="Dokumentansicht">
-          <button type="button" aria-pressed={view === 'edit'} onClick={() => setView('edit')} className={`rounded-md px-2.5 py-1.5 text-xs font-bold ${view === 'edit' ? 'bg-surface text-foreground shadow-sm' : 'text-muted'}`}>Bearbeiten</button>
-          <button type="button" aria-pressed={view === 'preview'} onClick={() => setView('preview')} className={`inline-flex items-center gap-1 rounded-md px-2.5 py-1.5 text-xs font-bold ${view === 'preview' ? 'bg-surface text-foreground shadow-sm' : 'text-muted'}`}><Eye size={14} /> Vorschau</button>
+          </Select>
         </div>
-        {firstValidationError ? <span id="document-save-validation-error" className="max-w-56 text-right text-xs text-error" role="status" aria-live="assertive">{firstValidationError}</span> : null}
-        <button type="button" onClick={handleSave} className="inline-flex h-9 items-center gap-1.5 rounded-lg bg-accent px-3 text-sm font-bold text-accent-foreground hover:bg-accent-hover" aria-label="Speichern" aria-describedby={firstValidationError ? 'document-save-validation-error' : undefined}><Save size={16} /> <span className="hidden sm:inline">Speichern</span></button>
+        {dirty ? <Badge tone="warning" className="hidden md:inline-flex"><span className="size-1.5 rounded-full bg-warning" aria-hidden="true" />Ungespeichert</Badge> : null}
+        <div className="flex gap-0.5 rounded-control border border-border bg-surface-sunken p-0.5" role="group" aria-label="Dokumentansicht">
+          <button type="button" aria-pressed={view === 'edit'} onClick={() => setView('edit')} className={viewButtonClass(view === 'edit')}>Bearbeiten</button>
+          <button type="button" aria-pressed={view === 'preview'} onClick={() => setView('preview')} className={viewButtonClass(view === 'preview')}><Eye size={14} aria-hidden="true" /> Vorschau</button>
+        </div>
+        {firstValidationError ? <span id="document-save-validation-error" className="max-w-56 text-right text-caption text-error-text" role="status" aria-live="assertive">{firstValidationError}</span> : null}
+        <Button onClick={handleSave} aria-label="Speichern" aria-describedby={firstValidationError ? 'document-save-validation-error' : undefined}>
+          <Save size={16} aria-hidden="true" />
+          <span className="hidden sm:inline">Speichern</span>
+        </Button>
       </header>
 
-      {saveError && validationErrors.length === 0 ? <div className="mx-auto mt-3 w-full max-w-[900px] rounded-lg border border-error-border bg-error-bg px-3 py-2 text-sm font-medium text-error" role="alert" aria-live="assertive">{saveError}</div> : null}
+      {saveError && validationErrors.length === 0 ? <div className="mx-auto mt-3 w-full max-w-[900px] rounded-control border border-error-border bg-error-bg px-3 py-2.5 text-control text-error-text" role="alert" aria-live="assertive">{saveError}</div> : null}
       {validationErrors.length > 0 ? <div className="mx-auto mt-3 w-full max-w-[900px]"><ValidationSummary title="Bitte korrigiere die markierten Pflichtfelder." errors={validationErrors.map(({ id, message }) => ({ id, message }))} onJump={focusValidationField} /></div> : null}
 
-      <main className="flex-1 overflow-auto bg-dark-1 p-4 sm:p-8">
+      <main className={`flex-1 overflow-auto bg-surface-inverse-raised p-5 ${saveError || validationErrors.length > 0 ? 'mt-3' : ''}`}>
         {view === 'preview' ? (
           <div className="mx-auto w-fit" data-document-preview data-testid="document-preview">
             <DocumentFlowPages model={viewModel} pageClassName="bf-page-preview" />

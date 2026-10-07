@@ -1,11 +1,11 @@
 import { create } from 'zustand';
-import type { Invoice } from '@billme/desktop-core/types';
+import type { Invoice, Offer } from '@billme/desktop-core/types';
 
 export interface UiState {
-  editingInvoice: Invoice | null;
+  editingInvoice: Invoice | Offer | null;
   editingDocumentType: 'invoice' | 'offer' | null;
   editingDocumentMode: 'create' | 'edit' | null;
-  setEditingInvoice: (invoice: Invoice, type: 'invoice' | 'offer', mode?: 'create' | 'edit') => void;
+  setEditingInvoice: (invoice: Invoice | Offer, type: 'invoice' | 'offer', mode?: 'create' | 'edit') => void;
   clearEditingInvoice: () => void;
 }
 

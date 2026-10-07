@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { Info } from 'lucide-react';
-import { ConfirmDialog } from '@billme/ui';
+import { Badge, ConfirmDialog } from '@billme/ui';
 import InboxView from './components/InboxView';
 import BookingEditor from './components/BookingEditor';
 import ReconciliationWorkbench from './components/ReconciliationWorkbench';
@@ -21,7 +21,9 @@ import { reportTabsForBusinessProfile, type BusinessReportingProfile } from './d
 
 export type AppView = 'inbox' | 'editor' | 'reconciliation' | 'exceptions' | 'assets' | 'reports' | 'opos' | 'special' | 'receipts';
 
-const ROUTABLE_VIEWS: readonly AppView[] = ['inbox', 'reconciliation', 'exceptions', 'assets', 'reports', 'opos', 'special', 'receipts'];
+const SAMPLE_DATA_HINT = 'Ohne verbundene Datenquelle zeigen Buchungen, Ausnahmen und Auswertungen einen Demo-Datensatz.';
+
+const ROUTABLE_VIEWS: readonly AppView[] = ['inbox', 'editor', 'reconciliation', 'exceptions', 'assets', 'reports', 'opos', 'special', 'receipts'];
 const isAccountingView = (value: unknown): value is AppView =>
   typeof value === 'string' && (ROUTABLE_VIEWS as readonly string[]).includes(value);
 
@@ -71,12 +73,14 @@ export default function App(props: ProAccountingWorkspaceProps) {
 
 function Workspace({ seed, dataAdapter, role = 'admin', assetsAvailable = true, busy = false, view, onViewChange, onManageRules }: ProAccountingWorkspaceProps) {
   const [oposInvoiceId, setOposInvoiceId] = useState<string | null>(null);
-  const [currentView, setCurrentView] = useState<AppView>(isAccountingView(view) ? view : 'inbox');
+  const [requestedView, setCurrentView] = useState<AppView>(isAccountingView(view) ? view : 'inbox');
 
   useEffect(() => {
     if (isAccountingView(view)) setCurrentView(view);
   }, [view]);
   const [selectedTransactionId, setSelectedTransactionId] = useState<string | null>(null);
+  // The editor works on one bank line; without one (a reload of `?view=editor`) it is the inbox.
+  const currentView: AppView = requestedView === 'editor' && !selectedTransactionId ? 'inbox' : requestedView;
   const [queue, setQueue] = useState<InboxQueueKey>('all');
   const editorDirty = useRef(false);
   const [pendingSwitchId, setPendingSwitchId] = useState<string | null>(null);
@@ -97,24 +101,30 @@ function Workspace({ seed, dataAdapter, role = 'admin', assetsAvailable = true, 
 
   const refresh = useCallback(() => setVersion((v) => v + 1), []);
 
+  /** Routed hosts own the area (`?view=`): a handoff moves the URL, otherwise reload and the navigation disagree with the screen. */
+  const showView = (next: AppView) => {
+    if (onViewChange) onViewChange(next);
+    else setCurrentView(next);
+  };
+
   const handleOpenTransaction = (transactionId: string) => {
     setInboxPreviewTransactionId(null);
     setSelectedTransactionId(transactionId);
-    setCurrentView('editor');
+    showView('editor');
   };
 
   const handleBackToInbox = () => {
-    setCurrentView('inbox');
+    showView('inbox');
     setSelectedTransactionId(null);
     refresh();
   };
 
   return (
-    <div className="flex h-full min-w-0 w-full flex-col text-foreground">
+    <div className="flex min-w-0 w-full flex-col text-foreground">
       {/* Routed (the app shell's sidebar opens each area): no second navigation here.
           Standalone use without a route keeps the tab bar. */}
       {view === undefined ? (
-      <div className="shrink-0 overflow-x-auto border-b border-border px-3 pt-2 sm:px-6">
+      <div className="mb-3 shrink-0 overflow-x-auto border-b border-border">
         <nav className="flex min-w-max items-center gap-0.5" aria-label="Buchhaltungsbereiche">
           {(
             [
@@ -132,11 +142,11 @@ function Workspace({ seed, dataAdapter, role = 'admin', assetsAvailable = true, 
             return (
               <button
                 key={view}
-                onClick={() => setCurrentView(view)}
+                onClick={() => showView(view)}
                 aria-current={isActive ? 'page' : undefined}
-                className={`relative min-h-10 rounded-t-lg px-4 py-2 text-sm font-semibold transition-colors ${
+                className={`relative h-8.5 px-3 text-label transition-colors focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-focus-ring ${
                   isActive
-                    ? 'text-foreground after:absolute after:bottom-0 after:left-0 after:right-0 after:h-0.5 after:bg-dark-base'
+                    ? 'text-foreground after:absolute after:bottom-0 after:left-0 after:right-0 after:h-0.5 after:bg-foreground'
                     : 'text-muted hover:text-foreground'
                 }`}
               >
@@ -145,33 +155,23 @@ function Workspace({ seed, dataAdapter, role = 'admin', assetsAvailable = true, 
             );
           })}
           {dataAdapter ? null : (
-            <span
-              className="ml-2 inline-flex items-center gap-1 rounded-full border border-warning-border bg-warning-bg px-2 py-0.5 text-xs font-semibold text-warning-text"
-              role="status"
-              title="Ohne verbundene Datenquelle zeigen Buchungen, Ausnahmen und Auswertungen einen Demo-Datensatz."
-            >
-              <Info size={12} aria-hidden="true" />
-              Beispieldaten
+            <span className="ml-2 inline-flex" role="status" title={SAMPLE_DATA_HINT}>
+              <Badge tone="warning"><Info size={12} aria-hidden="true" /> Beispieldaten</Badge>
             </span>
           )}
         </nav>
       </div>
       ) : dataAdapter ? null : (
-        <div className="shrink-0 px-4 pt-3">
-          <span
-            className="inline-flex items-center gap-1 rounded-full border border-warning-border bg-warning-bg px-2 py-0.5 text-xs font-semibold text-warning-text"
-            role="status"
-            title="Ohne verbundene Datenquelle zeigen Buchungen, Ausnahmen und Auswertungen einen Demo-Datensatz."
-          >
-            <Info size={12} aria-hidden="true" />
-            Beispieldaten
+        <div className="mb-3 shrink-0">
+          <span className="inline-flex" role="status" title={SAMPLE_DATA_HINT}>
+            <Badge tone="warning"><Info size={12} aria-hidden="true" /> Beispieldaten</Badge>
           </span>
         </div>
       )}
 
-      <div className="min-w-0 flex-1 overflow-hidden">
+      <div className="min-w-0">
         {busy ? <div className="sr-only" aria-live="polite">Speichere Änderung…</div> : null}
-        <div className="flex h-full min-w-0 flex-col overflow-hidden">
+        <div className="flex min-w-0 flex-col">
           {currentView === 'inbox' ? (
             <InboxView
               role={role}
@@ -187,9 +187,11 @@ function Workspace({ seed, dataAdapter, role = 'admin', assetsAvailable = true, 
               onQueueChange={setQueue}
             />
           ) : currentView === 'editor' ? (
-            // Workbench: the queue stays beside the editor (below lg the editor takes the full width).
-            <div className="grid h-full min-h-0 grid-rows-[minmax(0,1fr)] lg:grid-cols-[264px_minmax(0,1fr)]">
-              <div className="hidden min-h-0 lg:block">
+            // Workbench: queue, editor and aside as three panes on the ground, sized by the content
+            // width beside the rail. Narrower, the aside moves under them, then the queue is hidden.
+            <div className="@container">
+            <div className="grid items-start gap-3 @2xl:grid-cols-[264px_minmax(0,1fr)] @5xl:grid-cols-[264px_minmax(0,1fr)_312px]">
+              <div className="hidden min-w-0 @2xl:block">
                 <WorkbenchQueue
                   transactions={transactions}
                   queue={queue}
@@ -222,6 +224,7 @@ function Workspace({ seed, dataAdapter, role = 'admin', assetsAvailable = true, 
                 onCancel={() => setPendingSwitchId(null)}
               />
             </div>
+            </div>
           ) : currentView === 'reconciliation' ? (
             <ReconciliationWorkbench
               role={role}
@@ -233,7 +236,7 @@ function Workspace({ seed, dataAdapter, role = 'admin', assetsAvailable = true, 
               onRefresh={refresh}
               dataAdapter={dataAdapter}
               onManageRules={onManageRules}
-              onOpenInvoice={(invoiceId) => { setOposInvoiceId(invoiceId); if (onViewChange) onViewChange('opos'); else setCurrentView('opos'); }}
+              onOpenInvoice={(invoiceId) => { setOposInvoiceId(invoiceId); showView('opos'); }}
             />
           ) : currentView === 'exceptions' ? (
             <ExceptionCenter
@@ -256,11 +259,11 @@ function Workspace({ seed, dataAdapter, role = 'admin', assetsAvailable = true, 
           ) : currentView === 'opos' ? (
             <OposView key={oposInvoiceId ?? 'opos'} dataAdapter={dataAdapter} role={role} initialInvoiceId={oposInvoiceId ?? undefined} />
           ) : currentView === 'receipts' ? (
-            <ReceiptsInbox dataAdapter={dataAdapter} onOpenInvoice={(invoiceId) => { setOposInvoiceId(invoiceId); if (onViewChange) onViewChange('opos'); else setCurrentView('opos'); }} />
+            <ReceiptsInbox dataAdapter={dataAdapter} onOpenInvoice={(invoiceId) => { setOposInvoiceId(invoiceId); showView('opos'); }} />
           ) : currentView === 'special' ? (
             <SonderbuchungenWorkspace dataAdapter={dataAdapter} role={role} />
           ) : currentView === 'assets' && !assetsAvailable ? (
-            <div className="p-6 text-sm text-muted">Anlagen sind in dieser Verbindung nicht verfügbar.</div>
+            <div className="text-control text-muted">Anlagen sind in dieser Verbindung nicht verfügbar.</div>
           ) : (
             <AssetManagementView dataAdapter={dataAdapter} role={role} />
           )}

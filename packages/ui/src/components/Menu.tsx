@@ -129,7 +129,7 @@ export const Menu: React.FC<MenuProps> = ({ trigger, items, 'aria-label': ariaLa
             aria-label={ariaLabel}
             style={anchored.style}
             className={cn(
-              'ui-enter-popover z-[var(--z-dropdown)] min-w-44 max-w-80 rounded-card bg-surface p-1 shadow-md',
+              'ui-enter-popover z-[var(--z-dropdown)] min-w-44 max-w-80 rounded-card border border-border bg-surface p-1.5 text-control shadow-lift',
               closing && popoverExitClass,
               className,
             )}
@@ -145,7 +145,7 @@ export const Menu: React.FC<MenuProps> = ({ trigger, items, 'aria-label': ariaLa
           >
             {items.map((item, index) => (
               <React.Fragment key={item.id}>
-                {item.separated && <div role="separator" className="-mx-1 my-1 h-px bg-border-subtle" />}
+                {item.separated && <div role="separator" className="-mx-1.5 my-1.5 h-px bg-border" />}
                 <button
                   ref={(node) => { itemRefs.current[index] = node; }}
                   type="button"
@@ -156,9 +156,10 @@ export const Menu: React.FC<MenuProps> = ({ trigger, items, 'aria-label': ariaLa
                   onClick={() => select(item)}
                   onPointerMove={() => { if (!item.disabled && active !== index) setActive(index); }}
                   className={cn(
-                    'flex h-8 w-full items-center gap-2 rounded-sm px-2 text-left text-sm focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-focus-ring',
+                    'flex w-full items-center gap-2.5 rounded-control px-2.25 py-2 text-left focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-focus-ring',
                     item.tone === 'danger' ? 'text-error-text' : 'text-foreground',
                     index === active && (item.tone === 'danger' ? 'bg-error-bg' : 'bg-surface-sunken'),
+                    item.checked && 'bg-accent-50',
                     item.disabled && 'cursor-not-allowed text-disabled-foreground',
                   )}
                 >

@@ -142,7 +142,7 @@ export const Modal: React.FC<ModalProps> = ({
       <div
         ref={overlayRef}
         className={cn(
-          'ui-enter-fade fixed inset-0 z-[var(--z-overlay)] flex items-center justify-center overflow-y-auto bg-dark-base/20 p-4 backdrop-blur-sm',
+          'ui-enter-fade fixed inset-0 z-[var(--z-overlay)] flex items-start justify-center overflow-y-auto bg-ink-950/45 px-4 pb-4 pt-[8vh]',
           closing && 'opacity-0 duration-(--dur-overlay-exit)',
         )}
         onClick={(event) => {
@@ -158,7 +158,7 @@ export const Modal: React.FC<ModalProps> = ({
           aria-busy={ariaBusy || undefined}
           tabIndex={-1}
           className={cn(
-            'ui-enter-panel w-full max-w-lg rounded-modal bg-surface shadow-lg',
+            'ui-enter-panel w-full max-w-140 rounded-modal border border-border bg-surface shadow-lift',
             closing && 'translate-y-1 scale-[0.98] opacity-0 duration-(--dur-overlay-exit)',
             className,
           )}

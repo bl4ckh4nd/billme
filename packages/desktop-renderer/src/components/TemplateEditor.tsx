@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { AlertTriangle, ArrowLeft, CheckCircle2, ImagePlus, Paintbrush, Plus, Save, Trash2 } from 'lucide-react';
+import { AlertTriangle, CheckCircle2, ImagePlus, Paintbrush, Plus, Save, Trash2 } from 'lucide-react';
 import {
-  Badge, Button, ConfirmDialog, ErrorState, IconButton, Input, SegmentedControl, Switch, Textarea, useActionFeedback,
+  Badge, Button, ConfirmDialog, ErrorState, IconButton, Input, PageHeader, SegmentedControl, Select, Switch, Textarea, useActionFeedback,
 } from '@billme/ui';
 import { Spinner } from '../ui/components/Spinner';
 import { ScaledFlowPreview } from '@billme/desktop-designer/flow';
@@ -43,9 +43,9 @@ const SECTION_LABELS: Record<TemplateSectionId, string> = {
 type TextTarget = { element: HTMLInputElement | HTMLTextAreaElement; apply: (value: string) => void };
 
 const Section: React.FC<{ title: string; children: React.ReactNode; action?: React.ReactNode }> = ({ title, children, action }) => (
-  <section className="border-b border-border px-5 py-5">
-    <div className="mb-3 flex items-center gap-2">
-      <h2 className="flex-1 text-xs font-semibold uppercase tracking-wide text-muted">{title}</h2>
+  <section className="border-b border-border px-4.5 py-4 last:border-b-0">
+    <div className="mb-3 flex min-h-7 items-center gap-2">
+      <h2 className="flex-1 text-eyebrow uppercase text-muted">{title}</h2>
       {action}
     </div>
     <div className="flex flex-col gap-3">{children}</div>
@@ -83,7 +83,7 @@ export const TemplateEditor: React.FC<TemplateEditorProps> = ({ templateId, kind
 
   if (templatesQuery.isError || defaultsQuery.isError) {
     return (
-      <div className="flex h-full flex-col items-center justify-center gap-4 bg-background p-8">
+      <div className="flex h-full flex-col items-center justify-center gap-4 p-8">
         <ErrorState
           title="Vorlage konnte nicht geladen werden"
           description="Die gespeicherten Vorlagen sind gerade nicht abrufbar."
@@ -98,15 +98,15 @@ export const TemplateEditor: React.FC<TemplateEditorProps> = ({ templateId, kind
   }
   if (templatesQuery.isPending || defaultsQuery.isPending) {
     return (
-      <div className="flex h-full flex-col items-center justify-center gap-3 bg-background text-muted">
+      <div className="flex h-full flex-col items-center justify-center gap-3 text-muted">
         <Spinner size="md" />
-        <p role="status" className="text-sm font-medium">Vorlage wird geladen …</p>
+        <p role="status" className="text-control font-medium">Vorlage wird geladen …</p>
       </div>
     );
   }
   if (!initial) {
     return (
-      <div className="flex h-full flex-col items-center justify-center gap-4 bg-background p-8">
+      <div className="flex h-full flex-col items-center justify-center gap-4 p-8">
         <ErrorState title="Vorlage nicht gefunden" description="Sie wurde vermutlich gelöscht." />
         <Button variant="ghost" onClick={onBack}>Zurück zu den Vorlagen</Button>
       </div>
@@ -277,34 +277,40 @@ const TemplateEditorForm: React.FC<{
   const busy = upsert.isPending || setDefault.isPending;
 
   return (
-    <div className="flex h-full flex-col overflow-hidden bg-background">
-      <header className="flex min-h-14 shrink-0 items-center gap-3 border-b border-border bg-surface px-3 sm:px-4">
-        <Button variant="ghost" size="sm" onClick={() => (dirty ? setConfirmDiscard(true) : onBack())}>
-          <ArrowLeft size={16} aria-hidden="true" /> Vorlagen
-        </Button>
-        <div className="h-6 border-l border-border" />
-        <input
-          value={draft.name}
-          onChange={(event) => setDraft((previous) => ({ ...previous, name: event.target.value }))}
-          aria-label="Name der Vorlage"
-          className="min-w-0 flex-1 rounded-control border border-transparent bg-transparent px-2 py-1 text-sm font-semibold text-foreground hover:border-control-border focus-visible:border-control-border focus-visible:outline-2 focus-visible:outline-focus-ring"
-        />
-        <Badge tone="neutral">{TEMPLATE_KIND_LABELS[kind]}</Badge>
-        {dirty ? (
-          <span className="hidden items-center gap-1 text-xs font-semibold text-warning-text md:flex">
-            <span className="size-1.5 rounded-full bg-warning" aria-hidden="true" />Ungespeichert
-          </span>
-        ) : null}
-        <Button variant="secondary" size="sm" onClick={() => setConfirmApplyAll(true)} disabled={busy}>
-          <Paintbrush size={14} aria-hidden="true" /> Auf alle Arten übertragen
-        </Button>
-        <Button variant="primary" size="sm" onClick={() => void save()} loading={busy} disabled={!draft.name.trim()}>
-          <Save size={14} aria-hidden="true" /> Speichern
-        </Button>
-      </header>
+    <div className="flex h-full flex-col">
+      <PageHeader
+        title="Vorlagen"
+        description={draft.name}
+        back={{ label: 'Vorlagen', onClick: () => (dirty ? setConfirmDiscard(true) : onBack()) }}
+        toolbar={(
+          <>
+            <div className="min-w-0 flex-1 sm:max-w-96">
+              <Input
+                value={draft.name}
+                onChange={(event) => setDraft((previous) => ({ ...previous, name: event.target.value }))}
+                aria-label="Name der Vorlage"
+                className="font-semibold"
+                fullWidth
+              />
+            </div>
+            <Badge tone="neutral">{TEMPLATE_KIND_LABELS[kind]}</Badge>
+            {dirty ? <Badge tone="warning">Ungespeichert</Badge> : null}
+          </>
+        )}
+        actions={(
+          <>
+            <Button variant="secondary" onClick={() => setConfirmApplyAll(true)} disabled={busy}>
+              <Paintbrush size={16} aria-hidden="true" /> Auf alle Arten übertragen
+            </Button>
+            <Button variant="primary" onClick={() => void save()} loading={busy} disabled={!draft.name.trim()}>
+              <Save size={16} aria-hidden="true" /> Speichern
+            </Button>
+          </>
+        )}
+      />
 
-      <div className="flex min-h-0 flex-1">
-        <aside className="w-[400px] shrink-0 overflow-y-auto border-r border-border bg-surface" aria-label="Vorlage bearbeiten">
+      <div className="flex min-h-0 flex-1 overflow-hidden rounded-card border border-border bg-surface">
+        <aside className="w-100 shrink-0 overflow-y-auto border-r border-border" aria-label="Vorlage bearbeiten">
           <Section title="Verwendung">
             <Switch
               checked={makeDefault}
@@ -325,30 +331,30 @@ const TemplateEditorForm: React.FC<{
                     role="radio"
                     aria-checked={selected}
                     onClick={() => setBody((previous) => ({ ...previous, presetId: preset.id, accentColor: preset.accentColor, font: preset.font }))}
-                    className={`flex flex-col items-start gap-1 rounded-lg border p-3 text-left transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring ${selected ? 'border-foreground bg-surface-muted' : 'border-border hover:border-control-border-hover'}`}
+                    className={`flex flex-col items-start gap-1 rounded-control border p-2.5 text-left transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring ${selected ? 'border-foreground bg-surface-sunken' : 'border-border hover:border-control-border-hover'}`}
                   >
-                    <span className="flex items-center gap-2 text-sm font-semibold text-foreground">
+                    <span className="flex items-center gap-2 text-label text-foreground">
                       <span className="size-3 rounded-full" style={{ background: preset.accentColor }} aria-hidden="true" />
                       {preset.label}
                     </span>
-                    <span className="text-xs text-muted">{preset.description}</span>
+                    <span className="text-caption text-muted">{preset.description}</span>
                   </button>
                 );
               })}
             </div>
             <div className="flex items-end gap-3">
-              <label className="flex flex-col gap-1 text-xs font-medium text-muted">
+              <label className="flex flex-col gap-1 text-caption font-medium text-foreground-secondary">
                 Akzentfarbe
                 <input
                   type="color"
                   value={body.accentColor}
                   onChange={(event) => setBody((previous) => ({ ...previous, accentColor: event.target.value }))}
                   aria-label="Akzentfarbe"
-                  className="h-10 w-14 cursor-pointer rounded-control border border-control-border bg-surface p-1"
+                  className="h-8.5 w-14 cursor-pointer rounded-control border border-control-border bg-surface p-1"
                 />
               </label>
               <div className="flex flex-col gap-1">
-                <span className="text-xs font-medium text-muted">Schrift</span>
+                <span className="text-caption font-medium text-foreground-secondary">Schrift</span>
                 <SegmentedControl
                   aria-label="Schrift"
                   value={body.font}
@@ -362,7 +368,7 @@ const TemplateEditorForm: React.FC<{
           <Section title="Logo">
             {body.logo ? (
               <>
-                <div className="flex items-center gap-3 rounded-lg border border-border bg-surface-muted p-3">
+                <div className="flex items-center gap-3 rounded-control border border-border bg-surface-sunken p-2.5">
                   <img src={body.logo.dataUrl} alt="Logo" className="max-h-12 max-w-40 object-contain" />
                   <div className="flex-1" />
                   <IconButton size="sm" tooltip="Logo entfernen" aria-label="Logo entfernen" onClick={() => setBody((previous) => ({ ...previous, logo: null }))}>
@@ -370,7 +376,7 @@ const TemplateEditorForm: React.FC<{
                   </IconButton>
                 </div>
                 <div className="flex flex-col gap-1">
-                  <span className="text-xs font-medium text-muted">Position</span>
+                  <span className="text-caption font-medium text-foreground-secondary">Position</span>
                   <SegmentedControl
                     aria-label="Position des Logos"
                     value={body.logo.position}
@@ -378,7 +384,7 @@ const TemplateEditorForm: React.FC<{
                     options={[{ value: 'left', label: 'Links' }, { value: 'center', label: 'Mitte' }, { value: 'right', label: 'Rechts' }]}
                   />
                 </div>
-                <label className="flex flex-col gap-1 text-xs font-medium text-muted">
+                <label className="flex flex-col gap-1 text-caption font-medium text-foreground-secondary">
                   Breite: {body.logo.widthMm} mm
                   <input
                     type="range"
@@ -394,7 +400,7 @@ const TemplateEditorForm: React.FC<{
                 </label>
               </>
             ) : (
-              <label className="flex cursor-pointer items-center justify-center gap-2 rounded-lg border border-dashed border-control-border p-4 text-sm font-medium text-muted hover:border-foreground hover:text-foreground focus-within:outline-2 focus-within:outline-focus-ring">
+              <label className="flex cursor-pointer items-center justify-center gap-2 rounded-control border border-dashed border-control-border p-3.5 text-label text-muted hover:border-foreground hover:text-foreground focus-within:outline-2 focus-within:outline-focus-ring">
                 <ImagePlus size={16} aria-hidden="true" /> Logo hochladen (PNG, JPG oder SVG)
                 <input
                   type="file"
@@ -409,19 +415,19 @@ const TemplateEditorForm: React.FC<{
                 />
               </label>
             )}
-            {logoError ? <p className="text-xs text-error-text" role="alert">{logoError}</p> : null}
+            {logoError ? <p className="text-caption text-error-text" role="alert">{logoError}</p> : null}
           </Section>
 
           <Section
             title="Texte"
             action={(
-              <select
+              <Select
                 aria-label="Platzhalter einfügen"
                 value=""
                 onChange={(event) => {
                   if (event.target.value) insertPlaceholder(event.target.value);
                 }}
-                className="h-8 max-w-44 rounded-control border border-control-border bg-surface px-2 text-xs text-foreground focus-visible:outline-2 focus-visible:outline-focus-ring"
+                className="max-w-44"
               >
                 <option value="">Platzhalter einfügen …</option>
                 {VARIABLE_GROUPS.map((group) => (
@@ -429,7 +435,7 @@ const TemplateEditorForm: React.FC<{
                     {group.variables.map((variable) => <option key={variable.key} value={variable.key}>{variable.label}</option>)}
                   </optgroup>
                 ))}
-              </select>
+              </Select>
             )}
           >
             <Input
@@ -468,26 +474,29 @@ const TemplateEditorForm: React.FC<{
               </Button>
             ) : undefined}
           >
-            <p className="text-xs text-muted">Zeilen, deren Platzhalter leer bleiben, werden nicht gedruckt.</p>
+            <p className="text-caption text-muted">Zeilen, deren Platzhalter leer bleiben, werden nicht gedruckt.</p>
             {body.texts.meta.map((entry, index) => {
               const setEntry = (patch: Partial<typeof entry>) =>
                 setTexts({ meta: body.texts.meta.map((candidate, position) => (position === index ? { ...candidate, ...patch } : candidate)) });
               return (
                 <div key={index} className="flex items-center gap-2">
-                  <input
+                  <Input
                     value={entry.label}
                     onChange={(event) => setEntry({ label: event.target.value })}
                     {...textField((label) => setEntry({ label }))}
                     aria-label={`Bezeichnung Kopfangabe ${index + 1}`}
-                    className="h-9 w-32 min-w-0 rounded-control border border-control-border bg-surface px-2 text-sm focus-visible:outline-2 focus-visible:outline-focus-ring"
+                    className="w-32"
                   />
-                  <input
-                    value={entry.value}
-                    onChange={(event) => setEntry({ value: event.target.value })}
-                    {...textField((value) => setEntry({ value }))}
-                    aria-label={`Wert Kopfangabe ${index + 1}`}
-                    className="h-9 min-w-0 flex-1 rounded-control border border-control-border bg-surface px-2 font-mono text-xs focus-visible:outline-2 focus-visible:outline-focus-ring"
-                  />
+                  <div className="min-w-0 flex-1">
+                    <Input
+                      value={entry.value}
+                      onChange={(event) => setEntry({ value: event.target.value })}
+                      {...textField((value) => setEntry({ value }))}
+                      aria-label={`Wert Kopfangabe ${index + 1}`}
+                      className="font-mono"
+                      fullWidth
+                    />
+                  </div>
                   <IconButton size="sm" tooltip="Zeile entfernen" aria-label={`Kopfangabe ${index + 1} entfernen`} onClick={() => setTexts({ meta: body.texts.meta.filter((_, position) => position !== index) })}>
                     <Trash2 size={14} aria-hidden="true" />
                   </IconButton>
@@ -513,7 +522,7 @@ const TemplateEditorForm: React.FC<{
                   fullWidth
                   onChange={(event) => setTexts({ footerColumns: body.texts.footerColumns.map((candidate, position) => (position === index ? event.target.value : candidate)) })}
                   {...textField((value) => setTexts({ footerColumns: body.texts.footerColumns.map((candidate, position) => (position === index ? value : candidate)) }))}
-                  className="font-mono text-xs"
+                  className="font-mono"
                 />
                 <IconButton size="sm" tooltip="Spalte entfernen" aria-label={`Fußzeile Spalte ${index + 1} entfernen`} onClick={() => setTexts({ footerColumns: body.texts.footerColumns.filter((_, position) => position !== index) })}>
                   <Trash2 size={14} aria-hidden="true" />
@@ -551,18 +560,20 @@ const TemplateEditorForm: React.FC<{
                     onCheckedChange={(visible) => setColumn({ visible })}
                     aria-label={`Spalte ${column.label} anzeigen`}
                   />
-                  <input
-                    value={column.label}
-                    maxLength={40}
-                    disabled={locked}
-                    onChange={(event) => setColumn({ label: event.target.value })}
-                    aria-label={`Überschrift der Spalte ${index + 1}`}
-                    className="h-9 min-w-0 flex-1 rounded-control border border-control-border bg-surface px-2 text-sm disabled:text-disabled-foreground focus-visible:outline-2 focus-visible:outline-focus-ring"
-                  />
+                  <div className="min-w-0 flex-1">
+                    <Input
+                      value={column.label}
+                      maxLength={40}
+                      disabled={locked}
+                      onChange={(event) => setColumn({ label: event.target.value })}
+                      aria-label={`Überschrift der Spalte ${index + 1}`}
+                      fullWidth
+                    />
+                  </div>
                 </div>
               );
             })}
-            {priceLocked ? <p className="text-xs text-muted">Preisspalten sind auf dem Lieferschein immer ausgeblendet.</p> : null}
+            {priceLocked ? <p className="text-caption text-muted">Preisspalten sind auf dem Lieferschein immer ausgeblendet.</p> : null}
           </Section>
 
           <Section title="Falz- und Lochmarken">
@@ -580,11 +591,11 @@ const TemplateEditorForm: React.FC<{
 
           <Section title="Prüfung">
             {issues.length === 0 ? (
-              <p className="flex items-center gap-2 text-sm text-success-text"><CheckCircle2 size={16} aria-hidden="true" /> Alle Pflichtangaben sind enthalten.</p>
+              <p className="flex items-center gap-2 text-control text-success-text"><CheckCircle2 size={16} aria-hidden="true" /> Alle Pflichtangaben sind enthalten.</p>
             ) : (
               <ul className="flex flex-col gap-2" aria-label="Hinweise zur Vorlage">
                 {issues.map((issue) => (
-                  <li key={issue} className="flex gap-2 text-sm text-warning-text">
+                  <li key={issue} className="flex gap-2 text-control text-warning-text">
                     <AlertTriangle size={16} className="mt-0.5 shrink-0" aria-hidden="true" />
                     <span>{issue}</span>
                   </li>
@@ -595,7 +606,7 @@ const TemplateEditorForm: React.FC<{
         </aside>
 
         <main ref={previewRef} className="flex min-w-0 flex-1 flex-col overflow-auto bg-surface-sunken" aria-label="Vorschau">
-          <div className="sticky top-0 z-10 flex items-center gap-3 border-b border-border bg-surface-sunken/95 px-6 py-2 backdrop-blur">
+          <div className="sticky top-0 z-10 flex items-center gap-3 border-b border-border bg-surface-sunken/95 px-4.5 py-2 backdrop-blur">
             <SegmentedControl
               aria-label="Beispielbeleg"
               size="sm"
@@ -603,7 +614,7 @@ const TemplateEditorForm: React.FC<{
               onChange={(value) => setLongSample(value === 'long')}
               options={[{ value: 'short', label: 'Kurzer Beleg' }, { value: 'long', label: '40 Positionen' }]}
             />
-            <span className="text-xs text-muted" role="status">{pageCount} {pageCount === 1 ? 'Seite' : 'Seiten'} · so wird gedruckt</span>
+            <span className="text-caption text-muted" role="status">{pageCount} {pageCount === 1 ? 'Seite' : 'Seiten'} · so wird gedruckt</span>
           </div>
           <div className="flex justify-center px-8 py-8" data-testid="template-preview">
             <ScaledFlowPreview model={model} width={previewWidth} onReady={setPageCount} />

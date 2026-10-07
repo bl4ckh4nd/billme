@@ -26,6 +26,7 @@ export type NormalizedEinvoice = {
   seller: NormalizedAddress & {
     vatId?: string;
     taxId?: string;
+    iban?: string;
   };
   buyer: NormalizedAddress;
   buyerVatId?: string;
@@ -40,6 +41,10 @@ export type NormalizedEinvoice = {
     taxCategoryCode: 'S' | 'E' | 'AE' | 'O' | 'K' | 'G';
     taxExemptionReason?: string;
     lineKind: 'item' | 'time' | 'optional';
+  }>;
+  allowances?: Array<Pick<NormalizedEinvoice['lines'][number], 'taxRate' | 'taxCategoryCode' | 'taxExemptionReason'> & {
+    amount: number;
+    reason: string;
   }>;
   totals: {
     lineNetTotal: number;
@@ -111,7 +116,7 @@ const normalizeBuyerAddress = (invoice: Invoice): NormalizedAddress => {
   };
 };
 
-const normalizeSellerAddress = (settings: AppSettings): NormalizedAddress & { vatId?: string; taxId?: string } => {
+const normalizeSellerAddress = (settings: AppSettings): NormalizedAddress & { vatId?: string; taxId?: string; iban?: string } => {
   const companyName = settings.company.name.trim();
   const street = settings.company.street.trim();
   const city = settings.company.city.trim();
@@ -127,6 +132,7 @@ const normalizeSellerAddress = (settings: AppSettings): NormalizedAddress & { va
     countryCode: settings.legal.countryCode ?? 'DE',
     vatId: vatId || undefined,
     taxId: taxId || undefined,
+    iban: settings.finance.iban.replace(/\s/g, '').toUpperCase() || undefined,
   };
 };
 
@@ -163,8 +169,10 @@ export const normalizeInvoiceForEinvoice = (
   assertRequired('Käufer Straße', buyer.street);
   assertRequired('Käufer PLZ', buyer.postalCode);
   assertRequired('Käufer Ort', buyer.city);
+  assertRequired('Verkäufer USt-IdNr. oder Steuernummer', seller.vatId || seller.taxId || '');
+  if (definition.requiresBuyerVatId) assertRequired('Käufer USt-IdNr.', invoice.taxMeta?.buyerVatId || '');
 
-  const lines = (invoice.items ?? []).filter((item) => isBillableLine(item) || isOptionalLine(item)).map((item, idx) => {
+  const normalizedLines = (invoice.items ?? []).filter((item) => isBillableLine(item) || isOptionalLine(item)).map((item, idx) => {
     const optional = isOptionalLine(item);
     const quantity = toAmount(item.quantity) || 1;
     const netLineTotal = optional ? 0 : round2(getBillingLineAmount(item));
@@ -184,10 +192,18 @@ export const normalizeInvoiceForEinvoice = (
     };
   });
 
-  if (lines.length === 0) {
+  if (normalizedLines.length === 0) {
     throw new Error('ZUGFeRD Export fehlgeschlagen: Rechnung enthält keine Positionen.');
   }
 
+  const allowances = normalizedLines.filter((line) => line.netLineTotal < 0).map((line) => ({
+    amount: -line.netLineTotal,
+    reason: line.name,
+    taxRate: line.taxRate,
+    taxCategoryCode: line.taxCategoryCode,
+    taxExemptionReason: line.taxExemptionReason,
+  }));
+  const lines = normalizedLines.filter((line) => line.netLineTotal >= 0);
   const lineNetTotal = round2(lines.reduce((acc, line) => acc + line.netLineTotal, 0));
   const taxTotal = taxSnapshot.vatAmount;
   const grandTotal = taxSnapshot.grossAmount;
@@ -202,6 +218,7 @@ export const normalizeInvoiceForEinvoice = (
     buyer,
     buyerVatId: invoice.taxMeta?.buyerVatId?.trim() || undefined,
     lines,
+    allowances,
     totals: {
       lineNetTotal,
       taxTotal,

@@ -1,4 +1,7 @@
 import { z } from 'zod';
+import { dunningDeliverySchema, resolveDunningDeliverySchema } from '@billme/server-core';
+import { liteVatPeriodSchema, liteVatReportSchema, liteVatExportSchema } from '@billme/server-core';
+import { cliAccessRequestSchema, cliTokenSummarySchema, liteCashEntryInputSchema, liteCashEntrySchema, liteReceiptInputSchema, liteReceiptSchema, liteReceiptFileSchema, liteReceiptUploadSchema } from '@billme/server-core';
 import { taxFilingRoutes } from './taxFiling';
 import {
   deleteByIdSchema,
@@ -20,6 +23,8 @@ import {
   upsertPayloadSchema,
   upsertRecurringPayloadSchema,
   invoiceSchema,
+  offerSchema,
+  paymentSchema,
   projectSchema,
   clientSchema,
   articleSchema,
@@ -141,6 +146,7 @@ const transactionSchema = z.object({
   counterparty: z.string(),
   purpose: z.string(),
   linkedInvoiceId: z.string().optional(),
+  matchedManualEntryId: z.string().optional(), appliedAmountCents: z.number().int().optional(), unallocatedAmountCents: z.number().int().optional(),
   status: z.enum(['pending', 'booked']),
   dedupHash: z.string().optional(),
   importBatchId: z.string().optional(),
@@ -165,6 +171,7 @@ const findMatchesResultSchema = z.object({
 const linkTransactionSchema = z.object({
   transactionId: z.string().min(1),
   invoiceId: z.string().min(1),
+  appliedAmountCents: z.number().int().positive().optional(),
 });
 
 const linkTransactionResultSchema = z.object({
@@ -413,6 +420,8 @@ const dialogPickCsvArgsSchema = z.object({
 });
 const dialogPickCsvResultSchema = z.object({
   path: z.string().nullable(),
+  fileName: z.string().optional(),
+  contentBase64: z.string().optional(),
 });
 
 const financeImportPreviewResultSchema = z.object({
@@ -465,6 +474,19 @@ export type RouteDef<Args extends z.ZodTypeAny, Result extends z.ZodTypeAny> = {
 
 export const ipcRoutes = {
   ...taxFilingRoutes,
+  'vat:getReport': { channel: 'vat:getReport', args: liteVatPeriodSchema, result: liteVatReportSchema },
+  'vat:exportCsv': { channel: 'vat:exportCsv', args: liteVatPeriodSchema, result: liteVatExportSchema },
+  'vat:exportPdf': { channel: 'vat:exportPdf', args: liteVatPeriodSchema, result: liteVatExportSchema },
+  'cash:listEntries': { channel: 'cash:listEntries', args: z.undefined(), result: z.array(liteCashEntrySchema) },
+  'cash:listReceipts': { channel: 'cash:listReceipts', args: z.undefined(), result: z.array(liteReceiptSchema) },
+  'cash:saveEntry': { channel: 'cash:saveEntry', args: z.object({ entry: liteCashEntryInputSchema, expectedUpdatedAt: z.string().optional(), reason: z.string().trim().min(1) }), result: liteCashEntrySchema },
+  'cash:saveReceipt': { channel: 'cash:saveReceipt', args: z.object({ receipt: liteReceiptInputSchema, expectedUpdatedAt: z.string().optional(), reason: z.string().trim().min(1) }), result: liteReceiptSchema },
+  'cash:deleteEntry': { channel: 'cash:deleteEntry', args: z.object({ id: z.string().min(1), expectedUpdatedAt: z.string(), reason: z.string().trim().min(1) }), result: okSchema },
+  'cash:matchEntry': { channel: 'cash:matchEntry', args: z.object({ id: z.string().min(1), transactionId: z.string().min(1), expectedCashDate: z.string(), reason: z.string().trim().min(1) }), result: liteCashEntrySchema },
+  'cash:unmatchEntry': { channel: 'cash:unmatchEntry', args: z.object({ id: z.string().min(1), reason: z.string().trim().min(1) }), result: liteCashEntrySchema },
+  'cash:listFiles': { channel: 'cash:listFiles', args: z.object({ receiptId: z.string().min(1) }), result: z.array(liteReceiptFileSchema) },
+  'cash:uploadFile': { channel: 'cash:uploadFile', args: liteReceiptUploadSchema.extend({ receiptId: z.string().min(1) }), result: liteReceiptFileSchema },
+  'cash:downloadFile': { channel: 'cash:downloadFile', args: z.object({ id: z.string().min(1) }), result: liteReceiptFileSchema.extend({ contentBase64: z.string() }) },
   'invoices:list': {
     channel: 'invoices:list',
     args: z.undefined(),
@@ -473,6 +495,16 @@ export const ipcRoutes = {
   'invoices:upsert': {
     channel: 'invoices:upsert',
     args: upsertPayloadSchema,
+    result: invoiceSchema,
+  },
+  'invoices:savePayment': {
+    channel: 'invoices:savePayment',
+    args: z.object({ invoiceId: z.string().min(1), payment: paymentSchema, expectedPayment: paymentSchema.optional(), reason: z.string().trim().min(1) }),
+    result: invoiceSchema,
+  },
+  'invoices:removePayment': {
+    channel: 'invoices:removePayment',
+    args: z.object({ invoiceId: z.string().min(1), expectedPayment: paymentSchema, reason: z.string().trim().min(1) }),
     result: invoiceSchema,
   },
   'invoices:delete': {
@@ -484,12 +516,12 @@ export const ipcRoutes = {
   'offers:list': {
     channel: 'offers:list',
     args: z.undefined(),
-    result: z.array(invoiceSchema),
+    result: z.array(offerSchema),
   },
   'offers:upsert': {
     channel: 'offers:upsert',
     args: upsertOfferPayloadSchema,
-    result: invoiceSchema,
+    result: offerSchema,
   },
   'offers:delete': {
     channel: 'offers:delete',
@@ -893,6 +925,8 @@ export const ipcRoutes = {
     result: z.object({ success: z.boolean() }),
   },
 
+  'dunning:listDeliveries': { channel: 'dunning:listDeliveries', args: z.undefined(), result: z.array(dunningDeliverySchema) },
+  'dunning:resolveDelivery': { channel: 'dunning:resolveDelivery', args: resolveDunningDeliverySchema, result: z.object({ ok: z.literal(true) }) },
   'dunning:manualRun': {
     channel: 'dunning:manualRun',
     args: z.undefined(),
@@ -908,6 +942,28 @@ export const ipcRoutes = {
     channel: 'recurring:manualRun',
     args: z.undefined(),
     result: recurringManualRunResultSchema,
+  },
+
+  // Access for the `billme` CLI: a person confirms the code the CLI shows, and can revoke tokens later.
+  'cliAccess:pending': {
+    channel: 'cliAccess:pending',
+    args: z.object({ code: z.string().min(1) }),
+    result: cliAccessRequestSchema.nullable(),
+  },
+  'cliAccess:decide': {
+    channel: 'cliAccess:decide',
+    args: z.object({ code: z.string().min(1), approve: z.boolean() }),
+    result: okSchema,
+  },
+  'cliAccess:list': {
+    channel: 'cliAccess:list',
+    args: z.undefined(),
+    result: z.array(cliTokenSummarySchema),
+  },
+  'cliAccess:revoke': {
+    channel: 'cliAccess:revoke',
+    args: deleteByIdSchema,
+    result: okSchema,
   },
 
   'updater:getStatus': {

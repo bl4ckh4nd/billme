@@ -43,6 +43,8 @@ const normalizeBaseUrl = (baseUrl: string): string => {
 };
 
 const createPortalError = (error: unknown, res?: Response): PortalError => {
+  if (error instanceof Error && 'category' in error && 'userMessage' in error) return error as PortalError;
+
   // Network failure (no response)
   if (error instanceof TypeError && error.message.includes('fetch')) {
     const err = new Error('Portal nicht erreichbar. Bitte überprüfen Sie Ihre Internetverbindung.') as PortalError;

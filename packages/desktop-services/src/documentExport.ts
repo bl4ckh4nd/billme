@@ -20,13 +20,15 @@ export type PreparedDocumentExport = {
 export const createDocumentExportPreparer = (options: {
   product: 'lite' | 'pro';
   resolveConnection: () => EmbeddedConnectionResult;
+  /** `bearer` for a hosted server session; the embedded runtime takes its local token. */
+  auth?: 'local' | 'bearer';
   fetch?: typeof globalThis.fetch;
 }) => async (kind: 'invoice' | 'offer' | 'dunning', id: string, level?: number): Promise<PreparedDocumentExport> => {
   const connection = options.resolveConnection();
   if (!connection) throw new Error('Der lokale Billme-Server ist noch nicht verfügbar.');
   const response = await (options.fetch ?? globalThis.fetch)(
     `${connection.baseUrl.replace(/\/+$/, '')}/api/v1/${options.product}/documents/${kind}/${encodeURIComponent(id)}/render-context${level ? `?level=${level}` : ''}`,
-    { headers: { 'x-billme-local-token': connection.token } },
+    { headers: options.auth === 'bearer' ? { authorization: `Bearer ${connection.token}` } : { 'x-billme-local-token': connection.token } },
   );
   const payload = await response.json() as { message?: string; document?: unknown; settings?: AppSettings | null; dunning?: { levelName: string } };
   if (!response.ok) throw new Error(payload.message ?? `Beleg konnte nicht geladen werden (HTTP ${response.status}).`);

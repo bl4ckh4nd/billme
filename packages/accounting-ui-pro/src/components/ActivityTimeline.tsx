@@ -1,3 +1,4 @@
+import { Timeline } from '@billme/ui';
 import { ActivityEvent } from '../types';
 
 interface ActivityTimelineProps {
@@ -6,26 +7,26 @@ interface ActivityTimelineProps {
 
 export default function ActivityTimeline({ events }: ActivityTimelineProps) {
   return (
-    <div className="border border-border rounded-xl overflow-hidden">
-      <div className="px-4 py-3 bg-surface-muted border-b border-border text-sm font-semibold text-foreground">
-        Aktivität
-      </div>
-      <div className="max-h-64 overflow-auto divide-y divide-border-subtle">
-        {events.length === 0 ? (
-          <div className="px-4 py-6 text-sm text-muted">Noch keine Aktivität.</div>
-        ) : (
-          events.map((event) => (
-            <div key={event.id} className="px-4 py-3">
-              <div className="text-sm font-semibold text-foreground">{event.label}</div>
-              {event.details && <div className="text-xs text-muted mt-0.5">{event.details}</div>}
-              <div className="text-xs text-muted mt-1">
+    <section>
+      <h3 className="mb-2 text-eyebrow uppercase text-muted">Aktivität</h3>
+      {events.length === 0 ? (
+        <p className="text-caption text-muted">Noch keine Aktivität.</p>
+      ) : (
+        <Timeline
+          label="Aktivität"
+          entries={events.map((event) => ({
+            key: event.id,
+            title: event.label,
+            meta: (
+              <>
+                {event.details && <span className="block">{event.details}</span>}
                 {new Date(event.at).toLocaleString('de-DE')} • {event.actorName}
-              </div>
-            </div>
-          ))
-        )}
-      </div>
-    </div>
+              </>
+            ),
+            tone: event.type === 'booking_posted' ? 'success' : event.type === 'booking_reversed' ? 'warning' : 'neutral',
+          }))}
+        />
+      )}
+    </section>
   );
 }
-

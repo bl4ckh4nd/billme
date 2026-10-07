@@ -33,17 +33,17 @@ const toneDot: Record<MetricTone, string | null> = {
 
 export const Metric: React.FC<MetricProps> = ({ label, value, hint, tone = 'neutral', marker = 'dot', size = 'md', inverse = false, sparkline, className }) => (
   <div className={cn('min-w-0', className)}>
-    <div className={cn('flex items-center gap-1.5 text-label', inverse ? 'text-inverse-muted' : 'text-muted')}>
+    <div className={cn('flex items-center text-label', marker === 'tick' ? 'gap-2.25' : 'gap-1.5', inverse ? 'text-inverse-muted' : 'text-muted')}>
       {marker === 'tick' ? (
-        <span aria-hidden="true" className={cn('h-3.5 w-[3px] shrink-0 rounded-full', toneDot[tone] ?? 'bg-foreground')} />
+        <span aria-hidden="true" className={cn('h-3.5 w-0.75 shrink-0 rounded-xs', toneDot[tone] ?? 'bg-foreground')} />
       ) : toneDot[tone] && <span aria-hidden="true" className={cn('size-1.5 shrink-0 rounded-full', toneDot[tone])} />}
       <span className="truncate">{label}</span>
     </div>
-    <div className="mt-1 flex items-end justify-between gap-3">
+    <div className={cn('flex items-end justify-between gap-3', marker === 'tick' ? 'mt-2' : 'mt-1')}>
       <div
         className={cn(
           'min-w-0 tabular-nums',
-          size === 'lg' ? 'text-figure' : 'text-xl font-semibold tracking-[-0.01em]',
+          size === 'lg' || marker === 'tick' ? 'text-figure' : 'text-xl font-semibold tracking-[-0.01em]',
           inverse ? 'text-inverse-foreground' : 'text-foreground',
         )}
       >
@@ -51,6 +51,8 @@ export const Metric: React.FC<MetricProps> = ({ label, value, hint, tone = 'neut
       </div>
       {sparkline}
     </div>
-    {hint && <div className={cn('mt-1 text-caption', inverse ? 'text-inverse-muted' : 'text-muted')}>{hint}</div>}
+    {hint && (
+      <div className={`${marker === 'tick' ? 'mt-0.75 text-control' : 'mt-1 text-caption'} ${inverse ? 'text-inverse-muted' : 'text-muted'}`}>{hint}</div>
+    )}
   </div>
 );

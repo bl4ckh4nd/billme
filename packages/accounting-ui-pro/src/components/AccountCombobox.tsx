@@ -1,5 +1,5 @@
 import { useEffect, useId, useMemo, useRef, useState } from 'react';
-import { Search } from 'lucide-react';
+import { Input } from '@billme/ui';
 import { Account } from '../types';
 
 interface AccountComboboxProps {
@@ -8,6 +8,8 @@ interface AccountComboboxProps {
   valueAccountName?: string;
   disabled?: boolean;
   placeholder?: string;
+  /** Visible field label; the accessible name stays "Konto suchen". */
+  label?: string;
   onSelect: (account: Account) => void;
 }
 
@@ -22,6 +24,7 @@ export default function AccountCombobox({
   valueAccountName,
   disabled,
   placeholder = 'Konto suchen...',
+  label,
   onSelect,
 }: AccountComboboxProps) {
   const inputId = useId();
@@ -73,65 +76,63 @@ export default function AccountCombobox({
 
   return (
     <div className="relative">
-      <div className="relative">
-        <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 text-muted" size={14} />
-        <input
-          id={inputId}
-          type="text"
-          role="combobox"
-          aria-autocomplete="list"
-          aria-expanded={open}
-          aria-controls={listboxId}
-          aria-activedescendant={activeDescendantId}
-          aria-label="Konto suchen"
-          disabled={disabled}
-          value={query}
-          placeholder={placeholder}
-          onFocus={() => {
-            setFocused(true);
+      <Input
+        id={inputId}
+        type="text"
+        label={label}
+        fullWidth
+        role="combobox"
+        aria-autocomplete="list"
+        aria-expanded={open}
+        aria-controls={listboxId}
+        aria-activedescendant={activeDescendantId}
+        aria-label="Konto suchen"
+        disabled={disabled}
+        value={query}
+        placeholder={placeholder}
+        onFocus={() => {
+          setFocused(true);
+          setOpen(true);
+          setActiveIndex(0);
+        }}
+        onBlur={() => {
+          setFocused(false);
+          blurTimeout.current = window.setTimeout(() => setOpen(false), 100);
+        }}
+        onChange={(e) => {
+          setQuery(e.target.value);
+          setOpen(true);
+          setActiveIndex(0);
+        }}
+        onKeyDown={(e) => {
+          if (e.key === 'ArrowDown') {
+            e.preventDefault();
             setOpen(true);
-            setActiveIndex(0);
-          }}
-          onBlur={() => {
-            setFocused(false);
-            blurTimeout.current = window.setTimeout(() => setOpen(false), 100);
-          }}
-          onChange={(e) => {
-            setQuery(e.target.value);
+            setActiveIndex((idx) => (filtered.length ? (idx + 1) % filtered.length : 0));
+          } else if (e.key === 'ArrowUp') {
+            e.preventDefault();
             setOpen(true);
-            setActiveIndex(0);
-          }}
-          onKeyDown={(e) => {
-            if (e.key === 'ArrowDown') {
+            setActiveIndex((idx) => (filtered.length ? (idx - 1 + filtered.length) % filtered.length : 0));
+          } else if (e.key === 'Enter') {
+            if (open && activeOption) {
               e.preventDefault();
-              setOpen(true);
-              setActiveIndex((idx) => (filtered.length ? (idx + 1) % filtered.length : 0));
-            } else if (e.key === 'ArrowUp') {
-              e.preventDefault();
-              setOpen(true);
-              setActiveIndex((idx) => (filtered.length ? (idx - 1 + filtered.length) % filtered.length : 0));
-            } else if (e.key === 'Enter') {
-              if (open && activeOption) {
-                e.preventDefault();
-                commitSelect(activeOption);
-              }
-            } else if (e.key === 'Escape') {
-              setOpen(false);
-              setQuery(displayValue(valueAccountId, valueAccountName));
+              commitSelect(activeOption);
             }
-          }}
-          className="px-2.5 h-8 hover:border-control-border-hover w-full border border-control-border rounded-control pl-8 pr-2 text-sm disabled:bg-surface-muted focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
-        />
-      </div>
+          } else if (e.key === 'Escape') {
+            setOpen(false);
+            setQuery(displayValue(valueAccountId, valueAccountName));
+          }
+        }}
+      />
 
       {open && !disabled && (
         <div
           id={listboxId}
           role="listbox"
-          className="absolute top-full left-0 right-0 mt-1 bg-surface border border-border rounded-xl shadow-lg z-[var(--z-dropdown)] max-h-56 overflow-auto"
+          className="absolute left-0 top-full z-[var(--z-dropdown)] mt-1 max-h-56 w-70 min-w-full overflow-auto rounded-control border border-border bg-surface p-1 shadow-lift"
         >
           {filtered.length === 0 ? (
-            <div className="px-3 py-2 text-sm text-muted">Kein Konto gefunden</div>
+            <div className="px-2 py-1.5 text-control text-muted">Kein Konto gefunden</div>
           ) : (
             filtered.map((account, index) => {
               const selected = account.number === valueAccountId;
@@ -142,20 +143,19 @@ export default function AccountCombobox({
                   id={`${inputId}-opt-${account.id}`}
                   role="option"
                   aria-selected={selected}
-                  className={`px-3 py-2 cursor-pointer border-b border-border last:border-0 ${
-                    active ? 'bg-border-subtle' : 'hover:bg-surface-muted'
-                  }`}
+                  className={`cursor-pointer rounded-sm px-2 py-1.5 text-control text-foreground ${active ? 'bg-surface-sunken' : ''}`}
                   onMouseDown={(e) => {
                     e.preventDefault();
                     commitSelect(account);
                   }}
                   onMouseEnter={() => setActiveIndex(index)}
                 >
-                  <div className="text-sm font-semibold text-foreground">
-                    {account.number} - {account.name}
+                  <div className="flex items-baseline gap-2.5">
+                    <span className="shrink-0 font-mono font-semibold">{account.number}</span>
+                    <span className="min-w-0 flex-1 truncate">{account.name}</span>
                   </div>
                   {!!account.keywords?.length && (
-                    <div className="text-xs text-muted mt-0.5">
+                    <div className="truncate text-micro text-muted">
                       {account.keywords.slice(0, 3).join(', ')}
                     </div>
                   )}
@@ -168,4 +168,3 @@ export default function AccountCombobox({
     </div>
   );
 }
-

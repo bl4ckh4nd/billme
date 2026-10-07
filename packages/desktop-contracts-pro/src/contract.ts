@@ -80,6 +80,7 @@ const transactionSchema = z.object({
   counterparty: z.string(),
   purpose: z.string(),
   linkedInvoiceId: z.string().optional(),
+  matchedManualEntryId: z.string().optional(), appliedAmountCents: z.number().int().optional(), unallocatedAmountCents: z.number().int().optional(),
   status: z.enum(['pending', 'booked']),
   dedupHash: z.string().optional(),
   importBatchId: z.string().optional(),

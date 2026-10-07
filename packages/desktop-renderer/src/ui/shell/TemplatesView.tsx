@@ -1,7 +1,7 @@
 import React, { useMemo, useState } from 'react';
 import { Copy, MoreHorizontal, Pencil, Plus, Star, Trash2 } from 'lucide-react';
 import {
-  Badge, Button, ConfirmDialog, EmptyState, ErrorState, IconButton, Menu, PageHeader, SegmentedControl, useActionFeedback,
+  Badge, Button, Card, ConfirmDialog, EmptyState, ErrorState, IconButton, Menu, PageHeader, SegmentedControl, useActionFeedback,
 } from '@billme/ui';
 import { ScaledFlowPreview } from '@billme/desktop-designer/flow';
 import {
@@ -38,7 +38,7 @@ const dateFormatter = new Intl.DateTimeFormat('de-DE', { day: '2-digit', month: 
 const Thumbnail: React.FC<{ kind: TemplateKind; body: DocumentTemplateBody }> = ({ kind, body }) => {
   const model = useTemplatePreviewModel(kind, body);
   return (
-    <div className="flex justify-center rounded-lg bg-surface-sunken px-4 pt-4" aria-hidden="true">
+    <div className="flex justify-center rounded-control bg-surface-sunken px-4 pt-4" aria-hidden="true">
       <ScaledFlowPreview model={model} width={THUMB_WIDTH} firstPageOnly className="rounded-t-sm shadow-sm" />
     </div>
   );
@@ -55,23 +55,25 @@ type CardProps = {
 };
 
 const TemplateCard: React.FC<CardProps> = ({ kind, title, subtitle, body, isDefault, onOpen, menu }) => (
-  <article className="group relative flex flex-col gap-3 rounded-xl border border-border bg-surface p-3 transition-colors hover:border-control-border-hover">
-    <button
-      type="button"
-      onClick={onOpen}
-      aria-label={`Vorlage ${title} öffnen`}
-      className="relative rounded-lg focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
-    >
-      <Thumbnail kind={kind} body={body} />
-      {isDefault ? <span className="absolute left-2 top-2"><Badge tone="accent">Standard</Badge></span> : null}
-    </button>
-    <div className="flex items-start gap-2 px-1">
-      <div className="min-w-0 flex-1">
-        <h3 className="line-clamp-2 text-sm font-semibold text-foreground" title={title}>{title}</h3>
-        <p className="line-clamp-2 text-xs text-muted">{subtitle}</p>
+  <article>
+    <Card padding="sm" className="flex h-full flex-col gap-3 transition-colors hover:border-control-border-hover">
+      <button
+        type="button"
+        onClick={onOpen}
+        aria-label={`Vorlage ${title} öffnen`}
+        className="relative rounded-control focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+      >
+        <Thumbnail kind={kind} body={body} />
+        {isDefault ? <span className="absolute left-2 top-2"><Badge tone="accent">Standard</Badge></span> : null}
+      </button>
+      <div className="flex items-start gap-2 px-1">
+        <div className="min-w-0 flex-1">
+          <h3 className="line-clamp-2 text-sm font-semibold text-foreground" title={title}>{title}</h3>
+          <p className="line-clamp-2 text-caption text-muted">{subtitle}</p>
+        </div>
+        {menu}
       </div>
-      {menu}
-    </div>
+    </Card>
   </article>
 );
 
@@ -139,11 +141,10 @@ export const TemplatesView: React.FC<TemplatesViewProps> = ({ onOpenTemplate, on
   );
 
   return (
-    <div className="flex min-h-full flex-col gap-4">
+    <div className="flex flex-col">
       <PageHeader
         title="Vorlagen"
         description="Wie deine Belege aussehen. Je Belegart gibt es eine Standardvorlage, einzelne Belege können eine andere wählen."
-        className="px-1 pt-2"
         toolbar={tabs}
         actions={(
           <Button variant="primary" onClick={() => onCreateTemplate(kind)}>
@@ -164,7 +165,7 @@ export const TemplatesView: React.FC<TemplatesViewProps> = ({ onOpenTemplate, on
       ) : templatesQuery.isPending || defaultsQuery.isPending ? (
         <SkeletonLoader variant="card" count={4} />
       ) : (
-        <section aria-label={`Vorlagen für ${TEMPLATE_KIND_LABELS[kind]}`} className="grid grid-cols-[repeat(auto-fill,minmax(236px,1fr))] gap-4">
+        <section aria-label={`Vorlagen für ${TEMPLATE_KIND_LABELS[kind]}`} className="grid grid-cols-[repeat(auto-fill,minmax(236px,1fr))] gap-3.5">
           <TemplateCard
             kind={kind}
             title="Mitgeliefert"

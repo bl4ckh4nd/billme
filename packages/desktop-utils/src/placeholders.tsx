@@ -17,6 +17,7 @@ type InvoiceItemLike = {
 
 export type InvoiceLike = {
   number: string;
+  status?: string;
   documentKind?: InvoiceDocumentKind;
   date?: string;
   dueDate?: string;

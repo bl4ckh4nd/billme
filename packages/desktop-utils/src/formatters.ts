@@ -31,3 +31,5 @@ export const formatCurrency = (amount: number): string => {
 export const formatDate = (dateString: string): string => {
   return new Date(dateString).toLocaleDateString('de-DE', { day: '2-digit', month: '2-digit', year: 'numeric' });
 };
+export const localIsoDate = (date = new Date()): string =>
+  `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;

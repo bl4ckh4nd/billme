@@ -1,19 +1,24 @@
+import { DunningDeliveryReview } from './DunningDeliveryReview';
 
 
 import React, { useState } from 'react';
 import {
   Building2, Landmark, FileDigit, Scale,
-  Save, CheckCircle, HelpCircle, AlertCircle, Megaphone, Globe, Tags, Plus, Trash2, AlertTriangle, Mail, Repeat, Monitor, Moon, Sun, SunMoon
+  Save, AlertCircle, Megaphone, Globe, Tags, Plus, Trash2, AlertTriangle, Mail, Monitor, Moon, Sun, SunMoon
 } from 'lucide-react';
-import { Button, ConfirmDialog, ErrorState, SegmentedControl, useActionFeedback, useThemePreference, type ThemePreference } from '@billme/ui';
+import {
+  Badge, Button, Card, CardHeader, Checkbox, ConfirmDialog, EmptyState, ErrorState, Field, IconButton, Input, PageHeader,
+  SegmentedControl, Select, Switch, Textarea, useActionFeedback, useThemePreference, type CardHeaderProps, type ThemePreference,
+} from '@billme/ui';
 import { Spinner } from '../ui/components/Spinner';
 import type { AppSettings, BusinessReportingProfile, DunningLevel } from '@billme/desktop-core/types';
-import { ipc } from '../runtime-api';
+import { getRendererRuntime, ipc } from '../runtime-api';
 import { useSetSettingsMutation, useSettingsQuery } from '../hooks/useSettings';
 import { useQueryClient } from '@tanstack/react-query';
 import { v4 as uuidv4 } from 'uuid';
 import { DunningResultModal } from '../ui/components/DunningResultModal';
 import { DunningLevelPreviewModal } from '../ui/components/DunningLevelPreviewModal';
+import { CliAccessSection } from './CliAccessSection';
 
 type SettingsTab = 'company' | 'catalog' | 'finance' | 'numbers' | 'dunning' | 'legal' | 'portal' | 'system' | 'email' | 'appearance';
 
@@ -39,24 +44,26 @@ const inferBusinessReportingProfile = (settings: AppSettings): BusinessReporting
   };
 };
 
-/**
- * Settings gate. The form below seeds itself from the stored settings, so it is
- * mounted only once the query has answered: a failed query must never leave the
- * user editing (and saving) a stand-in company, bank account or tax number.
- */
+/** One settings group: a card on the ground with a lined head. `flush` leaves the body padding to the rows. */
+const SettingsCard: React.FC<Pick<CardHeaderProps, 'title' | 'subtitle' | 'count' | 'actions'> & { flush?: boolean; children: React.ReactNode }> = ({
+  flush = false,
+  children,
+  ...head
+}) => (
+  <Card padding="none">
+    <CardHeader className="border-b border-border px-3.5 py-3" {...head} />
+    <div className={flush ? undefined : 'flex flex-col gap-3 p-3.5'}>{children}</div>
+  </Card>
+);
+
 /** Per-device display preference; applies at once and is not part of "Einstellungen speichern". */
 const AppearanceSettings: React.FC = () => {
   const [theme, setTheme] = useThemePreference();
   return (
-    <div className="max-w-2xl space-y-6">
-      <div>
-        <h3 className="text-xl font-semibold mb-1">Darstellung</h3>
-        <p className="text-muted text-sm">
-          Gilt sofort und nur auf diesem Gerät. Rechnungen und PDFs bleiben immer hell.
-        </p>
-      </div>
+    <SettingsCard title="Darstellung" subtitle="Gilt sofort und nur auf diesem Gerät. Rechnungen und PDFs bleiben immer hell.">
       <SegmentedControl<ThemePreference>
         aria-label="Farbschema"
+        className="self-start"
         value={theme}
         onChange={setTheme}
         options={[
@@ -65,10 +72,15 @@ const AppearanceSettings: React.FC = () => {
           { value: 'dark', label: 'Dunkel', icon: <Moon size={14} aria-hidden="true" /> },
         ]}
       />
-    </div>
+    </SettingsCard>
   );
 };
 
+/**
+ * Settings gate. The form below seeds itself from the stored settings, so it is
+ * mounted only once the query has answered: a failed query must never leave the
+ * user editing (and saving) a stand-in company, bank account or tax number.
+ */
 export const SettingsView: React.FC = () => {
   const { data: loadedSettings, isError, refetch } = useSettingsQuery();
 
@@ -78,7 +90,7 @@ export const SettingsView: React.FC = () => {
 
   if (isError) {
     return (
-      <div className="flex min-h-full items-center justify-center bg-background p-8">
+      <div className="flex min-h-full items-center justify-center">
         <ErrorState
           title="Einstellungen konnten nicht geladen werden"
           description="Ohne die gespeicherten Stammdaten würde das Formular leer starten und leere Daten speichern."
@@ -89,16 +101,19 @@ export const SettingsView: React.FC = () => {
   }
 
   return (
-    <div className="flex min-h-full flex-col items-center justify-center gap-3 bg-background text-muted">
+    <div className="flex min-h-full flex-col items-center justify-center gap-3 text-muted">
       <Spinner size="md" />
-      <p role="status" className="text-sm font-medium">Einstellungen werden geladen …</p>
+      <p role="status" className="text-control">Einstellungen werden geladen …</p>
     </div>
   );
 };
 
 const SettingsForm: React.FC<{ initialSettings: AppSettings }> = ({ initialSettings }) => {
+  const isWebShell = getRendererRuntime().shell === 'web';
   const queryClient = useQueryClient();
-  const [activeTab, setActiveTab] = useState<SettingsTab>('company');
+  // `billme login` links here with its code (`#/settings?cliCode=…`); that lands on the section that takes it.
+  const [cliCode] = useState(() => new URLSearchParams(window.location.hash.split('?')[1] ?? '').get('cliCode') ?? undefined);
+  const [activeTab, setActiveTab] = useState<SettingsTab>(cliCode ? 'system' : 'company');
   const loadedSettings = initialSettings;
   const setSettingsMutation = useSetSettingsMutation();
   const [settings, setSettings] = useState<AppSettings>(initialSettings);
@@ -141,6 +156,7 @@ const SettingsForm: React.FC<{ initialSettings: AppSettings }> = ({ initialSetti
 
   React.useEffect(() => {
     let cancelled = false;
+    if (isWebShell) return;
     void (async () => {
       try {
         const configured = await ipc.secrets.has({ key: 'portal.apiKey' });
@@ -234,7 +250,7 @@ const SettingsForm: React.FC<{ initialSettings: AppSettings }> = ({ initialSetti
 
     const nextKey = portalApiKey.trim();
     try {
-      if (portalApiKeyTouched) {
+      if (!isWebShell && portalApiKeyTouched) {
         if (nextKey) {
           await ipc.secrets.set({ key: 'portal.apiKey', value: nextKey });
           setPortalApiKeyConfigured(true);
@@ -245,12 +261,13 @@ const SettingsForm: React.FC<{ initialSettings: AppSettings }> = ({ initialSetti
         setPortalApiKeyTouched(false);
       }
     } catch {
-      // ignore secret save errors (OS keychain issues should not block settings save)
+      notify('error', 'Zugangsdaten konnten nicht gespeichert werden. Bitte versuche es erneut.');
+      return;
     }
 
     // Save email credentials to keychain
     try {
-      if (smtpPasswordTouched) {
+      if (!isWebShell && smtpPasswordTouched) {
         if (smtpPassword.trim()) {
           await ipc.secrets.set({ key: 'smtp.password', value: smtpPassword.trim() });
           setSmtpPasswordConfigured(true);
@@ -261,7 +278,7 @@ const SettingsForm: React.FC<{ initialSettings: AppSettings }> = ({ initialSetti
         setSmtpPasswordTouched(false);
       }
 
-      if (resendApiKeyTouched) {
+      if (!isWebShell && resendApiKeyTouched) {
         if (resendApiKey.trim()) {
           await ipc.secrets.set({ key: 'resend.apiKey', value: resendApiKey.trim() });
           setResendApiKeyConfigured(true);
@@ -272,7 +289,8 @@ const SettingsForm: React.FC<{ initialSettings: AppSettings }> = ({ initialSetti
         setResendApiKeyTouched(false);
       }
     } catch {
-      // ignore secret save errors (OS keychain issues should not block settings save)
+      notify('error', 'Zugangsdaten konnten nicht gespeichert werden. Bitte versuche es erneut.');
+      return;
     }
 
     notify('success', 'Einstellungen gespeichert!');
@@ -352,7 +370,7 @@ const SettingsForm: React.FC<{ initialSettings: AppSettings }> = ({ initialSetti
         notify('error', 'Fehler beim Mahnlauf: ' + (response.error || 'Unbekannter Fehler'));
       }
     } catch (error) {
-      notify('error', 'Fehler beim Mahnlauf: ' + String(error));
+      notify('error', 'Fehler beim Mahnlauf: ' + (error instanceof Error ? error.message : String(error)));
     } finally {
       setDunningRunning(false);
     }
@@ -379,7 +397,7 @@ const SettingsForm: React.FC<{ initialSettings: AppSettings }> = ({ initialSetti
     } catch (error) {
       setEmailTestStatus({
         success: false,
-        message: String(error),
+        message: error instanceof Error ? error.message : String(error),
       });
     } finally {
       setEmailTesting(false);
@@ -388,6 +406,7 @@ const SettingsForm: React.FC<{ initialSettings: AppSettings }> = ({ initialSetti
 
   // Load email credentials from keychain on mount
   React.useEffect(() => {
+    if (isWebShell) return;
     (async () => {
       try {
         const [smtpConfigured, resendConfigured] = await Promise.all([
@@ -452,657 +471,553 @@ const SettingsForm: React.FC<{ initialSettings: AppSettings }> = ({ initialSetti
     {
       label: 'System',
       items: [
-        { id: 'system', label: 'System', icon: AlertCircle, desc: 'Backup & Audit' },
+        { id: 'system', label: 'System', icon: AlertCircle, desc: 'Backup, Audit & CLI' },
         { id: 'appearance', label: 'Darstellung', icon: SunMoon, desc: 'Hell, Dunkel, System' },
       ],
     },
   ];
   const navItems = navGroups.flatMap((g) => g.items);
 
+  const emailTestBanner = emailTestStatus && (
+    <p
+      className={`rounded-control border px-3 py-2.5 text-control ${
+        emailTestStatus.success
+          ? 'border-success-border bg-success-bg text-success-text'
+          : 'border-error-border bg-error-bg text-error-text'
+      }`}
+    >
+      {emailTestStatus.message}
+    </p>
+  );
+
   const renderActiveTab = () => {
     switch (activeTab) {
       case 'company':
         return (
-          <div className="max-w-2xl space-y-8">
-            <div>
-              <h3 className="text-xl font-semibold mb-1">Unternehmensdaten</h3>
-              <p className="text-muted text-sm">Diese Informationen erscheinen im Kopf- und Fußbereich der Rechnung.</p>
+          <SettingsCard
+            title="Unternehmensdaten"
+            subtitle="Diese Informationen erscheinen im Kopf- und Fußbereich der Rechnung."
+          >
+            <Input
+              id="settings-firmenname"
+              label="Firmenname"
+              type="text"
+              fullWidth
+              value={settings.company.name}
+              onChange={(e) => updateNested('company', 'name', e.target.value)}
+            />
+            <Input
+              id="settings-inhaber-geschaftsfuhrer"
+              label="Inhaber / Geschäftsführer"
+              type="text"
+              fullWidth
+              value={settings.company.owner}
+              onChange={(e) => updateNested('company', 'owner', e.target.value)}
+            />
+            <div className="grid grid-cols-3 gap-3">
+              <div className="col-span-2">
+                <Input
+                  id="settings-strae-hausnr"
+                  label="Straße & Hausnr."
+                  type="text"
+                  fullWidth
+                  value={settings.company.street}
+                  onChange={(e) => updateNested('company', 'street', e.target.value)}
+                />
+              </div>
+              <Input
+                id="settings-plz"
+                label="PLZ"
+                type="text"
+                fullWidth
+                value={settings.company.zip}
+                onChange={(e) => updateNested('company', 'zip', e.target.value)}
+              />
             </div>
-
-            <div className="grid grid-cols-1 gap-6">
-              <div>
-                <label className="block mb-1.5 text-label text-foreground" htmlFor="settings-firmenname">Firmenname</label>
-                <input
-                  id="settings-firmenname"
-                  type="text"
-                  value={settings.company.name}
-                  onChange={(e) => updateNested('company', 'name', e.target.value)}
- className="px-3 h-10 hover:border-control-border-hover text-sm w-full bg-surface border border-control-border rounded-control text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring transition-colors"
-                />
-              </div>
-              <div>
-                <label className="block mb-1.5 text-label text-foreground" htmlFor="settings-inhaber-geschaftsfuhrer">Inhaber / Geschäftsführer</label>
-                <input
-                  id="settings-inhaber-geschaftsfuhrer"
-                  type="text"
-                  value={settings.company.owner}
-                  onChange={(e) => updateNested('company', 'owner', e.target.value)}
- className="px-3 h-10 hover:border-control-border-hover text-sm w-full bg-surface border border-control-border rounded-control focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring transition-colors"
-                />
-              </div>
-              <div className="grid grid-cols-3 gap-4">
-                <div className="col-span-2">
-                  <label className="block mb-1.5 text-label text-foreground" htmlFor="settings-strae-hausnr">Straße & Hausnr.</label>
-                  <input
-                    id="settings-strae-hausnr"
-                    type="text"
-                    value={settings.company.street}
-                    onChange={(e) => updateNested('company', 'street', e.target.value)}
- className="px-3 h-10 hover:border-control-border-hover text-sm w-full bg-surface border border-control-border rounded-control focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring transition-colors"
-                  />
-                </div>
-                <div>
-                  <label className="block mb-1.5 text-label text-foreground" htmlFor="settings-plz">PLZ</label>
-                  <input
-                    id="settings-plz"
-                    type="text"
-                    value={settings.company.zip}
-                    onChange={(e) => updateNested('company', 'zip', e.target.value)}
- className="px-3 h-10 hover:border-control-border-hover text-sm w-full bg-surface border border-control-border rounded-control focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring transition-colors"
-                  />
-                </div>
-              </div>
-              <div>
-                <label className="block mb-1.5 text-label text-foreground" htmlFor="settings-stadt">Stadt</label>
-                <input
-                  id="settings-stadt"
-                  type="text"
-                  value={settings.company.city}
-                  onChange={(e) => updateNested('company', 'city', e.target.value)}
- className="px-3 h-10 hover:border-control-border-hover text-sm w-full bg-surface border border-control-border rounded-control focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring transition-colors"
-                />
-              </div>
-              <div className="border-t border-border-subtle my-4"></div>
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <label className="block mb-1.5 text-label text-foreground" htmlFor="settings-e-mail-adresse">E-Mail Adresse</label>
-                  <input
-                    id="settings-e-mail-adresse"
-                    type="email"
-                    value={settings.company.email}
-                    onChange={(e) => updateNested('company', 'email', e.target.value)}
- className="px-3 h-10 hover:border-control-border-hover text-sm w-full bg-surface border border-control-border rounded-control focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring transition-colors"
-                  />
-                </div>
-                <div>
-                  <label className="block mb-1.5 text-label text-foreground" htmlFor="settings-telefon">Telefon</label>
-                  <input
-                    id="settings-telefon"
-                    type="text"
-                    value={settings.company.phone}
-                    onChange={(e) => updateNested('company', 'phone', e.target.value)}
- className="px-3 h-10 hover:border-control-border-hover text-sm w-full bg-surface border border-control-border rounded-control focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring transition-colors"
-                  />
-                </div>
-              </div>
-              <div>
-                <label className="block mb-1.5 text-label text-foreground" htmlFor="settings-webseite">Webseite</label>
-                <input
-                  id="settings-webseite"
-                  type="text"
-                  value={settings.company.website}
-                  onChange={(e) => updateNested('company', 'website', e.target.value)}
- className="px-3 h-10 hover:border-control-border-hover text-sm w-full bg-surface border border-control-border rounded-control focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring transition-colors"
-                />
-              </div>
+            <Input
+              id="settings-stadt"
+              label="Stadt"
+              type="text"
+              fullWidth
+              value={settings.company.city}
+              onChange={(e) => updateNested('company', 'city', e.target.value)}
+            />
+            <div className="grid grid-cols-2 gap-3">
+              <Input
+                id="settings-e-mail-adresse"
+                label="E-Mail Adresse"
+                type="email"
+                fullWidth
+                value={settings.company.email}
+                onChange={(e) => updateNested('company', 'email', e.target.value)}
+              />
+              <Input
+                id="settings-telefon"
+                label="Telefon"
+                type="text"
+                fullWidth
+                value={settings.company.phone}
+                onChange={(e) => updateNested('company', 'phone', e.target.value)}
+              />
             </div>
-          </div>
+            <Input
+              id="settings-webseite"
+              label="Webseite"
+              type="text"
+              fullWidth
+              value={settings.company.website}
+              onChange={(e) => updateNested('company', 'website', e.target.value)}
+            />
+          </SettingsCard>
         );
       case 'catalog':
         return (
-          <div className="max-w-2xl space-y-8">
-            <div>
-              <h3 className="text-xl font-semibold mb-1">Kategorien</h3>
-              <p className="text-muted text-sm">
-                Kategorien für „Produkte & Leistungen“. Änderungen können beim Speichern automatisch in Artikeln
-                übernommen werden.
-              </p>
-            </div>
-
-            <div className="bg-surface-muted rounded-xl p-6 border border-border-subtle space-y-4">
-              <div className="flex items-center justify-between">
-                <h4 className="font-semibold text-sm uppercase flex items-center gap-2">
-                  <Tags size={16} /> Kategorien
-                </h4>
-                <Button
-                  variant="dark"
-                  size="sm"
-                  onClick={() => {
-                    setSettings((prev) => ({
-                      ...prev,
-                      catalog: {
-                        categories: [
-                          ...(prev.catalog?.categories ?? []),
-                          { id: uuidv4(), name: 'Neu' },
-                        ],
-                      },
-                    }));
-                  }}
-                >
-                  <Plus size={16} /> Kategorie
-                </Button>
-              </div>
-
-              {(settings.catalog?.categories ?? []).length === 0 ? (
-                <div className="p-4 bg-surface rounded-xl border border-border-subtle text-sm text-muted">
-                  Noch keine Kategorien. Lege Kategorien an, damit du sie bei Artikeln auswählen kannst.
+          <SettingsCard
+            title="Kategorien"
+            subtitle="Kategorien für „Produkte & Leistungen“. Änderungen können beim Speichern automatisch in Artikeln übernommen werden."
+            actions={
+              <Button
+                variant="secondary"
+                size="sm"
+                onClick={() => {
+                  setSettings((prev) => ({
+                    ...prev,
+                    catalog: {
+                      categories: [
+                        ...(prev.catalog?.categories ?? []),
+                        { id: uuidv4(), name: 'Neu' },
+                      ],
+                    },
+                  }));
+                }}
+              >
+                <Plus size={14} aria-hidden="true" /> Kategorie
+              </Button>
+            }
+          >
+            {(settings.catalog?.categories ?? []).length === 0 ? (
+              <EmptyState
+                title="Noch keine Kategorien"
+                description="Lege Kategorien an, damit du sie bei Artikeln auswählen kannst."
+              />
+            ) : (
+              (settings.catalog?.categories ?? []).map((cat, idx) => (
+                <div key={cat.id} className="flex items-end gap-3">
+                  <span className="grid size-8.5 shrink-0 place-items-center rounded-control bg-surface-sunken text-caption font-medium tabular-nums text-muted">
+                    {String(idx + 1).padStart(2, '0')}
+                  </span>
+                  <div className="min-w-0 flex-1">
+                    <Input
+                      label="Name"
+                      fullWidth
+                      value={cat.name}
+                      onChange={(e) => {
+                        const name = e.target.value;
+                        setSettings((prev) => {
+                          const list = [...(prev.catalog?.categories ?? [])];
+                          list[idx] = { ...list[idx]!, name };
+                          return { ...prev, catalog: { categories: list } };
+                        });
+                      }}
+                    />
+                  </div>
+                  <IconButton
+                    aria-label={`Kategorie ${cat.name} entfernen`}
+                    onClick={() => {
+                      setSettings((prev) => {
+                        const list = (prev.catalog?.categories ?? []).filter((c) => c.id !== cat.id);
+                        return { ...prev, catalog: { categories: list } };
+                      });
+                    }}
+                  >
+                    <Trash2 size={16} aria-hidden="true" />
+                  </IconButton>
                 </div>
-              ) : (
-                <div className="space-y-3">
-                  {(settings.catalog?.categories ?? []).map((cat, idx) => (
-                    <div key={cat.id} className="flex items-center gap-3 bg-surface rounded-xl p-3 border border-border-subtle">
-                      <div className="w-10 h-10 rounded-xl bg-surface-muted border border-border-subtle flex items-center justify-center text-xs font-semibold text-muted">
-                        {String(idx + 1).padStart(2, '0')}
-                      </div>
-                      <div className="flex-1">
-                        <label className="block mb-1 text-label text-foreground">
-                          Name
-                        </label>
-                        <input
-                          value={cat.name}
-                          onChange={(e) => {
-                            const name = e.target.value;
-                            setSettings((prev) => {
-                              const list = [...(prev.catalog?.categories ?? [])];
-                              list[idx] = { ...list[idx]!, name };
-                              return { ...prev, catalog: { categories: list } };
-                            });
-                          }}
- className="px-3 h-10 hover:border-control-border-hover w-full bg-surface border border-control-border rounded-control text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
-                        />
-                      </div>
-                      <button type="button"
-                        onClick={() => {
-                          setSettings((prev) => {
-                            const list = (prev.catalog?.categories ?? []).filter((c) => c.id !== cat.id);
-                            return { ...prev, catalog: { categories: list } };
-                          });
-                        }}
-                        aria-label={`Kategorie ${cat.name} entfernen`}
-                        className="inline-flex size-8 shrink-0 items-center justify-center rounded-control text-muted transition-colors hover:bg-surface-sunken hover:text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
-                      >
-                        <Trash2 size={16} aria-hidden="true" />
-                      </button>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-          </div>
+              ))
+            )}
+          </SettingsCard>
         );
       case 'finance':
         return (
-          <div className="max-w-2xl space-y-8">
-            <div>
-              <h3 className="text-xl font-semibold mb-1">Bankverbindung & Steuer</h3>
-              <p className="text-muted text-sm">Wichtig für den Zahlungsverkehr und die Pflichtangaben auf der Rechnung.</p>
-            </div>
-
-            <div className="bg-surface-muted rounded-xl p-6 border border-border-subtle">
-              <h4 className="font-semibold mb-4 flex items-center gap-2 text-sm uppercase">
-                <Landmark size={16} /> Bankkonto
-              </h4>
-              <div className="space-y-4">
-                <div>
-                  <label className="block text-xs font-semibold text-muted mb-2" htmlFor="settingsview-bankname">Bankname</label>
-                  <input id="settingsview-bankname"
-                    type="text"
-                    value={settings.finance.bankName}
-                    onChange={(e) => updateNested('finance', 'bankName', e.target.value)}
- className="px-3 h-10 hover:border-control-border-hover w-full bg-surface border border-control-border rounded-control text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring transition-colors"
-                  />
-                </div>
-                <div className="grid grid-cols-2 gap-4">
-                  <div>
-                    <label className="block text-xs font-semibold text-muted mb-2" htmlFor="settingsview-iban">IBAN</label>
-                    <input id="settingsview-iban"
-                      type="text"
-                      value={settings.finance.iban}
-                      onChange={(e) => updateNested('finance', 'iban', e.target.value)}
- className="px-3 h-10 hover:border-control-border-hover w-full bg-surface border border-control-border rounded-control text-sm font-mono focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring transition-colors"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-xs font-semibold text-muted mb-2" htmlFor="settingsview-bic">BIC</label>
-                    <input id="settingsview-bic"
-                      type="text"
-                      value={settings.finance.bic}
-                      onChange={(e) => updateNested('finance', 'bic', e.target.value)}
- className="px-3 h-10 hover:border-control-border-hover w-full bg-surface border border-control-border rounded-control text-sm font-mono focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring transition-colors"
-                    />
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            <div className="grid grid-cols-2 gap-6">
-              <div>
-                <label className="block mb-1.5 text-label text-foreground" htmlFor="settings-steuernummer">Steuernummer</label>
-                <input
-                  id="settings-steuernummer"
-                  type="text"
-                  value={settings.finance.taxId}
-                  onChange={(e) => updateNested('finance', 'taxId', e.target.value)}
- className="px-3 h-10 hover:border-control-border-hover text-sm w-full bg-surface border border-control-border rounded-control focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring transition-colors"
-                />
-              </div>
-              <div>
-                <label className="block mb-1.5 text-label text-foreground" htmlFor="settings-ust-idnr">USt-IdNr.</label>
-                <input
-                  id="settings-ust-idnr"
-                  type="text"
-                  value={settings.finance.vatId}
-                  onChange={(e) => updateNested('finance', 'vatId', e.target.value)}
- className="px-3 h-10 hover:border-control-border-hover text-sm w-full bg-surface border border-control-border rounded-control focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring transition-colors"
-                />
-              </div>
-            </div>
-
-            <div>
-              <label className="block mb-1.5 text-label text-foreground" htmlFor="settings-registergericht-hrb">Registergericht / HRB</label>
-              <input
-                id="settings-registergericht-hrb"
+          <SettingsCard
+            title="Bankverbindung & Steuer"
+            subtitle="Wichtig für den Zahlungsverkehr und die Pflichtangaben auf der Rechnung."
+          >
+            <h3 className="text-label text-foreground">Bankkonto</h3>
+            <Input
+              id="settingsview-bankname"
+              label="Bankname"
+              type="text"
+              fullWidth
+              value={settings.finance.bankName}
+              onChange={(e) => updateNested('finance', 'bankName', e.target.value)}
+            />
+            <div className="grid grid-cols-2 gap-3">
+              <Input
+                id="settingsview-iban"
+                label="IBAN"
                 type="text"
-                value={settings.finance.registerCourt}
-                onChange={(e) => updateNested('finance', 'registerCourt', e.target.value)}
-                placeholder="z.B. Amtsgericht Berlin HRB 12345"
- className="px-3 h-10 hover:border-control-border-hover text-sm w-full bg-surface border border-control-border rounded-control focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring transition-colors"
+                fullWidth
+                className="font-mono"
+                value={settings.finance.iban}
+                onChange={(e) => updateNested('finance', 'iban', e.target.value)}
+              />
+              <Input
+                id="settingsview-bic"
+                label="BIC"
+                type="text"
+                fullWidth
+                className="font-mono"
+                value={settings.finance.bic}
+                onChange={(e) => updateNested('finance', 'bic', e.target.value)}
               />
             </div>
-          </div>
+            <div className="grid grid-cols-2 gap-3 border-t border-border pt-3">
+              <Input
+                id="settings-steuernummer"
+                label="Steuernummer"
+                type="text"
+                fullWidth
+                value={settings.finance.taxId}
+                onChange={(e) => updateNested('finance', 'taxId', e.target.value)}
+              />
+              <Input
+                id="settings-ust-idnr"
+                label="USt-IdNr."
+                type="text"
+                fullWidth
+                value={settings.finance.vatId}
+                onChange={(e) => updateNested('finance', 'vatId', e.target.value)}
+              />
+            </div>
+            <Input
+              id="settings-registergericht-hrb"
+              label="Registergericht / HRB"
+              type="text"
+              fullWidth
+              value={settings.finance.registerCourt}
+              onChange={(e) => updateNested('finance', 'registerCourt', e.target.value)}
+              placeholder="z.B. Amtsgericht Berlin HRB 12345"
+            />
+          </SettingsCard>
         );
       case 'numbers':
         return (
-          <div className="max-w-2xl space-y-8">
-            <div>
-              <h3 className="text-xl font-semibold mb-1">Nummernkreise</h3>
-              <p className="text-muted text-sm">Definieren Sie das Format für Ihre Rechnungs-, Angebots- und Kundennummern.</p>
-            </div>
-
-            <div className="bg-surface-muted rounded-xl p-6 border border-border">
-              <div className="flex justify-between items-start mb-6">
-                <h4 className="font-semibold flex items-center gap-2">
-                  <FileDigit size={16} /> Rechnungen
-                </h4>
-                <div className="bg-surface px-3 py-1 rounded-lg shadow-sm">
-                  <span className="text-xs font-semibold text-muted uppercase mr-2">Vorschau:</span>
-                  <span className="font-mono font-semibold">{nextInvoicePreview}</span>
-                </div>
+          <SettingsCard
+            title="Nummernkreise"
+            subtitle="Definieren Sie das Format für Ihre Rechnungs-, Angebots- und Kundennummern."
+          >
+            <section className="flex flex-col gap-3">
+              <div className="flex flex-wrap items-baseline justify-between gap-2">
+                <h3 className="text-label text-foreground">Rechnungen</h3>
+                <p className="text-caption text-muted">
+                  Vorschau: <span className="font-mono text-foreground">{nextInvoicePreview}</span>
+                </p>
               </div>
-
-              <div className="grid grid-cols-2 gap-4 mb-4">
-                <div>
-                  <div className="flex items-center gap-2 mb-2">
-                    <label className="text-label text-foreground">Präfix Format</label>
-                    <div className="group relative">
-                      <HelpCircle size={12} className="text-muted cursor-help" />
-                      <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 w-48 bg-dark-base text-inverse-foreground text-xs p-2 rounded-sm pointer-events-none opacity-0 group-hover:opacity-100 motion-safe:transition-opacity motion-reduce:transition-none z-[var(--z-dropdown)]">
-                        %Y = Aktuelles Jahr (z.B. 2023)
-                      </div>
-                    </div>
-                  </div>
-                  <input
-                    type="text"
-                    value={settings.numbers.invoicePrefix}
-                    onChange={(e) => updateNested('numbers', 'invoicePrefix', e.target.value)}
- className="px-3 h-10 hover:border-control-border-hover w-full bg-surface border border-control-border rounded-control font-mono text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring transition-colors"
-                  />
-                </div>
-                <div>
-                  <label className="block mb-1.5 text-label text-foreground" htmlFor="settings-nachste-nummer">Nächste Nummer</label>
-                  <input
-                    id="settings-nachste-nummer"
-                    type="number"
-                    value={settings.numbers.nextInvoiceNumber}
-                    min={1}
-                    onChange={(e) => updateNested(
-                      'numbers',
-                      'nextInvoiceNumber',
-                      parsePositiveInteger(e.target.value, settings.numbers.nextInvoiceNumber),
-                    )}
- className="px-3 h-10 hover:border-control-border-hover w-full bg-surface border border-control-border rounded-control text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring transition-colors tabular-nums"
-                  />
-                </div>
-              </div>
-              <div>
-                <label className="block mb-1.5 text-label text-foreground" htmlFor="settings-mindestlange-padding">Mindestlänge (Padding)</label>
-                <input
-                  id="settings-mindestlange-padding"
-                  type="range"
-                  min="1"
-                  max="6"
-                  step="1"
-                  value={settings.numbers.numberLength}
+              <div className="grid grid-cols-2 gap-3">
+                <Input
+                  label="Präfix Format"
+                  type="text"
+                  fullWidth
+                  className="font-mono"
+                  hint="%Y = Aktuelles Jahr (z.B. 2023)"
+                  value={settings.numbers.invoicePrefix}
+                  onChange={(e) => updateNested('numbers', 'invoicePrefix', e.target.value)}
+                />
+                <Input
+                  id="settings-nachste-nummer"
+                  label="Nächste Nummer"
+                  type="number"
+                  fullWidth
+                  className="tabular-nums"
+                  value={settings.numbers.nextInvoiceNumber}
+                  min={1}
                   onChange={(e) => updateNested(
                     'numbers',
-                    'numberLength',
-                    parsePositiveInteger(e.target.value, settings.numbers.numberLength),
+                    'nextInvoiceNumber',
+                    parsePositiveInteger(e.target.value, settings.numbers.nextInvoiceNumber),
                   )}
-                  className="w-full accent-dark-base h-2 bg-border rounded-lg appearance-none cursor-pointer"
                 />
-                <div className="flex justify-between text-xs font-semibold text-muted mt-1">
+              </div>
+              <div>
+                {/* ponytail: raw range inputs here and under Kunden; @billme/ui has no slider, replace when one exists. */}
+                <Field id="settings-mindestlange-padding" label="Mindestlänge (Padding)">
+                  <input
+                    type="range"
+                    min="1"
+                    max="6"
+                    step="1"
+                    value={settings.numbers.numberLength}
+                    onChange={(e) => updateNested(
+                      'numbers',
+                      'numberLength',
+                      parsePositiveInteger(e.target.value, settings.numbers.numberLength),
+                    )}
+                    className="h-2 w-full cursor-pointer appearance-none rounded-full bg-border accent-foreground"
+                  />
+                </Field>
+                <div className="mt-1 flex justify-between text-micro text-muted">
                   <span>1</span>
                   <span className="tabular-nums">{settings.numbers.numberLength} Stellen (z.B. 001)</span>
                   <span>6</span>
                 </div>
               </div>
-            </div>
+            </section>
 
-            <div className="bg-surface-muted rounded-xl p-6 border border-border-subtle">
-              <div className="flex justify-between items-start mb-6">
-                <h4 className="font-semibold flex items-center gap-2">
-                  <FileDigit size={16} /> Angebote
-                </h4>
-              </div>
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <label className="block mb-1.5 text-label text-foreground" htmlFor="settings-prafix-format">Präfix Format</label>
-                  <input
-                    id="settings-prafix-format"
-                    type="text"
-                    value={settings.numbers.offerPrefix}
-                    onChange={(e) => updateNested('numbers', 'offerPrefix', e.target.value)}
- className="px-3 h-10 hover:border-control-border-hover w-full bg-surface border border-control-border rounded-control font-mono text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring transition-colors"
-                  />
-                </div>
-                <div>
-                  <label className="block mb-1.5 text-label text-foreground" htmlFor="settings-nachste-nummer-2">Nächste Nummer</label>
-                  <input
-                    id="settings-nachste-nummer-2"
-                    type="number"
-                    value={settings.numbers.nextOfferNumber}
-                    min={1}
-                    onChange={(e) => updateNested(
-                      'numbers',
-                      'nextOfferNumber',
-                      parsePositiveInteger(e.target.value, settings.numbers.nextOfferNumber),
-                    )}
- className="px-3 h-10 hover:border-control-border-hover w-full bg-surface border border-control-border rounded-control text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring transition-colors tabular-nums"
-                  />
-                </div>
-              </div>
-            </div>
-
-            <div className="bg-surface-muted rounded-xl p-6 border border-border-subtle">
-              <div className="flex justify-between items-start mb-6">
-                <h4 className="font-semibold flex items-center gap-2">
-                  <FileDigit size={16} /> Kunden
-                </h4>
-                <div className="bg-surface px-3 py-1 rounded-lg shadow-sm">
-                  <span className="text-xs font-semibold text-muted uppercase mr-2">Vorschau:</span>
-                  <span className="font-mono font-semibold">{nextCustomerPreview}</span>
-                </div>
-              </div>
-              <div className="grid grid-cols-2 gap-4 mb-4">
-                <div>
-                  <label className="block mb-1.5 text-label text-foreground" htmlFor="settings-prafix-format-2">Präfix Format</label>
-                  <input
-                    id="settings-prafix-format-2"
-                    type="text"
-                    value={settings.numbers.customerPrefix}
-                    onChange={(e) => updateNested('numbers', 'customerPrefix', e.target.value)}
- className="px-3 h-10 hover:border-control-border-hover w-full bg-surface border border-control-border rounded-control font-mono text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring transition-colors"
-                  />
-                </div>
-                <div>
-                  <label className="block mb-1.5 text-label text-foreground" htmlFor="settings-nachste-nummer-3">Nächste Nummer</label>
-                  <input
-                    id="settings-nachste-nummer-3"
-                    type="number"
-                    value={settings.numbers.nextCustomerNumber}
-                    min={1}
-                    onChange={(e) => updateNested(
-                      'numbers',
-                      'nextCustomerNumber',
-                      parsePositiveInteger(e.target.value, settings.numbers.nextCustomerNumber),
-                    )}
- className="px-3 h-10 hover:border-control-border-hover w-full bg-surface border border-control-border rounded-control text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring transition-colors tabular-nums"
-                  />
-                </div>
-              </div>
-              <div>
-                <label className="block mb-1.5 text-label text-foreground" htmlFor="settings-mindestlange-padding-2">Mindestlänge (Padding)</label>
-                <input
-                  id="settings-mindestlange-padding-2"
-                  type="range"
-                  min="1"
-                  max="8"
-                  step="1"
-                  value={settings.numbers.customerNumberLength}
+            <section className="flex flex-col gap-3 border-t border-border pt-3">
+              <h3 className="text-label text-foreground">Angebote</h3>
+              <div className="grid grid-cols-2 gap-3">
+                <Input
+                  id="settings-prafix-format"
+                  label="Präfix Format"
+                  type="text"
+                  fullWidth
+                  className="font-mono"
+                  value={settings.numbers.offerPrefix}
+                  onChange={(e) => updateNested('numbers', 'offerPrefix', e.target.value)}
+                />
+                <Input
+                  id="settings-nachste-nummer-2"
+                  label="Nächste Nummer"
+                  type="number"
+                  fullWidth
+                  className="tabular-nums"
+                  value={settings.numbers.nextOfferNumber}
+                  min={1}
                   onChange={(e) => updateNested(
                     'numbers',
-                    'customerNumberLength',
-                    parsePositiveInteger(e.target.value, settings.numbers.customerNumberLength),
+                    'nextOfferNumber',
+                    parsePositiveInteger(e.target.value, settings.numbers.nextOfferNumber),
                   )}
-                  className="w-full accent-dark-base h-2 bg-border rounded-lg appearance-none cursor-pointer"
                 />
-                <div className="flex justify-between text-xs font-semibold text-muted mt-1">
+              </div>
+            </section>
+
+            <section className="flex flex-col gap-3 border-t border-border pt-3">
+              <div className="flex flex-wrap items-baseline justify-between gap-2">
+                <h3 className="text-label text-foreground">Kunden</h3>
+                <p className="text-caption text-muted">
+                  Vorschau: <span className="font-mono text-foreground">{nextCustomerPreview}</span>
+                </p>
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <Input
+                  id="settings-prafix-format-2"
+                  label="Präfix Format"
+                  type="text"
+                  fullWidth
+                  className="font-mono"
+                  value={settings.numbers.customerPrefix}
+                  onChange={(e) => updateNested('numbers', 'customerPrefix', e.target.value)}
+                />
+                <Input
+                  id="settings-nachste-nummer-3"
+                  label="Nächste Nummer"
+                  type="number"
+                  fullWidth
+                  className="tabular-nums"
+                  value={settings.numbers.nextCustomerNumber}
+                  min={1}
+                  onChange={(e) => updateNested(
+                    'numbers',
+                    'nextCustomerNumber',
+                    parsePositiveInteger(e.target.value, settings.numbers.nextCustomerNumber),
+                  )}
+                />
+              </div>
+              <div>
+                <Field id="settings-mindestlange-padding-2" label="Mindestlänge (Padding)">
+                  <input
+                    type="range"
+                    min="1"
+                    max="8"
+                    step="1"
+                    value={settings.numbers.customerNumberLength}
+                    onChange={(e) => updateNested(
+                      'numbers',
+                      'customerNumberLength',
+                      parsePositiveInteger(e.target.value, settings.numbers.customerNumberLength),
+                    )}
+                    className="h-2 w-full cursor-pointer appearance-none rounded-full bg-border accent-foreground"
+                  />
+                </Field>
+                <div className="mt-1 flex justify-between text-micro text-muted">
                   <span>1</span>
                   <span className="tabular-nums">{settings.numbers.customerNumberLength} Stellen (z.B. 0001)</span>
                   <span>8</span>
                 </div>
               </div>
-            </div>
-          </div>
+            </section>
+          </SettingsCard>
         );
       case 'email':
+        if (isWebShell) return <SettingsCard title="E-Mail im Serverbetrieb" subtitle="Versandanbieter und Zugangsdaten werden vom Betreiber am Server eingerichtet.">
+          <p className="text-control">Gespeicherter Anbieter: {settings.email.provider}. Der Verbindungstest verwendet die Serverkonfiguration.</p>
+          <Button className="mt-3" variant="secondary" loading={emailTesting} onClick={handleEmailTest}>Serververbindung prüfen</Button>
+          {emailTestStatus && <p role="status" className="mt-3 text-control">{emailTestStatus.message}</p>}
+        </SettingsCard>;
         return (
-          <div className="max-w-3xl space-y-8">
-            <div>
-              <h3 className="text-xl font-semibold mb-1">E-Mail Konfiguration</h3>
-              <p className="text-muted text-sm">Konfigurieren Sie SMTP oder Resend für den E-Mail-Versand.</p>
-            </div>
-
-            {/* Provider Selection */}
-            <div className="bg-surface border border-border rounded-xl p-6">
-              <h4 className="font-semibold mb-4">E-Mail-Anbieter</h4>
-              <div className="flex gap-3">
-                <button type="button"
-                  aria-pressed={settings.email.provider === 'none'}
-                  onClick={() => updateNested('email', 'provider', 'none')}
-                  className={`flex-1 p-4 rounded-xl border-2 transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring ${
-                    settings.email.provider === 'none'
-                      ? 'border-foreground bg-surface-muted'
-                      : 'border border-control-border hover:border-control-border'
-                  }`}
-                >
-                  <div className="font-semibold">Kein Versand</div>
-                  <div className="text-xs text-muted mt-1">E-Mails deaktiviert</div>
-                </button>
-                <button type="button"
-                  aria-pressed={settings.email.provider === 'smtp'}
-                  onClick={() => updateNested('email', 'provider', 'smtp')}
-                  className={`flex-1 p-4 rounded-xl border-2 transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring ${
-                    settings.email.provider === 'smtp'
-                      ? 'border-foreground bg-surface-muted'
-                      : 'border border-control-border hover:border-control-border'
-                  }`}
-                >
-                  <div className="font-semibold">SMTP</div>
-                  <div className="text-xs text-muted mt-1">Eigener Mail-Server</div>
-                </button>
-                <button type="button"
-                  aria-pressed={settings.email.provider === 'resend'}
-                  onClick={() => updateNested('email', 'provider', 'resend')}
-                  className={`flex-1 p-4 rounded-xl border-2 transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring ${
-                    settings.email.provider === 'resend'
-                      ? 'border-foreground bg-surface-muted'
-                      : 'border border-control-border hover:border-control-border'
-                  }`}
-                >
-                  <div className="font-semibold">Resend</div>
-                  <div className="text-xs text-muted mt-1">Transactional API</div>
-                </button>
+          <>
+            <SettingsCard
+              title="E-Mail Konfiguration"
+              subtitle="Konfigurieren Sie SMTP oder Resend für den E-Mail-Versand."
+            >
+              <h3 className="text-caption font-medium text-foreground-secondary">E-Mail-Anbieter</h3>
+              <div className="grid gap-3 sm:grid-cols-3">
+                {([
+                  { id: 'none', label: 'Kein Versand', hint: 'E-Mails deaktiviert' },
+                  { id: 'smtp', label: 'SMTP', hint: 'Eigener Mail-Server' },
+                  { id: 'resend', label: 'Resend', hint: 'Transactional API' },
+                ] as const).map((provider) => {
+                  const active = settings.email.provider === provider.id;
+                  return (
+                    // ponytail: raw button; the prototype's option card (viewEinstellungen, Buchführung) has no primitive, replace when @billme/ui gets one.
+                    <button
+                      type="button"
+                      key={provider.id}
+                      aria-pressed={active}
+                      onClick={() => updateNested('email', 'provider', provider.id)}
+                      className={`rounded-card border bg-surface p-3 text-left transition-colors motion-reduce:transition-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring ${
+                        active ? 'border-foreground' : 'border-border hover:border-border-strong'
+                      }`}
+                    >
+                      <span className="flex items-center justify-between gap-2">
+                        <span className="text-label text-foreground">{provider.label}</span>
+                        {active && <span aria-hidden="true"><Badge tone="accent">aktiv</Badge></span>}
+                      </span>
+                      <span className="mt-1 block text-caption text-muted">{provider.hint}</span>
+                    </button>
+                  );
+                })}
               </div>
-            </div>
+            </SettingsCard>
 
-            {/* SMTP Configuration */}
             {settings.email.provider === 'smtp' && (
-              <div className="bg-surface border border-border rounded-xl p-6 space-y-4">
-                <h4 className="font-semibold">SMTP-Konfiguration</h4>
-                <div className="grid grid-cols-2 gap-4">
-                  <div>
-                    <label className="block text-xs font-semibold text-muted mb-2" htmlFor="settingsview-server-host">Server (Host)</label>
-                    <input id="settingsview-server-host"
-                      type="text"
-                      value={settings.email.smtpHost}
-                      onChange={(e) => updateNested('email', 'smtpHost', e.target.value)}
-                      placeholder="smtp.example.com"
- className="px-3 h-10 hover:border-control-border-hover w-full bg-surface border border-control-border rounded-control text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring transition-colors"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-xs font-semibold text-muted mb-2" htmlFor="settingsview-port">Port</label>
-                    <input id="settingsview-port"
-                      type="number"
-                      value={settings.email.smtpPort}
-                      onChange={(e) => updateNested('email', 'smtpPort', Number(e.target.value))}
-                      placeholder="587"
- className="px-3 h-10 hover:border-control-border-hover w-full bg-surface border border-control-border rounded-control text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring transition-colors"
-                    />
-                  </div>
-                </div>
-                <div>
-                  <label className="flex items-center gap-2 cursor-pointer">
-                    <input
-                      type="checkbox"
-                      checked={settings.email.smtpSecure}
-                      onChange={(e) => updateNested('email', 'smtpSecure', e.target.checked)}
-                      className="w-4 h-4"
-                    />
-                    <span className="text-sm font-medium">SSL/TLS verwenden (empfohlen für Port 465)</span>
-                  </label>
-                </div>
-                <div>
-                  <label className="block text-xs font-semibold text-muted mb-2" htmlFor="settingsview-benutzername">Benutzername</label>
-                  <input id="settingsview-benutzername"
+              <SettingsCard title="SMTP-Konfiguration">
+                <div className="grid grid-cols-2 gap-3">
+                  <Input
+                    id="settingsview-server-host"
+                    label="Server (Host)"
                     type="text"
-                    value={settings.email.smtpUser}
-                    onChange={(e) => updateNested('email', 'smtpUser', e.target.value)}
-                    placeholder="user@example.com"
- className="px-3 h-10 hover:border-control-border-hover w-full bg-surface border border-control-border rounded-control text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring transition-colors"
+                    fullWidth
+                    value={settings.email.smtpHost}
+                    onChange={(e) => updateNested('email', 'smtpHost', e.target.value)}
+                    placeholder="smtp.example.com"
+                  />
+                  <Input
+                    id="settingsview-port"
+                    label="Port"
+                    type="number"
+                    fullWidth
+                    value={settings.email.smtpPort}
+                    onChange={(e) => updateNested('email', 'smtpPort', Number(e.target.value))}
+                    placeholder="587"
                   />
                 </div>
-                <div>
-                  <label className="block text-xs font-semibold text-muted mb-2" htmlFor="settingsview-passwort">Passwort</label>
-                <input id="settingsview-passwort"
+                <Checkbox
+                  label="SSL/TLS verwenden (empfohlen für Port 465)"
+                  checked={settings.email.smtpSecure}
+                  onChange={(e) => updateNested('email', 'smtpSecure', e.target.checked)}
+                />
+                <Input
+                  id="settingsview-benutzername"
+                  label="Benutzername"
+                  type="text"
+                  fullWidth
+                  value={settings.email.smtpUser}
+                  onChange={(e) => updateNested('email', 'smtpUser', e.target.value)}
+                  placeholder="user@example.com"
+                />
+                <Input
+                  id="settingsview-passwort"
+                  label="Passwort"
                   type="password"
+                  fullWidth
                   value={smtpPassword}
                   onChange={(e) => {
                     setSmtpPassword(e.target.value);
                     setSmtpPasswordTouched(true);
                   }}
                   placeholder={smtpPasswordConfigured ? '•••••••• (gespeichert)' : '••••••••'}
- className="px-3 h-10 hover:border-control-border-hover w-full bg-surface border border-control-border rounded-control text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring transition-colors"
-                  />
-                  <p className="text-xs text-muted mt-1">Wird sicher im Schlüsselbund des Systems gespeichert.</p>
-                </div>
-                <div>
-                  <Button
-                    variant="secondary"
-                    size="sm"
-                    onClick={handleEmailTest}
-                    loading={emailTesting}
-                    disabled={
-                      !settings.email.smtpHost ||
-                      !settings.email.smtpUser ||
-                      (!smtpPassword && !smtpPasswordConfigured)
-                    }
-                  >
-                    Verbindung testen
-                  </Button>
-                  {emailTestStatus && (
-                    <div className={`mt-3 p-3 rounded-lg ${emailTestStatus.success ? 'bg-success-bg text-success-text' : 'bg-error-bg text-error-text'}`}>
-                      <p className="text-sm font-medium">{emailTestStatus.message}</p>
-                    </div>
-                  )}
-                </div>
-              </div>
+                  hint="Wird sicher im Schlüsselbund des Systems gespeichert."
+                />
+                <Button
+                  variant="secondary"
+                  className="self-start"
+                  onClick={handleEmailTest}
+                  loading={emailTesting}
+                  disabled={
+                    !settings.email.smtpHost ||
+                    !settings.email.smtpUser ||
+                    (!smtpPassword && !smtpPasswordConfigured)
+                  }
+                >
+                  Verbindung testen
+                </Button>
+                {emailTestBanner}
+              </SettingsCard>
             )}
 
-            {/* Resend Configuration */}
             {settings.email.provider === 'resend' && (
-              <div className="bg-surface border border-border rounded-xl p-6 space-y-4">
-                <h4 className="font-semibold">Resend API-Konfiguration</h4>
-                <div>
-                  <label className="block text-xs font-semibold text-muted mb-2" htmlFor="settingsview-api-key">API-Key</label>
-                  <input id="settingsview-api-key"
-                    type="password"
-                    value={resendApiKey}
-                    onChange={(e) => {
-                      setResendApiKey(e.target.value);
-                      setResendApiKeyTouched(true);
-                      // Real-time format validation
-                      if (e.target.value && !e.target.value.startsWith('re_')) {
-                        setEmailTestStatus({
-                          success: false,
-                          message: 'Warnung: Resend API-Keys beginnen üblicherweise mit "re_"',
-                        });
-                      } else {
-                        setEmailTestStatus(null);
-                      }
-                    }}
-                    placeholder={resendApiKeyConfigured ? 're_*** (gespeichert)' : 're_***'}
- className="px-3 h-10 hover:border-control-border-hover w-full bg-surface border border-control-border rounded-control text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring transition-colors"
-                  />
-                  <p className="text-xs text-muted mt-1">Wird sicher im Schlüsselbund des Systems gespeichert.</p>
-                </div>
-                <div>
-                  <Button
-                    variant="secondary"
-                    size="sm"
-                    onClick={handleEmailTest}
-                    loading={emailTesting}
-                    disabled={!resendApiKey && !resendApiKeyConfigured}
-                  >
-                    API-Schlüssel testen
-                  </Button>
-                  {emailTestStatus && (
-                    <div className={`mt-3 p-3 rounded-lg ${emailTestStatus.success ? 'bg-success-bg text-success-text' : 'bg-error-bg text-error-text'}`}>
-                      <p className="text-sm font-medium">{emailTestStatus.message}</p>
-                    </div>
-                  )}
-                </div>
-              </div>
+              <SettingsCard title="Resend API-Konfiguration">
+                <Input
+                  id="settingsview-api-key"
+                  label="API-Key"
+                  type="password"
+                  fullWidth
+                  value={resendApiKey}
+                  onChange={(e) => {
+                    setResendApiKey(e.target.value);
+                    setResendApiKeyTouched(true);
+                    // Real-time format validation
+                    if (e.target.value && !e.target.value.startsWith('re_')) {
+                      setEmailTestStatus({
+                        success: false,
+                        message: 'Warnung: Resend API-Keys beginnen üblicherweise mit "re_"',
+                      });
+                    } else {
+                      setEmailTestStatus(null);
+                    }
+                  }}
+                  placeholder={resendApiKeyConfigured ? 're_*** (gespeichert)' : 're_***'}
+                  hint="Wird sicher im Schlüsselbund des Systems gespeichert."
+                />
+                <Button
+                  variant="secondary"
+                  className="self-start"
+                  onClick={handleEmailTest}
+                  loading={emailTesting}
+                  disabled={!resendApiKey && !resendApiKeyConfigured}
+                >
+                  API-Schlüssel testen
+                </Button>
+                {emailTestBanner}
+              </SettingsCard>
             )}
 
-            {/* Sender Information */}
             {settings.email.provider !== 'none' && (
-              <div className="bg-surface border border-border rounded-xl p-6 space-y-4">
-                <h4 className="font-semibold">Absender-Informationen</h4>
-                <div>
-                  <label className="block text-xs font-semibold text-muted mb-2" htmlFor="settingsview-absender-name">Absender-Name</label>
-                  <input id="settingsview-absender-name"
-                    type="text"
-                    value={settings.email.fromName}
-                    onChange={(e) => updateNested('email', 'fromName', e.target.value)}
-                    placeholder={settings.company.name || 'Meine Firma'}
- className="px-3 h-10 hover:border-control-border-hover w-full bg-surface border border-control-border rounded-control text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring transition-colors"
-                  />
-                </div>
-                <div>
-                  <label className="block text-xs font-semibold text-muted mb-2" htmlFor="settingsview-absender-e-mail">Absender-E-Mail</label>
-                  <input id="settingsview-absender-e-mail"
-                    type="email"
-                    value={settings.email.fromEmail}
-                    onChange={(e) => updateNested('email', 'fromEmail', e.target.value)}
-                    placeholder={settings.company.email || 'info@example.com'}
- className="px-3 h-10 hover:border-control-border-hover w-full bg-surface border border-control-border rounded-control text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring transition-colors"
-                  />
-                </div>
-              </div>
+              <SettingsCard title="Absender-Informationen">
+                <Input
+                  id="settingsview-absender-name"
+                  label="Absender-Name"
+                  type="text"
+                  fullWidth
+                  value={settings.email.fromName}
+                  onChange={(e) => updateNested('email', 'fromName', e.target.value)}
+                  placeholder={settings.company.name || 'Meine Firma'}
+                />
+                <Input
+                  id="settingsview-absender-e-mail"
+                  label="Absender-E-Mail"
+                  type="email"
+                  fullWidth
+                  value={settings.email.fromEmail}
+                  onChange={(e) => updateNested('email', 'fromEmail', e.target.value)}
+                  placeholder={settings.company.email || 'info@example.com'}
+                />
+              </SettingsCard>
             )}
-          </div>
+          </>
         );
       case 'dunning': {
         const dunningEnabled = settings.automation?.dunningEnabled ?? false;
@@ -1110,399 +1025,293 @@ const SettingsForm: React.FC<{ initialSettings: AppSettings }> = ({ initialSetti
         const totalLevels = settings.dunning.levels.length;
 
         return (
-          <div className="max-w-4xl space-y-6">
-            {/* Header */}
-            <div className="flex items-end justify-between">
-              <div>
-                <h3 className="text-xl font-semibold mb-1">Mahnwesen</h3>
-                <p className="text-muted text-sm">Automatische Zahlungserinnerungen und Mahnungen</p>
-              </div>
-            </div>
+          <>
+            <SettingsCard title="Mahnwesen" subtitle="Automatische Zahlungserinnerungen und Mahnungen">
+              <Switch
+                label="Mahnwesen aktivieren"
+                description="Automatische Zahlungserinnerungen für überfällige Rechnungen"
+                checked={dunningEnabled}
+                onCheckedChange={(checked) => updateAutomation('dunningEnabled', checked)}
+              />
+              {dunningEnabled && settings.email.provider === 'none' && (
+                <div className="flex items-start gap-2.5 rounded-control border border-warning-border bg-warning-bg px-3 py-2.5 text-control text-warning-text">
+                  <AlertTriangle size={16} className="mt-px shrink-0" aria-hidden="true" />
+                  <div>
+                    <p className="font-semibold">E-Mail-Provider erforderlich</p>
+                    <p>Konfigurieren Sie SMTP oder Resend im E-Mail-Tab, um Mahnungen versenden zu können.</p>
+                  </div>
+                </div>
+              )}
+              {!dunningEnabled && (
+                <p className="text-caption text-muted">Aktivieren Sie das Mahnwesen, um Mahnstufen zu konfigurieren</p>
+              )}
+            </SettingsCard>
 
-            {/* Master Enable/Disable Toggle */}
-            <button type="button"
-              role="switch"
-              aria-checked={dunningEnabled}
-              onClick={() => updateAutomation('dunningEnabled', !dunningEnabled)}
-              className="w-full text-left bg-surface border-2 border-border-subtle rounded-xl p-6 transition-colors hover:border-control-border focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
-            >
-              <div className="flex items-center gap-4">
-                <span
-                  aria-hidden="true"
-                  className={`w-6 h-6 rounded-full border-2 flex items-center justify-center ${dunningEnabled ? 'bg-dark-base border-dark-base' : 'border-control-border'}`}
+            {dunningEnabled && (
+              <SettingsCard title="Automatisierung">
+                <Input
+                  id="settings-tagliche-ausfuhrung-um"
+                  label="Tägliche Ausführung um"
+                  type="time"
+                  className="w-48"
+                  value={settings.automation?.dunningRunTime ?? '09:00'}
+                  onChange={(e) => updateAutomation('dunningRunTime', e.target.value)}
+                />
+                <dl className="grid grid-cols-[auto_1fr] gap-x-3.5 gap-y-1.75 text-control text-foreground">
+                  <dt className="text-caption text-muted">Letzter Lauf</dt>
+                  <dd>
+                    {settings.automation?.lastDunningRun
+                      ? new Date(settings.automation.lastDunningRun).toLocaleDateString('de-DE', {
+                          day: '2-digit',
+                          month: 'short',
+                          hour: '2-digit',
+                          minute: '2-digit'
+                        })
+                      : 'Noch nie'}
+                  </dd>
+                  <dt className="text-caption text-muted">Nächster Lauf</dt>
+                  <dd>{calculateNextRun(settings.automation?.dunningRunTime ?? '09:00')}</dd>
+                </dl>
+                <Button
+                  variant="secondary"
+                  className="self-start"
+                  onClick={handleManualDunningRun}
+                  loading={dunningRunning}
+                  disabled={settings.email.provider === 'none' || activeLevelCount === 0}
                 >
-                  {dunningEnabled && <CheckCircle size={14} className="text-success-text" />}
-                </span>
-                <div>
-                  <h4 className="font-semibold text-sm">Mahnwesen aktivieren</h4>
-                  <p className="text-xs text-muted mt-1">Automatische Zahlungserinnerungen für überfällige Rechnungen</p>
-                </div>
-              </div>
-            </button>
-
-            {/* Email Provider Warning (if not configured) */}
-            {dunningEnabled && settings.email.provider === 'none' && (
-              <div className="bg-warning-bg border border-warning-border rounded-xl p-4 flex items-start gap-3">
-                <AlertTriangle size={16} className="text-warning-text shrink-0 mt-0.5" />
-                <div>
-                  <p className="text-sm font-semibold text-warning-text">E-Mail-Provider erforderlich</p>
-                  <p className="text-xs text-warning-text mt-1">
-                    Konfigurieren Sie SMTP oder Resend im E-Mail-Tab, um Mahnungen versenden zu können.
-                  </p>
-                </div>
-              </div>
+                  <Megaphone size={16} aria-hidden="true" />
+                  Jetzt manuell ausführen
+                </Button>
+              </SettingsCard>
             )}
 
-            {/* Automation Settings Card (only when enabled) */}
+            <DunningDeliveryReview />
             {dunningEnabled && (
-              <div className="bg-surface-muted border border-border rounded-xl p-6 space-y-5">
-                <h4 className="font-semibold flex items-center gap-2">
-                  <Megaphone size={16} /> Automatisierung
-                </h4>
+              <SettingsCard title="Mahnstufen" count={<span className="tabular-nums">{activeLevelCount} von {totalLevels} aktiv</span>} flush>
+                {settings.dunning.levels.map((level, index) => (
+                  <div key={level.id} className="flex flex-col gap-3 border-b border-border p-3.5 last:border-b-0">
+                    <div className="flex flex-wrap items-center justify-between gap-3">
+                      <div className="flex items-center gap-2.5">
+                        <Checkbox
+                          checked={level.enabled}
+                          aria-label={`Mahnstufe ${level.id} aktivieren`}
+                          onChange={(e) => updateDunningLevel(index, 'enabled', e.target.checked)}
+                        />
+                        <Badge tone={level.enabled ? 'inverse' : 'neutral'}>{level.id}</Badge>
+                        <h3 className="text-label text-foreground">{level.name}</h3>
+                      </div>
 
-                {/* Schedule Time */}
-                <div>
-                  <label className="block mb-1.5 text-label text-foreground" htmlFor="settings-tagliche-ausfuhrung-um">Tägliche Ausführung um</label>
-                  <input
-                    id="settings-tagliche-ausfuhrung-um"
+                      <div className="flex items-center gap-3 text-caption text-muted">
+                        <div className="flex items-center gap-1.5">
+                          <span>nach</span>
+                          <Input
+                            type="number"
+                            className="w-14 text-center"
+                            aria-label={`${level.name}: Tage nach Fälligkeit`}
+                            value={level.daysAfterDueDate}
+                            onChange={(e) => updateDunningLevel(index, 'daysAfterDueDate', Number(e.target.value))}
+                            disabled={!level.enabled}
+                          />
+                          <span>Tagen</span>
+                        </div>
+                        <div className="flex items-center gap-1.5">
+                          <span>Gebühr</span>
+                          <Input
+                            type="number"
+                            step="0.01"
+                            className="w-16 text-center"
+                            aria-label={`${level.name}: Gebühr in Euro`}
+                            value={level.fee}
+                            onChange={(e) => updateDunningLevel(index, 'fee', Number(e.target.value))}
+                            disabled={!level.enabled}
+                          />
+                          <span>€</span>
+                        </div>
+                      </div>
+                    </div>
+
+                    {level.enabled && (
+                      <>
+                        <Input
+                          label="Betreff"
+                          type="text"
+                          fullWidth
+                          value={level.subject}
+                          onChange={(e) => updateDunningLevel(index, 'subject', e.target.value)}
+                          placeholder="z.B. Zahlungserinnerung für Rechnung %N"
+                        />
+                        <Textarea
+                          label="Einleitungstext"
+                          rows={2}
+                          fullWidth
+                          value={level.text}
+                          onChange={(e) => updateDunningLevel(index, 'text', e.target.value)}
+                          placeholder="z.B. leider haben wir noch keinen Zahlungseingang für die Rechnung %N vom %D über %A erhalten..."
+                        />
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <div className="flex flex-wrap gap-1">
+                            {[
+                              { code: '%N', label: 'Nr.', present: level.text.includes('%N') },
+                              { code: '%D', label: 'Datum', present: level.text.includes('%D') },
+                              { code: '%A', label: 'Betrag', present: level.text.includes('%A') },
+                              { code: '%C', label: 'Kunde', present: level.text.includes('%C') },
+                            ].map((ph) => (
+                              <Button
+                                key={ph.code}
+                                variant="secondary"
+                                size="sm"
+                                onClick={() => {
+                                  const textarea = document.querySelector(`textarea[value="${level.text}"]`) as HTMLTextAreaElement;
+                                  if (textarea) {
+                                    const start = textarea.selectionStart;
+                                    const end = textarea.selectionEnd;
+                                    const newText = level.text.substring(0, start) + ph.code + level.text.substring(end);
+                                    updateDunningLevel(index, 'text', newText);
+                                    setTimeout(() => {
+                                      textarea.focus();
+                                      textarea.setSelectionRange(start + ph.code.length, start + ph.code.length);
+                                    }, 0);
+                                  }
+                                }}
+                                className={`font-mono ${ph.present ? 'border-success-border bg-success-bg text-success-text' : ''}`}
+                                aria-label={`${ph.label} einfügen`}
+                              >
+                                {ph.code}
+                              </Button>
+                            ))}
+                          </div>
+                          <div className="flex items-center gap-2">
+                            {(!level.text.includes('%N') || !level.text.includes('%A')) && (
+                              <span className="inline-flex items-center gap-1 text-caption text-warning-text">
+                                <AlertTriangle size={12} aria-hidden="true" />
+                                %N und %A empfohlen
+                              </span>
+                            )}
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              onClick={() => {
+                                setPreviewLevelIndex(index);
+                                setPreviewModalOpen(true);
+                              }}
+                            >
+                              Vorschau
+                            </Button>
+                          </div>
+                        </div>
+                      </>
+                    )}
+                  </div>
+                ))}
+              </SettingsCard>
+            )}
+
+            <SettingsCard title="Automatische Abo-Rechnungen" subtitle="Automatische Generierung wiederkehrender Rechnungen">
+              <Switch
+                label="Automatische Generierung aktivieren"
+                description="Abo-Rechnungen werden automatisch zum festgelegten Zeitpunkt erstellt"
+                checked={settings.automation.recurringEnabled}
+                onCheckedChange={(checked) => updateAutomation('recurringEnabled', checked)}
+              />
+              {settings.automation.recurringEnabled && (
+                <div className="flex flex-col gap-3 border-t border-border pt-3">
+                  <h3 className="text-label text-foreground">Automatisierung</h3>
+                  <Input
+                    id="settings-tagliche-ausfuhrung-um-2"
+                    label="Tägliche Ausführung um"
                     type="time"
-                    value={settings.automation?.dunningRunTime ?? '09:00'}
-                    onChange={(e) => updateAutomation('dunningRunTime', e.target.value)}
- className="px-2.5 h-8 hover:border-control-border-hover w-48 bg-surface border border-control-border rounded-control text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                    className="w-48"
+                    value={settings.automation?.recurringRunTime ?? '03:00'}
+                    onChange={(e) => updateAutomation('recurringRunTime', e.target.value)}
+                    hint="Empfohlen: 03:00 Uhr (nachts, um Konflikte mit Mahnlauf zu vermeiden)"
                   />
-                </div>
-
-                {/* Status Display */}
-                <div className="grid grid-cols-2 gap-4">
-                  <div className="bg-surface border border-border-subtle rounded-lg p-3">
-                    <label className="block mb-1 text-label text-foreground">Letzter Lauf</label>
-                    <p className="text-sm font-semibold text-foreground">
-                      {settings.automation?.lastDunningRun
-                        ? new Date(settings.automation.lastDunningRun).toLocaleDateString('de-DE', {
+                  <dl className="grid grid-cols-[auto_1fr] gap-x-3.5 gap-y-1.75 text-control text-foreground">
+                    <dt className="text-caption text-muted">Letzter Lauf</dt>
+                    <dd>
+                      {settings.automation?.lastRecurringRun
+                        ? new Date(settings.automation.lastRecurringRun).toLocaleDateString('de-DE', {
                             day: '2-digit',
                             month: 'short',
                             hour: '2-digit',
                             minute: '2-digit'
                           })
                         : 'Noch nie'}
-                    </p>
-                  </div>
-                  <div className="bg-surface border border-border-subtle rounded-lg p-3">
-                    <label className="block mb-1 text-label text-foreground">Nächster Lauf</label>
-                    <p className="text-sm font-semibold text-foreground">
-                      {calculateNextRun(settings.automation?.dunningRunTime ?? '09:00')}
-                    </p>
-                  </div>
-                </div>
-
-                {/* Manual Trigger */}
-                <Button
-                  variant="dark"
-                  fullWidth
-                  onClick={handleManualDunningRun}
-                  loading={dunningRunning}
-                  disabled={settings.email.provider === 'none' || activeLevelCount === 0}
-                >
-                  <Megaphone size={16} />
-                  Jetzt manuell ausführen
-                </Button>
-              </div>
-            )}
-
-            {/* Dunning Levels Configuration (only when enabled) */}
-            {dunningEnabled && (
-              <div className="space-y-3">
-                <div className="flex items-center justify-between">
-                  <h4 className="font-semibold">Mahnstufen</h4>
-                  <p className="text-sm text-muted tabular-nums">
-                    {activeLevelCount} von {totalLevels} aktiv
-                  </p>
-                </div>
-
-                {settings.dunning.levels.map((level, index) => (
-                  <div
-                    key={level.id}
-                    className={`bg-surface border rounded-xl overflow-hidden transition-colors ${
-                      level.enabled ? 'border-border hover:border-control-border' : 'border-border-subtle'
-                    }`}
-                  >
-                    {/* Header with inline toggle */}
-                    <div className="bg-surface-muted px-4 py-3 border-b border-border-subtle flex items-center justify-between">
-                      <div className="flex items-center gap-3">
-                        {/* Individual Enable Toggle */}
-                        <label className="relative inline-flex items-center cursor-pointer">
-                          <input
-                            type="checkbox"
-                            checked={level.enabled}
-                            aria-label={`Mahnstufe ${level.id} aktivieren`}
-                            onChange={(e) => updateDunningLevel(index, 'enabled', e.target.checked)}
-                            className="sr-only peer"
-                          />
- <div className="w-11 h-6 bg-control-border peer-focus-visible:outline-2 peer-focus-visible:outline-offset-2 peer-focus-visible:outline-focus-ring rounded-full peer peer-checked:after:translate-x-full motion-safe:peer-checked:after:transition-transform motion-safe:peer-checked:after:duration-150 motion-reduce:transition-none after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-surface after:rounded-full after:h-5 after:w-5 peer-checked:bg-dark-base"></div>
-                        </label>
-
-                        <span className={`w-7 h-7 rounded-full flex items-center justify-center font-semibold text-xs ${
-                          level.enabled ? 'bg-dark-base text-inverse-foreground' : 'bg-border-subtle text-muted'
-                        }`}>
-                          {level.id}
-                        </span>
-                        <h5 className="font-semibold text-sm">{level.name}</h5>
-                      </div>
-
-                      {/* Quick edit inline */}
-                      <div className="flex items-center gap-4 text-xs">
-                        <div className="flex items-center gap-1.5">
-                          <span className="text-muted font-medium">nach</span>
-                          <input
-                            type="number"
-                            value={level.daysAfterDueDate}
-                            onChange={(e) => updateDunningLevel(index, 'daysAfterDueDate', Number(e.target.value))}
-                            disabled={!level.enabled}
- className="px-2.5 h-8 hover:border-control-border-hover text-sm w-14 bg-surface border border-control-border rounded-sm text-center focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring disabled:opacity-50"
-                          />
-                          <span className="text-muted font-medium">Tagen</span>
-                        </div>
-                        <div className="h-4 w-px bg-border-subtle"></div>
-                        <div className="flex items-center gap-1.5">
-                          <span className="text-muted font-medium">Gebühr</span>
-                          <input
-                            type="number"
-                            step="0.01"
-                            value={level.fee}
-                            onChange={(e) => updateDunningLevel(index, 'fee', Number(e.target.value))}
-                            disabled={!level.enabled}
- className="px-2.5 h-8 hover:border-control-border-hover text-sm w-16 bg-surface border border-control-border rounded-sm text-center focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring disabled:opacity-50"
-                          />
-                          <span className="text-muted font-medium">€</span>
-                        </div>
-                      </div>
-                    </div>
-
-                    {/* Content (subject + text) */}
-                    {level.enabled && (
-                      <div className="p-4 space-y-3">
-                        <div>
-                          <label className="block mb-1.5 text-label text-foreground" htmlFor="settingsview-betreff">Betreff</label>
-                          <input id="settingsview-betreff"
-                            type="text"
-                            value={level.subject}
-                            onChange={(e) => updateDunningLevel(index, 'subject', e.target.value)}
- className="px-2.5 h-8 hover:border-control-border-hover w-full bg-surface border border-control-border rounded-control text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
-                            placeholder="z.B. Zahlungserinnerung für Rechnung %N"
-                          />
-                        </div>
-                        <div>
-                          <div className="flex items-center justify-between mb-1.5">
-                            <label className="block text-label text-foreground">Einleitungstext</label>
-                            <button type="button"
-                              onClick={() => {
-                                setPreviewLevelIndex(index);
-                                setPreviewModalOpen(true);
-                              }}
-                              className="px-2.5 py-1 bg-surface-muted hover:bg-border text-foreground rounded-sm text-xs font-semibold transition-colors"
-                            >
-                              Vorschau
-                            </button>
-                          </div>
-                          <textarea
-                            rows={2}
-                            value={level.text}
-                            onChange={(e) => updateDunningLevel(index, 'text', e.target.value)}
- className="px-2.5 py-2 hover:border-control-border-hover w-full bg-surface border border-control-border rounded-control text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring resize-none"
-                            placeholder="z.B. leider haben wir noch keinen Zahlungseingang für die Rechnung %N vom %D über %A erhalten..."
-                          />
-                          <div className="mt-1.5 flex items-center justify-between">
-                            <div className="flex flex-wrap gap-1">
-                              {[
-                                { code: '%N', label: 'Nr.', present: level.text.includes('%N') },
-                                { code: '%D', label: 'Datum', present: level.text.includes('%D') },
-                                { code: '%A', label: 'Betrag', present: level.text.includes('%A') },
-                                { code: '%C', label: 'Kunde', present: level.text.includes('%C') },
-                              ].map((ph) => (
-                                <button type="button"
-                                  key={ph.code}
-                                  onClick={() => {
-                                    const textarea = document.querySelector(`textarea[value="${level.text}"]`) as HTMLTextAreaElement;
-                                    if (textarea) {
-                                      const start = textarea.selectionStart;
-                                      const end = textarea.selectionEnd;
-                                      const newText = level.text.substring(0, start) + ph.code + level.text.substring(end);
-                                      updateDunningLevel(index, 'text', newText);
-                                      setTimeout(() => {
-                                        textarea.focus();
-                                        textarea.setSelectionRange(start + ph.code.length, start + ph.code.length);
-                                      }, 0);
-                                    }
-                                  }}
-                                  className={`px-1.5 py-1 rounded-sm text-xs font-semibold transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring ${
-                                    ph.present
-                                      ? 'bg-success-bg text-success-text'
-                                      : 'bg-surface-muted text-muted hover:bg-border'
-                                  }`}
-                                  aria-label={`${ph.label} einfügen`}
-                                >
-                                  {ph.code}
-                                </button>
-                              ))}
-                            </div>
-                            {(!level.text.includes('%N') || !level.text.includes('%A')) && (
-                              <div className="flex items-center gap-1 text-warning-text">
-                                <AlertTriangle size={12} />
-                                <span className="text-xs font-medium">%N und %A empfohlen</span>
-                              </div>
-                            )}
-                          </div>
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                ))}
-              </div>
-            )}
-
-            {/* Disabled State Message */}
-            {!dunningEnabled && (
-              <div className="text-center py-12 text-muted">
-                <Megaphone size={48} className="mx-auto mb-4 opacity-30" />
-                <p>Aktivieren Sie das Mahnwesen, um Mahnstufen zu konfigurieren</p>
-              </div>
-            )}
-
-            {/* Recurring Invoices Section */}
-            <div className="border-t border-border pt-8 mt-8">
-              <div className="mb-6">
-                <h3 className="text-xl font-semibold mb-1 flex items-center gap-2">
-                  <Repeat size={20} /> Automatische Abo-Rechnungen
-                </h3>
-                <p className="text-muted text-sm">Automatische Generierung wiederkehrender Rechnungen</p>
-              </div>
-
-              {/* Master Enable/Disable Toggle */}
-              <button type="button"
-                role="switch"
-                aria-checked={settings.automation.recurringEnabled}
-                onClick={() => updateAutomation('recurringEnabled', !settings.automation.recurringEnabled)}
-                className="w-full text-left bg-surface border-2 border-border-subtle rounded-xl p-6 transition-colors hover:border-control-border focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
-              >
-                <div className="flex items-center gap-4">
-                  <span
-                    aria-hidden="true"
-                    className={`w-6 h-6 rounded-full border-2 flex items-center justify-center ${settings.automation.recurringEnabled ? 'bg-dark-base border-dark-base' : 'border-control-border'}`}
-                  >
-                    {settings.automation.recurringEnabled && <CheckCircle size={14} className="text-success-text" />}
-                  </span>
-                  <div>
-                    <h4 className="font-semibold text-sm">Automatische Generierung aktivieren</h4>
-                    <p className="text-xs text-muted mt-1">Abo-Rechnungen werden automatisch zum festgelegten Zeitpunkt erstellt</p>
-                  </div>
-                </div>
-              </button>
-
-              {/* Automation Settings Card (only when enabled) */}
-              {settings.automation.recurringEnabled && (
-                <div className="bg-surface-muted border border-border rounded-xl p-6 space-y-5 mt-4">
-                  <h4 className="font-semibold flex items-center gap-2">
-                    <Repeat size={16} /> Automatisierung
-                  </h4>
-
-                  {/* Schedule Time */}
-                  <div>
-                    <label className="block mb-1.5 text-label text-foreground" htmlFor="settings-tagliche-ausfuhrung-um-2">Tägliche Ausführung um</label>
-                    <input
-                      id="settings-tagliche-ausfuhrung-um-2"
-                      type="time"
-                      value={settings.automation?.recurringRunTime ?? '03:00'}
-                      onChange={(e) => updateAutomation('recurringRunTime', e.target.value)}
- className="px-2.5 h-8 hover:border-control-border-hover w-48 bg-surface border border-control-border rounded-control text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
-                    />
-                    <p className="text-xs text-muted mt-2">
-                      Empfohlen: 03:00 Uhr (nachts, um Konflikte mit Mahnlauf zu vermeiden)
-                    </p>
-                  </div>
-
-                  {/* Status Display */}
-                  <div className="grid grid-cols-2 gap-4">
-                    <div className="bg-surface border border-border-subtle rounded-lg p-3">
-                      <label className="block mb-1 text-label text-foreground">Letzter Lauf</label>
-                      <p className="text-sm font-semibold text-foreground">
-                        {settings.automation?.lastRecurringRun
-                          ? new Date(settings.automation.lastRecurringRun).toLocaleDateString('de-DE', {
-                              day: '2-digit',
-                              month: 'short',
-                              hour: '2-digit',
-                              minute: '2-digit'
-                            })
-                          : 'Noch nie'}
-                      </p>
-                    </div>
-                    <div className="bg-surface border border-border-subtle rounded-lg p-3">
-                      <label className="block mb-1 text-label text-foreground">Nächster Lauf</label>
-                      <p className="text-sm font-semibold text-foreground">
-                        {calculateNextRun(settings.automation?.recurringRunTime ?? '03:00')}
-                      </p>
-                    </div>
-                  </div>
+                    </dd>
+                    <dt className="text-caption text-muted">Nächster Lauf</dt>
+                    <dd>{calculateNextRun(settings.automation?.recurringRunTime ?? '03:00')}</dd>
+                  </dl>
                 </div>
               )}
-            </div>
-          </div>
+            </SettingsCard>
+          </>
         );
       }
       case 'legal':
         return (
-          <div className="max-w-2xl space-y-8">
-            <div>
-              <h3 className="text-xl font-semibold mb-1">Rechtliches & Texte</h3>
-              <p className="text-muted text-sm">Steuerliche Einstellungen und Standardtexte.</p>
-            </div>
+          <>
+            <SettingsCard title="Rechtliches & Texte" subtitle="Steuerliche Einstellungen und Standardtexte.">
+              <Switch
+                label="Kleinunternehmerregelung anwenden"
+                description="Keine Umsatzsteuerberechnung gem. § 19 UStG."
+                checked={settings.legal.smallBusinessRule}
+                onCheckedChange={(checked) => updateNested('legal', 'smallBusinessRule', checked)}
+              />
+              <Switch
+                label="ZUGFeRD Export für Rechnungen aktivieren"
+                description={`Exportiert Rechnungen als ZUGFeRD EN16931 (Profil ${settings.eInvoice.profile}, Version ${settings.eInvoice.version}).`}
+                checked={settings.eInvoice.enabled}
+                onCheckedChange={(checked) => updateNested('eInvoice', 'enabled', checked)}
+              />
+              <div className="grid grid-cols-2 gap-3 border-t border-border pt-3">
+                <Select
+                  id="settings-sitzland-des-verkaufers"
+                  label="Sitzland des Verkäufers"
+                  fullWidth
+                  value={settings.legal.countryCode ?? 'DE'}
+                  onChange={(e) => updateNested('legal', 'countryCode', e.target.value)}
+                >
+                  <option value="DE">Deutschland</option>
+                  <option value="AT">Österreich</option>
+                  <option value="CH">Schweiz</option>
+                </Select>
+                <Input
+                  id="settings-standard-umsatzsteuer"
+                  label="Standard Umsatzsteuer (%)"
+                  type="number"
+                  fullWidth
+                  value={settings.legal.defaultVatRate}
+                  disabled={settings.legal.smallBusinessRule}
+                  onChange={(e) => updateNested('legal', 'defaultVatRate', parseFloat(e.target.value))}
+                />
+                <Input
+                  id="settings-zahlungsziel-tage"
+                  label="Zahlungsziel (Tage)"
+                  type="number"
+                  fullWidth
+                  value={settings.legal.paymentTermsDays}
+                  onChange={(e) => updateNested('legal', 'paymentTermsDays', parseInt(e.target.value))}
+                />
+              </div>
+            </SettingsCard>
 
-            <button type="button"
-              role="switch"
-              aria-checked={settings.legal.smallBusinessRule}
-              onClick={() => updateNested('legal', 'smallBusinessRule', !settings.legal.smallBusinessRule)}
-              className="w-full text-left bg-surface border-2 border-border-subtle rounded-xl p-6 transition-colors hover:border-control-border focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+            <SettingsCard
+              title="Berichtsprofil"
+              subtitle="Der aktuelle Berichts- und Steuerumfang unterstützt Deutschland. AT/CH-Berichte sind noch nicht verfügbar."
             >
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-4">
-                  <span
-                    aria-hidden="true"
-                    className={`w-6 h-6 rounded-full border-2 flex items-center justify-center ${settings.legal.smallBusinessRule ? 'bg-dark-base border-dark-base' : 'border-control-border'}`}
-                  >
-                    {settings.legal.smallBusinessRule && <CheckCircle size={14} className="text-success-text" />}
-                  </span>
-                  <div>
-                    <h4 className="font-semibold text-sm">Kleinunternehmerregelung anwenden</h4>
-                    <p className="text-xs text-muted mt-1">Keine Umsatzsteuerberechnung gem. § 19 UStG.</p>
-                  </div>
-                </div>
-              </div>
-            </button>
-
-            <div className="bg-surface border-2 border-border-subtle rounded-xl p-6 space-y-5">
-              <div>
-                <h4 className="font-semibold text-sm">Berichtsprofil</h4>
-                <p className="text-xs text-muted mt-1">Der aktuelle Berichts- und Steuerumfang unterstützt Deutschland. AT/CH-Berichte sind noch nicht verfügbar.</p>
-              </div>
-              <div className="grid grid-cols-2 gap-4">
-                <label className="block text-label text-foreground">
-                  Rechtsraum
-                  <select aria-label="Rechtsraum" value={reportingProfile.jurisdiction} onChange={(event) => updateReportingProfile('jurisdiction', event.target.value as 'DE')} className="px-3 h-10 hover:border-control-border-hover text-sm mt-2 w-full bg-surface border border-control-border rounded-control text-foreground">
-                    <option value="DE">Deutschland</option>
-                  </select>
-                </label>
-                <label className="block text-label text-foreground">
-                  Rechtsform
-                  <select aria-label="Rechtsform" value={reportingProfile.legalForm} onChange={(event) => updateReportingProfile('legalForm', event.target.value as BusinessReportingProfile['legalForm'])} className="px-3 h-10 hover:border-control-border-hover text-sm mt-2 w-full bg-surface border border-control-border rounded-control text-foreground">
-                    <option value="sole_proprietor">Einzelunternehmen</option>
-                    <option value="gmbh">GmbH</option>
-                  </select>
-                </label>
-                <div className="col-span-2 text-label text-foreground">
-                  Gewinnermittlung
-                  <div className="mt-2 flex items-start justify-between gap-3 rounded-control border border-border-subtle bg-surface-muted p-3">
+              <div className="grid grid-cols-2 gap-3">
+                <Select label="Rechtsraum" aria-label="Rechtsraum" fullWidth value={reportingProfile.jurisdiction} onChange={(event) => updateReportingProfile('jurisdiction', event.target.value as 'DE')}>
+                  <option value="DE">Deutschland</option>
+                </Select>
+                <Select label="Rechtsform" aria-label="Rechtsform" fullWidth value={reportingProfile.legalForm} onChange={(event) => updateReportingProfile('legalForm', event.target.value as BusinessReportingProfile['legalForm'])}>
+                  <option value="sole_proprietor">Einzelunternehmen</option>
+                  <option value="gmbh">GmbH</option>
+                </Select>
+                <div className="col-span-2">
+                  <p className="mb-1 text-caption font-medium text-foreground-secondary">Gewinnermittlung</p>
+                  <div className="flex items-start justify-between gap-3 rounded-control border border-border bg-surface-muted p-3">
                     <div className="min-w-0">
-                      <p data-testid="profit-determination-value" className="text-sm font-semibold text-foreground">{PROFIT_DETERMINATION_COPY[reportingProfile.profitDetermination].label}</p>
-                      <p className="mt-0.5 text-xs font-normal text-muted">{PROFIT_DETERMINATION_COPY[reportingProfile.profitDetermination].hint}</p>
+                      <p data-testid="profit-determination-value" className="text-label text-foreground">{PROFIT_DETERMINATION_COPY[reportingProfile.profitDetermination].label}</p>
+                      <p className="mt-0.5 text-caption text-muted">{PROFIT_DETERMINATION_COPY[reportingProfile.profitDetermination].hint}</p>
                     </div>
                     <Button variant="secondary" size="sm" onClick={() => setPendingProfitDetermination(reportingProfile.profitDetermination)}>
                       Ändern…
@@ -1510,287 +1319,171 @@ const SettingsForm: React.FC<{ initialSettings: AppSettings }> = ({ initialSetti
                   </div>
                 </div>
                 {reportingProfile.legalForm === 'gmbh' && (
-                  <label className="block text-label text-foreground">
-                    GmbH-Größe
-                    <select aria-label="GmbH-Größe" value={reportingProfile.hgbSizeClass ?? ''} onChange={(event) => updateReportingProfile('hgbSizeClass', event.target.value as 'micro' | 'small')} className="px-3 h-10 hover:border-control-border-hover text-sm mt-2 w-full bg-surface border border-control-border rounded-control text-foreground">
-                      <option value="micro">Micro</option>
-                      <option value="small">Small</option>
-                    </select>
-                  </label>
+                  <Select label="GmbH-Größe" aria-label="GmbH-Größe" fullWidth value={reportingProfile.hgbSizeClass ?? ''} onChange={(event) => updateReportingProfile('hgbSizeClass', event.target.value as 'micro' | 'small')}>
+                    <option value="micro">Micro</option>
+                    <option value="small">Small</option>
+                  </Select>
                 )}
                 {reportingProfile.profitDetermination === 'double_entry' && (
-                  <label className="block text-label text-foreground">
-                    Kontenrahmen
-                    <select aria-label="Kontenrahmen" value={reportingProfile.chart ?? ''} onChange={(event) => updateReportingProfile('chart', event.target.value as 'SKR03' | 'SKR04')} className="px-3 h-10 hover:border-control-border-hover text-sm mt-2 w-full bg-surface border border-control-border rounded-control text-foreground">
-                      <option value="SKR03">SKR03</option>
-                      <option value="SKR04">SKR04</option>
-                    </select>
-                  </label>
+                  <Select label="Kontenrahmen" aria-label="Kontenrahmen" fullWidth value={reportingProfile.chart ?? ''} onChange={(event) => updateReportingProfile('chart', event.target.value as 'SKR03' | 'SKR04')}>
+                    <option value="SKR03">SKR03</option>
+                    <option value="SKR04">SKR04</option>
+                  </Select>
                 )}
-                <label className="block text-label text-foreground">
-                  Wirtschaftsjahresbeginn (MM-TT)
-                  <input aria-label="Wirtschaftsjahresbeginn" value={reportingProfile.fiscalYearStart} onChange={(event) => updateReportingProfile('fiscalYearStart', event.target.value)} placeholder="01-01" className="px-3 h-10 hover:border-control-border-hover text-sm mt-2 w-full bg-surface border border-control-border rounded-control text-foreground" />
-                </label>
-                <label className="block text-label text-foreground">
-                  Umsatzsteuer-Methode
-                  <select aria-label="Umsatzsteuer-Methode" value={reportingProfile.vatMethod} onChange={(event) => updateReportingProfile('vatMethod', event.target.value as BusinessReportingProfile['vatMethod'])} className="px-3 h-10 hover:border-control-border-hover text-sm mt-2 w-full bg-surface border border-control-border rounded-control text-foreground">
-                    <option value="soll">Soll-Versteuerung</option>
-                    <option value="ist">Ist-Versteuerung</option>
-                  </select>
-                </label>
+                <Input label="Wirtschaftsjahresbeginn (MM-TT)" aria-label="Wirtschaftsjahresbeginn" fullWidth value={reportingProfile.fiscalYearStart} onChange={(event) => updateReportingProfile('fiscalYearStart', event.target.value)} placeholder="01-01" />
+                <Select label="Umsatzsteuer-Methode" aria-label="Umsatzsteuer-Methode" fullWidth value={reportingProfile.vatMethod} onChange={(event) => updateReportingProfile('vatMethod', event.target.value as BusinessReportingProfile['vatMethod'])}>
+                  <option value="soll">Soll-Versteuerung</option>
+                  <option value="ist">Ist-Versteuerung</option>
+                </Select>
               </div>
-              {reportingProfile.legalForm === 'gmbh' && reportingProfile.profitDetermination !== 'double_entry' && <p className="text-xs text-error-text">Eine GmbH muss mit doppelter Buchführung geführt werden.</p>}
-            </div>
+              {reportingProfile.legalForm === 'gmbh' && reportingProfile.profitDetermination !== 'double_entry' && <p className="text-caption text-error-text">Eine GmbH muss mit doppelter Buchführung geführt werden.</p>}
+            </SettingsCard>
 
-            <button type="button"
-              role="switch"
-              aria-checked={settings.eInvoice.enabled}
-              onClick={() => updateNested('eInvoice', 'enabled', !settings.eInvoice.enabled)}
-              className="w-full text-left bg-surface border-2 border-border-subtle rounded-xl p-6 transition-colors hover:border-control-border focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+            <SettingsCard
+              title="Umsatzsteuer-Basis (Übersicht)"
+              subtitle="Soll: basiert auf gestellten Rechnungen (Status ≠ Entwurf) nach Rechnungsdatum. Ist: basiert auf erfassten Zahlungen nach Zahlungsdatum."
             >
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-4">
-                  <span
-                    aria-hidden="true"
-                    className={`w-6 h-6 rounded-full border-2 flex items-center justify-center ${settings.eInvoice.enabled ? 'bg-dark-base border-dark-base' : 'border-control-border'}`}
-                  >
-                    {settings.eInvoice.enabled && <CheckCircle size={14} className="text-success-text" />}
-                  </span>
-                  <div>
-                    <h4 className="font-semibold text-sm">ZUGFeRD Export für Rechnungen aktivieren</h4>
-                    <p className="text-xs text-muted mt-1">
-                      Exportiert Rechnungen als ZUGFeRD EN16931 (Profil {settings.eInvoice.profile}, Version {settings.eInvoice.version}).
-                    </p>
-                  </div>
-                </div>
-              </div>
-            </button>
+              <SegmentedControl
+                aria-label="Umsatzsteuer-Basis"
+                className="self-start"
+                value={settings.legal.taxAccountingMethod ?? 'soll'}
+                onChange={(method) => updateNested('legal', 'taxAccountingMethod', method)}
+                options={[
+                  { value: 'soll', label: 'Soll' },
+                  { value: 'ist', label: 'Ist' },
+                ]}
+              />
+            </SettingsCard>
 
-            <div className="grid grid-cols-2 gap-6">
-              <div>
-                <label className="block mb-1.5 text-label text-foreground" htmlFor="settings-sitzland-des-verkaufers">Sitzland des Verkäufers</label>
-                <select
-                  id="settings-sitzland-des-verkaufers"
-                  value={settings.legal.countryCode ?? 'DE'}
-                  onChange={(e) => updateNested('legal', 'countryCode', e.target.value)}
- className="px-3 h-10 hover:border-control-border-hover text-sm w-full bg-surface border border-control-border rounded-control text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring transition-colors"
-                >
-                  <option value="DE">Deutschland</option>
-                  <option value="AT">Österreich</option>
-                  <option value="CH">Schweiz</option>
-                </select>
-              </div>
-              <div>
-                <label className="block mb-1.5 text-label text-foreground" htmlFor="settings-standard-umsatzsteuer">Standard Umsatzsteuer (%)</label>
-                <input
-                  id="settings-standard-umsatzsteuer"
-                  type="number"
-                  value={settings.legal.defaultVatRate}
-                  disabled={settings.legal.smallBusinessRule}
-                  onChange={(e) => updateNested('legal', 'defaultVatRate', parseFloat(e.target.value))}
- className="px-3 h-10 hover:border-control-border-hover text-sm w-full bg-surface border border-control-border rounded-control text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring transition-colors"
-                />
-              </div>
-              <div>
-                <label className="block mb-1.5 text-label text-foreground" htmlFor="settings-zahlungsziel-tage">Zahlungsziel (Tage)</label>
-                <input
-                  id="settings-zahlungsziel-tage"
-                  type="number"
-                  value={settings.legal.paymentTermsDays}
-                  onChange={(e) => updateNested('legal', 'paymentTermsDays', parseInt(e.target.value))}
- className="px-3 h-10 hover:border-control-border-hover text-sm w-full bg-surface border border-control-border rounded-control text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring transition-colors"
-                />
-              </div>
-            </div>
-
-            <div className="bg-surface border border-border-subtle rounded-xl p-6">
-              <h4 className="font-semibold text-sm mb-2">Umsatzsteuer-Basis (Übersicht)</h4>
-              <p className="text-xs text-muted mb-4">
-                Soll: basiert auf gestellten Rechnungen (Status ≠ Entwurf) nach Rechnungsdatum. Ist: basiert auf erfassten Zahlungen nach Zahlungsdatum.
-              </p>
-              <div className="flex items-center gap-2 bg-surface-muted/80 p-1.5 rounded-full border border-border w-fit">
-                {(['soll', 'ist'] as const).map((m) => (
-                  <button type="button"
-                    key={m}
-                    onClick={() => updateNested('legal', 'taxAccountingMethod', m)}
-                    className={`px-5 py-2 rounded-control text-xs font-semibold transition-colors ${
-                      (settings.legal.taxAccountingMethod ?? 'soll') === m
-                        ? 'bg-dark-base text-inverse-foreground shadow-md'
-                        : 'text-muted hover:bg-surface hover:text-foreground hover:shadow-sm'
-                    }`}
-                  >
-                    {m === 'soll' ? 'Soll' : 'Ist'}
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            <div className="border-t border-border-subtle pt-6">
-              <h4 className="font-semibold text-sm mb-4">Standardtexte</h4>
-
-              <div className="mb-6">
-                <label className="block mb-1.5 text-label text-foreground" htmlFor="settings-einleitungstext-standard">Einleitungstext (Standard)</label>
-                <textarea
-                  id="settings-einleitungstext-standard"
-                  value={settings.legal.defaultIntroText}
-                  onChange={(e) => updateNested('legal', 'defaultIntroText', e.target.value)}
-                  rows={3}
- className="px-3 py-2.5 hover:border-control-border-hover w-full bg-surface border border-control-border rounded-control text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring resize-none transition-colors"
-                />
-              </div>
-              <div>
-                <label className="block mb-1.5 text-label text-foreground" htmlFor="settings-fuzeilentext-zusatz">Fußzeilentext (Zusatz)</label>
-                <textarea
-                  id="settings-fuzeilentext-zusatz"
-                  value={settings.legal.defaultFooterText}
-                  onChange={(e) => updateNested('legal', 'defaultFooterText', e.target.value)}
-                  rows={2}
- className="px-3 py-2.5 hover:border-control-border-hover w-full bg-surface border border-control-border rounded-control text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring resize-none transition-colors"
-                />
-              </div>
-            </div>
-          </div>
+            <SettingsCard title="Standardtexte">
+              <Textarea
+                id="settings-einleitungstext-standard"
+                label="Einleitungstext (Standard)"
+                fullWidth
+                rows={3}
+                value={settings.legal.defaultIntroText}
+                onChange={(e) => updateNested('legal', 'defaultIntroText', e.target.value)}
+              />
+              <Textarea
+                id="settings-fuzeilentext-zusatz"
+                label="Fußzeilentext (Zusatz)"
+                fullWidth
+                rows={2}
+                value={settings.legal.defaultFooterText}
+                onChange={(e) => updateNested('legal', 'defaultFooterText', e.target.value)}
+              />
+            </SettingsCard>
+          </>
         );
       case 'portal':
         return (
-          <div className="max-w-2xl space-y-8">
-            <div>
-              <h3 className="text-xl font-semibold mb-1">Angebotsportal</h3>
-              <p className="text-muted text-sm">Angebotslinks veröffentlichen und Status synchronisieren.</p>
-            </div>
-
-            <div className="bg-surface border-2 border-border-subtle rounded-xl p-6 space-y-6">
-              <div>
-                <label className="block mb-1.5 text-label text-foreground" htmlFor="settings-portal-basis-url">Portal-Basis-URL</label>
-                <input
-                  id="settings-portal-basis-url"
-                  type="text"
-                  value={settings.portal.baseUrl}
-                  onChange={(e) => updateNested('portal', 'baseUrl', e.target.value)}
-                  placeholder="https://offers.example.com"
- className="px-3 h-10 hover:border-control-border-hover text-sm w-full bg-surface border border-control-border rounded-control text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring transition-colors"
-                />
-                <p className="text-xs text-muted mt-2">Tipp: Einrichtungsseite im Portal: <span className="font-mono">/admin/setup</span></p>
-              </div>
-
-              <div>
-                <label className="block mb-1.5 text-label text-foreground" htmlFor="settings-publish-api-schlussel-optional">Publish-API-Schlüssel (optional)</label>
-                <input
-                  id="settings-publish-api-schlussel-optional"
-                  type="password"
-                  value={portalApiKey}
-                  onChange={(e) => {
-                    setPortalApiKey(e.target.value);
-                    setPortalApiKeyTouched(true);
-                  }}
-                  placeholder={
-                    portalApiKeyConfigured
-                      ? '(im System-Schlüsselbund gespeichert, zum Ersetzen eingeben)'
-                      : '(im System-Schlüsselbund gespeichert)'
+          <SettingsCard title="Angebotsportal" subtitle="Angebotslinks veröffentlichen und Status synchronisieren.">
+            <Input
+              id="settings-portal-basis-url"
+              label="Portal-Basis-URL"
+              type="text"
+              fullWidth
+              value={settings.portal.baseUrl}
+              onChange={(e) => updateNested('portal', 'baseUrl', e.target.value)}
+              placeholder="https://offers.example.com"
+              hint={<>Tipp: Einrichtungsseite im Portal: <span className="font-mono">/admin/setup</span></>}
+            />
+            {isWebShell ? <p className="my-3 text-control text-muted">Der Publish-Schlüssel wird am Server vom Betreiber eingerichtet.</p> : <Input
+              id="settings-publish-api-schlussel-optional"
+              label="Publish-API-Schlüssel (optional)"
+              type="password"
+              fullWidth
+              value={portalApiKey}
+              onChange={(e) => {
+                setPortalApiKey(e.target.value);
+                setPortalApiKeyTouched(true);
+              }}
+              placeholder={
+                portalApiKeyConfigured
+                  ? '(im System-Schlüsselbund gespeichert, zum Ersetzen eingeben)'
+                  : '(im System-Schlüsselbund gespeichert)'
+              }
+            />}
+            <div className="flex flex-wrap items-center gap-3">
+              <Button
+                variant="secondary"
+                onClick={async () => {
+                  try {
+                    setPortalTestStatus('Verbindung wird geprüft ...');
+                    const baseUrl = settings.portal.baseUrl.trim();
+                    if (!baseUrl) throw new Error('Portal-Basis-URL fehlt.');
+                    const res = await ipc.portal.health({ baseUrl });
+                    setPortalTestStatus(res.ok ? `OK (${res.ts})` : 'Fehler');
+                  } catch (e) {
+                    setPortalTestStatus(`Fehler: ${String(e)}`);
                   }
- className="px-3 h-10 hover:border-control-border-hover text-sm w-full bg-surface border border-control-border rounded-control text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring transition-colors"
-                />
-              </div>
-
-              <div className="flex flex-col sm:flex-row gap-3 items-center">
-                <button type="button"
-                  onClick={async () => {
-                    try {
-                      setPortalTestStatus('Verbindung wird geprüft ...');
-                      const baseUrl = settings.portal.baseUrl.trim();
-                      if (!baseUrl) throw new Error('Portal-Basis-URL fehlt.');
-                      const res = await ipc.portal.health({ baseUrl });
-                      setPortalTestStatus(res.ok ? `OK (${res.ts})` : 'Fehler');
-                    } catch (e) {
-                      setPortalTestStatus(`Fehler: ${String(e)}`);
-                    }
-                  }}
-                  className="px-5 py-3 rounded-xl font-semibold bg-surface border border-border hover:bg-surface-muted transition-colors w-full sm:w-auto"
-                >
-                  Verbindung testen
-                </button>
-                <div className="flex-1 text-sm font-medium text-muted w-full">
-                  {portalTestStatus}
-                </div>
+                }}
+              >
+                Verbindung testen
+              </Button>
+              <div className="min-w-0 flex-1 text-control text-muted">
+                {portalTestStatus}
               </div>
             </div>
-          </div>
+          </SettingsCard>
         );
       case 'appearance':
         return <AppearanceSettings />;
       case 'system':
         return (
-          <div className="max-w-2xl space-y-10">
-            <div>
-              <h3 className="text-xl font-semibold mb-1">System</h3>
-              <p className="text-muted text-sm">Audit-Log, Backup und Wiederherstellung.</p>
-            </div>
+          <>
+            <CliAccessSection initialCode={cliCode} />
 
-            <div className="bg-surface-muted rounded-xl p-6 border border-border-subtle space-y-4">
-              <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-                <div>
-                  <h4 className="text-lg font-semibold text-foreground">Audit</h4>
-                  <p className="text-sm text-muted">Audit-Log prüfen und als CSV exportieren.</p>
-                </div>
-                <div className="flex gap-3">
-                  <Button
-                    variant="secondary"
-                    onClick={async () => {
-                      setAuditStatus('Audit-Log wird geprüft ...');
-                      try {
-                        const result = await ipc.audit.verify();
-                        const errorCount = result.errors.length;
-                        setAuditStatus(
-                          result.ok && errorCount === 0
-                            ? `Audit-Log ist intakt: ${formatCount(result.count, 'Eintrag', 'Einträge')} geprüft, keine Fehler.`
-                            : `Audit-Log ist nicht intakt: ${formatCount(result.count, 'Eintrag', 'Einträge')} geprüft, ${formatCount(errorCount, 'Fehler', 'Fehler')} gefunden.`,
-                        );
-                      } catch (e) {
-                        setAuditStatus(`Audit-Log-Prüfung fehlgeschlagen: ${e instanceof Error ? e.message : 'Unbekannter Fehler.'}`);
-                      }
-                    }}
-                  >
-                    Prüfen
-                  </Button>
-                  <Button
-                    variant="dark"
-                    onClick={async () => {
-                      setAuditStatus('Audit-Log wird exportiert ...');
-                      try {
-                        const csv = await ipc.audit.exportCsv();
-                        const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
-                        const url = URL.createObjectURL(blob);
-                        const a = document.createElement('a');
-                        a.href = url;
-                        a.download = `audit-${new Date().toISOString().slice(0, 10)}.csv`;
-                        document.body.appendChild(a);
-                        a.click();
-                        a.remove();
-                        URL.revokeObjectURL(url);
-                        setAuditStatus('Audit-Log als CSV exportiert.');
-                      } catch (e) {
-                        setAuditStatus(`CSV-Export fehlgeschlagen: ${e instanceof Error ? e.message : 'Unbekannter Fehler.'}`);
-                      }
-                    }}
-                  >
-                    CSV exportieren
-                  </Button>
-                </div>
+            <SettingsCard title="Audit" subtitle="Audit-Log prüfen und als CSV exportieren.">
+              <div className="flex flex-wrap gap-2">
+                <Button
+                  variant="secondary"
+                  onClick={async () => {
+                    setAuditStatus('Audit-Log wird geprüft ...');
+                    try {
+                      const result = await ipc.audit.verify();
+                      const errorCount = result.errors.length;
+                      setAuditStatus(
+                        result.ok && errorCount === 0
+                          ? `Audit-Log ist intakt: ${formatCount(result.count, 'Eintrag', 'Einträge')} geprüft, keine Fehler.`
+                          : `Audit-Log ist nicht intakt: ${formatCount(result.count, 'Eintrag', 'Einträge')} geprüft, ${formatCount(errorCount, 'Fehler', 'Fehler')} gefunden.`,
+                      );
+                    } catch (e) {
+                      setAuditStatus(`Audit-Log-Prüfung fehlgeschlagen: ${e instanceof Error ? e.message : 'Unbekannter Fehler.'}`);
+                    }
+                  }}
+                >
+                  Prüfen
+                </Button>
+                <Button
+                  variant="secondary"
+                  onClick={async () => {
+                    setAuditStatus('Audit-Log wird exportiert ...');
+                    try {
+                      const csv = await ipc.audit.exportCsv();
+                      const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
+                      const url = URL.createObjectURL(blob);
+                      const a = document.createElement('a');
+                      a.href = url;
+                      a.download = `audit-${new Date().toISOString().slice(0, 10)}.csv`;
+                      document.body.appendChild(a);
+                      a.click();
+                      a.remove();
+                      URL.revokeObjectURL(url);
+                      setAuditStatus('Audit-Log als CSV exportiert.');
+                    } catch (e) {
+                      setAuditStatus(`CSV-Export fehlgeschlagen: ${e instanceof Error ? e.message : 'Unbekannter Fehler.'}`);
+                    }
+                  }}
+                >
+                  CSV exportieren
+                </Button>
               </div>
-              <div className="text-sm font-medium text-muted w-full">
-                {auditStatus}
-              </div>
-            </div>
+              {auditStatus && <p className="text-control text-muted">{auditStatus}</p>}
+            </SettingsCard>
 
-            <div className="bg-surface-muted rounded-xl p-6 border border-border-subtle space-y-4">
-              <div>
-                <h4 className="text-lg font-semibold text-foreground">Backup</h4>
-                <p className="text-sm text-muted">
-                  Datenbank sichern oder aus einer Sicherung wiederherstellen.
-                </p>
-              </div>
-
-              <div className="flex flex-col sm:flex-row gap-3">
+            {isWebShell ? <SettingsCard title="Datensicherung im Serverbetrieb"><p className="text-control">Der Betreiber sichert die Serverdatenbank und Originalbelege. Wiederherstellungen werden am Server durchgeführt.</p></SettingsCard> : <SettingsCard title="Backup" subtitle="Datenbank sichern oder aus einer Sicherung wiederherstellen.">
+              <div className="flex flex-wrap items-center gap-2">
                 <Button
                   variant="secondary"
                   onClick={async () => {
@@ -1805,39 +1498,36 @@ const SettingsForm: React.FC<{ initialSettings: AppSettings }> = ({ initialSetti
                 >
                   Backup erstellen
                 </Button>
-
-                <div className="flex-1 flex gap-2">
-                  <input
+                <div className="min-w-48 flex-1">
+                  <Input
+                    fullWidth
                     value={backupPath}
                     onChange={(e) => setBackupPath(e.target.value)}
                     placeholder="Pfad zur .pglite.tar-Sicherung..."
- className="px-3 h-10 hover:border-control-border-hover flex-1 bg-surface border border-control-border rounded-control text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
                   />
-                  <Button
-                    variant="dark"
-                    onClick={async () => {
-                      setBackupStatus('Wiederherstellung wird durchgeführt ...');
-                      try {
-                        const res = await ipc.db.restore({ path: backupPath.trim() });
-                        const errorCount = res.verification.errors.length;
-                        const verificationStatus = res.verification.ok && errorCount === 0
-                          ? `Audit-Log geprüft: ${formatCount(res.verification.count, 'Eintrag', 'Einträge')}, keine Fehler.`
-                          : `Audit-Log geprüft: ${formatCount(res.verification.count, 'Eintrag', 'Einträge')}, ${formatCount(errorCount, 'Fehler', 'Fehler')} gefunden.`;
-                        setBackupStatus(`Wiederherstellung abgeschlossen: ${res.ok ? 'erfolgreich.' : 'mit Fehlern.'} ${verificationStatus}`);
-                      } catch (e) {
-                        setBackupStatus(`Wiederherstellung fehlgeschlagen: ${e instanceof Error ? e.message : 'Unbekannter Fehler.'}`);
-                      }
-                    }}
-                  >
-                    Wiederherstellen
-                  </Button>
                 </div>
+                <Button
+                  variant="secondary"
+                  onClick={async () => {
+                    setBackupStatus('Wiederherstellung wird durchgeführt ...');
+                    try {
+                      const res = await ipc.db.restore({ path: backupPath.trim() });
+                      const errorCount = res.verification.errors.length;
+                      const verificationStatus = res.verification.ok && errorCount === 0
+                        ? `Audit-Log geprüft: ${formatCount(res.verification.count, 'Eintrag', 'Einträge')}, keine Fehler.`
+                        : `Audit-Log geprüft: ${formatCount(res.verification.count, 'Eintrag', 'Einträge')}, ${formatCount(errorCount, 'Fehler', 'Fehler')} gefunden.`;
+                      setBackupStatus(`Wiederherstellung abgeschlossen: ${res.ok ? 'erfolgreich.' : 'mit Fehlern.'} ${verificationStatus}`);
+                    } catch (e) {
+                      setBackupStatus(`Wiederherstellung fehlgeschlagen: ${e instanceof Error ? e.message : 'Unbekannter Fehler.'}`);
+                    }
+                  }}
+                >
+                  Wiederherstellen
+                </Button>
               </div>
-              <div className="text-sm font-medium text-muted w-full">
-                {backupStatus}
-              </div>
-            </div>
-          </div>
+              {backupStatus && <p className="text-control text-muted">{backupStatus}</p>}
+            </SettingsCard>}
+          </>
         );
       default:
         return null;
@@ -1845,112 +1535,109 @@ const SettingsForm: React.FC<{ initialSettings: AppSettings }> = ({ initialSetti
   };
 
   return (
-    <div className="relative flex h-full gap-3 overflow-hidden px-1 pt-2">
-
-      {/* Sidebar Navigation. The card is capped at the page height, so the
-          nine tabs can outgrow it; the sidebar owns that overflow instead of
-          pushing the save footer below the fold. */}
-      <div className="flex w-64 shrink-0 flex-col overflow-y-auto rounded-card border border-border bg-surface px-3 py-5">
-        <h1 className="text-title px-2 mb-6">Einstellungen</h1>
-        <nav aria-label="Einstellungsbereiche" className="space-y-5">
-          {navGroups.map((group) => (
-            <div key={group.label}>
-              <p className="text-caption text-muted mb-1 px-2">{group.label}</p>
-              <div className="space-y-0.5">
-                {group.items.map((item) => {
-                  const Icon = item.icon;
-                  const isActive = activeTab === item.id;
-                  return (
-                    <button type="button"
-                      key={item.id}
-                      onClick={() => setActiveTab(item.id as SettingsTab)}
-                      aria-current={isActive ? 'page' : undefined}
-                      title={item.desc}
-                      className={`w-full h-9 text-left px-2 rounded-control flex items-center gap-2.5 text-label transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring ${
-                        isActive
-                          ? 'bg-surface text-foreground shadow-sm'
-                          : 'text-muted hover:bg-surface-sunken hover:text-foreground'
-                      }`}
-                    >
-                      <Icon size={16} aria-hidden="true" className="shrink-0" />
-                      <span className="truncate">{item.label}</span>
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
-          ))}
-        </nav>
-
-        <div className="mt-auto">
-             <p className="flex items-start gap-2 px-2 pt-6 text-caption text-muted">
-                 <AlertCircle size={14} className="shrink-0 mt-px" aria-hidden="true" />
-                 Alle Änderungen wirken sich sofort auf neue Dokumente aus.
-             </p>
-        </div>
-      </div>
-
-      {/* Main Content Form. The column stretches to the card height, so the save
-          footer sits at the card end and the tab body scrolls above it. */}
-      <div className="flex min-w-0 flex-1 flex-col overflow-hidden rounded-card border border-border bg-surface">
-         <div className="flex-1 overflow-y-auto px-6 py-6 lg:px-8">
-
-            {renderActiveTab()}
-
-         </div>
-
-         {/* Footer Actions */}
-         <div className="flex justify-end border-t border-border bg-surface px-6 py-3">
-             <Button
-                onClick={handleSave}
-                loading={setSettingsMutation.isPending}
-             >
-                 <Save size={16} aria-hidden="true" />
-                 Einstellungen speichern
-             </Button>
-         </div>
-      </div>
-
-      {/* Dunning Result Modal */}
-      <DunningResultModal
-        isOpen={showDunningResult}
-        onClose={() => setShowDunningResult(false)}
-        result={dunningResult}
+    <>
+      <PageHeader
+        title="Einstellungen"
+        actions={
+          <Button onClick={handleSave} loading={setSettingsMutation.isPending}>
+            <Save size={16} aria-hidden="true" />
+            Einstellungen speichern
+          </Button>
+        }
       />
+      <div className="relative flex h-full gap-3.5 overflow-hidden">
 
-      {/* Dunning Level Preview Modal */}
-      {previewLevelIndex !== null && (
-        <DunningLevelPreviewModal
-          isOpen={previewModalOpen}
-          onClose={() => setPreviewModalOpen(false)}
-          subject={settings.dunning.levels[previewLevelIndex]?.subject ?? ''}
-          text={settings.dunning.levels[previewLevelIndex]?.text ?? ''}
-          levelNumber={previewLevelIndex + 1}
+        {/* Sidebar Navigation. The page is capped at the content height, so the
+            tabs can outgrow it; the sidebar owns that overflow. */}
+        <div className="flex max-h-full w-56 shrink-0 flex-col self-start overflow-y-auto rounded-card border border-border bg-surface p-2.5">
+          <nav aria-label="Einstellungsbereiche" className="flex flex-col gap-3">
+            {navGroups.map((group) => (
+              <div key={group.label}>
+                <p className="mb-1 px-3 text-eyebrow uppercase text-muted">{group.label}</p>
+                <div className="flex flex-col gap-0.5">
+                  {group.items.map((item) => {
+                    const Icon = item.icon;
+                    const isActive = activeTab === item.id;
+                    return (
+                      <Button
+                        key={item.id}
+                        variant={isActive ? 'secondary' : 'ghost'}
+                        fullWidth
+                        static
+                        onClick={() => setActiveTab(item.id as SettingsTab)}
+                        aria-current={isActive ? 'page' : undefined}
+                        title={item.desc}
+                        className={`justify-start ${isActive ? 'bg-surface-sunken' : 'text-foreground-secondary'}`}
+                      >
+                        <Icon size={16} aria-hidden="true" className="shrink-0" />
+                        {item.label}
+                      </Button>
+                    );
+                  })}
+                </div>
+              </div>
+            ))}
+          </nav>
+
+          <p className="mt-3 flex items-start gap-2 border-t border-border px-3 pt-3 text-caption text-muted">
+            <AlertCircle size={14} className="mt-px shrink-0" aria-hidden="true" />
+            Alle Änderungen wirken sich sofort auf neue Dokumente aus.
+          </p>
+        </div>
+
+        {/* A grid of section cards; it scrolls on its own so the section list stays in view. */}
+        <div className="min-w-0 flex-1 overflow-y-auto">
+          <div className="grid grid-cols-[repeat(auto-fit,minmax(340px,1fr))] items-start gap-3.5">
+            {renderActiveTab()}
+          </div>
+        </div>
+
+        <DunningResultModal
+          isOpen={showDunningResult}
+          onClose={() => setShowDunningResult(false)}
+          result={dunningResult}
         />
-      )}
 
-      <ConfirmDialog
-        open={pendingProfitDetermination !== null}
-        title="Gewinnermittlung ändern"
-        description="Bereits erfasste Buchungen und Auswertungen werden nicht umgerechnet. Sprich die Umstellung mit deiner Steuerberatung ab."
-        confirmLabel="Umstellen"
-        details={pendingProfitDetermination !== null && (
-          <label className="block text-label text-foreground">
-            Gewinnermittlung
-            <select aria-label="Gewinnermittlung" value={pendingProfitDetermination} onChange={(event) => setPendingProfitDetermination(event.target.value as BusinessReportingProfile['profitDetermination'])} className="px-3 h-10 hover:border-control-border-hover text-sm mt-2 w-full bg-surface border border-control-border rounded-control text-foreground">
+        {previewLevelIndex !== null && (
+          <DunningLevelPreviewModal
+            isOpen={previewModalOpen}
+            onClose={() => setPreviewModalOpen(false)}
+            subject={settings.dunning.levels[previewLevelIndex]?.subject ?? ''}
+            text={settings.dunning.levels[previewLevelIndex]?.text ?? ''}
+            levelNumber={previewLevelIndex + 1}
+          />
+        )}
+
+        <ConfirmDialog
+          open={pendingProfitDetermination !== null}
+          title="Gewinnermittlung ändern"
+          description="Bereits erfasste Buchungen und Auswertungen werden nicht umgerechnet. Sprich die Umstellung mit deiner Steuerberatung ab."
+          confirmLabel="Umstellen"
+          details={pendingProfitDetermination !== null && (
+            <Select
+              label="Gewinnermittlung"
+              aria-label="Gewinnermittlung"
+              fullWidth
+              value={pendingProfitDetermination}
+              onChange={(event) => setPendingProfitDetermination(event.target.value as BusinessReportingProfile['profitDetermination'])}
+              hint={
+                <>
+                  {PROFIT_DETERMINATION_COPY[pendingProfitDetermination].hint}
+                  {reportingProfile.legalForm === 'gmbh' && <span className="mt-1 block">Eine GmbH muss mit doppelter Buchführung geführt werden.</span>}
+                </>
+              }
+            >
               <option value="eur" disabled={reportingProfile.legalForm === 'gmbh'}>EÜR</option>
               <option value="double_entry">Doppelte Buchführung</option>
-            </select>
-            <span className="mt-2 block text-xs font-normal text-muted">{PROFIT_DETERMINATION_COPY[pendingProfitDetermination].hint}</span>
-            {reportingProfile.legalForm === 'gmbh' && <span className="mt-1 block text-xs font-normal text-muted">Eine GmbH muss mit doppelter Buchführung geführt werden.</span>}
-          </label>
-        )}
-        onConfirm={() => {
-          if (pendingProfitDetermination) updateReportingProfile('profitDetermination', pendingProfitDetermination);
-          setPendingProfitDetermination(null);
-        }}
-        onCancel={() => setPendingProfitDetermination(null)}
-      />
-    </div>
+            </Select>
+          )}
+          onConfirm={() => {
+            if (pendingProfitDetermination) updateReportingProfile('profitDetermination', pendingProfitDetermination);
+            setPendingProfitDetermination(null);
+          }}
+          onCancel={() => setPendingProfitDetermination(null)}
+        />
+      </div>
+    </>
   );
 };

@@ -97,9 +97,9 @@ export const BarChart: React.FC<BarChartProps> = ({
           <svg width={width} height={height} role="img" aria-label={ariaLabel} className="block overflow-visible">
             {paired && (
               <defs>
-                <pattern id={patternId} width="5" height="5" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
-                  <rect width="5" height="5" className="fill-surface-sunken" />
-                  <line x1="0" y1="0" x2="0" y2="5" className="stroke-control-border" strokeWidth="2" />
+                <pattern id={patternId} width="7" height="7" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
+                  <rect width="7" height="7" className="fill-surface-sunken" />
+                  <line x1="0" y1="0" x2="0" y2="7" className="stroke-border-strong" strokeWidth="3" />
                 </pattern>
               </defs>
             )}
@@ -108,8 +108,8 @@ export const BarChart: React.FC<BarChartProps> = ({
               const tickY = y(value);
               return (
                 <g key={index}>
-                  <line x1={AXIS_WIDTH} x2={width} y1={tickY} y2={tickY} className={index === 0 ? 'stroke-control-border' : 'stroke-border'} strokeWidth={1} shapeRendering="crispEdges" />
-                  <text x={AXIS_WIDTH - 8} y={tickY} dy="0.32em" textAnchor="end" className="fill-muted text-caption tabular-nums">
+                  <line x1={AXIS_WIDTH} x2={width} y1={tickY} y2={tickY} className="stroke-border" strokeWidth={1} shapeRendering="crispEdges" />
+                  <text x={AXIS_WIDTH - 8} y={tickY} dy="0.32em" textAnchor="end" className="fill-muted text-micro tabular-nums">
                     {formatAxis(value)}
                   </text>
                 </g>
@@ -129,25 +129,20 @@ export const BarChart: React.FC<BarChartProps> = ({
                     <path
                       d={barPath(center + 1, compareTop, barWidth, compareHeight)}
                       fill={`url(#${patternId})`}
-                      className="stroke-control-border"
-                      strokeWidth={1}
                     />
                   )}
                   {barHeight > 0 && (
                     <path
                       d={barPath(primaryX, top, barWidth, barHeight)}
-                      className={cn(
-                        'transition-[fill] duration-(--dur-micro) motion-reduce:transition-none',
-                        datum.highlight ? 'fill-accent stroke-foreground' : active ? 'fill-foreground' : paired ? 'fill-ink-600' : 'fill-ink-400',
-                      )}
-                      strokeWidth={datum.highlight ? 1 : 0}
+                      className={datum.highlight ? 'fill-accent stroke-foreground' : 'fill-foreground'}
+                      strokeWidth={datum.highlight ? 1.5 : 0}
                     />
                   )}
                   <text
                     x={center}
                     y={height - 6}
                     textAnchor="middle"
-                    className={cn('text-caption', datum.highlight || active ? 'fill-foreground font-medium' : 'fill-muted')}
+                    className={cn('text-micro', datum.highlight || active ? 'fill-foreground font-semibold' : 'fill-muted')}
                   >
                     {datum.label}
                   </text>
@@ -166,9 +161,9 @@ export const BarChart: React.FC<BarChartProps> = ({
             })}
             {reference && reference.value > 0 && (
               <g aria-hidden="true">
-                <line x1={AXIS_WIDTH} x2={width} y1={y(reference.value)} y2={y(reference.value)} className="stroke-foreground" strokeWidth={1} strokeDasharray="4 4" />
+                <line x1={AXIS_WIDTH} x2={width} y1={y(reference.value)} y2={y(reference.value)} className="stroke-foreground opacity-50" strokeWidth={1.5} strokeDasharray="5 4" />
                 {/* Left end: the right end is where the current, highlighted period sits. */}
-                <text x={AXIS_WIDTH + 4} y={y(reference.value) - 5} textAnchor="start" className="fill-foreground text-caption font-medium">
+                <text x={AXIS_WIDTH + 4} y={y(reference.value) - 5} textAnchor="start" className="fill-muted text-micro tabular-nums">
                   {reference.label}
                 </text>
               </g>
@@ -178,26 +173,22 @@ export const BarChart: React.FC<BarChartProps> = ({
         {hoveredDatum && hovered !== null && (
           <div
             aria-hidden="true"
-            className="pointer-events-none absolute z-10 -translate-x-1/2 -translate-y-full whitespace-nowrap rounded-sm bg-surface-inverse px-2 py-1 text-caption text-inverse-foreground"
-            style={{ left: AXIS_WIDTH + band * hovered + band / 2, top: y(hoveredDatum.value) - 6 }}
+            className="pointer-events-none absolute z-10 flex -translate-x-1/2 -translate-y-full flex-col gap-0.5 whitespace-nowrap rounded-control border border-border-toast bg-surface-toast px-2.75 py-2 text-caption text-inverse-foreground shadow-lift"
+            style={{ left: AXIS_WIDTH + band * hovered + band / 2, top: y(Math.max(hoveredDatum.value, hoveredDatum.compare ?? 0)) - 12 }}
           >
-            <span className="text-inverse-muted">{hoveredDatum.longLabel ?? hoveredDatum.label}</span>{' '}
-            <span className="font-medium tabular-nums">{formatValue(hoveredDatum.value)}</span>
+            <strong className="text-control font-semibold">{hoveredDatum.longLabel ?? hoveredDatum.label}</strong>
+            <span className="tabular-nums text-ink-200">{paired ? `${valueHeader} ` : ''}{formatValue(hoveredDatum.value)}</span>
             {paired && hoveredDatum.compare !== undefined && (
-              <>
-                {' · '}
-                <span className="text-inverse-muted">{compareHeader}</span>{' '}
-                <span className="font-medium tabular-nums">{formatValue(hoveredDatum.compare)}</span>
-              </>
+              <span className="tabular-nums text-ink-200">{compareHeader} {formatValue(hoveredDatum.compare)}</span>
             )}
           </div>
         )}
       </div>
       {paired && (
-        <figcaption aria-hidden="true" className="mt-2 flex flex-wrap gap-3 text-caption text-muted">
-          <span className="inline-flex items-center gap-1.5"><span className="size-2.5 rounded-xs bg-ink-600" />{valueHeader}</span>
+        <figcaption aria-hidden="true" className="mt-3 flex flex-wrap justify-center gap-3 text-caption text-foreground-secondary">
+          <span className="inline-flex items-center gap-1.5"><span className="size-2.25 rounded-xs bg-foreground" />{valueHeader}</span>
           <span className="inline-flex items-center gap-1.5">
-            <span className="size-2.5 rounded-xs border border-control-border bg-[repeating-linear-gradient(135deg,var(--color-surface-sunken)_0_2px,var(--color-control-border)_2px_3px)]" />
+            <span className="size-2.25 rounded-xs bg-surface-sunken outline outline-1 outline-border-strong" />
             {compareHeader}
           </span>
           {reference && reference.value > 0 && (

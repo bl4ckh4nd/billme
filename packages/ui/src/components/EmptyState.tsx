@@ -25,13 +25,13 @@ export const EmptyState: React.FC<EmptyStateProps> = ({
 }) => (
   <div
     className={cn(
-      'flex flex-col items-center justify-center gap-1.5 rounded-card bg-surface-muted px-6 py-10 text-center',
+      'flex flex-col items-center justify-center gap-2 px-5 py-10 text-center',
       className,
     )}
   >
-    <p className="text-sm font-medium text-foreground">{title}</p>
-    {description && <p className="max-w-md text-caption text-muted">{description}</p>}
-    {action && <div className="mt-2">{action}</div>}
+    <p className="text-section text-foreground">{title}</p>
+    {description && <p className="max-w-[40ch] text-control text-muted">{description}</p>}
+    {action && <div className="mt-1">{action}</div>}
   </div>
 );
 

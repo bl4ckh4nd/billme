@@ -15,19 +15,19 @@ export interface ButtonProps extends React.ButtonHTMLAttributes<HTMLButtonElemen
 }
 
 const variantStyles: Record<ButtonVariant, string> = {
-  primary: 'bg-accent text-accent-foreground hover:bg-accent-hover shadow-button focus-visible:outline-focus-ring disabled:shadow-none disabled:border disabled:border-disabled-foreground disabled:bg-disabled-surface disabled:text-disabled-foreground',
-  secondary: 'bg-surface border border-control-border text-foreground hover:bg-surface-muted hover:border-control-border-hover focus-visible:outline-focus-ring disabled:border-disabled-foreground disabled:bg-disabled-surface disabled:text-disabled-foreground',
-  danger: 'bg-error text-background hover:bg-error/90 shadow-xs focus-visible:outline-focus-ring disabled:shadow-none disabled:border disabled:border-disabled-foreground disabled:bg-disabled-surface disabled:text-disabled-foreground',
-  ghost: 'bg-transparent text-foreground hover:bg-surface-sunken focus-visible:outline-focus-ring disabled:bg-disabled-surface disabled:text-disabled-foreground',
-  dark: 'bg-surface-inverse text-inverse-foreground hover:bg-surface-inverse-raised shadow-button-inverse focus-visible:outline-focus-ring disabled:shadow-none disabled:border disabled:border-dark-muted disabled:bg-dark-2 disabled:text-dark-muted',
+  primary: 'border-accent bg-accent font-semibold text-accent-foreground hover:border-accent-hover hover:bg-accent-hover focus-visible:outline-focus-ring',
+  secondary: 'border-border-strong bg-surface text-foreground hover:border-control-border hover:bg-surface-sunken focus-visible:outline-focus-ring',
+  danger: 'border-error-border bg-error-bg text-error-text hover:border-control-border hover:bg-surface-sunken focus-visible:outline-focus-ring',
+  ghost: 'bg-transparent text-foreground hover:bg-surface-sunken focus-visible:outline-focus-ring',
+  dark: 'bg-surface-inverse text-inverse-foreground hover:bg-surface-inverse-raised shadow-button-inverse focus-visible:outline-focus-ring disabled:shadow-none',
 };
 
 const sizeStyles: Record<ButtonSize, string> = {
-  sm: 'h-8 px-3 text-sm',
-  md: 'h-10 px-4 text-sm',
+  sm: 'h-7 px-2.25 text-caption',
+  md: 'h-8.5 px-3',
   lg: 'h-11 px-5 text-sm',
-  icon: 'size-10',
-  'icon-sm': 'size-8',
+  icon: 'size-8.5',
+  'icon-sm': 'size-7',
 };
 
 export const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
@@ -53,19 +53,20 @@ export const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
         disabled={isDisabled}
         aria-busy={loading ? true : ariaBusy}
         className={cn(
-          'relative inline-flex shrink-0 items-center justify-center rounded-control font-semibold transition-[color,background-color,border-color,box-shadow,scale] duration-(--dur-micro) motion-reduce:transition-none focus-visible:outline-2 focus-visible:outline-offset-2',
+          'relative inline-flex shrink-0 items-center justify-center rounded-control border border-transparent text-label font-medium transition-[color,background-color,border-color,box-shadow,scale] duration-(--dur-micro) motion-reduce:transition-none focus-visible:outline-2 focus-visible:outline-offset-2',
           !isStatic && 'motion-safe:active:scale-[0.96]',
           variantStyles[variant],
           sizeStyles[size],
           fullWidth && 'w-full',
           isDisabled && 'cursor-not-allowed active:scale-100',
+          disabled && 'opacity-50',
           className
         )}
         {...props}
       >
         {/* The label row is its own flex line: Tailwind's preflight makes svg
             block-level, so an inline icon would otherwise stack above the text. */}
-        <span className={cn('inline-flex items-center gap-2 whitespace-nowrap', loading && 'opacity-0')}>{children}</span>
+        <span className={cn('inline-flex items-center gap-1.75 whitespace-nowrap', loading && 'opacity-0')}>{children}</span>
         {loading && (
           <span
             aria-hidden="true"

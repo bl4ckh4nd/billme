@@ -25,6 +25,7 @@ export type LiteHttpApiOptions = {
   /** Test seam for asserting fail-closed behavior on unknown contract keys. */
   onInvoke?: (invoke: IpcInvoke) => void;
   fetch?: typeof globalThis.fetch;
+  downloadFile?: (blob: Blob, fileName: string) => void;
 };
 
 const PRODUCT_PREFIX = '/api/v1/lite';
@@ -51,7 +52,7 @@ const eurTaxYearSchema = z.union([
 
 const serverEurClassificationSchema = z.object({
   id: z.string(),
-  sourceType: z.enum(['transaction', 'invoice']),
+  sourceType: z.enum(['transaction', 'invoice', 'manual']),
   sourceId: z.string(),
   taxYear: eurTaxYearSchema,
   eurLineId: z.string().optional(),
@@ -85,7 +86,7 @@ const serverEurReportSchema = z.object({
 });
 
 const serverEurItemSchema = z.object({
-  sourceType: z.enum(['transaction', 'invoice']),
+  sourceType: z.enum(['transaction', 'invoice', 'manual']),
   sourceId: z.string(),
   date: z.string(),
   amountGross: z.number(),
@@ -149,6 +150,7 @@ export const createLiteHttpBillmeApi = ({
   onAuthFailure,
   onInvoke,
   fetch: fetchImpl = globalThis.fetch,
+  downloadFile,
 }: LiteHttpApiOptions): LiteHttpBillmeApi => {
   if (!fetchImpl) {
     throw new Error('Für den Lite-HTTP-Client ist keine Fetch-Implementierung verfügbar.');
@@ -245,6 +247,25 @@ export const createLiteHttpBillmeApi = ({
       throw new Error(`Die Lite-HTTP-Laufzeit unterstützt die IPC-Route ${String(key)} nicht.`);
     }
     const args = ipcRoutes[key].args.parse(rawArgs) as IpcArgs<K>;
+    if (downloadFile && (key === 'pdf:export' || key === 'eur:exportPdf')) {
+      const connection = await resolveHttpConnection();
+      if (!connection) throw new Error('Der Billme-Server ist noch nicht verfügbar.');
+      const pdf = args as IpcArgs<'pdf:export'>;
+      const eur = args as IpcArgs<'eur:exportPdf'>;
+      const path = key === 'pdf:export'
+        ? `${PRODUCT_PREFIX}/documents/${pdf.kind}/${encodeURIComponent(pdf.id)}/pdf${pdf.level ? `?level=${pdf.level}` : ''}`
+        : `${PRODUCT_PREFIX}/reports/eur/pdf?taxYear=${eurReportQuery(eur).taxYear}`;
+      const response = await fetchImpl(`${normalizeBaseUrl(connection.baseUrl)}${path}`, { headers: connection.auth.mode === 'embedded' ? { 'x-billme-local-token': connection.auth.token } : { authorization: `Bearer ${connection.auth.token}` } });
+      if (response.status === 401) onAuthFailure?.();
+      if (!response.ok) throw parseResponseError(response.status, await response.json().catch(() => null));
+      const blob = await response.blob();
+      if (await blob.slice(0, 5).text() !== '%PDF-') throw new Error('Der Server hat keine gültige PDF-Datei geliefert.');
+      const encodedName = /filename\*=UTF-8''([^;]+)/i.exec(response.headers.get('content-disposition') ?? '')?.[1];
+      let fileName = key === 'pdf:export' ? `${pdf.kind}-${pdf.id}.pdf` : `anlage-euer-${eur.taxYear}.pdf`;
+      if (encodedName) { try { fileName = decodeURIComponent(encodedName).replace(/[\\/\x00-\x1f]/g, '_'); } catch { /* use fallback name */ } }
+      downloadFile(blob, fileName);
+      return parseResult(key, { path: fileName });
+    }
 
     if (embeddedConnectionResolver && isServerOwnedRoute(key)) {
       const connection = await resolveHttpConnection();
@@ -264,7 +285,7 @@ export const createLiteHttpBillmeApi = ({
       }
       case 'eur:listItems': {
         const parsed = args as IpcArgs<'eur:listItems'>;
-        const query = eurReportQuery(parsed);
+        const query = { ...eurReportQuery(parsed), status: parsed.status, flowType: parsed.flowType, sourceType: parsed.sourceType, search: parsed.search, accountId: parsed.accountId, onlyUnclassified: parsed.onlyUnclassified, limit: parsed.limit, offset: parsed.offset };
         const items = await requestJson('GET', `${PRODUCT_PREFIX}/reports/eur/items`, z.array(serverEurItemSchema), undefined, query);
         if (items.some((item) => item.classification && item.classification.taxYear !== query.taxYear)) {
           throw new Error(`EÜR-Klassifikation gehört nicht zum angeforderten Steuerjahr ${query.taxYear}.`);

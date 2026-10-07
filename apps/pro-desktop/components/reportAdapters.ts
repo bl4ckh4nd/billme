@@ -148,8 +148,8 @@ export const mapEngineReport = (report: EngineReport | EngineReportPayload): Guv
       result: report.totals.operatingResult,
     }
     : {
-      revenue: rows.filter((row) => row.amountCurrent > 0).reduce((sum, row) => sum + row.amountCurrent, 0),
-      expenses: Math.abs(rows.filter((row) => row.amountCurrent < 0).reduce((sum, row) => sum + row.amountCurrent, 0)),
+      revenue: report.rows.filter((row) => row.position === 'revenue').reduce((sum, row) => sum + row.amount, 0),
+      expenses: Math.abs(report.rows.filter((row) => row.kind === 'line' && row.amount < 0).reduce((sum, row) => sum + row.amount, 0)),
       result: 'netResult' in report ? report.netResult : rows.reduce((sum, row) => sum + row.amountCurrent, 0),
     };
   const result = 'netResult' in report ? report.netResult : totals.result;

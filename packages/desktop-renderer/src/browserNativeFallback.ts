@@ -42,8 +42,27 @@ export const createBrowserNativeFallback = <TInvoke extends AnyInvoke>(
         window.open(url, '_blank', 'noopener,noreferrer');
         return parseResult(key, { ok: true as const });
       }
-      case 'dialog:pickCsv':
-        return parseResult(key, { path: null });
+      case 'dialog:pickCsv': {
+        const file = await new Promise<File | null>((resolve) => {
+          const input = document.createElement('input');
+          input.type = 'file';
+          input.accept = '.csv,text/csv';
+          input.addEventListener('change', () => { resolve(input.files?.[0] ?? null); input.remove(); }, { once: true });
+          input.addEventListener('cancel', () => { resolve(null); input.remove(); }, { once: true });
+          input.hidden = true;
+          document.body.append(input);
+          input.click();
+        });
+        if (!file) return parseResult(key, { path: null });
+        if (file.size > 20 * 1024 * 1024) throw new Error('CSV-Dateien dürfen höchstens 20 MB groß sein.');
+        const contentBase64 = await new Promise<string>((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = () => resolve(String(reader.result).split(',')[1] ?? '');
+          reader.onerror = () => reject(new Error('Datei konnte nicht gelesen werden.'));
+          reader.readAsDataURL(file);
+        });
+        return parseResult(key, { path: null, fileName: file.name, contentBase64 });
+      }
       case 'secrets:get':
         return parseResult(key, null);
       case 'secrets:has':

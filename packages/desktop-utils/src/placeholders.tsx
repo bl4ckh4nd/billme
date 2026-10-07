@@ -1,4 +1,4 @@
-import { calculateInvoiceTaxSnapshot } from '@billme/server-core/services';
+import { calculateInvoiceTaxSnapshot, servicePeriodRange } from '@billme/server-core/services';
 import type { BillingDocumentLine } from '@billme/server-core/domain';
 import { getInvoiceDocumentLabel, type InvoiceDocumentKind } from '@billme/desktop-core/types';
 
@@ -178,6 +178,12 @@ const formatDate = (dateString?: string) => {
   return new Date(dateString).toLocaleDateString('de-DE', { day: '2-digit', month: '2-digit', year: 'numeric' });
 };
 
+/** A recurring invoice's period prints as "01.10.2026 bis 31.10.2026". */
+const formatServicePeriod = (value?: string) => {
+  const range = servicePeriodRange(value);
+  return range ? `${formatDate(range.start)} bis ${formatDate(range.end)}` : value ? formatDate(value) : '';
+};
+
 const formatCurrency = (amount: number) => {
   return new Intl.NumberFormat('de-DE', { style: 'currency', currency: 'EUR' }).format(amount);
 };
@@ -257,7 +263,7 @@ export const replacePlaceholders = (
     'invoice.documentLabel': getInvoiceDocumentLabel(invoice.documentKind),
     'invoice.date': formatDate(invoice.date),
     'invoice.dueDate': formatDate(invoice.dueDate),
-    'invoice.servicePeriod': invoice.servicePeriod ? formatDate(invoice.servicePeriod) : formatDate(invoice.date),
+    'invoice.servicePeriod': formatServicePeriod(invoice.servicePeriod) || formatDate(invoice.date),
     'client.company': invoice.client,
     'client.number': invoice.clientNumber || '',
     'client.address': invoice.clientAddress || '',

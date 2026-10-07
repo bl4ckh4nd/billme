@@ -926,6 +926,18 @@ describe('VAT preparation', () => {
       }
     });
 
+    test('a service period counts in the month it ends (Soll), like a subscription invoice billed at its start', async () => {
+      const period = await issueDated(h.api, { client: 'Abo-Zeitraum', date: '2026-11-20', servicePeriod: '2026-11-20 bis 2026-12-19', items: [line('Wartung', 100, 19)] });
+      await setMethod('soll');
+      try {
+        assert.ok(!(await month(11)).sources.some((s) => s.sourceId === period.id), 'not yet in the month the period starts');
+        assert.ok((await month(12)).sources.some((s) => s.sourceId === period.id && s.date === '2026-12-19'), 'in the month the period ends');
+        assert.ok(!(await month(12)).issues.some((i) => i.code === 'SERVICE_DATE_REQUIRED' && i.sourceId === period.id));
+      } finally {
+        await setMethod('ist');
+      }
+    });
+
     test('the service date decides the month under Soll; an invoice issued without one is dated by the invoice date', async () => {
       const noServiceDate = await issueDated(h.api, { client: 'Ohne Leistungsdatum', date: '2026-03-03', items: [line('Beratung', 100, 19)] });
       assert.equal(noServiceDate.servicePeriod, '2026-03-03', 'issuing stores the invoice date as the service date (§14 Abs. 4 Nr. 6 UStG)');

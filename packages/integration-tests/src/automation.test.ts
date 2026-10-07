@@ -9,7 +9,8 @@ import type { BillmeApi } from '@billme/desktop-contracts/api';
 import { createLiteHttpBillmeApi } from '@billme/desktop-services/liteHttpApi';
 import { createProHttpBillmeApi } from '@billme/desktop-services/proHttpApi';
 import { PRODUCTS, startProduct, type LiteHarness, type Product } from './harness.js';
-import { addDays, draftInvoice, issueInvoice, newClient, today } from './fixtures.js';
+import { localIsoDate } from '@billme/server-core';
+import { addDays, asSmallBusiness, draftInvoice, issueInvoice, newClient, today } from './fixtures.js';
 
 /**
  * Automation end to end through the Lite desktop backend: recurring invoices,
@@ -19,7 +20,9 @@ import { addDays, draftInvoice, issueInvoice, newClient, today } from './fixture
  * - recurring profiles: empty, zero-value or malformed profiles saved, a
  *   profile for a client that does not exist, changes and deletions not audited
  * - recurring runs: wrong number, date, due date, amount, tax mode, recipient
- *   or project on the generated invoice; the next run wrong for an interval
+ *   or project on the generated invoice; a service date instead of the billed
+ *   period, a catch-up run billing the run day twice instead of each missed
+ *   period, VAT on a Kleinunternehmer's subscription invoice; the next run wrong for an interval
  *   (month ends, leap years); the billing day drifting after a short month;
  *   an end date ignored or a profile never switched off; a second or a
  *   concurrent run creating the invoice twice; inactive profiles or inactive
@@ -118,6 +121,14 @@ const parseCsv = (text: string): string[][] => text.replace(/^﻿/, '').split('\
  * invoice. ponytail: Pro does not book it in the journal yet; that needs its own Mahngebühr entry and open item.
  */
 const chargedFee = (_product: Product, fee: number) => fee;
+
+/** Last day of the month-long period starting on `start` (local calendar, like the recurring run). */
+const monthEnd = (start: string) => {
+  const end = new Date(`${start}T12:00:00`);
+  end.setMonth(end.getMonth() + 1);
+  end.setDate(end.getDate() - 1);
+  return localIsoDate(end);
+};
 
 const level = (id: number, daysAfterDueDate: number, fee: number, text = `Invoice %N for %K is %T days late, fee %F.`) => ({
   id, name: id === 1 ? 'Zahlungserinnerung' : `${id - 1}. Mahnung`, enabled: true, daysAfterDueDate, fee, subject: `Level ${id} %N`, text,
@@ -278,7 +289,7 @@ for (const product of PRODUCTS) describe(`automation (${product})`, () => {
       assert.equal(invoice.number, `RE-${new Date().getFullYear()}-${String(counter).padStart(3, '0')}`);
       assert.equal(invoice.date, today());
       assert.equal(invoice.dueDate, addDays(today(), paymentTerms));
-      assert.equal(invoice.servicePeriod, today());
+      assert.equal(invoice.servicePeriod, `${today()} bis ${monthEnd(today())}`, 'a subscription bills its whole period');
       assert.equal(invoice.client, owner.company);
       assert.equal(invoice.clientNumber, owner.customerNumber);
       assert.equal(invoice.clientEmail, 'buchhaltung@abo.example');
@@ -434,6 +445,30 @@ for (const product of PRODUCTS) describe(`automation (${product})`, () => {
       assert.deepEqual(await h.api.recurring.manualRun(), { success: true, result: { generated: 0, deactivated: 0, errors: [] } });
       assert.equal((await invoicesOf(owner.id)).length, 1);
       assert.deepEqual(await profileOf(body.id), after, 'the profile did not move again');
+    });
+
+    test('a catch-up run bills each missed period once, dated today', async () => {
+      const owner = await billingClient();
+      // Two periods are due; after two runs the next one lies in the future, so later tests see no due profile.
+      const start = addDays(today(), -45);
+      const body = profileBody(owner.id, { name: 'Nachholen', nextRun: start });
+      await saveProfile(body);
+      await h.api.recurring.manualRun();
+      const second = (await profileOf(body.id)).nextRun;
+      await h.api.recurring.manualRun();
+      assert.ok((await profileOf(body.id)).nextRun > today(), 'nothing is due any more');
+      const periods = (await invoicesOf(owner.id)).map((invoice) => [invoice.date, invoice.servicePeriod]).sort();
+      assert.deepEqual(periods, [[today(), `${start} bis ${monthEnd(start)}`], [today(), `${second} bis ${monthEnd(second)}`]].sort());
+    });
+
+    test('a Kleinunternehmer subscription carries no VAT even though the profile says standard', async () => {
+      const owner = await billingClient();
+      await asSmallBusiness(h.api, async () => {
+        await saveProfile(profileBody(owner.id, { name: 'KU-Abo', taxMode: 'standard_vat', items: [{ kind: 'item', description: 'Wartung', quantity: 1, price: 100, total: 100, taxRate: 19 }] }));
+        await h.api.recurring.manualRun();
+      });
+      const [invoice] = await invoicesOf(owner.id);
+      assert.deepEqual({ mode: invoice!.taxMode, vat: invoice!.taxSnapshot!.vatAmount, amount: invoice!.amount }, { mode: 'small_business_19_ustg', vat: 0, amount: 100 });
     });
 
     test('two simultaneous runs claim a due profile exactly once', async () => {

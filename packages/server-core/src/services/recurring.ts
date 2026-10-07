@@ -30,7 +30,7 @@ import { ZodError } from 'zod';
 import { chooseDefaultBillingAddress, chooseDefaultBillingEmail, formatAddressMultiline } from './clientNumbering.js';
 import { catchMaybePromise, chainMaybePromise, isPromiseLike, mapMaybePromise } from './maybePromise.js';
 import { calculateInvoiceTaxSnapshot } from './taxMode.js';
-import { InvoiceIssueError, prepareInvoiceForIssue, resolveIssueTaxMode } from './invoiceIssuance.js';
+import { resolveIssueTaxMode } from './invoiceIssuance.js';
 
 export interface RecurringResult {
   generated: number;
@@ -56,7 +56,6 @@ const isRecurringProfileError = (error: unknown): error is InvalidRecurringProfi
 
 const toExpectedRecurringProfileError = (error: unknown): InvalidRecurringProfileError | null => {
   if (isRecurringProfileError(error)) return error;
-  if (error instanceof InvoiceIssueError) return new InvalidRecurringProfileError(error.message);
   if (error instanceof ZodError) {
     return new InvalidRecurringProfileError(
       `Das Abo-Profil enthält ungültige Rechnungsdaten: ${error.issues[0]?.message ?? 'Validierung fehlgeschlagen.'}`,
@@ -324,7 +323,9 @@ const buildInvoiceFromProfile = (
       throw new Error('Settings not found');
     }
 
-    const servicePeriod = calculateServicePeriod(profile.interval, now);
+    // The period this run bills is the one the profile was due for, so a catch-up run after downtime
+    // bills each missed period once instead of the run day again.
+    const servicePeriod = calculateServicePeriod(profile.interval, new Date(`${profile.nextRun}T12:00:00`));
     const billingAddress = chooseDefaultBillingAddress(client.addresses ?? []);
     const shippingAddress =
       (client.addresses ?? []).find((address) => address.isDefaultShipping) ??
@@ -337,7 +338,7 @@ const buildInvoiceFromProfile = (
     const taxMode = resolveIssueTaxMode(profile.taxMode, settings);
     const taxSnapshot = calculateInvoiceTaxSnapshot({ items, taxMode, taxMeta: profile.taxMeta }, settings);
 
-    return chainMaybePromise(dependencies.projectPort.ensureDefaultProject(profile.clientId), (project) => prepareInvoiceForIssue<Invoice>({
+    return chainMaybePromise(dependencies.projectPort.ensureDefaultProject(profile.clientId), (project) => ({
       kind: 'invoice',
       documentKind: 'invoice',
       revisionNumber: 0,
@@ -357,14 +358,14 @@ const buildInvoiceFromProfile = (
       taxSnapshot,
       date: today,
       dueDate: calculateDueDate(now, settings.legal.paymentTermsDays),
-      servicePeriod: servicePeriod.start,
+      servicePeriod: servicePeriod.start === servicePeriod.end ? servicePeriod.start : `${servicePeriod.start} bis ${servicePeriod.end}`,
       amount: taxSnapshot.grossAmount,
       status: 'draft',
       dunningLevel: 0,
       items,
       payments: [],
       history: [],
-    }, settings));
+    }));
   });
 };
 

@@ -198,7 +198,8 @@ const main = async () => {
         tenantId: session.tenantId,
         overdueInvoiceId: seed.invoices[1]!.id,
         overdueInvoiceNumber: seed.invoices[1]!.number,
-        expectedOverdueAmount: Number(seed.invoices[1]!.amount) + dunningFee,
+        // The Mahngebühr is recorded in the dunning history; the issued invoice keeps its amount.
+        expectedOverdueAmount: Number(seed.invoices[1]!.amount),
         recurringProfileId: seed.recurringProfiles[0]!.id,
         recurringClientId: seed.recurringProfiles[0]!.clientId,
         seedInvoiceIds: seed.invoices.map((invoice) => invoice.id),

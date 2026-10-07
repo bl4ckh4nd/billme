@@ -93,7 +93,11 @@ export const ISSUER = {
 
 /** Runs `body` with the Kleinunternehmerregelung switched on, then restores the settings. Only §19 tenants may issue under §19. */
 export const asSmallBusiness = async (api: Pick<BillmeApi, 'settings'>, body: () => Promise<void>) => {
-  const settings = (await api.settings.get())!;
-  await api.settings.set({ settings: { ...settings, legal: { ...settings.legal, smallBusinessRule: true } } });
-  try { await body(); } finally { await api.settings.set({ settings }); }
+  const toggle = async (smallBusinessRule: boolean) => {
+    // Re-read: the settings carry the number counters, which `body` may have advanced.
+    const settings = (await api.settings.get())!;
+    await api.settings.set({ settings: { ...settings, legal: { ...settings.legal, smallBusinessRule } } });
+  };
+  await toggle(true);
+  try { await body(); } finally { await toggle(false); }
 };

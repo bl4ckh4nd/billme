@@ -24,7 +24,7 @@ const filled = (value: string | undefined | null): boolean => Boolean(value?.tri
  * standard VAT, so for a Kleinunternehmer a standard mode means "not chosen":
  * it must never put VAT on the invoice (§19 UStG, otherwise owed under §14c).
  */
-export const resolveIssueTaxMode = (taxMode: InvoiceTaxMode | undefined, settings: IssuerSettings): InvoiceTaxMode =>
+export const resolveIssueTaxMode = (taxMode: InvoiceTaxMode | undefined, settings: Pick<IssuerSettings, 'legal'>): InvoiceTaxMode =>
   settings.legal.smallBusinessRule && (!taxMode || taxMode === 'standard_vat')
     ? 'small_business_19_ustg'
     : resolveInvoiceTaxMode(taxMode, settings);
@@ -68,3 +68,12 @@ export const prepareInvoiceForIssue = <T extends Invoice>(invoice: T, settings: 
 
   return { ...invoice, taxMode: mode, servicePeriod: filled(invoice.servicePeriod) ? invoice.servicePeriod : invoice.date };
 };
+
+/** A service period stored as "YYYY-MM-DD bis YYYY-MM-DD" (recurring invoices); a single date otherwise. */
+export const servicePeriodRange = (value: string | undefined): { start: string; end: string } | undefined => {
+  const match = value?.match(/^(\d{4}-\d{2}-\d{2}) bis (\d{4}-\d{2}-\d{2})$/);
+  return match ? { start: match[1]!, end: match[2]! } : undefined;
+};
+
+/** The day a service counts as rendered: the end of a period (§13 Abs. 1 Nr. 1a UStG, Teilleistung), else the date itself. */
+export const serviceDateOf = (value: string | undefined): string | undefined => servicePeriodRange(value)?.end ?? value;

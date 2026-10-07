@@ -135,7 +135,8 @@ for (const product of PRODUCTS) describe(`invoices (${product})`, () => {
   const withSettings = async (patch: (s: NonNullable<Awaited<ReturnType<typeof h.api.settings.get>>>) => object, body: () => Promise<void>) => {
     const settings = (await h.api.settings.get())!;
     await h.api.settings.set({ settings: patch(settings) as never });
-    try { await body(); } finally { await h.api.settings.set({ settings }); }
+    // Restore everything but the number counters, which `body` may have advanced.
+    try { await body(); } finally { await h.api.settings.set({ settings: { ...settings, numbers: (await h.api.settings.get())!.numbers } }); }
   };
 
   type Draft = Awaited<ReturnType<typeof draftInvoice>>;

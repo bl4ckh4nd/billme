@@ -894,9 +894,6 @@ export interface SyncDefaultProjectPorts<TProject extends ClientProjectShape = C
 }
 
 export interface RecurringNumberingSettingsShape extends NumberingSettingsShape {
-  /** The seller's Pflichtangaben (§14 UStG), checked before a generated invoice is issued. */
-  company: { name?: string; street?: string; zip?: string; city?: string };
-  finance: { taxId?: string; vatId?: string };
   legal: {
     smallBusinessRule: boolean;
     defaultVatRate: number;

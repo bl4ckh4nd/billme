@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { invoiceSchema, liteReceiptSchema, liteVatPeriodSchema, liteVatReportSchema, type Invoice, type LiteReceipt, type LiteVatReport, type TenantScope } from '@billme/server-core';
+import { invoiceSchema, liteReceiptSchema, liteVatPeriodSchema, liteVatReportSchema, serviceDateOf, type Invoice, type LiteReceipt, type LiteVatReport, type TenantScope } from '@billme/server-core';
 import { createPostgresInvoiceRepository } from './billing.js';
 import { listLiteCashEntries, listLiteReceipts } from './liteCash.js';
 import { runInTransaction, type PostgresQueryable } from './connection.js';
@@ -53,7 +53,7 @@ export const getServerLiteVatReport = (database: PostgresQueryable, scope: Tenan
   const recognizeOutgoing = (invoice: Invoice, type: 'invoice' | 'receipt' = 'invoice') => {
     if (invoice.status === 'draft' || ['order_confirmation', 'delivery_note'].includes(invoice.documentKind ?? 'invoice')) return;
     const snapshot = invoice.taxSnapshot;
-    const relevant = inPeriod(invoice.date) || (invoice.payments ?? []).some((payment) => inPeriod(payment.date)) || (calendarDate(invoice.servicePeriod) && inPeriod(invoice.servicePeriod!));
+    const relevant = inPeriod(invoice.date) || (invoice.payments ?? []).some((payment) => inPeriod(payment.date)) || (calendarDate(serviceDateOf(invoice.servicePeriod)) && inPeriod(serviceDateOf(invoice.servicePeriod)!));
     if (!snapshot || !Number.isFinite(snapshot.grossAmount) || snapshot.grossAmount === 0) { if (relevant) issue('TAX_SNAPSHOT_REQUIRED', 'Steueraufteilung des gestellten Belegs fehlt.', invoice.id); return; }
     const parts: Part[] = (snapshot.vatBreakdown?.length ? snapshot.vatBreakdown : [{ rate: snapshot.vatRateApplied, netAmount: snapshot.netAmount, vatAmount: snapshot.vatAmount }]).map((part) => ({ rate: part.rate, net: cents(part.netAmount), vat: cents(part.vatAmount) }));
     const gross = cents(snapshot.grossAmount);
@@ -61,7 +61,7 @@ export const getServerLiteVatReport = (database: PostgresQueryable, scope: Tenan
     const mode = invoice.taxMode;
     if (mode !== 'standard_vat' && parts.some((part) => part.vat !== 0) && relevant) issue('TAX_MODE_AMOUNT_CONFLICT', 'Steuerfreie oder besondere Steuerbehandlung passt nicht zu den ausgewiesenen Steuerbeträgen. Bitte prüfen.', invoice.id);
     if (mode === 'standard_vat' && parts.some((part) => part.rate === 0) && !snapshot.taxRuleConfirmed && relevant) issue('ZERO_RATE_REVIEW', 'Nullsteuersatz bitte anhand der Voraussetzungen und des Originalbelegs bestätigen.', invoice.id);
-    const service = calendarDate(invoice.servicePeriod);
+    const service = calendarDate(serviceDateOf(invoice.servicePeriod));
     if (!service && relevant) issue('SERVICE_DATE_REQUIRED', 'Das genaue Leistungsdatum fehlt; vorläufig wird das Belegdatum verwendet.', invoice.id);
     let performance = service ?? invoice.date;
     const correction = ['credit_note', 'cancellation_invoice'].includes(invoice.documentKind ?? 'invoice');

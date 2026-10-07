@@ -331,7 +331,8 @@ export const runWorkerFlowScenario = async (product) => {
         !metadata.seedInvoiceIds.includes(invoice.id) &&
         invoice.clientId === metadata.recurringClientId &&
         invoice.status === 'draft' &&
-        invoice.servicePeriod === metadata.todayIso,
+        // A subscription bills the period that starts on its due date.
+        invoice.servicePeriod?.startsWith(`${metadata.todayIso} bis `),
     );
     expect(generatedInvoice).toBeTruthy();
 

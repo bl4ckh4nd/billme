@@ -926,6 +926,35 @@ describe('VAT preparation', () => {
       }
     });
 
+    test('an advance invoice is taxed when paid (Mindest-Ist), an unpaid one only with the final invoice (Soll)', async () => {
+      const order = async (client: string) => {
+        const offer = await draftOffer(h.api, { client, date: '2026-10-01', items: [line('Montage', 300, 19)] });
+        const accepted = await h.api.offers.upsert({ reason: 'Zusage', offer: { ...offer, status: 'accepted' } } as never);
+        return h.api.documents.chainIssue({ operation: 'order_confirmation', id: randomUUID(), offerId: accepted.id, date: '2026-10-01', reason: 'AB' } as never) as unknown as Promise<{ id: string }>;
+      };
+      const settle = (orderId: string, kind: string, amount: number, date: string) =>
+        h.api.documents.chainIssue({ operation: 'settlement_invoice', id: randomUUID(), orderId, kind, amount, date, reason: kind } as never) as unknown as Promise<{ id: string; servicePeriod?: string }>;
+      const paid = await order('Abschlag bezahlt');
+      const unpaid = await order('Abschlag offen');
+      const paidAdvance = await settle(paid.id, 'advance_invoice', 119, '2026-10-05');
+      const unpaidAdvance = await settle(unpaid.id, 'advance_invoice', 119, '2026-10-06');
+      assert.equal(paidAdvance.servicePeriod, undefined, 'an advance states no service date of its own');
+      await pay(h.api, paidAdvance.id, 119, '2026-11-03');
+      await settle(paid.id, 'final_invoice', 238, '2026-12-10');
+      await settle(unpaid.id, 'final_invoice', 238, '2026-12-11');
+      await setMethod('soll');
+      try {
+        const of = async (m: number, id: string) => (await month(m)).sources.filter((src) => src.sourceId === id).map((src) => [src.date, src.taxCents]);
+        assert.deepEqual(await of(10, paidAdvance.id), [], 'issuing an advance creates no VAT');
+        assert.deepEqual(await of(10, unpaidAdvance.id), []);
+        assert.deepEqual(await of(11, paidAdvance.id), [['2026-11-03', 1900]], 'taxed in the month it was paid');
+        assert.deepEqual(await of(12, paidAdvance.id), [], 'not again with the final invoice');
+        assert.deepEqual(await of(12, unpaidAdvance.id), [['2026-12-11', 1900]], 'the unpaid advance is taxed with the service, at the final invoice');
+      } finally {
+        await setMethod('ist');
+      }
+    });
+
     test('a service period counts in the month it ends (Soll), like a subscription invoice billed at its start', async () => {
       const period = await issueDated(h.api, { client: 'Abo-Zeitraum', date: '2026-11-20', servicePeriod: '2026-11-20 bis 2026-12-19', items: [line('Wartung', 100, 19)] });
       await setMethod('soll');

@@ -947,12 +947,14 @@ for (const product of PRODUCTS) describe(`offers and the document chain (${produ
     });
 
     // The Lite VAT report; Pro reports VAT from the journal (pro-reporting).
-    if (product === 'lite') test('an advance invoice appears in the VAT report with its output VAT', async () => {
+    if (product === 'lite') test('an advance invoice appears in the VAT report with its output VAT once it is paid', async () => {
       const offer = await draftOffer(h.api, { client: 'USt Abschlag GmbH', date: '2026-04-02', items: [offerLine()] });
       await accept(offer);
       const dated = { date: '2026-04-10', servicePeriod: '2026-04-10' };
       const order = await issue({ operation: 'order_confirmation', offerId: offer.id, ...dated });
       const advance = await settle(order, 'advance_invoice', 357, dated);
+      // Mindest-Ist: an advance is taxed when the money comes in (§13 Abs. 1 Nr. 1a S. 4 UStG).
+      await h.api.invoices.savePayment({ invoiceId: advance.id, payment: { id: randomUUID(), date: '2026-04-20', amount: 357, method: 'bank' }, reason: 'Anzahlung' });
       const report = await h.api.vat.getReport({ from: '2026-04-01', to: '2026-04-30' });
       const issues = report.issues.filter((issueItem) => issueItem.sourceId === advance.id).map((issueItem) => issueItem.code);
       assert.ok(!issues.includes('TAX_SNAPSHOT_REQUIRED'), `the advance invoice is missing its tax split in the VAT report: ${issues}`);

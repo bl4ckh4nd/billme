@@ -30,6 +30,13 @@ export const getServerLiteVatReport = (database: PostgresQueryable, scope: Tenan
   const receipts = await listLiteReceipts(db, scope);
   const report: LiteVatReport = { from, to, method, smallBusiness, generatedAt: new Date().toISOString(), sourceHash: '', preparationComplete: false, submissionReady: false, positions: [], sources: [], issues: [], outputVatCents: 0, inputVatCents: 0, payableCents: 0, reconciliation: { paymentCashCents: 0, paymentRecognizedCents: 0, paymentResidualCents: 0 } };
   const inPeriod = (date: string) => date >= from && date <= to;
+  const NEVER = '9999-12-31';
+  const advanceIds = new Set(invoices.filter((invoice) => invoice.documentKind === 'advance_invoice').map((invoice) => invoice.id));
+  /** The service date of the issued final invoice that settles an advance's order, if any. */
+  const finalServiceDate = (advance: Invoice): string | undefined => {
+    const final = invoices.find((invoice) => invoice.documentKind === 'final_invoice' && invoice.sourceDocumentId === advance.sourceDocumentId && !['draft', 'cancelled'].includes(invoice.status));
+    return final ? calendarDate(serviceDateOf(final.servicePeriod)) ?? final.date : undefined;
+  };
   const issue = (code: string, message: string, sourceId?: string) => {
     if (!report.issues.some((item) => item.code === code && item.sourceId === sourceId)) report.issues.push({ code, message, sourceId });
   };
@@ -61,10 +68,15 @@ export const getServerLiteVatReport = (database: PostgresQueryable, scope: Tenan
     const mode = invoice.taxMode;
     if (mode !== 'standard_vat' && parts.some((part) => part.vat !== 0) && relevant) issue('TAX_MODE_AMOUNT_CONFLICT', 'Steuerfreie oder besondere Steuerbehandlung passt nicht zu den ausgewiesenen Steuerbeträgen. Bitte prüfen.', invoice.id);
     if (mode === 'standard_vat' && parts.some((part) => part.rate === 0) && !snapshot.taxRuleConfirmed && relevant) issue('ZERO_RATE_REVIEW', 'Nullsteuersatz bitte anhand der Voraussetzungen und des Originalbelegs bestätigen.', invoice.id);
-    const service = calendarDate(serviceDateOf(invoice.servicePeriod));
-    if (!service && relevant) issue('SERVICE_DATE_REQUIRED', 'Das genaue Leistungsdatum fehlt; vorläufig wird das Belegdatum verwendet.', invoice.id);
-    let performance = service ?? invoice.date;
     const correction = ['credit_note', 'cancellation_invoice'].includes(invoice.documentKind ?? 'invoice');
+    // An advance invoice bills a service not yet rendered: its VAT arises when it is paid (Mindest-Ist,
+    // §13 Abs. 1 Nr. 1a S. 4 UStG), an unpaid rest only with the service, i.e. the final invoice's date.
+    const advance = invoice.documentKind === 'advance_invoice';
+    // A correction of an advance taxes nothing back: the advance was taxed only as it was paid, and a refund is a payment of it.
+    if (correction && advanceIds.has(invoice.sourceDocumentId ?? '')) return;
+    const service = advance ? finalServiceDate(invoice) : calendarDate(serviceDateOf(invoice.servicePeriod));
+    if (!service && !advance && relevant) issue('SERVICE_DATE_REQUIRED', 'Das genaue Leistungsdatum fehlt; vorläufig wird das Belegdatum verwendet.', invoice.id);
+    let performance = advance ? service ?? NEVER : service ?? invoice.date;
     if (correction) performance = invoice.date;
     if (mode === 'intra_eu_supply_6a') {
       const nextMonth = new Date(`${performance}T00:00:00Z`); nextMonth.setUTCMonth(nextMonth.getUTCMonth() + 2, 0);

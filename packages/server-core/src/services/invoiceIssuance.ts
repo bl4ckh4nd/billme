@@ -66,7 +66,9 @@ export const prepareInvoiceForIssue = <T extends Invoice>(invoice: T, settings: 
   if (mode.startsWith('intra_eu') && !filled(settings.finance.vatId)) missing.push(`deine USt-IdNr. fehlt (Pflicht bei „${definition.label}“, §14a UStG)`);
   if (missing.length) throw new InvoiceIssueError(missing);
 
-  return { ...invoice, taxMode: mode, servicePeriod: filled(invoice.servicePeriod) ? invoice.servicePeriod : invoice.date };
+  // An advance invoice bills a service still to come; it gets no service date of its own.
+  const servicePeriod = filled(invoice.servicePeriod) || kind === 'advance_invoice' ? invoice.servicePeriod : invoice.date;
+  return { ...invoice, taxMode: mode, servicePeriod };
 };
 
 /** A service period stored as "YYYY-MM-DD bis YYYY-MM-DD" (recurring invoices); a single date otherwise. */

@@ -165,14 +165,17 @@ export const determineDunningLevel = (daysOverdue: number, dunningLevels: Dunnin
 
 export const replaceDunningPlaceholders = (
   template: string,
-  invoice: Pick<Invoice, 'amount' | 'client' | 'dueDate' | 'number'>,
+  invoice: Pick<Invoice, 'amount' | 'client' | 'dueDate' | 'number'> & { payments?: Invoice['payments'] },
   daysOverdue: number,
   dunningLevel: Pick<DunningLevel, 'fee'>,
+  credited = 0,
 ): string => {
+  // %A is what is still open: a reminder demanding money already paid or credited is wrong.
+  const paid = (invoice.payments ?? []).reduce((sum, payment) => sum + payment.amount, 0);
   const replacements: Record<string, string> = {
     '%N': invoice.number,
     '%D': new Date(invoice.dueDate).toLocaleDateString('de-DE'),
-    '%A': invoice.amount.toFixed(2),
+    '%A': (Math.round((invoice.amount - paid - credited) * 100) / 100).toFixed(2),
     '%T': daysOverdue.toString(),
     '%F': dunningLevel.fee.toFixed(2),
     '%K': invoice.client,
@@ -237,9 +240,11 @@ export const processDunningRun = async <TSettings extends DunningSettings>(
   }
 
   const clock = dependencies.clock ?? systemClock;
-  const overdueInvoices = (await dependencies.invoiceRepo.list(scope)).filter((invoice) =>
-    isInvoiceOverdue(invoice, clock.now()),
-  );
+  const allInvoices = await dependencies.invoiceRepo.list(scope);
+  const overdueInvoices = allInvoices.filter((invoice) => isInvoiceOverdue(invoice, clock.now()));
+  const credited = (invoiceId: string) => allInvoices
+    .filter((document) => document.documentKind === 'credit_note' && document.sourceDocumentId === invoiceId && document.status !== 'draft')
+    .reduce((sum, document) => sum + Math.abs(document.amount), 0);
   if (overdueInvoices.length === 0) {
     return result;
   }
@@ -270,8 +275,8 @@ export const processDunningRun = async <TSettings extends DunningSettings>(
         const projectedLevel = { ...applicableLevel, fee: claimed.delivery.fee };
         const attachment = dependencies.renderAttachment ? await dependencies.renderAttachment(claimed.invoice, projectedLevel) : undefined;
         if (!await dependencies.delivery.begin(scope, deliveryId)) continue;
-        const subject = replaceDunningPlaceholders(projectedLevel.subject, claimed.invoice, daysOverdue, projectedLevel);
-        const bodyText = replaceDunningPlaceholders(projectedLevel.text, claimed.invoice, daysOverdue, projectedLevel);
+        const subject = replaceDunningPlaceholders(projectedLevel.subject, claimed.invoice, daysOverdue, projectedLevel, credited(invoice.id));
+        const bodyText = replaceDunningPlaceholders(projectedLevel.text, claimed.invoice, daysOverdue, projectedLevel, credited(invoice.id));
         const emailResult = await dependencies.emailPort.send(providerConfig.provider, providerConfig.config, {
           from: { name: settings.email.fromName || settings.company.name, email: settings.email.fromEmail || settings.company.email },
           to: { name: claimed.invoice.client, email: claimed.invoice.clientEmail }, subject, text: bodyText,
@@ -322,8 +327,6 @@ export const processDunningRun = async <TSettings extends DunningSettings>(
       );
 
       let feeApplied = 0;
-      // Rendered before the fee is added: the letter shows the level's fee on top
-      // of the original amount, which the fee-inclusive amount would count twice.
       let attachment: { filename: string; path: string } | undefined;
       if (dependencies.renderAttachment) {
         try {
@@ -333,36 +336,17 @@ export const processDunningRun = async <TSettings extends DunningSettings>(
           dependencies.logger?.warn?.(`Mahnschreiben für ${invoice.number} konnte nicht als PDF erstellt werden`, error);
         }
       }
-      let current = await dependencies.invoiceRepo.getById(scope, invoice.id);
-      if (!current || !isInvoiceOverdue(current, clock.now())) continue;
+      // The Mahngebühr is the customer's own debt (§288 BGB damages, not taxable): it lives in the
+      // dunning history and never changes the issued invoice's amount.
       if (applicableLevel.fee > 0 && !feeAlreadyApplied) {
-        const before = current;
-        const amountBefore = current.amount;
-        const after = dependencies.invoiceRepo.patchDunning
-          ? await dependencies.invoiceRepo.patchDunning(scope, invoice.id, { fee: applicableLevel.fee })
-          : await dependencies.invoiceRepo.save(scope, { ...current, amount: current.amount + applicableLevel.fee });
-        current = after;
-
-        feeApplied = Math.max(0, after.amount - amountBefore);
+        feeApplied = applicableLevel.fee;
         result.feesApplied += feeApplied;
-
-        await dependencies.auditLog.append(scope, {
-          occurredAt: runStartedAt,
-          action: 'invoice.update',
-          reason: `Mahngebühr Stufe ${applicableLevel.id} (${applicableLevel.fee.toFixed(2)}€)`,
-          actor,
-          subject: buildAuditSubject(scope, invoice.id),
-          change: {
-            before,
-            after,
-          },
-        });
       }
 
-      current = await dependencies.invoiceRepo.getById(scope, invoice.id);
+      const current = await dependencies.invoiceRepo.getById(scope, invoice.id);
       if (!current || !isInvoiceOverdue(current, clock.now())) continue;
-      const subject = replaceDunningPlaceholders(applicableLevel.subject, current, daysOverdue, applicableLevel);
-      const bodyText = replaceDunningPlaceholders(applicableLevel.text, current, daysOverdue, applicableLevel);
+      const subject = replaceDunningPlaceholders(applicableLevel.subject, current, daysOverdue, applicableLevel, credited(invoice.id));
+      const bodyText = replaceDunningPlaceholders(applicableLevel.text, current, daysOverdue, applicableLevel, credited(invoice.id));
       const emailResult = await dependencies.emailPort.send(providerConfig.provider, providerConfig.config, {
         from: {
           name: settings.email.fromName || settings.company.name,

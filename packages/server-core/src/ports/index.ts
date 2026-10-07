@@ -170,7 +170,7 @@ export interface InvoiceRepository {
   list(scope: TenantScope): MaybePromise<Invoice[]>;
   getById(scope: TenantScope, id: string): MaybePromise<Invoice | null>;
   save(scope: TenantScope, invoice: Invoice, options?: { replacePayments: true }): MaybePromise<Invoice>;
-  patchDunning?(scope: TenantScope, id: string, patch: { fee?: number; dunningLevel?: number; historyEntry?: { date: string; action: string } }): MaybePromise<Invoice>;
+  patchDunning?(scope: TenantScope, id: string, patch: { dunningLevel?: number; historyEntry?: { date: string; action: string } }): MaybePromise<Invoice>;
   remove(scope: TenantScope, id: string): MaybePromise<void>;
 }
 
@@ -894,6 +894,9 @@ export interface SyncDefaultProjectPorts<TProject extends ClientProjectShape = C
 }
 
 export interface RecurringNumberingSettingsShape extends NumberingSettingsShape {
+  /** The seller's Pflichtangaben (§14 UStG), checked before a generated invoice is issued. */
+  company: { name?: string; street?: string; zip?: string; city?: string };
+  finance: { taxId?: string; vatId?: string };
   legal: {
     smallBusinessRule: boolean;
     defaultVatRate: number;

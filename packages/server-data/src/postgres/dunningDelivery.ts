@@ -47,8 +47,9 @@ export const createPostgresDunningDelivery = (db: PostgresQueryable): DunningDel
     const repository = createPostgresInvoiceRepository(client);
     const before = await repository.getById(scope, String(row.invoice_id));
     if (!before) throw new Error('DUNNING_INVOICE_MISSING');
-    const after = await repository.patchDunning!(scope, before.id, { fee: Number(row.fee), dunningLevel: Number(row.level), historyEntry: { date: history.processedAt.slice(0, 10), action: `Mahnstufe ${row.level} vom E-Mail-Anbieter angenommen` } });
-    const fee = Math.round((after.amount - before.amount) * 100) / 100;
+    const after = await repository.patchDunning!(scope, before.id, { dunningLevel: Number(row.level), historyEntry: { date: history.processedAt.slice(0, 10), action: `Mahnstufe ${row.level} vom E-Mail-Anbieter angenommen` } });
+    // A fee is owed only while the invoice is: one paid or cancelled before the mail was accepted carries none.
+    const fee = ['paid', 'cancelled', 'draft'].includes(before.status) ? 0 : Math.round(Number(row.fee) * 100) / 100;
     await createPostgresDunningHistoryRepository(client).record(scope, { ...history, invoiceId: before.id, invoiceNumber: before.number, dunningLevel: Number(row.level), emailSent: true, feeApplied: fee });
     await client.query("UPDATE dunning_deliveries SET state='sent',updated_at=$1,error=NULL WHERE id=$2", [stamp(), id]);
     await createPostgresAuditLogPort(client).append(scope, { occurredAt: stamp(), action: 'invoice.dunning_reminder_sent', reason: mutation.reason, actor: mutation.actor!, subject: { entityType: 'invoice', entityId: before.id, tenantId: scope.tenantId }, change: { before, after } });

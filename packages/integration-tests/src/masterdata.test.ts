@@ -4,7 +4,7 @@ import { after, before, describe, test } from 'node:test';
 import type { BillmeApi } from '@billme/desktop-contracts/api';
 import { createDefaultTemplateBody, resolveInvoiceTaxMode } from '@billme/server-core';
 import { PRODUCTS, startProduct, type LiteHarness } from './harness.js';
-import { addDays, datevEvidence, draftInvoice, draftOffer, issueInvoice, newClient, today } from './fixtures.js';
+import { addDays, datevEvidence, draftInvoice, draftOffer, ISSUER, issueInvoice, newClient, today } from './fixtures.js';
 
 /**
  * Master data, settings, document templates and the audit log, end to end
@@ -159,7 +159,7 @@ for (const product of PRODUCTS) describe(`masterdata (${product})`, () => {
         assert.deepEqual(stored.catalog.categories, [{ id: 'cat-1', name: 'Beratung' }]);
       });
       const restored = await getSettings();
-      assert.equal(restored.company.name, '');
+      assert.equal(restored.company.name, ISSUER.company.name, 'restored to what onboarding stored');
       assert.equal(restored.email.provider, 'none');
     });
 
@@ -907,12 +907,14 @@ for (const product of PRODUCTS) describe(`masterdata (${product})`, () => {
         await withSettings((s) => ({ ...s, dunning: { levels } }), async () => {
           const invoice = await issueInvoice(h.api, { client: `Mahnung ${uid()}`, date: addDays(today(), -40), dueDate: addDays(today(), -20) });
           await h.api.invoices.savePayment({ invoiceId: invoice.id, payment: { id: randomUUID(), date: today(), amount: 50, method: 'bank' }, reason: 'Teilzahlung' });
+          // A partial credit note reduces what the letter demands, like a payment.
+          await h.api.documents.chainIssue({ operation: 'correction', id: randomUUID(), invoiceId: invoice.id, kind: 'credit_note', amount: 23.8, date: today(), dueDate: today(), reason: 'Teilgutschrift' } as never);
 
           const first = await h.api.documents.renderContext({ kind: 'dunning', id: invoice.id });
           assert.equal(first.templateKind, 'dunning');
           assert.equal(first.template.id, dunningTemplate.id);
           assert.equal(first.template.body.accentColor, '#abcdef');
-          assert.deepEqual(first.dunning, { level: 1, levelName: 'Zahlungserinnerung', date: today(), payUntil: addDays(today(), 7), fee: 0, originalAmount: invoice.amount, paidAmount: 50, daysOverdue: 20 });
+          assert.deepEqual(first.dunning, { level: 1, levelName: 'Zahlungserinnerung', date: today(), payUntil: addDays(today(), 7), fee: 0, originalAmount: invoice.amount, paidAmount: 50, creditedAmount: 23.8, daysOverdue: 20 });
           assert.equal(first.texts!.intro, 'Sehr geehrte Damen und Herren,\n\nDie Rechnung {{invoice.number}} vom {{invoice.date}} ist noch offen.\n\nBitte überweisen Sie den offenen Betrag bis zum {{dunning.payUntil}}.');
           assert.equal(first.document.id, invoice.id);
 

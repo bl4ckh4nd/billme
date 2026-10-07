@@ -1014,9 +1014,9 @@ for (const product of PRODUCTS) describe(`transactions, banking and cash (${prod
   });
 
   describe('invoice suggestions for a bank line', () => {
-    const open = (label: string, amount: number, extra: { client?: string; taxMode?: 'small_business_19_ustg' } = {}) =>
+    const open = (label: string, amount: number, extra: { client?: string; taxMode?: 'vat_exempt_4_ustg' } = {}) =>
       issueInvoice(h.api, {
-        client: extra.client ?? unique(label), date: '2020-01-10', taxMode: 'small_business_19_ustg', taxMeta: datevEvidence(product) as never,
+        client: extra.client ?? unique(label), date: '2020-01-10', taxMode: 'vat_exempt_4_ustg', taxMeta: datevEvidence(product) as never,
         items: [{ kind: 'item', description: label, quantity: 1, price: amount, total: amount }],
       });
     /** Bank line dated far from every due date so only amount, number and name rules can fire. */
@@ -1045,7 +1045,7 @@ for (const product of PRODUCTS) describe(`transactions, banking and cash (${prod
     });
 
     test('a due date within 14 days adds a reason and lifts an otherwise unrelated invoice to medium', async () => {
-      const invoice = await issueInvoice(h.api, { client: unique('Fällig'), date: '2020-02-01', dueDate: '2020-02-15', taxMode: 'small_business_19_ustg', taxMeta: datevEvidence(product) as never, items: [{ kind: 'item', description: 'x', quantity: 1, price: 77_000, total: 77_000 }] });
+      const invoice = await issueInvoice(h.api, { client: unique('Fällig'), date: '2020-02-01', dueDate: '2020-02-15', taxMode: 'vat_exempt_4_ustg', taxMeta: datevEvidence(product) as never, items: [{ kind: 'item', description: 'x', quantity: 1, price: 77_000, total: 77_000 }] });
       const tx = await bankLine(5, { date: '2020-02-20', name: 'Zzqx Fristzahler' });
       const hit = (await suggest(tx.id)).find((s) => s.invoice.id === invoice.id)!;
       assert.equal(hit.confidence, 'medium');
@@ -1064,7 +1064,7 @@ for (const product of PRODUCTS) describe(`transactions, banking and cash (${prod
     test('paid, draft and cancelled invoices are never suggested; the open replacement is', async () => {
       const paid = await open('paid', 20_000);
       await h.api.invoices.savePayment({ invoiceId: paid.id, payment: { id: randomUUID(), date: today(), amount: 20_000, method: 'cash' }, reason: 'bar' });
-      const draft = await draftInvoice(h.api, { client: unique('Entwurf'), taxMode: 'small_business_19_ustg', items: [{ kind: 'item', description: 'x', quantity: 1, price: 20_000, total: 20_000 }] });
+      const draft = await draftInvoice(h.api, { client: unique('Entwurf'), taxMode: 'vat_exempt_4_ustg', items: [{ kind: 'item', description: 'x', quantity: 1, price: 20_000, total: 20_000 }] });
       const source = await open('cancelled', 20_000);
       const revision = await h.api.documents.chainIssue({ operation: 'revision', id: randomUUID(), invoiceId: source.id, date: '2020-01-10', dueDate: '2020-01-24', reason: 'Fehler' } as never);
       const replacement = await h.api.invoices.upsert({ reason: 'Ersatz stellen', invoice: { ...revision, status: 'open' } });

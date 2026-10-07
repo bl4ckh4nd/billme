@@ -753,6 +753,7 @@ export const documentRenderContextSchema = z.object({
     fee: z.number(),
     originalAmount: z.number(),
     paidAmount: z.number(),
+    creditedAmount: z.number().optional(),
     daysOverdue: z.number().int(),
   }).optional(),
 });

@@ -9,6 +9,8 @@ export type DunningDocumentContext = {
   fee: number;
   originalAmount: number;
   paidAmount: number;
+  /** Issued credit notes for the invoice; they reduce what is open like payments do. */
+  creditedAmount: number;
   daysOverdue: number;
   /** Intro of the letter: the level's reminder text with placeholders. */
   intro?: string;
@@ -22,16 +24,17 @@ const dayMs = (iso: string) => Date.parse(`${iso.slice(0, 10)}T00:00:00Z`);
 const round2 = (value: number) => Math.round(value * 100) / 100;
 
 /**
- * What a dunning letter for `level` shows. The dunning run adds each fee to
- * the invoice amount, so the original amount is the current amount minus every
- * fee in the history. The letter's fee is what was charged up to its level,
- * plus the level's own fee when that level has not run yet (a preview).
+ * What a dunning letter for `level` shows: the invoice amount, what was paid and
+ * credited, and the fees. Fees live only in the dunning history, never in the
+ * invoice amount. The letter's fee is what was charged up to its level, plus the
+ * level's own fee when that level has not run yet (a preview).
  */
 export const buildDunningDocumentContext = (input: {
   invoice: Pick<Invoice, 'number' | 'date' | 'dueDate' | 'amount' | 'payments' | 'dunningLevel'>;
   level?: number;
   levels: DunningLevel[];
   history: DunningHistoryEntry[];
+  credited?: number;
   today: Date;
 }): DunningDocumentContext => {
   const level = input.level ?? Math.max(1, input.invoice.dunningLevel ?? 0);
@@ -50,8 +53,9 @@ export const buildDunningDocumentContext = (input: {
     date: letterDay,
     payUntil,
     fee: round2(fee),
-    originalAmount: round2(input.invoice.amount - sumFees(input.history)),
+    originalAmount: round2(input.invoice.amount),
     paidAmount: round2((input.invoice.payments ?? []).reduce((sum, payment) => sum + payment.amount, 0)),
+    creditedAmount: round2(input.credited ?? 0),
     daysOverdue,
     intro: text
       ? `Sehr geehrte Damen und Herren,\n\n${text.replaceAll('%N', '{{invoice.number}}').replaceAll('%D', '{{invoice.date}}')}\n\nBitte überweisen Sie den offenen Betrag bis zum {{dunning.payUntil}}.`

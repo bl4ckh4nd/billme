@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { createHash, randomUUID } from 'node:crypto';
 import { after, before, describe, test } from 'node:test';
 import { startPro, type ProHarness } from './harness.js';
-import { addDays, today } from './fixtures.js';
+import { addDays, asSmallBusiness, today } from './fixtures.js';
 import {
   addBankAccount, approveDraft, assertBalanced, assertLedgerConsistent, bankCsv, bankTransactions, bankTx, draft, draftAction, entryFor, get,
   getDraft, importCsv, invoiceEntry, issue, journal, money, openItems, payOpenItem, postDraft, saveDraft, shape,
@@ -251,17 +251,21 @@ describe('pro accounting: setup and posting of issued invoices', () => {
     test('Kleinunternehmer and §13b invoices post without VAT lines and keep their evidence; without it issuing is refused', async () => {
       const items = [{ kind: 'item' as const, description: 'Leistung', quantity: 1, price: 100, total: 100, taxRate: 19 }];
       const before = { entries: (await journal(h)).length, items: (await openItems(h)).length };
-      const blocked = await draft(h, { client: 'KU ohne Nachweis', taxMode: 'small_business_19_ustg', items });
-      const refused = await h.raw('POST', '/invoices', { reason: 'stellen', invoice: { ...blocked, status: 'open', kind: 'invoice' } });
-      assert.equal(refused.status, 400, refused.text);
-      assert.match(refused.body.message, /MISSING_TAX_EVIDENCE/);
-      assert.equal((await invoiceOf(h, blocked.id)).status, 'draft');
-      assert.deepEqual([(await journal(h)).length, (await openItems(h)).length], [before.entries, before.items], 'nothing was posted');
+      // Only a Kleinunternehmer issues under §19.
+      let kuEntry!: NonNullable<Awaited<ReturnType<typeof invoiceEntry>>>;
+      await asSmallBusiness(h.api, async () => {
+        const blocked = await draft(h, { client: 'KU ohne Nachweis', taxMode: 'small_business_19_ustg', items });
+        const refused = await h.raw('POST', '/invoices', { reason: 'stellen', invoice: { ...blocked, status: 'open', kind: 'invoice' } });
+        assert.equal(refused.status, 400, refused.text);
+        assert.match(refused.body.message, /MISSING_TAX_EVIDENCE/);
+        assert.equal((await invoiceOf(h, blocked.id)).status, 'draft');
+        assert.deepEqual([(await journal(h)).length, (await openItems(h)).length], [before.entries, before.items], 'nothing was posted');
 
-      const ku = await issue(h, { client: 'KU mit Nachweis', taxMode: 'small_business_19_ustg', taxMeta: { datevEvidenceType: 'exemption', datevEvidenceReference: '§19 UStG' }, items });
-      const kuEntry = (await invoiceEntry(h, ku.id))!;
-      assert.deepEqual(shape(kuEntry), [['1400', 100, 0], ['8400', 0, 100]]);
-      assert.deepEqual([kuEntry.lines[1]!.taxCaseKey, kuEntry.lines[1]!.evidenceType, kuEntry.lines[1]!.evidenceReference], ['DE_KU19', 'exemption', '§19 UStG']);
+        const ku = await issue(h, { client: 'KU mit Nachweis', taxMode: 'small_business_19_ustg', taxMeta: { datevEvidenceType: 'exemption', datevEvidenceReference: '§19 UStG' }, items });
+        kuEntry = (await invoiceEntry(h, ku.id))!;
+        assert.deepEqual(shape(kuEntry), [['1400', 100, 0], ['8400', 0, 100]]);
+        assert.deepEqual([kuEntry.lines[1]!.taxCaseKey, kuEntry.lines[1]!.evidenceType, kuEntry.lines[1]!.evidenceReference], ['DE_KU19', 'exemption', '§19 UStG']);
+      });
 
       const rc = await issue(h, { client: 'RC mit Nachweis', taxMode: 'reverse_charge_13b', taxMeta: { buyerVatId: 'DE123456789', datevEvidenceType: 'reverse_charge', datevEvidenceReference: '13' }, items: [{ kind: 'item', description: 'Bau', quantity: 1, price: 100, total: 100 }] });
       const rcEntry = (await invoiceEntry(h, rc.id))!;
@@ -278,8 +282,9 @@ describe('pro accounting: setup and posting of issued invoices', () => {
       const unposted = await draft(h, { client: 'EU Kunde', taxMode: 'intra_eu_supply_6a', items: [{ kind: 'item', description: 'Ware', quantity: 1, price: 200, total: 200 }] });
       const before = await snapshotOfLedger();
       const refused = await h.raw('POST', '/invoices', { reason: 'stellen', invoice: { ...unposted, status: 'open', kind: 'invoice' } });
-      assert.equal(refused.status, 400, refused.text);
-      assert.match(refused.body.message, /MISSING_TAX_COUNTRY/);
+      // §14a: the issue check refuses before the ledger sees it; the posting rule (MISSING_TAX_COUNTRY) stays behind it.
+      assert.equal(refused.status, 422, refused.text);
+      assert.match(refused.body.message, /USt-IdNr\. des Kunden fehlt/);
       assert.deepEqual(await snapshotOfLedger(), before, 'no entry, no open item');
       const stored = await invoiceOf(h, unposted.id);
       assert.equal(stored.status, 'draft', 'the invoice is still a draft');

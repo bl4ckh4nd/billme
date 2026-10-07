@@ -29,7 +29,8 @@ import {
 import { ZodError } from 'zod';
 import { chooseDefaultBillingAddress, chooseDefaultBillingEmail, formatAddressMultiline } from './clientNumbering.js';
 import { catchMaybePromise, chainMaybePromise, isPromiseLike, mapMaybePromise } from './maybePromise.js';
-import { calculateInvoiceTaxSnapshot, resolveInvoiceTaxMode } from './taxMode.js';
+import { calculateInvoiceTaxSnapshot } from './taxMode.js';
+import { InvoiceIssueError, prepareInvoiceForIssue, resolveIssueTaxMode } from './invoiceIssuance.js';
 
 export interface RecurringResult {
   generated: number;
@@ -55,6 +56,7 @@ const isRecurringProfileError = (error: unknown): error is InvalidRecurringProfi
 
 const toExpectedRecurringProfileError = (error: unknown): InvalidRecurringProfileError | null => {
   if (isRecurringProfileError(error)) return error;
+  if (error instanceof InvoiceIssueError) return new InvalidRecurringProfileError(error.message);
   if (error instanceof ZodError) {
     return new InvalidRecurringProfileError(
       `Das Abo-Profil enthält ungültige Rechnungsdaten: ${error.issues[0]?.message ?? 'Validierung fehlgeschlagen.'}`,
@@ -332,10 +334,10 @@ const buildInvoiceFromProfile = (
     const billingEmail = chooseDefaultBillingEmail(client.emails ?? []);
     const items = buildInvoiceItems(profile);
     const today = localIsoDate(now);
-    const taxMode = resolveInvoiceTaxMode(profile.taxMode, settings);
+    const taxMode = resolveIssueTaxMode(profile.taxMode, settings);
     const taxSnapshot = calculateInvoiceTaxSnapshot({ items, taxMode, taxMeta: profile.taxMeta }, settings);
 
-    return chainMaybePromise(dependencies.projectPort.ensureDefaultProject(profile.clientId), (project) => ({
+    return chainMaybePromise(dependencies.projectPort.ensureDefaultProject(profile.clientId), (project) => prepareInvoiceForIssue<Invoice>({
       kind: 'invoice',
       documentKind: 'invoice',
       revisionNumber: 0,
@@ -362,7 +364,7 @@ const buildInvoiceFromProfile = (
       items,
       payments: [],
       history: [],
-    }));
+    }, settings));
   });
 };
 

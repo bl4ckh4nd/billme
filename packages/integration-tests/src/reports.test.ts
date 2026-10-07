@@ -801,7 +801,8 @@ describe('VAT preparation', () => {
     await pay(h.api, mixed.id, -56.5, '2026-06-02', 'refund');
     // July: every special tax treatment once (net 100 … 700).
     const meta = { taxRuleConfirmed: true, buyerVatId: 'ATU12345678', buyerCountryCode: 'AT', sellerCountryCode: 'DE' };
-    const special: Array<[string, number]> = [['small_business_19_ustg', 100], ['reverse_charge_13b', 200], ['intra_eu_supply_6a', 300], ['intra_eu_service_reverse_charge', 400], ['export_third_country', 500], ['vat_exempt_4_ustg', 600], ['non_taxable_outside_scope', 700]];
+    // No §19 invoice here: a tenant that charges VAT cannot issue one (the Kleinunternehmer block covers §19).
+    const special: Array<[string, number]> = [['reverse_charge_13b', 200], ['intra_eu_supply_6a', 300], ['intra_eu_service_reverse_charge', 400], ['export_third_country', 500], ['vat_exempt_4_ustg', 600], ['non_taxable_outside_scope', 700]];
     for (const [mode, net] of special) await issueDated(h.api, { client: `Sonder ${mode}`, date: '2026-07-10', servicePeriod: '2026-07-10', taxMode: mode as never, taxMeta: meta as never, items: [line(mode, net)] });
     await issueDated(h.api, { client: 'Unbestätigt', date: '2026-07-11', servicePeriod: '2026-07-11', taxMode: 'reverse_charge_13b', taxMeta: { buyerVatId: 'ATU12345678' } as never, items: [line('Unbestätigt', 50)] });
     // August: an unpaid invoice that is cancelled, and a draft.
@@ -877,7 +878,7 @@ describe('VAT preparation', () => {
   describe('special tax treatments and corrections', () => {
     test('every non-standard mode lands in its own position without any output VAT', async () => {
       const july = await month(7);
-      const expected: Array<[string, number]> = [['21', 40000], ['41', 30000], ['43', 50000], ['45', 70000], ['48', 70000], ['60', 20000 + 5000]];
+      const expected: Array<[string, number]> = [['21', 40000], ['41', 30000], ['43', 50000], ['45', 70000], ['48', 60000], ['60', 20000 + 5000]];
       for (const [code, basis] of expected) {
         const p = position(july, code);
         assert.ok(p, `position ${code}`);
@@ -888,7 +889,7 @@ describe('VAT preparation', () => {
       assert.equal(july.outputVatCents, 0);
       assert.equal(july.inputVatCents, 0);
       assert.deepEqual(july.positions.map((p) => p.code), ['21', '41', '43', '45', '48', '60']);
-      assert.equal(position(july, '48')?.basisWholeEuros, 700, 'the ELSTER form takes whole euros');
+      assert.equal(position(july, '48')?.basisWholeEuros, 600, 'the ELSTER form takes whole euros');
     });
 
     test('a special treatment nobody confirmed is flagged for review', async () => {
@@ -925,13 +926,14 @@ describe('VAT preparation', () => {
       }
     });
 
-    test('the service date decides the month under Soll; a missing one is flagged', async () => {
+    test('the service date decides the month under Soll; an invoice issued without one is dated by the invoice date', async () => {
       const noServiceDate = await issueDated(h.api, { client: 'Ohne Leistungsdatum', date: '2026-03-03', items: [line('Beratung', 100, 19)] });
+      assert.equal(noServiceDate.servicePeriod, '2026-03-03', 'issuing stores the invoice date as the service date (§14 Abs. 4 Nr. 6 UStG)');
       await setMethod('soll');
       try {
         const march = await month(3);
-        assert.ok(march.issues.some((i) => i.code === 'SERVICE_DATE_REQUIRED' && i.sourceId === noServiceDate.id));
-        assert.ok(march.sources.some((s) => s.sourceId === noServiceDate.id && s.date === '2026-03-03'), 'falls back to the invoice date');
+        assert.ok(!march.issues.some((i) => i.code === 'SERVICE_DATE_REQUIRED' && i.sourceId === noServiceDate.id));
+        assert.ok(march.sources.some((s) => s.sourceId === noServiceDate.id && s.date === '2026-03-03'), 'counted in the month of the invoice date');
       } finally {
         await setMethod('ist');
       }

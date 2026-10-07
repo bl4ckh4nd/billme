@@ -12,6 +12,9 @@ import {
   offerSchema,
   reserveDocumentNumber,
   settleInvoiceStatusFromPayments,
+  prepareInvoiceForIssue,
+  InvoiceIssueError,
+  type IssuerSettings,
   type TenantScope,
   type Invoice,
   type Offer,
@@ -196,6 +199,16 @@ export const postOpenedBillingDocument = async (
  * receipt: a replay returns the recorded response byte-for-byte, a changed
  * intent for the same id is a 409, and any failure rolls back every effect.
  */
+/** §14 check at issue time, reported as 422 with everything that is missing. */
+export const issuable = <T extends Invoice>(invoice: T, settings: IssuerSettings): T => {
+  try {
+    return prepareInvoiceForIssue(invoice, settings);
+  } catch (error) {
+    if (error instanceof InvoiceIssueError) throw new ApiError(422, error.message);
+    throw error;
+  }
+};
+
 export const issueDocumentChain = async (
   database: ServerDatabase,
   auth: AuthSession,
@@ -276,6 +289,11 @@ export const issueDocumentChain = async (
     if (input.operation === 'revision') {
       await session.query("UPDATE number_reservations SET document_id=$3 WHERE tenant_id=$1 AND id=$2 AND status='reserved'", [scope.tenantId, reservation.reservationId, created.id]);
     } else await finalizeDocumentNumber(numbering, reservation.reservationId, created.id);
+    // A final or partial invoice is the first invoice of an order; corrections copy an issued invoice and stay possible.
+    if (input.operation === 'settlement_invoice') {
+      if (!settings) throw new ApiError(409, 'Die Einstellungen müssen zuerst eingerichtet werden.');
+      created = issuable(created, settings);
+    }
     const open = input.operation === 'revision' ? created : await repositories.invoiceRepo.save(scope, { ...created, status: 'open' });
     await repositories.auditLog.append(
       scope,

@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { createNumberingPortsForDb } from './numbering.js';
 import { convertServerOfferToInvoice } from './offerConversion.js';
-import type { InvoiceTaxSnapshot } from '@billme/server-core';
+import type { Invoice, InvoiceTaxSnapshot } from '@billme/server-core';
 import Fastify, { type FastifyInstance } from 'fastify';
 import cors from '@fastify/cors';
 import { DEFAULT_SETTINGS } from '@billme/desktop-services/mockData';
@@ -15,6 +15,7 @@ import {
   clientProjectSchema,
   calculateInvoiceTaxSnapshot,
   resolveInvoiceTaxMode,
+  resolveIssueTaxMode,
   prepareClientForUpsert,
   createSingleTenantScope,
   createCancellationInvoiceAsync,
@@ -82,7 +83,7 @@ import {
 import { SessionTokenService, checkSessionSecret, type AuthSession, type AuthSessionInfo } from './auth.js';
 import { createAuthStore, resolveSetupToken } from './authStore.js';
 import { buildAuditEntry, withInvoiceHistory, withOfferHistory } from './auditHistory.js';
-import { assertOfferContentEditable, assertInvoiceContentEditable, cancelUnpaidRevisionSource, chainIssueBodySchema, settleCorrectedSource, settledInvoiceStatus, issueDocumentChain, lockChainSource, postOpenedBillingDocument } from './documentIssuance.js';
+import { assertOfferContentEditable, assertInvoiceContentEditable, cancelUnpaidRevisionSource, chainIssueBodySchema, settleCorrectedSource, settledInvoiceStatus, issueDocumentChain, issuable, lockChainSource, postOpenedBillingDocument } from './documentIssuance.js';
 import { ApiError, registerErrorHandler, typedRoute } from './http.js';
 import { registerServerApiOrpc } from './orpc.js';
 import { registerProAccountingRoutes, type ProAccountingRouteOptions } from './proAccountingRoutes.js';
@@ -481,9 +482,11 @@ const registerBillingRoutes = (app: FastifyInstance, product: 'lite' | 'pro', pr
         if (!before || before.status === 'draft') {
           const settings = parseStoredSettings(await getServerSettings(transaction, session.scope.tenantId));
           if (!settings) throw new ApiError(409, 'Die Einstellungen müssen zuerst eingerichtet werden.');
+          // The mode decides the VAT, so it is resolved before the snapshot (§19 UStG: a Kleinunternehmer shows none).
+          nextInvoice.taxMode = resolveIssueTaxMode(nextInvoice.taxMode, settings);
+          if (nextInvoice.status !== 'draft') Object.assign(nextInvoice, issuable(nextInvoice, settings));
           const taxSnapshot = keepChainTax(nextInvoice.taxSnapshot, calculateInvoiceTaxSnapshot(nextInvoice, settings));
           nextInvoice.taxSnapshot = taxSnapshot;
-          nextInvoice.taxMode = resolveInvoiceTaxMode(nextInvoice.taxMode, settings);
           nextInvoice.amount = taxSnapshot.grossAmount;
         }
         if (before && before.status !== 'draft') nextInvoice.status = await settledInvoiceStatus(transaction, session.scope, before);

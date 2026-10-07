@@ -65,6 +65,7 @@ export const renderContextSchema = z.object({
     fee: z.number(),
     originalAmount: z.number(),
     paidAmount: z.number(),
+    creditedAmount: z.number(),
     daysOverdue: z.number().int(),
   }).optional(),
 });
@@ -221,6 +222,10 @@ export const registerDocumentTemplateRoutes = (app: FastifyInstance, product: 'l
             claimed && definition.id === level ? { ...definition, fee: Number(claimed.fee) } : definition,
           ),
           history: await repositories.dunningHistoryRepo.listByInvoice(session.scope, document.id),
+          credited: (await database.query<{ amount: string | number }>(
+            "SELECT amount FROM invoices WHERE tenant_id=$1 AND source_document_id=$2 AND document_kind='credit_note' AND status<>'draft'",
+            [tenantId, document.id],
+          )).rows.reduce((sum, row) => sum + Math.abs(Number(row.amount)), 0),
           today: new Date(),
         });
         return { templateKind, document, template, settings, source, dunning, texts: intro ? { intro } : undefined };

@@ -7,6 +7,7 @@ import { createLiteHttpBillmeApi } from '@billme/desktop-services/liteHttpApi';
 import { createProHttpBillmeApi } from '@billme/desktop-services/proHttpApi';
 import { DEFAULT_SETTINGS } from '@billme/desktop-services/mockData';
 import { buildServerApi, type BuildServerApiOptions } from '../../server-runtime/src/app.js';
+import { ISSUER } from './fixtures.js';
 import { startPgliteWire, type PgliteWire } from './pglite-wire.js';
 
 /**
@@ -130,7 +131,7 @@ export const startHostedServer = async (suite: string, options: {
 
   /** The app's own Einstellungen save, so numbering and tax see a configured company. */
   const putSettings = async (product: 'lite' | 'pro', token: string, patch: Record<string, unknown> = {}) => {
-    const settings = { ...DEFAULT_SETTINGS, company: { ...DEFAULT_SETTINGS.company, name: 'Muster GmbH', email: 'info@muster.example' }, ...patch };
+    const settings = { ...DEFAULT_SETTINGS, company: { ...DEFAULT_SETTINGS.company, ...ISSUER.company }, finance: { ...DEFAULT_SETTINGS.finance, ...ISSUER.finance }, ...patch };
     const response = await http('PUT', `/api/v1/${product}/settings`, { token, body: { reason: 'integration setup', settings } });
     if (response.status !== 200) throw new Error(`settings failed: ${response.status} ${response.text}`);
     return settings;

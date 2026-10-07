@@ -57,7 +57,6 @@ export const convertServerOfferToInvoice = (
     invoiceNumber: reservation.number,
     invoiceDate: date,
     dueDate: due.toISOString().slice(0, 10),
-    servicePeriod: offer.validUntil,
   }));
   await finalizeDocumentNumber(numbering, reservation.reservationId, saved.id);
   await session.query('INSERT INTO offer_invoice_conversions (tenant_id,product,offer_id,invoice_id) VALUES ($1,$2,$3,$4)', [scope.tenantId, scope.product, input.offerId, saved.id]);

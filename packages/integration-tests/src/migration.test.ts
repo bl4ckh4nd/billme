@@ -53,6 +53,7 @@ const iso = (days: number) => new Date(Date.now() + days * 86_400_000).toISOStri
 const settings = {
   ...DEFAULT_SETTINGS,
   company: { ...DEFAULT_SETTINGS.company, name: 'Altbestand GmbH', owner: 'Anna Alt', email: 'anna@alt.example', street: 'Altstraße 1', zip: '10115', city: 'Berlin' },
+  finance: { ...DEFAULT_SETTINGS.finance, taxId: '27/123/45678' },
   numbers: { ...DEFAULT_SETTINGS.numbers, invoicePrefix: 'RE-%Y-', nextInvoiceNumber: 4, numberLength: 3, offerPrefix: 'ANG-%Y-', nextOfferNumber: 3, nextCustomerNumber: 3 },
   onboardingCompleted: true,
 };

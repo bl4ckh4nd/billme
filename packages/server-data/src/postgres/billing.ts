@@ -1081,17 +1081,13 @@ export const createPostgresInvoiceRepository = (
       },
   async patchDunning(scope, id, patch) {
     return runInTransaction(db, async (session) => {
-      const locked = await session.query<{ accounting_status: string | null }>('SELECT accounting_status FROM invoices WHERE tenant_id=$1 AND id=$2 FOR UPDATE', [scope.tenantId, id]);
+      await session.query('SELECT id FROM invoices WHERE tenant_id=$1 AND id=$2 FOR UPDATE', [scope.tenantId, id]);
       const repository = createPostgresInvoiceRepository(session);
       const current = await repository.getById(scope, id);
       if (!current) throw new Error('INVOICE_NOT_FOUND');
-      // ponytail: a posted (Pro) receivable keeps its journal amount, so the fee is not charged there;
-      // booking it needs its own Mahngebühr entry and open item.
-      const posted = ['posted', 'reversed'].includes(String(locked.rows[0]?.accounting_status));
-      const eligible = !posted && !['draft', 'paid', 'cancelled'].includes(current.status);
+      // The Mahngebühr is recorded in the dunning history; the issued invoice's amount never changes.
       return repository.save(scope, {
         ...current,
-        amount: current.amount + (eligible ? patch.fee ?? 0 : 0),
         dunningLevel: patch.dunningLevel === undefined ? current.dunningLevel : Math.max(current.dunningLevel ?? 0, patch.dunningLevel),
         history: patch.historyEntry ? [patch.historyEntry, ...current.history] : current.history,
         updatedAt: nowIso(),

@@ -410,7 +410,7 @@ describe('server worker', () => {
 
       const stored = (await h.http('GET', `/api/v1/lite/invoices/${invoice.id}`, { token: tenant.token })).body;
       assert.equal(stored.dunningLevel, 2, '30 days overdue is the second level');
-      assert.equal(stored.amount, invoice.amount + 5, 'the fee is added once');
+      assert.equal(stored.amount, invoice.amount, 'the fee is recorded in the dunning history, the issued invoice keeps its amount');
       const log = await rows<{ status: string; recipient_email: string }>(`SELECT status, recipient_email FROM email_log WHERE tenant_id = $1 AND document_id = $2`, [tenant.tenantId, invoice.id]);
       assert.deepEqual(log, [{ status: 'sent', recipient_email: 'saeumig@example.com' }]);
       assert.equal((await rows(`SELECT 1 FROM audit_log WHERE tenant_id = $1 AND entity_id = $2 AND action = 'invoice.dunning_reminder_sent'`, [tenant.tenantId, invoice.id])).length, 1);
@@ -421,7 +421,8 @@ describe('server worker', () => {
       const again = await w.runDunningJob();
       assert.equal(again.details?.emailsSent, 0);
       assert.equal(smtp.mails.length, 1, 'a reminder for the same level went out twice');
-      assert.equal((await h.http('GET', `/api/v1/lite/invoices/${invoice.id}`, { token: tenant.token })).body.amount, invoice.amount + 5, 'the fee was charged twice');
+      assert.equal(Number((await rows<{ fee: string }>(`SELECT COALESCE(SUM(fee_applied), 0) AS fee FROM dunning_history WHERE tenant_id = $1 AND invoice_id = $2`, [tenant.tenantId, invoice.id]))[0]!.fee), 5, 'the fee was charged twice');
+      assert.equal((await h.http('GET', `/api/v1/lite/invoices/${invoice.id}`, { token: tenant.token })).body.amount, invoice.amount);
     });
 
     test('a reminder that could not be sent is reported, never raises the level, and never costs the fee or the mail twice', async () => {
@@ -435,7 +436,8 @@ describe('server worker', () => {
       assert.equal(failed.details?.emailsSent, 0);
       const afterFailure = (await h.http('GET', `/api/v1/lite/invoices/${invoice.id}`, { token: tenant.token })).body;
       assert.equal(afterFailure.dunningLevel ?? 0, 0, 'a reminder that never left must not raise the level');
-      assert.ok(afterFailure.amount <= invoice.amount + 5, 'at most one fee');
+      assert.equal(afterFailure.amount, invoice.amount, 'the issued invoice never carries a fee');
+      assert.ok(Number((await rows<{ fee: string }>(`SELECT COALESCE(SUM(fee_applied), 0) AS fee FROM dunning_history WHERE tenant_id = $1 AND invoice_id = $2`, [tenant.tenantId, invoice.id]))[0]!.fee) <= 5, 'at most one fee');
       assert.equal((await rows(`SELECT 1 FROM email_log WHERE tenant_id = $1 AND document_id = $2 AND status = 'failed'`, [tenant.tenantId, invoice.id])).length, 1, 'the failure is in the mail log');
       assert.equal((await rows(`SELECT 1 FROM email_log WHERE tenant_id = $1 AND document_id = $2 AND status = 'sent'`, [tenant.tenantId, invoice.id])).length, 0);
       // The send state is not silent: a delivery whose outcome is unclear must be visible for a person to reconcile.
@@ -455,7 +457,8 @@ describe('server worker', () => {
       await w.runDunningJob().catch(() => undefined);
       assert.ok(smtp.mails.length <= 1, `${smtp.mails.length} reminders for one level`);
       const stored = (await h.http('GET', `/api/v1/lite/invoices/${invoice.id}`, { token: tenant.token })).body;
-      assert.ok(stored.amount <= invoice.amount + 5, 'the fee was charged twice');
+      assert.equal(stored.amount, invoice.amount);
+      assert.ok(Number((await rows<{ fee: string }>(`SELECT COALESCE(SUM(fee_applied), 0) AS fee FROM dunning_history WHERE tenant_id = $1 AND invoice_id = $2`, [tenant.tenantId, invoice.id]))[0]!.fee) <= 5, 'the fee was charged twice');
     });
 
     test('dunning without a configured mail provider stops loudly instead of marking invoices as reminded', async () => {

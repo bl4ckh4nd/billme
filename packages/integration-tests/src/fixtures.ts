@@ -84,3 +84,16 @@ export const newClient = (overrides: Record<string, unknown> = {}) => ({
   activities: [],
   ...overrides,
 });
+
+/** What onboarding asks for: §14 UStG refuses invoices from a seller without name, address and tax number. */
+export const ISSUER = {
+  company: { name: 'Muster GmbH', street: 'Musterweg 1', zip: '10115', city: 'Berlin', email: 'info@muster.example' },
+  finance: { taxId: '12/345/67890', vatId: 'DE123456789' },
+};
+
+/** Runs `body` with the Kleinunternehmerregelung switched on, then restores the settings. Only §19 tenants may issue under §19. */
+export const asSmallBusiness = async (api: Pick<BillmeApi, 'settings'>, body: () => Promise<void>) => {
+  const settings = (await api.settings.get())!;
+  await api.settings.set({ settings: { ...settings, legal: { ...settings.legal, smallBusinessRule: true } } });
+  try { await body(); } finally { await api.settings.set({ settings }); }
+};

@@ -27,7 +27,8 @@ import { addDays, draftInvoice, issueInvoice, newClient, today } from './fixture
  *   failed profile burning an invoice number; generated invoices untraceable
  * - dunning: invoices dunned that are not overdue, paid, still a draft, not
  *   receivables or already settled by a Stornorechnung/full credit note; the wrong level; a fee charged twice or for a mail that was
- *   never sent; one level mailed twice; the same invoice escalated twice in
+ *   never sent, or added to the issued invoice's amount (it is the customer's own debt, not taxable
+ *   revenue); a reminder whose %A demands what was already paid or credited; one level mailed twice; the same invoice escalated twice in
  *   one day; a rejected mail recorded as sent; a run that silently does
  *   nothing when automation, levels or the mail provider are missing
  * - e-mail: a mail reported as queued when no provider can deliver it, the
@@ -113,10 +114,10 @@ const parseCsv = (text: string): string[][] => text.replace(/^﻿/, '').split('\
 });
 
 /**
- * ponytail: Pro posts every issued invoice and a posted receivable keeps its journal amount, so the
- * dunning fee is not charged there (only level, mail and history). Booking it needs a Mahngebühr entry.
+ * The Mahngebühr is recorded in the dunning history for both products and never changes the issued
+ * invoice. ponytail: Pro does not book it in the journal yet; that needs its own Mahngebühr entry and open item.
  */
-const chargedFee = (product: Product, fee: number) => (product === 'pro' ? 0 : fee);
+const chargedFee = (_product: Product, fee: number) => fee;
 
 const level = (id: number, daysAfterDueDate: number, fee: number, text = `Invoice %N for %K is %T days late, fee %F.`) => ({
   id, name: id === 1 ? 'Zahlungserinnerung' : `${id - 1}. Mahnung`, enabled: true, daysAfterDueDate, fee, subject: `Level ${id} %N`, text,
@@ -607,7 +608,7 @@ for (const product of PRODUCTS) describe(`automation (${product})`, () => {
           assert.deepEqual(status.history.map((entry) => [entry.dunningLevel, entry.feeApplied, entry.emailSent, entry.daysOverdue]), [[expectedLevel, charged(fee), true, days]], key);
 
           const stored = await invoiceOf(original.id);
-          assert.equal(stored.amount, original.amount + charged(fee), `${key}: the fee is added to the amount owed`);
+          assert.equal(stored.amount, original.amount, `${key}: the fee is the customer's own debt, the issued invoice is unchanged`);
           assert.equal(stored.dunningLevel, expectedLevel, key);
           assert.equal(stored.taxSnapshot!.grossAmount, original.taxSnapshot!.grossAmount, `${key}: the VAT snapshot of the invoice is not touched`);
           assert.ok(stored.history!.some((entry) => /Mahnstufe|dunning/i.test(entry.action)), `${key}: the reminder shows in the document history`);
@@ -636,12 +637,24 @@ for (const product of PRODUCTS) describe(`automation (${product})`, () => {
       });
     });
 
-    // The letter announces the level's fee (%F) while a posted Pro receivable does not carry it.
-    if (product === 'pro') test('the dunning fee is charged on a posted invoice', { todo: 'BUG: Pro posts every issued invoice; the Mahngebühr needs its own journal entry and open item' }, async () => {
+    if (product === 'pro') test('the dunning fee is recorded for a posted invoice too', async () => {
       const invoice = await overdueInvoice(15, 'Gebuehr Pro');
       await withSettings(dunningSetup([level(1, 7, 0), level(2, 14, 5)]), async () => {
         await h.api.dunning.manualRun();
         assert.equal((await statusOf(invoice.id)).totalFeesApplied, 5);
+      });
+    });
+
+    test('the reminder demands the open balance: %A subtracts payments and issued credit notes, the invoice keeps its amount', async () => {
+      const invoice = await overdueInvoice(10, 'Teilweise beglichen');
+      await h.api.invoices.savePayment({ invoiceId: invoice.id, payment: { id: randomUUID(), date: today(), amount: 38, method: 'bank' }, reason: 'Teilzahlung' });
+      await h.api.documents.chainIssue({ operation: 'correction', id: randomUUID(), invoiceId: invoice.id, kind: 'credit_note', amount: 50, date: today(), dueDate: today(), reason: 'Teilgutschrift' } as never);
+      await withSettings(dunningSetup([level(1, 7, 4, 'Offen sind noch %A EUR zzgl. %F EUR Gebühr.')]), async () => {
+        await h.api.dunning.manualRun();
+        const [mail] = mailsTo('teilweisebeglichen@example.com');
+        assert.ok(mail?.includes(`Offen sind noch ${(invoice.amount - 38 - 50).toFixed(2)} EUR zzgl. 4.00 EUR Geb`), mail);
+        assert.equal((await statusOf(invoice.id)).totalFeesApplied, 4);
+        assert.equal((await invoiceOf(invoice.id)).amount, invoice.amount);
       });
     });
 
@@ -683,7 +696,7 @@ for (const product of PRODUCTS) describe(`automation (${product})`, () => {
         assert.equal(status.currentLevel, 2);
         assert.equal(status.totalFeesApplied, charged(5));
         assert.deepEqual(status.history.map((entry) => [entry.dunningLevel, entry.feeApplied]).sort(), [[1, 0], [2, charged(5)]]);
-        assert.equal((await invoiceOf(invoice.id)).amount, invoice.amount + charged(5), 'the fee was charged once');
+        assert.equal((await invoiceOf(invoice.id)).amount, invoice.amount, 'the invoice amount never carries the fee');
       });
     });
 
@@ -735,7 +748,7 @@ for (const product of PRODUCTS) describe(`automation (${product})`, () => {
         assert.equal((await h.raw('POST', '/dunning/deliveries/resolve', { id: confirmedDelivery.id, accepted: true, reason: 'Beim Anbieter bestätigt' })).status, 200);
         const confirmedStatus = await statusOf(confirmed.id);
         assert.deepEqual({ level: confirmedStatus.currentLevel, fee: confirmedStatus.totalFeesApplied }, { level: 1, fee: charged(3) });
-        assert.equal((await invoiceOf(confirmed.id)).amount, confirmed.amount + charged(3));
+        assert.equal((await invoiceOf(confirmed.id)).amount, confirmed.amount);
 
         const retry = await h.api.dunning.manualRun();
         assert.equal(retry.result!.emailsSent, 1, 'only the refused invoice is mailed');
@@ -743,7 +756,7 @@ for (const product of PRODUCTS) describe(`automation (${product})`, () => {
         assert.match(mailText(sink.messages.at(-1)!), new RegExp(`Subject: Level 1 ${refused.number}`));
         const refusedStatus = await statusOf(refused.id);
         assert.deepEqual({ level: refusedStatus.currentLevel, fee: refusedStatus.totalFeesApplied }, { level: 1, fee: charged(3) });
-        assert.equal((await invoiceOf(refused.id)).amount, refused.amount + charged(3), 'the fee is charged once, after the provider took the mail');
+        assert.equal((await invoiceOf(refused.id)).amount, refused.amount, 'the fee lives in the history, not in the invoice');
         assert.deepEqual(await deliveries(), [], 'nothing is waiting any more');
 
         const reviewed = (await auditRows()).filter((row) => row[4] === 'invoice.dunning_delivery_reviewed' && row[3] === refused.id);
@@ -921,6 +934,6 @@ for (const product of PRODUCTS) test(`recurring progress, dunning history and la
   assert.deepEqual((await second.api.dunning.manualRun()).result, { processedInvoices: 0, emailsSent: 0, feesApplied: 0, errors: [] }, 'the level is not mailed again');
   assert.equal(sink.messages.length, 1);
   assert.equal((await second.api.invoices.list()).length, invoicesBefore);
-  assert.equal((await second.api.invoices.list()).find((invoice) => invoice.id === late.id)!.amount, late.amount + chargedFee(product, 4), 'the fee was charged once');
+  assert.equal((await second.api.invoices.list()).find((invoice) => invoice.id === late.id)!.amount, late.amount, 'the invoice amount never carries the fee');
   assert.equal((await second.api.audit.verify()).ok, true);
 });

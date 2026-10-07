@@ -4,7 +4,7 @@ import { after, before, describe, test } from 'node:test';
 import { PDFArray, PDFDict, PDFDocument, PDFName, PDFRawStream, PDFString, decodePDFRawStream } from 'pdf-lib';
 import { createDocumentExportPreparer } from '@billme/desktop-services/documentExport';
 import { startLite, type LiteHarness } from './harness.js';
-import { draftInvoice, draftOffer } from './fixtures.js';
+import { asSmallBusiness, draftInvoice, draftOffer } from './fixtures.js';
 import { configureLite, issueDated, line } from './reports-fixtures.js';
 
 /**
@@ -219,11 +219,18 @@ describe('e-invoice export (Lite)', () => {
     ];
     for (const [mode, category, zero, reason] of modes) {
       test(`${mode} → ${category}${zero ? ', 0 %, with a legal reason, gross = net' : ', VAT charged'}`, async () => {
-        const invoice = await issueDated(h.api, {
+        // Only a Kleinunternehmer issues under §19.
+        const asTenant = async <T,>(body: () => Promise<T>): Promise<T> => {
+          if (mode !== 'small_business_19_ustg') return body();
+          let result!: T;
+          await asSmallBusiness(h.api, async () => { result = await body(); });
+          return result;
+        };
+        const invoice = await asTenant(() => issueDated(h.api, {
           client: `Modus ${mode}`, date: '2026-06-02', servicePeriod: '2026-06-02', taxMode: mode as never,
           taxMeta: { taxRuleConfirmed: true, buyerVatId: 'ATU12345678', buyerCountryCode: 'AT', sellerCountryCode: 'DE' } as never,
           items: [line('Leistung A', 100, 19), line('Leistung B', 50, 7)],
-        });
+        }));
         const { xml } = await exportInvoice(invoice.id);
         const storedInvoice = await stored(invoice.id);
         const groups = headerTaxes(xml);
@@ -256,10 +263,9 @@ describe('e-invoice export (Lite)', () => {
       assert.equal(headerTaxes(xml)[0]!.category, 'AE');
     });
 
-    test('modes that need a buyer VAT ID (13b, intra-EU supply, EU service) are refused without one (BR-AE-02 / BR-IC-02)', async () => {
+    test('modes that need a buyer VAT ID (13b, intra-EU supply, EU service) cannot even be issued without one (BR-AE-02 / BR-IC-02)', async () => {
       for (const mode of ['reverse_charge_13b', 'intra_eu_supply_6a', 'intra_eu_service_reverse_charge']) {
-        const invoice = await issueDated(h.api, { client: `Ohne USt-IdNr ${mode}`, date: '2026-06-04', servicePeriod: '2026-06-04', taxMode: mode as never, taxMeta: { taxRuleConfirmed: true } as never, items: [line('Leistung', 1000)] });
-        await assert.rejects(prepare("invoice", invoice.id), Error, mode);
+        await assert.rejects(issueDated(h.api, { client: `Ohne USt-IdNr ${mode}`, date: '2026-06-04', servicePeriod: '2026-06-04', taxMode: mode as never, taxMeta: { taxRuleConfirmed: true } as never, items: [line('Leistung', 1000)] }), /USt-IdNr\. des Kunden fehlt/, mode);
       }
     });
 
@@ -269,8 +275,10 @@ describe('e-invoice export (Lite)', () => {
         return unescapeXml(headerTaxes((await exportInvoice(invoice.id)).xml)[0]!.reason!);
       };
       assert.equal(await reasonOf('vat_exempt_4_ustg', { exemptionReasonOverride: ' Steuerfrei nach § 4 Nr. 14 UStG ' }), 'Steuerfrei nach § 4 Nr. 14 UStG');
-      assert.equal(await reasonOf('small_business_19_ustg', { sellerCountryCode: 'AT' }), 'Kleinunternehmerregelung nach UStG');
-      assert.equal(await reasonOf('small_business_19_ustg', { sellerCountryCode: 'CH' }), 'Keine MWST wegen Kleinunternehmen');
+      await asSmallBusiness(h.api, async () => {
+        assert.equal(await reasonOf('small_business_19_ustg', { sellerCountryCode: 'AT' }), 'Kleinunternehmerregelung nach UStG');
+        assert.equal(await reasonOf('small_business_19_ustg', { sellerCountryCode: 'CH' }), 'Keine MWST wegen Kleinunternehmen');
+      });
       assert.equal(await reasonOf('reverse_charge_13b', { sellerCountryCode: 'AT' }), 'Steuerschuldnerschaft des Leistungsempfängers (Reverse Charge)');
     });
   });
@@ -398,16 +406,13 @@ describe('e-invoice export (Lite)', () => {
       }
     });
 
-    test('an incomplete seller address stops the export with the missing field (the company data is frozen when the invoice is issued)', async () => {
+    test('an incomplete seller address stops the invoice already when it is issued', async () => {
       await configureLite(h.api, { eInvoice: true, street: '' });
-      let invoiceId: string;
       try {
-        invoiceId = (await issueDated(h.api, { client: 'Seller Check', date: '2026-06-25', servicePeriod: '2026-06-25', items: [line('Leistung', 10, 19)] })).id;
-        await assert.rejects(prepare('invoice', invoiceId), /Pflichtfeld "Verkäufer Straße"/);
+        await assert.rejects(issueDated(h.api, { client: 'Seller Check', date: '2026-06-25', servicePeriod: '2026-06-25', items: [line('Leistung', 10, 19)] }), /Anschrift deines Unternehmens/);
       } finally {
         await configureLite(h.api, { eInvoice: true });
       }
-      await assert.rejects(prepare('invoice', invoiceId), /Pflichtfeld "Verkäufer Straße"/, 'the issued invoice keeps the data it was issued with');
       const later = await issueDated(h.api, { client: 'Seller Check 2', date: '2026-06-25', servicePeriod: '2026-06-25', items: [line('Leistung', 10, 19)] });
       assert.ok((await prepare('invoice', later.id)).finalize, 'a complete profile works again');
     });
@@ -416,14 +421,13 @@ describe('e-invoice export (Lite)', () => {
       const draft = await draftInvoice(h.api, { client: 'Adresse unvollständig', items: [line('Leistung', 10, 19)] });
       const incomplete = await h.api.invoices.upsert({ reason: 'Adresse ohne PLZ', invoice: { ...draft, clientAddress: 'Hauptstraße 1\nBerlin', status: 'open' } });
       await assert.rejects(prepare('invoice', incomplete.id), /Pflichtfeld "Käufer PLZ"/);
-      const noAddress = await h.api.invoices.upsert({ reason: 'Ohne Adresse', invoice: { ...(await draftInvoice(h.api, { client: 'Ohne Adresse' })), clientAddress: '', status: 'open' } });
-      await assert.rejects(prepare('invoice', noAddress.id), /Pflichtfeld "Käufer Straße"/);
+      // Without any address the invoice is not issued at all (§14 Abs. 4 Nr. 1 UStG).
+      await assert.rejects(h.api.invoices.upsert({ reason: 'Ohne Adresse', invoice: { ...(await draftInvoice(h.api, { client: 'Ohne Adresse' })), clientAddress: '', status: 'open' } }), /Anschrift des Kunden fehlt/);
     });
 
-    test('an invoice with nothing billable has no e-invoice', async () => {
+    test('an invoice with nothing billable is not issued, so there is no e-invoice', async () => {
       const draft = await draftInvoice(h.api, { client: 'Nur Text', items: [{ kind: 'text', description: 'Nur ein Hinweis', quantity: 0, price: 0, total: 0 }] });
-      const issued = await h.api.invoices.upsert({ reason: 'Rechnung gestellt', invoice: { ...draft, status: 'open' } });
-      await assert.rejects(prepare('invoice', issued.id), /keine Positionen/);
+      await assert.rejects(h.api.invoices.upsert({ reason: 'Rechnung gestellt', invoice: { ...draft, status: 'open' } }), /Position mit Betrag/);
     });
 
     test('an unknown document and a corrupt PDF fail instead of producing a half-embedded file', async () => {
@@ -462,8 +466,7 @@ describe('e-invoice export (Lite)', () => {
     test('an e-invoice states a seller tax identifier (VAT ID or tax number)', async () => {
       await configureLite(h.api, { eInvoice: true, vatId: '', taxId: '' });
       try {
-        const invoice = await issueDated(h.api, { client: 'Seller ohne ID', date: '2026-07-03', servicePeriod: '2026-07-03', items: [line('Leistung', 10, 19)] });
-        await assert.rejects(prepare('invoice', invoice.id));
+        await assert.rejects(issueDated(h.api, { client: 'Seller ohne ID', date: '2026-07-03', servicePeriod: '2026-07-03', items: [line('Leistung', 10, 19)] }), /Steuernummer oder USt-IdNr\./);
       } finally {
         await configureLite(h.api, { eInvoice: true });
       }

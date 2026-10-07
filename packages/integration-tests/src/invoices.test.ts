@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { after, before, describe, test } from 'node:test';
 import { calculateInvoiceTaxSnapshot } from '@billme/server-core';
 import { PRODUCTS, startProduct, type LiteHarness } from './harness.js';
-import { datevEvidence, draftInvoice, draftOffer, issueInvoice, today, type DocumentInput } from './fixtures.js';
+import { addDays, asSmallBusiness, datevEvidence, draftInvoice, draftOffer, issueInvoice, today, type DocumentInput } from './fixtures.js';
 
 /**
  * Invoices end to end through the Lite desktop backend.
@@ -13,6 +13,12 @@ import { datevEvidence, draftInvoice, draftOffer, issueInvoice, today, type Docu
  *   again, concurrent reservations colliding, a reservation reused for another
  *   document, the year placeholder not expanded
  * - issuing: a draft issued without a number, a direct jump draft → paid
+ * - §14 UStG at issue: an invoice issued without the buyer's address, without
+ *   the seller's address or tax number, without a priced line, due before it is
+ *   dated, as reverse charge without both VAT IDs, or as Kleinunternehmer by a
+ *   tenant that is not one; a Kleinunternehmer's invoice showing VAT because the
+ *   editor sent the default mode; no service date on the stored invoice; a
+ *   refused issue still consuming an invoice number
  * - immutability: an issued invoice's content, number or tax changed in place,
  *   an issued invoice set back to draft
  * - tax: the snapshot (net/VAT/gross per rate) lost or altered on save; mixed
@@ -74,7 +80,7 @@ for (const product of PRODUCTS) describe(`invoices (${product})`, () => {
       const items = [{ kind: 'item' as const, description: 'Ohne Reservierung', quantity: 1, price: 50, total: 50 }];
       const taxSnapshot = calculateInvoiceTaxSnapshot({ items, taxMode: 'standard_vat' }, settings!);
       const saved = await h.api.invoices.upsert({ reason: 'create', invoice: {
-        id, number: 'ENTWURF', client: 'No reservation', clientEmail: '', date: today(), dueDate: today(),
+        id, number: 'ENTWURF', client: 'No reservation', clientEmail: '', clientAddress: 'Hauptstraße 1\n10115 Berlin', date: today(), dueDate: today(),
         amount: taxSnapshot.grossAmount, status: 'open', items, payments: [], history: [], taxMode: 'standard_vat', taxSnapshot,
       } });
       assert.match(saved.number, /^RE-\d{4}-\d{3}$/);
@@ -126,6 +132,105 @@ for (const product of PRODUCTS) describe(`invoices (${product})`, () => {
     });
   });
 
+  const withSettings = async (patch: (s: NonNullable<Awaited<ReturnType<typeof h.api.settings.get>>>) => object, body: () => Promise<void>) => {
+    const settings = (await h.api.settings.get())!;
+    await h.api.settings.set({ settings: patch(settings) as never });
+    try { await body(); } finally { await h.api.settings.set({ settings }); }
+  };
+
+  type Draft = Awaited<ReturnType<typeof draftInvoice>>;
+  describe('issuing enforces §14 UStG', () => {
+    const issue = (draft: Draft, patch: Partial<Draft> = {}) =>
+      h.raw('POST', '/invoices', { reason: 'Rechnung gestellt', invoice: { ...draft, ...patch, kind: 'invoice', status: 'open' } });
+    const nextNumber = async () => {
+      const probe = await h.api.numbers.reserve({ kind: 'invoice' });
+      await h.api.numbers.release({ reservationId: probe.reservationId });
+      return probe.number;
+    };
+
+    test('a draft may be incomplete; issuing it names every missing Pflichtangabe', async () => {
+      const draft = await h.api.invoices.upsert({ reason: 'create', invoice: { ...(await draftInvoice(h.api, { client: 'Lückenhaft' })), clientAddress: '', items: [{ kind: 'text', description: 'Nur Text', quantity: 0, price: 0, total: 0 }], dueDate: addDays(today(), -1) } });
+      assert.equal(draft.status, 'draft', 'drafts are not checked');
+      const response = await issue(draft);
+      assert.equal(response.status, 422, response.text);
+      assert.match(response.text, /Anschrift des Kunden/);
+      assert.match(response.text, /Position mit Betrag/);
+      assert.match(response.text, /Fälligkeitsdatum liegt vor dem Rechnungsdatum/);
+      const stored = (await h.api.invoices.list()).find((i) => i.id === draft.id)!;
+      assert.equal(stored.status, 'draft', 'the refused draft stays a draft');
+    });
+
+    test('a structured billing address counts as the buyer address', async () => {
+      const draft = await draftInvoice(h.api, { client: 'Strukturiert' });
+      const open = await h.api.invoices.upsert({ reason: 'issue', invoice: { ...draft, clientAddress: '', billingAddressJson: { company: 'Strukturiert', street: 'Ring 2', zip: '20095', city: 'Hamburg', country: 'DE' }, status: 'open' } });
+      assert.equal(open.status, 'open');
+    });
+
+    test('a seller without address or tax number cannot issue', async () => {
+      const draft = await draftInvoice(h.api, { client: 'Kunde ohne Gegenüber' });
+      await withSettings((s) => ({ ...s, company: { ...s.company, street: '' }, finance: { ...s.finance, taxId: '', vatId: '' } }), async () => {
+        const before = await nextNumber();
+        const response = await issue(draft, { number: 'ENTWURF', numberReservationId: undefined } as never);
+        assert.equal(response.status, 422, response.text);
+        assert.match(response.text, /Anschrift deines Unternehmens/);
+        assert.match(response.text, /Steuernummer oder USt-IdNr\./);
+        assert.equal(await nextNumber(), before, 'a refused issue consumes no invoice number');
+      });
+    });
+
+    test('reverse charge needs the buyer VAT ID; an intra-EU service also the seller VAT ID (§14a)', async () => {
+      const draft = await draftInvoice(h.api, { client: 'Bau GmbH', taxMode: 'reverse_charge_13b', taxMeta: datevEvidence(product) as never, items: [{ kind: 'item', description: 'Bauleistung', quantity: 1, price: 1000, total: 1000 }] });
+      const response = await issue(draft);
+      assert.equal(response.status, 422, response.text);
+      assert.match(response.text, /USt-IdNr\. des Kunden fehlt/);
+      const eu = await draftInvoice(h.api, { client: 'Wien GmbH', taxMode: 'intra_eu_service_reverse_charge', taxMeta: { ...datevEvidence(product), buyerVatId: 'ATU12345678' } as never, items: [{ kind: 'item', description: 'Beratung', quantity: 1, price: 1000, total: 1000 }] });
+      await withSettings((s) => ({ ...s, finance: { ...s.finance, vatId: '' } }), async () => {
+        const domestic = await issue(draft, { taxMeta: { ...draft.taxMeta, buyerVatId: 'DE987654321' } });
+        assert.equal(domestic.status, 200, `a domestic §13b invoice needs only the tax number: ${domestic.text}`);
+        const missingOwn = await issue(eu);
+        assert.equal(missingOwn.status, 422, missingOwn.text);
+        assert.match(missingOwn.text, /deine USt-IdNr\. fehlt/);
+      });
+    });
+
+    test('only a Kleinunternehmer may issue under §19, and the default mode becomes §19 for one', async () => {
+      const ku = await draftInvoice(h.api, { client: 'Kein KU', taxMode: 'small_business_19_ustg', taxMeta: datevEvidence(product) as never });
+      const refused = await issue(ku);
+      assert.equal(refused.status, 422, refused.text);
+      assert.match(refused.text, /Kleinunternehmerregelung ist in den Einstellungen nicht aktiv/);
+
+      await asSmallBusiness(h.api, async () => {
+        // The editor sends the schema default; for a Kleinunternehmer that must never put VAT on the invoice (§14c UStG).
+        const draft = await draftInvoice(h.api, { client: 'KU-Kunde', taxMeta: datevEvidence(product) as never, items: [{ kind: 'item', description: 'Leistung', quantity: 1, price: 500, total: 500, taxRate: 19 }] });
+        const open = await h.api.invoices.upsert({ reason: 'issue', invoice: { ...draft, status: 'open' } });
+        assert.equal(open.taxMode, 'small_business_19_ustg');
+        assert.equal(open.taxSnapshot!.vatAmount, 0);
+        assert.equal(open.amount, 500);
+        assert.match(open.taxSnapshot!.taxNotice ?? '', /19/);
+      });
+    });
+
+    test('an invoice without service date is stored with the invoice date', async () => {
+      const draft = await draftInvoice(h.api, { client: 'Ohne Leistungsdatum' });
+      const open = await h.api.invoices.upsert({ reason: 'issue', invoice: { ...draft, servicePeriod: '', status: 'open' } });
+      assert.equal(open.servicePeriod, draft.date);
+      const dated = await draftInvoice(h.api, { client: 'Mit Leistungsdatum' });
+      const kept = await h.api.invoices.upsert({ reason: 'issue', invoice: { ...dated, servicePeriod: '01.03.2026 bis 31.03.2026', status: 'open' } });
+      assert.equal(kept.servicePeriod, '01.03.2026 bis 31.03.2026');
+    });
+
+    test('a final invoice for an order without buyer address is refused and consumes no number', async () => {
+      const offer = await draftOffer(h.api, { client: 'Auftrag ohne Anschrift' });
+      const accepted = await h.api.offers.upsert({ reason: 'accept', offer: { ...offer, clientAddress: '', status: 'accepted' } } as never);
+      const order = await h.api.documents.chainIssue({ id: randomUUID(), operation: 'order_confirmation', offerId: accepted.id, date: today(), reason: 'AB' } as never);
+      const before = await nextNumber();
+      const response = await h.raw('POST', '/document-chain/issue', { id: randomUUID(), operation: 'settlement_invoice', kind: 'final_invoice', amount: 238, orderId: (order as { id: string }).id, date: today(), reason: 'Schluss' });
+      assert.equal(response.status, 422, response.text);
+      assert.match(response.text, /Anschrift des Kunden/);
+      assert.equal(await nextNumber(), before);
+    });
+  });
+
   describe('tax', () => {
     const roundTrip = async (taxMode: DocumentInput['taxMode'], items: DocumentInput['items'], taxMeta?: DocumentInput['taxMeta']) => {
       const issued = await issueInvoice(h.api, { client: `Tax ${taxMode}`, taxMode, items, taxMeta: taxMode === 'standard_vat' ? taxMeta : { ...taxMeta, ...datevEvidence(product) } as never });
@@ -148,10 +253,12 @@ for (const product of PRODUCTS) describe(`invoices (${product})`, () => {
     });
 
     test('Kleinunternehmer invoices carry no VAT and the §19 notice', async () => {
-      const { stored } = await roundTrip('small_business_19_ustg', [{ kind: 'item', description: 'Leistung', quantity: 1, price: 500, total: 500, taxRate: 19 }]);
-      assert.equal(stored.taxSnapshot!.vatAmount, 0);
-      assert.equal(stored.taxSnapshot!.grossAmount, 500);
-      assert.match(stored.taxSnapshot!.taxNotice ?? '', /19/);
+      await asSmallBusiness(h.api, async () => {
+        const { stored } = await roundTrip('small_business_19_ustg', [{ kind: 'item', description: 'Leistung', quantity: 1, price: 500, total: 500, taxRate: 19 }]);
+        assert.equal(stored.taxSnapshot!.vatAmount, 0);
+        assert.equal(stored.taxSnapshot!.grossAmount, 500);
+        assert.match(stored.taxSnapshot!.taxNotice ?? '', /19/);
+      });
     });
 
     test('reverse charge keeps the buyer VAT ID and category AE', async () => {

@@ -4,6 +4,7 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { TestContext } from 'node:test';
 import './route-log.js';
+import { ISSUER } from './fixtures.js';
 import { createLiteHttpBillmeApi } from '@billme/desktop-services/liteHttpApi';
 import { createProHttpBillmeApi } from '@billme/desktop-services/proHttpApi';
 import { createLocalBackend } from '../../../apps/desktop/electron/localBackend.js';
@@ -64,6 +65,12 @@ const temporaryDir = async (product: string) => mkdtemp(join(tmpdir(), `billme-i
  * when that test ends; otherwise call `close()` (e.g. from an `after` hook).
  * Pass `userDataPath` to reopen an existing data dir (restart scenarios).
  */
+const onboard = async (api: Pick<ReturnType<typeof createLiteHttpBillmeApi>, 'settings'>) => {
+  const settings = await api.settings.get();
+  if (!settings || settings.company.name) return;
+  await api.settings.set({ settings: { ...settings, company: { ...settings.company, ...ISSUER.company }, finance: { ...settings.finance, ...ISSUER.finance } } });
+};
+
 export const startLite = async (t: TestContext | null, suite: string, existingDataPath?: string) => {
   const userDataPath = existingDataPath ?? await temporaryDir('lite');
   const log: Exchange[] = [];
@@ -77,6 +84,7 @@ export const startLite = async (t: TestContext | null, suite: string, existingDa
     if (!keepData) await rm(userDataPath, { recursive: true, force: true });
   };
   t?.after(() => close());
+  if (!existingDataPath) await onboard(api);
   return { api, raw: rawClient('lite', connection, doFetch), connection, backend, userDataPath, log, close };
 };
 
@@ -94,6 +102,7 @@ export const startPro = async (t: TestContext | null, suite: string, existingDat
     if (!keepData) await rm(userDataPath, { recursive: true, force: true });
   };
   t?.after(() => close());
+  if (!existingDataPath) await onboard(api as never);
   return { api, raw: rawClient('pro', connection, doFetch), connection, backend, userDataPath, log, close };
 };
 

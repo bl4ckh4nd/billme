@@ -12,3 +12,4 @@ export * from './eurItemFilters.js';
 export * from './openRouterVlm.js';
 export * from './document-chain.js';
 export * from './platformSecrets.js';
+export * from './invoiceIssuance.js';

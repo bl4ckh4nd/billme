@@ -399,6 +399,10 @@ describe('server mode', () => {
       'GET /health', 'GET /api/v1/meta/capabilities', 'GET /api/v1/openapi.json',
       'POST /api/v1/auth/bootstrap', 'GET /api/v1/auth/bootstrap/status', 'POST /api/v1/auth/login',
       'POST /api/v1/auth/device/start', 'POST /api/v1/auth/device/token',
+      // Sign-up, invitation links and password reset work without a session; each has its own guard (setup code, token, throttle).
+      'POST /api/v1/auth/signup', 'GET /api/v1/auth/apps',
+      'GET /api/v1/auth/invitations/:token', 'POST /api/v1/auth/invitations/:token/accept',
+      'POST /api/v1/auth/password-reset', 'POST /api/v1/auth/password-reset/confirm',
       ...['lite', 'pro'].flatMap((product) => [`POST /api/v1/${product}/auth/bootstrap`, `GET /api/v1/${product}/auth/bootstrap/status`, `POST /api/v1/${product}/auth/login`]),
     ]);
     const routes = () => fastifyRoutes(h.app.printRoutes({ commonPrefix: false }));

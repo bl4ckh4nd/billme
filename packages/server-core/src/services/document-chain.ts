@@ -175,11 +175,26 @@ export const orderConfirmationBlocker = (offer: Offer | ChainDocumentLike & { sh
   return null;
 };
 
+/**
+ * A final invoice deducts the advance and partial invoices of its order; while it
+ * stands they are settled in it and only the final invoice itself is corrected.
+ */
+const settledInFinalInvoice = (source: ChainDocumentLike, documents: ReadonlyArray<ChainDocumentLike>): boolean => {
+  if (source.documentKind !== 'advance_invoice' && source.documentKind !== 'partial_invoice') return false;
+  const cancelled = issuedCancellationSources(documents);
+  return documents.some((candidate) => candidate.documentKind === 'final_invoice'
+    && candidate.status !== 'draft'
+    && candidate.rootDocumentId === source.rootDocumentId
+    && !cancelled.has(candidate.id));
+};
+const SETTLED_IN_FINAL = 'Diese Rechnung ist in der Schlussrechnung verrechnet. Bitte zuerst die Schlussrechnung stornieren oder gutschreiben.';
+
 /** Why an invoice cannot be corrected, or null when it can. */
 export const correctionBlocker = (source: ChainDocumentLike, documents: ReadonlyArray<ChainDocumentLike>, kind: CorrectionDocumentKind): string | null => {
   if (source.status === 'draft') return 'Nur gestellte Rechnungen können korrigiert werden.';
   if (source.documentKind === 'order_confirmation' || source.documentKind === 'delivery_note') return 'Auftragsbestätigungen und Lieferscheine können nicht korrigiert werden.';
   if (isCorrectionDocumentKind(source.documentKind)) return 'Gutschriften und Stornorechnungen werden nicht erneut korrigiert.';
+  if (settledInFinalInvoice(source, documents)) return SETTLED_IN_FINAL;
   const corrections = documents.filter((candidate) => candidate.sourceDocumentId === source.id && isCorrectionDocumentKind(candidate.documentKind) && candidate.status !== 'draft');
   if (kind === 'cancellation_invoice' && corrections.length > 0) {
     return 'Zu dieser Rechnung gibt es schon eine Gutschrift oder Stornorechnung; eine Stornorechnung ist nicht mehr möglich.';
@@ -195,8 +210,8 @@ export const correctionBlocker = (source: ChainDocumentLike, documents: Readonly
 export const revisionBlocker = (source: ChainDocumentLike, documents: ReadonlyArray<ChainDocumentLike>): string | null => {
   if (source.status === 'draft') return 'Nur gestellte Rechnungen können überarbeitet werden.';
   if (!isReceivableDocumentKind(source.documentKind)) return 'Nur Rechnungen können überarbeitet werden; Auftragsbestätigungen, Lieferscheine, Gutschriften und Stornos nicht.';
-  if (source.documentKind === 'final_invoice') return 'Eine Schlussrechnung wird über Gutschrift oder Storno korrigiert, nicht über eine Revision.';
   if (source.status === 'cancelled') return 'Die Rechnung ist storniert und kann nicht überarbeitet werden.';
+  if (settledInFinalInvoice(source, documents)) return SETTLED_IN_FINAL;
   if (source.status === 'paid' || (source.payments?.length ?? 0) > 0) return 'Bezahlte Rechnungen werden über Gutschrift oder Storno korrigiert, nicht über eine Revision.';
   if (documents.some((candidate) => candidate.sourceDocumentId === source.id && isCorrectionDocumentKind(candidate.documentKind) && candidate.status !== 'draft')) {
     return 'Zu dieser Rechnung gibt es bereits eine Gutschrift oder Stornorechnung.';

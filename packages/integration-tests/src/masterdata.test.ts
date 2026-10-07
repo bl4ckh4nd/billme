@@ -114,7 +114,7 @@ for (const product of PRODUCTS) describe(`masterdata (${product})`, () => {
       const s = await getSettings();
       assert.deepEqual(
         { ...s.numbers },
-        { invoicePrefix: 'RE-%Y-', nextInvoiceNumber: 1, numberLength: 3, offerPrefix: 'ANG-%Y-', nextOfferNumber: 1, customerPrefix: 'KD-', nextCustomerNumber: 1, customerNumberLength: 4 },
+        { invoicePrefix: 'RE-%Y-', nextInvoiceNumber: 1, numberLength: 3, offerPrefix: 'ANG-%Y-', nextOfferNumber: 1, customerPrefix: 'KD-', nextCustomerNumber: 1, customerNumberLength: 4, orderConfirmationPrefix: 'AB-%Y-', nextOrderConfirmationNumber: 1, deliveryNotePrefix: 'LS-%Y-', nextDeliveryNoteNumber: 1 },
       );
       assert.equal(s.legal.smallBusinessRule, false);
       assert.equal(s.legal.defaultVatRate, 19);

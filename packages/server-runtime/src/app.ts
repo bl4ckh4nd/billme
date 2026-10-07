@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { createNumberingPortsForDb } from './numbering.js';
 import { convertServerOfferToInvoice } from './offerConversion.js';
+import type { InvoiceTaxSnapshot } from '@billme/server-core';
 import Fastify, { type FastifyInstance } from 'fastify';
 import cors from '@fastify/cors';
 import { DEFAULT_SETTINGS } from '@billme/desktop-services/mockData';
@@ -480,9 +481,10 @@ const registerBillingRoutes = (app: FastifyInstance, product: 'lite' | 'pro', pr
         if (!before || before.status === 'draft') {
           const settings = parseStoredSettings(await getServerSettings(transaction, session.scope.tenantId));
           if (!settings) throw new ApiError(409, 'Die Einstellungen müssen zuerst eingerichtet werden.');
-          nextInvoice.taxSnapshot = calculateInvoiceTaxSnapshot(nextInvoice, settings);
+          const taxSnapshot = keepChainTax(nextInvoice.taxSnapshot, calculateInvoiceTaxSnapshot(nextInvoice, settings));
+          nextInvoice.taxSnapshot = taxSnapshot;
           nextInvoice.taxMode = resolveInvoiceTaxMode(nextInvoice.taxMode, settings);
-          nextInvoice.amount = nextInvoice.taxSnapshot.grossAmount;
+          nextInvoice.amount = taxSnapshot.grossAmount;
         }
         if (before && before.status !== 'draft') nextInvoice.status = await settledInvoiceStatus(transaction, session.scope, before);
         let issuanceReservationId: string | undefined;
@@ -1417,6 +1419,22 @@ const registerProRoutes = (app: FastifyInstance) => {
       return { ok: true as const };
     },
   });
+};
+
+/**
+ * A final invoice's tax is the order's tax minus the tax already invoiced, not
+ * re-rounded from its net (§14 Abs. 5 UStG). When a draft of such a document
+ * (a revision) is saved with the same net per rate, its stored tax stays;
+ * any change to the lines recomputes it.
+ */
+const keepChainTax = (stored: InvoiceTaxSnapshot | undefined, fresh: InvoiceTaxSnapshot): InvoiceTaxSnapshot => {
+  if (!stored?.vatBreakdown?.length || !fresh.vatBreakdown?.length) return fresh;
+  const net = (entries: InvoiceTaxSnapshot['vatBreakdown']) =>
+    new Map((entries ?? []).map((entry) => [entry.rate, Math.round(entry.netAmount * 100)]));
+  const storedNet = net(stored.vatBreakdown);
+  const freshNet = net(fresh.vatBreakdown);
+  const sameNet = storedNet.size === freshNet.size && [...freshNet].every(([rate, value]) => storedNet.get(rate) === value);
+  return sameNet && stored.label === fresh.label ? { ...fresh, vatBreakdown: stored.vatBreakdown, vatAmount: stored.vatAmount, grossAmount: stored.grossAmount, netAmount: stored.netAmount } : fresh;
 };
 
 export const buildServerApi = async (options: BuildServerApiOptions = {}): Promise<FastifyInstance> => {

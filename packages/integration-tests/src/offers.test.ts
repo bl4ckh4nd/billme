@@ -782,6 +782,42 @@ for (const product of PRODUCTS) describe(`offers and the document chain (${produ
       assert.equal((await h.api.invoices.list()).length, before, 'a refused revision leaves no draft behind');
     });
 
+    test('advance and partial invoices settled in a final invoice are corrected through the final invoice only', async () => {
+      // Found by chain-invariants (seed 29): a revision of an advance after the final invoice left the final invoice deducting a cancelled advance.
+      const { order } = await orderFromOffer('Verrechnet GmbH');
+      const advance = await settle(order, 'advance_invoice', 357);
+      const final = await settle(order, 'final_invoice', cents(order.amount - 357) / 100);
+      for (const body of [
+        { operation: 'revision', invoiceId: advance.id },
+        { operation: 'correction', kind: 'credit_note', invoiceId: advance.id, amount: 10 },
+        { operation: 'correction', kind: 'cancellation_invoice', invoiceId: advance.id },
+      ]) {
+        const refused = await issueRaw(body);
+        assert.equal(refused.status, 422, `${JSON.stringify(body)}: ${refused.text}`);
+        assert.match(refused.text, /in der Schlussrechnung verrechnet/);
+      }
+      await issue({ operation: 'correction', kind: 'cancellation_invoice', invoiceId: final.id });
+      const reversed = await issue({ operation: 'correction', kind: 'cancellation_invoice', invoiceId: advance.id });
+      assert.equal(reversed.documentKind, 'cancellation_invoice', 'once the final invoice is reversed, the advance can be corrected again');
+    });
+
+    test('a Storno cancels a paid invoice too; the payment stays and a refund can be recorded', async () => {
+      // Found by chain-invariants (seeds 105, 106, 121): the source stayed "paid" next to its Storno.
+      const source = await issueInvoice(h.api, { client: 'Bezahlt Storno GmbH' });
+      const pay = await h.raw('POST', `/invoices/${source.id}/payments`, { reason: 'Zahlung', payment: { id: randomUUID(), date: today(), amount: source.amount, method: 'Überweisung' } });
+      assert.equal(pay.status, 200, pay.text);
+      assert.equal((await h.api.invoices.list()).find((invoice) => invoice.id === source.id)!.status, 'paid');
+      await issue({ operation: 'correction', kind: 'cancellation_invoice', invoiceId: source.id });
+      const cancelled = (await h.api.invoices.list()).find((invoice) => invoice.id === source.id)!;
+      assert.equal(cancelled.status, 'cancelled');
+      assert.equal(cancelled.payments.length, 1, 'the received payment stays on record');
+      const refund = await h.raw('POST', `/invoices/${source.id}/payments`, { reason: 'Rückzahlung', payment: { id: randomUUID(), date: today(), amount: -source.amount, method: 'Überweisung' } });
+      assert.equal(refund.status, 200, refund.text);
+      assert.equal((await h.api.invoices.list()).find((invoice) => invoice.id === source.id)!.status, 'cancelled', 'a refund does not reopen a cancelled invoice');
+      const furtherPayment = await h.raw('POST', `/invoices/${source.id}/payments`, { reason: 'Zahlung', payment: { id: randomUUID(), date: today(), amount: 5, method: 'Überweisung' } });
+      assert.equal(furtherPayment.status, 409, 'no new incoming payment on a cancelled invoice');
+    });
+
     test('follow-up documents keep the source service date and bill on the payment term', async () => {
       const { order } = await orderFromOffer('Leistung GmbH');
       const settings = (await h.api.settings.get())!;
@@ -1452,7 +1488,7 @@ for (const product of PRODUCTS) describe(`offers and the document chain (${produ
 });
 
 /** The priced lines of a document; chain documents open with a describing text line. */
-const billable = (document: { items: Array<Record<string, any>> }) => document.items.filter((line) => line.kind !== 'text') as Array<Record<string, any>>;
+const billable = (document: object) => (((document as { items?: unknown }).items ?? []) as Array<Record<string, any>>).filter((line) => line.kind !== 'text');
 
 describe('Pro: the order chain posts to the journal', () => {
   let p: ProHarness;

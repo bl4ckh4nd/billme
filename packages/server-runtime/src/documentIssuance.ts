@@ -124,7 +124,9 @@ export const settleCorrectedSource = async (transaction: ServerDatabaseSession, 
   if (!correction.sourceDocumentId || (kind !== 'cancellation_invoice' && kind !== 'credit_note')) return;
   const repositories = createPostgresBillingDependencies(transaction);
   const source = await repositories.invoiceRepo.getById(auth.scope, correction.sourceDocumentId);
-  if (!source || !['open', 'overdue'].includes(source.status)) return;
+  // A Storno cancels the invoice even when it was paid; the payment stays recorded and is owed back as a refund.
+  const settleable = kind === 'cancellation_invoice' ? ['open', 'overdue', 'paid'] : ['open', 'overdue'];
+  if (!source || !settleable.includes(source.status)) return;
   let status: 'cancelled' | 'paid' | undefined = kind === 'cancellation_invoice' ? 'cancelled' : undefined;
   if (kind === 'credit_note') {
     const credits = await transaction.query<{ amount: string | number }>("SELECT amount FROM invoices WHERE tenant_id=$1 AND source_document_id=$2 AND document_kind='credit_note' AND status<>'draft'", [auth.scope.tenantId, source.id]);

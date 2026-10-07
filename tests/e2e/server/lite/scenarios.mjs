@@ -522,8 +522,13 @@ export const runLiteDocumentKindsScenario = async (page, scenarioKey = 'document
   await expect(page.getByRole('dialog', { name: 'Teilrechnung erstellen' }).getByRole('button', { name: new RegExp(orderNumber) })).toHaveCount(0);
   await page.getByRole('dialog', { name: 'Teilrechnung erstellen' }).getByRole('button', { name: 'Abbrechen' }).click();
 
-  await startFollowUp('Gutschrift', advanceNumber);
-  await confirmAmount('Gutschrift', '100.00', '10');
+  // The advance is settled in the final invoice: it is corrected through the final invoice, not on its own.
+  await page.getByRole('button', { name: 'Folgebeleg' }).click();
+  await page.getByRole('menuitem', { name: 'Gutschrift …' }).click();
+  await expect(page.getByRole('dialog', { name: 'Gutschrift erstellen' }).getByRole('button', { name: new RegExp(advanceNumber) })).toHaveCount(0);
+  await page.getByRole('dialog', { name: 'Gutschrift erstellen' }).getByRole('button', { name: 'Abbrechen' }).click();
+  await startFollowUp('Gutschrift', finalNumber);
+  await confirmAmount('Gutschrift', '257.00', '10');
   const creditNumber = await headingNumber();
   await backToList();
 

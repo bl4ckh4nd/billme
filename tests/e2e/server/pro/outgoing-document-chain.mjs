@@ -137,6 +137,12 @@ export const runProOutgoingDocumentChainScenario = async (page) => {
     amount: 70.4,
     reason: 'E2E: Schlussrechnung',
   }, 'final_invoice');
+  // A revision is made before any correction: an invoice with a credit note is corrected further only by credit notes.
+  const revision = await createChainDocument(state, session, 'revision', {
+    id: `outgoing-chain-revision-${suffix}`,
+    invoiceId: final.document.id,
+    reason: 'E2E: Revision mit korrigiertem Dokumentstand',
+  }, 'final_invoice');
   const credit = await createChainDocument(state, session, 'correction', {
     id: `outgoing-chain-credit-${suffix}`,
     invoiceId: final.document.id,
@@ -144,11 +150,6 @@ export const runProOutgoingDocumentChainScenario = async (page) => {
     amount: 20,
     reason: 'E2E: Teilgutschrift',
   }, 'credit_note');
-  const revision = await createChainDocument(state, session, 'revision', {
-    id: `outgoing-chain-revision-${suffix}`,
-    invoiceId: final.document.id,
-    reason: 'E2E: Revision mit korrigiertem Dokumentstand',
-  }, 'final_invoice');
 
   const chain = await requestJson(state, session, `/api/v1/pro/document-chain/${encodeURIComponent(order.document.id)}`);
   expect(chain).toHaveLength(7);
@@ -217,9 +218,10 @@ export const runProOutgoingDocumentChainScenario = async (page) => {
   expect(pdf.subarray(0, 5).toString()).toBe('%PDF-');
   await fs.writeFile(creditPdf, pdf);
   const { stdout: text } = await promisify(execFile)('pdftotext', ['-layout', creditPdf, '-']);
+  // One cent-exact line per tax rate of the credited invoice, not a quantity factor.
   expect(text).toContain('20,00');
-  expect(text).toContain('0,1424');
-  expect(text).toContain('14,24');
+  expect(text).toMatch(/Anteilig 19 % USt\s+1\s+14,24 €/);
+  expect(text).toMatch(/Anteilig 7 % USt\s+1\s+2,85 €/);
   await fs.writeFile(path.join(directory, 'credit-note.txt'), text);
   await promisify(execFile)('pdftoppm', ['-png', '-singlefile', '-scale-to', '1600', creditPdf, path.join(directory, 'credit-note')]);
   await openProShell(page, state, { route: 'documents', session });

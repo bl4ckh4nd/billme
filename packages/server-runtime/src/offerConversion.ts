@@ -42,6 +42,11 @@ export const convertServerOfferToInvoice = (
     return (await invoiceRepo.getById(scope, targetId))!;
   }
 
+  // The offer is billed either directly or through an order confirmation, never both.
+  const order = await session.query("SELECT number FROM invoices WHERE tenant_id=$1 AND source_document_id=$2 AND document_kind='order_confirmation' LIMIT 1", [scope.tenantId, input.offerId]);
+  if (order.rows.length) {
+    throw new ApiError(409, `Zu diesem Angebot gibt es bereits die Auftragsbestätigung ${(order.rows[0] as { number: string }).number}; abgerechnet wird über Abschlags- und Schlussrechnung.`);
+  }
   const now = new Date();
   const date = new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Berlin', year: 'numeric', month: '2-digit', day: '2-digit' }).format(now);
   const due = new Date(`${date}T00:00:00Z`);

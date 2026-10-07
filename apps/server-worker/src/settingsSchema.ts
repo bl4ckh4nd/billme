@@ -44,6 +44,10 @@ const NumbersSettingsSchema = z.object({
   customerPrefix: z.string().optional().default('KD-'),
   nextCustomerNumber: z.number().optional().default(1),
   customerNumberLength: z.number().optional().default(4),
+  orderConfirmationPrefix: z.string().optional().default('AB-%Y-'),
+  nextOrderConfirmationNumber: z.number().optional().default(1),
+  deliveryNotePrefix: z.string().optional().default('LS-%Y-'),
+  nextDeliveryNoteNumber: z.number().optional().default(1),
 });
 
 const DunningLevelSchema = z.object({

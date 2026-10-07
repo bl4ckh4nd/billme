@@ -80,7 +80,7 @@ export interface ServerSettingsRecord {
 export interface ServerNumberReservation {
   id: string;
   tenantId: string;
-  kind: "invoice" | "offer" | "customer";
+  kind: "invoice" | "offer" | "customer" | "order_confirmation" | "delivery_note";
   number: string;
   counterValue: number;
   status: "reserved" | "released" | "finalized";

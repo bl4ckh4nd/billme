@@ -81,6 +81,8 @@ function toSafeCounter(value: number): number {
 function getCurrentCounter<TSettings extends NumberingSettingsShape>(settings: TSettings, kind: DocumentNumberKind): number {
   if (kind === 'invoice') return settings.numbers.nextInvoiceNumber;
   if (kind === 'offer') return settings.numbers.nextOfferNumber;
+  if (kind === 'order_confirmation') return settings.numbers.nextOrderConfirmationNumber ?? 1;
+  if (kind === 'delivery_note') return settings.numbers.nextDeliveryNoteNumber ?? 1;
   return settings.numbers.nextCustomerNumber;
 }
 
@@ -98,6 +100,14 @@ function setCurrentCounter<TSettings extends NumberingSettingsShape>(
     settings.numbers.nextOfferNumber = safeNextValue;
     return;
   }
+  if (kind === 'order_confirmation') {
+    settings.numbers.nextOrderConfirmationNumber = safeNextValue;
+    return;
+  }
+  if (kind === 'delivery_note') {
+    settings.numbers.nextDeliveryNoteNumber = safeNextValue;
+    return;
+  }
   settings.numbers.nextCustomerNumber = safeNextValue;
 }
 
@@ -113,6 +123,10 @@ export function formatDocumentNumber<TSettings extends NumberingSettingsShape>(
     prefixTemplate = settings.numbers.invoicePrefix;
   } else if (kind === 'offer') {
     prefixTemplate = settings.numbers.offerPrefix;
+  } else if (kind === 'order_confirmation') {
+    prefixTemplate = settings.numbers.orderConfirmationPrefix ?? 'AB-%Y-';
+  } else if (kind === 'delivery_note') {
+    prefixTemplate = settings.numbers.deliveryNotePrefix ?? 'LS-%Y-';
   }
 
   const prefix = (prefixTemplate || '').replace(/%Y/g, year);

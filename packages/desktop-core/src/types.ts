@@ -76,6 +76,11 @@ export interface AppSettings {
     customerPrefix: string;
     nextCustomerNumber: number;
     customerNumberLength: number;
+    /** Order confirmations and delivery notes have their own ranges (defaults AB-%Y- / LS-%Y-). */
+    orderConfirmationPrefix?: string;
+    nextOrderConfirmationNumber?: number;
+    deliveryNotePrefix?: string;
+    nextDeliveryNoteNumber?: number;
   };
   dunning: {
     levels: DunningLevel[];

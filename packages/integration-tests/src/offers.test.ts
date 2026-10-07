@@ -36,7 +36,15 @@ import { documentIdFromUrl, newToken, startPortal, type PortalHandle } from './o
  *   settle exactly the remainder, a zero amount document, a cancelled advance
  *   invoice that never frees its amount, partial documents without a tax
  *   snapshot (VAT report and Pro posting wrong), corrections beyond the invoice,
- *   non-billing documents corrected, duplicate or out-of-order numbers
+ *   non-billing documents corrected, duplicate or out-of-order numbers; one
+ *   offer billed twice (converted to an invoice and through an order); a credit
+ *   note or Storno of a credit note or Storno; a payment on an order
+ *   confirmation, delivery note or correction; a revision of a document that
+ *   cannot be revised (left behind as an unissuable draft); a follow-up document
+ *   without the source's service date or due on its issue day; order
+ *   confirmations and delivery notes consuming invoice numbers; a final invoice
+ *   that does not state the whole order and deduct the earlier invoices with
+ *   their tax (§14 Abs. 5 UStG)
  * - idempotency: a replay creating a second document or consuming a number, a
  *   changed intent accepted, concurrent identical requests creating two, a
  *   failed request leaking a number or a half-written document
@@ -424,7 +432,9 @@ for (const product of PRODUCTS) describe(`offers and the document chain (${produ
       await accept(offer);
       const order = await issue({ operation: 'order_confirmation', offerId: offer.id, dueDate: addDays(today(), 7) });
       const advance = await settle(order, 'advance_invoice', 357, { servicePeriod: '2026-01-01 bis 2026-01-31' });
-      const invoice = await h.api.documents.convertOfferToInvoice({ offerId: offer.id });
+      const direct = await saveOffer({ ...(await h.api.documents.createFromClient({ kind: 'offer', clientId: client.id })), items, amount: taxSnapshot.grossAmount, taxSnapshot, taxMode: 'standard_vat', dueDate: addDays(today(), 14) }, 'zweites Angebot');
+      await accept(direct);
+      const invoice = await h.api.documents.convertOfferToInvoice({ offerId: direct.id });
       for (const document of [order, advance, invoice]) {
         assert.equal(document.clientId, client.id, `${document.documentKind}: client id`);
         assert.equal(document.clientNumber, client.customerNumber);
@@ -435,7 +445,8 @@ for (const product of PRODUCTS) describe(`offers and the document chain (${produ
         assert.equal((document.shippingAddressJson as Record<string, string>).street, 'Werkstr. 1');
       }
       assert.equal(order.dueDate, addDays(today(), 7), 'an explicit due date is kept');
-      assert.equal(advance.dueDate, advance.date, 'without one the due date is the document date');
+      const settings = (await h.api.settings.get())!;
+      assert.equal(advance.dueDate, addDays(advance.date, settings.legal.paymentTermsDays), 'without one the due date follows the payment term');
       assert.equal(advance.servicePeriod, '2026-01-01 bis 2026-01-31');
     });
 
@@ -585,15 +596,28 @@ for (const product of PRODUCTS) describe(`offers and the document chain (${produ
         assert.equal(document.client, 'Kette AG');
       }
       assert.equal(cents(advance.amount + partial.amount + final.amount), cents(order.amount), 'the invoices add up to the order');
-      assert.equal(advance.items[0].quantity, 3, 'lines are prorated to the billed share');
-      assert.equal(advance.items[0].total, 300);
-      assert.equal(final.items[0].total, 600);
+      assert.match(advance.items[0].description, /^Abschlagsrechnung zur Auftragsbestätigung .*: 357,00 € von 1\.190,00 € \(30 %\)\.$/, 'the advance invoice says what it is');
+      assert.equal(billable(advance)[0].quantity, 3, 'lines are prorated to the billed share');
+      assert.equal(billable(advance)[0].total, 300);
+      // §14 Abs. 5 UStG: the final invoice states the whole order and deducts the earlier invoices with their tax.
+      assert.match(final.items[0].description, /^Schlussrechnung zur Auftragsbestätigung .*Gesamtauftrag netto 1\.000,00 € zzgl\. USt 190,00 € = 1\.190,00 €\.$/);
+      assert.equal(billable(final)[0].total, 1000, 'the final invoice lists the full order');
+      const deductions = billable(final).filter((line) => line.price < 0);
+      assert.deepEqual(deductions.map((line) => line.total), [-300, -100]);
+      assert.ok(deductions.every((line) => /^Abzüglich (Abschlagsrechnung|Teilrechnung) /.test(line.description)), 'each deduction names its invoice');
+      assert.match(deductions[0]!.description, new RegExp(`${advance.number}.*19 % USt 57,00 €`));
+      assert.deepEqual([final.taxSnapshot?.netAmount, final.taxSnapshot?.vatAmount, final.taxSnapshot?.grossAmount], [600, 114, 714], 'tax: order minus the tax already invoiced');
 
       const chain = await h.api.documents.chainList({ rootDocumentId: order.id } as never);
       assert.deepEqual(chain.map((document) => document.documentKind).sort(), ['advance_invoice', 'delivery_note', 'final_invoice', 'order_confirmation', 'partial_invoice']);
       const numbers = [order, delivery, advance, partial, final].map((document) => document.number as string);
       assert.equal(new Set(numbers).size, 5, `numbers are unique: ${numbers}`);
-      assert.deepEqual(numbers.map(numberOf), [...numbers.map(numberOf)].sort((a, b) => a - b), 'numbers grow in issue order');
+      // §14 UStG: order confirmations and delivery notes are no invoices and do not consume the invoice range.
+      assert.match(order.number, /^AB-\d{4}-\d{3}$/);
+      assert.match(delivery.number, /^LS-\d{4}-\d{3}$/);
+      const invoiceNumbers = [advance, partial, final].map((document) => document.number as string);
+      assert.ok(invoiceNumbers.every((number) => /^RE-\d{4}-\d{3}$/.test(number)), `invoice range: ${invoiceNumbers}`);
+      assert.deepEqual(invoiceNumbers.map(numberOf), [numberOf(invoiceNumbers[0]!), numberOf(invoiceNumbers[0]!) + 1, numberOf(invoiceNumbers[0]!) + 2], 'the invoice range has no gap from the order or the delivery note');
       const stored = await h.api.invoices.list();
       for (const document of chain) assert.ok(stored.some((entry) => entry.id === document.id), 'chain documents are ordinary invoices rows');
     });
@@ -609,7 +633,7 @@ for (const product of PRODUCTS) describe(`offers and the document chain (${produ
       const final = await settle(order, 'final_invoice', 714);
       assert.equal(final.amount, 714);
       for (const kind of ['advance_invoice', 'partial_invoice', 'final_invoice'] as const) {
-        await assert.rejects(settle(order, kind, 0.01), /höher als der offene Auftragsbetrag \(0\.00 €\)/, `${kind} after the order is fully billed`);
+        await assert.rejects(settle(order, kind, 0.01), /bereits eine Schlussrechnung/, `${kind} after the final invoice`);
       }
       assert.equal((await h.api.documents.chainList({ rootDocumentId: order.id } as never)).filter((document) => document.documentKind === 'final_invoice').length, 1);
     });
@@ -619,7 +643,8 @@ for (const product of PRODUCTS) describe(`offers and the document chain (${produ
       await assert.rejects(settle(order, 'final_invoice', 1000), /Schlussrechnung muss den offenen Auftragsbetrag \(1190\.00 €\)/);
       const final = await settle(order, 'final_invoice', GROSS);
       assert.equal(final.amount, GROSS);
-      assert.equal(final.items[0].total, 1000);
+      assert.equal(billable(final)[0].total, 1000);
+      assert.equal(billable(final).filter((line) => line.price < 0).length, 0, 'nothing to deduct');
     });
 
     test('settlement amounts must be positive and a settlement needs an order confirmation', async () => {
@@ -693,7 +718,7 @@ for (const product of PRODUCTS) describe(`offers and the document chain (${produ
       await assert.rejects(issue({ operation: 'correction', kind: 'cancellation_invoice', invoiceId: source.id }), /eine Stornorechnung ist nicht mehr möglich/);
       const rest = await credit(59.5) as Record<string, any>;
       assert.equal(rest.amount, 59.5);
-      await assert.rejects(credit(0.01), /Alle Korrekturen zusammen wären höher/, 'fully credited');
+      await assert.rejects(credit(0.01), /bereits vollständig gutgeschrieben/, 'fully credited');
 
       const other = await issueInvoice(h.api, { client: 'Storno AG' });
       await assert.rejects(issue({ operation: 'correction', kind: 'cancellation_invoice', invoiceId: other.id, amount: 10 }), /Eine Stornorechnung muss die ursprüngliche Rechnung vollständig aufheben/);
@@ -702,6 +727,76 @@ for (const product of PRODUCTS) describe(`offers and the document chain (${produ
       assert.equal(cancellation.amount, other.amount);
       await assert.rejects(issue({ operation: 'correction', kind: 'credit_note', invoiceId: other.id, amount: 1 }), /eine Gutschrift ist nicht mehr möglich/);
       await assert.rejects(issue({ operation: 'correction', kind: 'cancellation_invoice', invoiceId: other.id }), /eine Stornorechnung ist nicht mehr möglich/);
+    });
+
+    test('an offer is billed once: either converted or through an order confirmation, in either order', async () => {
+      const converted = await draftOffer(h.api, { client: 'Einmal GmbH' });
+      await accept(converted);
+      await h.api.documents.convertOfferToInvoice({ offerId: converted.id });
+      const refusedOrder = await issueRaw({ operation: 'order_confirmation', offerId: converted.id });
+      assert.equal(refusedOrder.status, 409, refusedOrder.text);
+      assert.match(refusedOrder.text, /bereits direkt in eine Rechnung umgewandelt/);
+
+      const { offer, order } = await orderFromOffer('Einmal Kette GmbH');
+      await assert.rejects(h.api.documents.convertOfferToInvoice({ offerId: offer.id }), new RegExp(`bereits die Auftragsbestätigung ${order.number}`));
+      const invoices = (await h.api.invoices.list()).filter((invoice) => invoice.sourceDocumentId === offer.id);
+      assert.deepEqual(invoices.map((invoice) => invoice.documentKind), ['order_confirmation'], 'no second billing path was opened');
+    });
+
+    test('corrections, payments and revisions only apply to billing documents', async () => {
+      const { order } = await orderFromOffer('Nur Rechnungen GmbH');
+      const delivery = await issue({ operation: 'delivery_note', orderId: order.id });
+      const source = await issueInvoice(h.api, { client: 'Nur Rechnungen GmbH' });
+      const credit = await issue({ operation: 'correction', kind: 'credit_note', invoiceId: source.id, amount: 10 });
+      const other = await issueInvoice(h.api, { client: 'Nur Rechnungen GmbH' });
+      const storno = await issue({ operation: 'correction', kind: 'cancellation_invoice', invoiceId: other.id });
+
+      for (const correction of [credit, storno]) {
+        for (const kind of ['credit_note', 'cancellation_invoice'] as const) {
+          const refused = await issueRaw({ operation: 'correction', kind, invoiceId: correction.id, amount: kind === 'credit_note' ? 1 : correction.amount });
+          assert.equal(refused.status, 422, `${kind} of ${correction.documentKind}: ${refused.text}`);
+          assert.match(refused.text, /Gutschriften und Stornorechnungen werden nicht erneut korrigiert/);
+        }
+      }
+
+      for (const document of [order, delivery, credit, storno]) {
+        const payment = await h.raw('POST', `/invoices/${document.id}/payments`, { reason: 'Zahlung', payment: { id: randomUUID(), date: today(), amount: 1, method: 'Überweisung' } });
+        assert.equal(payment.status, 409, `payment on ${document.documentKind}: ${payment.text}`);
+        assert.match(payment.text, /Zahlungen gehören zu Rechnungen/);
+      }
+      const paid = await h.raw('POST', `/invoices/${source.id}/payments`, { reason: 'Zahlung', payment: { id: randomUUID(), date: today(), amount: 1, method: 'Überweisung' } });
+      assert.equal(paid.status, 200, 'an invoice still takes payments');
+
+      const before = (await h.api.invoices.list()).length;
+      for (const [document, pattern] of [
+        [order, /Nur Rechnungen können überarbeitet werden/],
+        [delivery, /Nur Rechnungen können überarbeitet werden/],
+        [credit, /Nur Rechnungen können überarbeitet werden/],
+        [other, /storniert/],
+        [source, /Bezahlte Rechnungen werden über Gutschrift oder Storno korrigiert|Gutschrift oder Stornorechnung/],
+      ] as const) {
+        const refused = await issueRaw({ operation: 'revision', invoiceId: document.id });
+        assert.equal(refused.status, 422, `revision of ${document.documentKind} ${document.status}: ${refused.text}`);
+        assert.match(refused.text, pattern);
+      }
+      assert.equal((await h.api.invoices.list()).length, before, 'a refused revision leaves no draft behind');
+    });
+
+    test('follow-up documents keep the source service date and bill on the payment term', async () => {
+      const { order } = await orderFromOffer('Leistung GmbH');
+      const settings = (await h.api.settings.get())!;
+      const withService = async (servicePeriod: string) => {
+        const draft = await draftInvoice(h.api, { client: 'Leistung GmbH' });
+        return h.api.invoices.upsert({ reason: 'Rechnung gestellt', invoice: { ...draft, servicePeriod, status: 'open' } });
+      };
+      const source = await withService('2026-03-01 bis 2026-03-31');
+      const credit = await issue({ operation: 'correction', kind: 'credit_note', invoiceId: source.id, amount: 10 });
+      assert.equal(credit.servicePeriod, '2026-03-01 bis 2026-03-31', 'a credit note names the corrected service period');
+      const advance = await settle(order, 'advance_invoice', 100);
+      assert.equal(advance.dueDate, addDays(advance.date, settings.legal.paymentTermsDays));
+      const revision = await issue({ operation: 'revision', invoiceId: (await withService('2026-04-15')).id });
+      assert.equal(revision.servicePeriod, '2026-04-15', 'a revision keeps the service date');
+      assert.equal(revision.dueDate, addDays(revision.date, settings.legal.paymentTermsDays));
     });
 
     test('revisions of an issued invoice are drafts with the same content, numbered per source and listed under it', async () => {
@@ -789,10 +884,11 @@ for (const product of PRODUCTS) describe(`offers and the document chain (${produ
       const invoice = await settle(order, 'final_invoice', 119);
       const credit = await issue({ operation: 'correction', kind: 'credit_note', invoiceId: invoice.id, amount: 11.9 });
       assert.equal(credit.taxSnapshot?.grossAmount, 11.9);
-      assert.equal(credit.items[0].price, 200);
-      assert.equal(credit.items[0].discountPercent, 50);
-      assert.equal(credit.items[0].quantity, 0.1);
-      assert.equal(credit.items[1].total, 0);
+      assert.match(credit.items[0].description, /^Gutschrift zur Rechnung .* über /);
+      assert.equal(billable(credit)[0].price, 200);
+      assert.equal(billable(credit)[0].discountPercent, 50);
+      assert.equal(billable(credit)[0].quantity, 0.1);
+      assert.equal(billable(credit)[1].total, 0);
       const before = (await h.api.invoices.list()).map((entry) => entry.id).sort();
       const refused = await issueRaw({ operation: 'correction', kind: 'credit_note', invoiceId: invoice.id, amount: 0.03 });
       assert.equal(refused.status, 422, refused.text);
@@ -1182,8 +1278,7 @@ for (const product of PRODUCTS) describe(`offers and the document chain (${produ
       const order = await h.api.documents.chainIssue({ operation: 'order_confirmation', id: randomUUID(), offerId: offer.id, date: today(), reason: 'Zusage per Portal' } as never);
       assert.equal(order.documentKind, 'order_confirmation');
       assert.equal(order.amount, GROSS);
-      const invoice = await h.api.documents.convertOfferToInvoice({ offerId: offer.id });
-      assert.equal(invoice.sourceDocumentId, offer.id);
+      await assert.rejects(h.api.documents.convertOfferToInvoice({ offerId: offer.id }), /bereits die Auftragsbestätigung/, 'the order is billed through the chain, not converted again');
     });
 
     test('a declined offer is recorded as declined and cannot open an order', async () => {
@@ -1355,6 +1450,9 @@ for (const product of PRODUCTS) describe(`offers and the document chain (${produ
     });
   });
 });
+
+/** The priced lines of a document; chain documents open with a describing text line. */
+const billable = (document: { items: Array<Record<string, any>> }) => document.items.filter((line) => line.kind !== 'text') as Array<Record<string, any>>;
 
 describe('Pro: the order chain posts to the journal', () => {
   let p: ProHarness;

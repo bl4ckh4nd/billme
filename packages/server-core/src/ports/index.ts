@@ -811,7 +811,7 @@ export interface SyncTransactionPort extends TransactionPort {
   inTransaction<TResult>(work: () => TResult): TResult;
 }
 
-export type DocumentNumberKind = 'invoice' | 'offer' | 'customer';
+export type DocumentNumberKind = 'invoice' | 'offer' | 'customer' | 'order_confirmation' | 'delivery_note';
 export type DocumentNumberReservationStatus = 'reserved' | 'released' | 'finalized';
 
 export interface NumberingSettingsShape {
@@ -824,6 +824,10 @@ export interface NumberingSettingsShape {
     customerPrefix: string;
     nextCustomerNumber: number;
     customerNumberLength: number;
+    orderConfirmationPrefix?: string;
+    nextOrderConfirmationNumber?: number;
+    deliveryNotePrefix?: string;
+    nextDeliveryNoteNumber?: number;
   };
 }
 

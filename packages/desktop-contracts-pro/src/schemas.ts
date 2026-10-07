@@ -662,6 +662,10 @@ const appSettingsBaseSchema = z.object({
     customerPrefix: z.string().default('KD-'),
     nextCustomerNumber: z.number().default(1),
     customerNumberLength: z.number().default(4),
+    orderConfirmationPrefix: z.string().optional(),
+    nextOrderConfirmationNumber: z.number().optional(),
+    deliveryNotePrefix: z.string().optional(),
+    nextDeliveryNoteNumber: z.number().optional(),
   }),
   dunning: z.object({
     levels: z.array(dunningLevelSchema),

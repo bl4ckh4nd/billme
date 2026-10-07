@@ -67,6 +67,10 @@ export const MOCK_SETTINGS: AppSettings = {
     customerPrefix: 'KD-',
     nextCustomerNumber: 4,
     customerNumberLength: 4,
+    orderConfirmationPrefix: 'AB-%Y-',
+    nextOrderConfirmationNumber: 1,
+    deliveryNotePrefix: 'LS-%Y-',
+    nextDeliveryNoteNumber: 1,
   },
   dunning: {
     levels: [
@@ -172,6 +176,10 @@ export const DEFAULT_SETTINGS: AppSettings = {
     customerPrefix: 'KD-',
     nextCustomerNumber: 1,
     customerNumberLength: 4,
+    orderConfirmationPrefix: 'AB-%Y-',
+    nextOrderConfirmationNumber: 1,
+    deliveryNotePrefix: 'LS-%Y-',
+    nextDeliveryNoteNumber: 1,
   },
   dunning: {
     levels: [],

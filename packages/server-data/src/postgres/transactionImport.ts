@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { previewCsv, type CsvMapping, type CsvPreviewResult, commitCsv } from '@billme/desktop-services/csvImport';
-import type { Invoice, TenantScope } from '@billme/server-core';
+import { isReceivableDocumentKind, type Invoice, type TenantScope } from '@billme/server-core';
 import { createPostgresBillingDependencies } from './billing.js';
 import { appendWithClient } from './audit.js';
 import { runInTransaction, type PostgresQueryable } from './connection.js';
@@ -580,7 +580,7 @@ export const findServerTransactionMatches = async (
     transaction,
     suggestions: invoiceMatchSuggestions(transaction, invoices.filter((invoice) =>
       (invoice.status === 'open' || invoice.status === 'overdue')
-      && (invoice.documentKind ?? 'invoice') === 'invoice')),
+      && isReceivableDocumentKind(invoice.documentKind))),
   };
 };
 

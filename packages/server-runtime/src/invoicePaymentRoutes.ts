@@ -4,6 +4,7 @@ import { invoiceSchema, paymentSchema, type Payment } from '@billme/server-core'
 import { createPostgresBillingDependencies } from '@billme/server-data';
 import { buildAuditEntry, withInvoiceHistory } from './auditHistory.js';
 import { settledInvoiceStatus } from './documentIssuance.js';
+import { isReceivableDocumentKind } from '@billme/server-core';
 import { ApiError, typedRoute } from './http.js';
 import { requireDatabase, requireMutationSessionFor } from './runtimeContext.js';
 
@@ -34,6 +35,10 @@ export const registerInvoicePaymentRoutes = (app: FastifyInstance, product: 'lit
           const repositories = createPostgresBillingDependencies(transaction);
           const before = await repositories.invoiceRepo.getById(session.scope, params.invoiceId);
           if (!before) throw new ApiError(404, 'Rechnung nicht gefunden.');
+          // Only billing documents are paid; an order confirmation, delivery note or correction is not a receivable.
+          if (operation === 'save' && !isReceivableDocumentKind(before.documentKind)) {
+            throw new ApiError(409, 'Zahlungen gehören zu Rechnungen; Auftragsbestätigungen, Lieferscheine, Gutschriften und Stornos nehmen keine Zahlung an.');
+          }
           if (operation === 'save' && (before.status === 'draft' || (before.status === 'cancelled' && (body.payment?.amount ?? 0) > 0))) throw new ApiError(409, 'Zahlungen benötigen eine gestellte, gültige Rechnung. Rückzahlungen bleiben separat möglich.');
           const paymentId = operation === 'save' ? body.payment?.id : params.paymentId;
           if (!paymentId || (operation === 'reverse' && !body.expectedPayment)) throw new ApiError(400, 'Zahlung und Vergleichsstand fehlen.');

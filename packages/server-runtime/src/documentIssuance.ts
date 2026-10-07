@@ -204,7 +204,7 @@ export const issueDocumentChain = async (
   return database.transaction({}, async (session) => {
     const numbering = createNumberingPortsForDb(session, scope);
     // Locks server_settings FOR UPDATE first: this serializes issuance per tenant.
-    await numbering.getSettings();
+    const settings = await numbering.getSettings();
 
     const { id: operationId, ...intent } = input;
     const intentHash = sha256Hex(stableStringify(intent));
@@ -238,7 +238,18 @@ export const issueDocumentChain = async (
     if (existing) throw new ApiError(409, 'Document id already belongs to another document');
 
     const now = new Date();
-    const reservation = await reserveDocumentNumber(numbering, 'invoice', now);
+    // §14 UStG: only invoices consume the invoice range; order confirmations and delivery notes have their own.
+    const numberKind = input.operation === 'order_confirmation' || input.operation === 'delivery_note' ? input.operation : 'invoice';
+    const reservation = await reserveDocumentNumber(numbering, numberKind, now);
+    // Billing documents are due after the payment term, like any invoice; a calendar date, not a timestamp.
+    const dueAfterTerms = (date: string): string => {
+      const due = new Date(`${date.slice(0, 10)}T00:00:00Z`);
+      due.setUTCDate(due.getUTCDate() + (settings?.legal.paymentTermsDays ?? 14));
+      return due.toISOString().slice(0, 10);
+    };
+    if ((input.operation === 'settlement_invoice' || input.operation === 'revision') && !input.dueDate) {
+      input = { ...input, dueDate: dueAfterTerms(input.date) };
+    }
     let created;
     switch (input.operation) {
       case 'order_confirmation':

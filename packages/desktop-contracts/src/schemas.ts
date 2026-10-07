@@ -524,6 +524,11 @@ const appSettingsBaseSchema = z.object({
     customerPrefix: z.string().default('KD-'),
     nextCustomerNumber: z.number().int().min(1).default(1),
     customerNumberLength: z.number().int().min(1).max(10).default(4),
+    // Order confirmations and delivery notes are no invoices and get their own ranges.
+    orderConfirmationPrefix: z.string().optional(),
+    nextOrderConfirmationNumber: z.number().int().min(1).optional(),
+    deliveryNotePrefix: z.string().optional(),
+    nextDeliveryNoteNumber: z.number().int().min(1).optional(),
   }),
   dunning: z.object({
     levels: z.array(dunningLevelSchema),

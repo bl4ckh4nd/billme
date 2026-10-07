@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import { appSettingsSchema } from '@billme/desktop-contracts-pro/schemas';
-import type { TenantScope } from '@billme/server-core';
+import type { DocumentNumberKind, TenantScope } from '@billme/server-core';
 import { getServerSettings, saveServerSettings, listServerNumberReservations, saveServerNumberReservation, type ServerDatabaseSession } from '@billme/server-data';
 type AppSettings = z.infer<typeof appSettingsSchema>;
 
@@ -29,7 +29,7 @@ export const createNumberingPortsForDb = (
   },
   async createReservation(reservation: {
     id: string;
-    kind: 'invoice' | 'offer' | 'customer';
+    kind: DocumentNumberKind;
     number: string;
     counterValue: number;
     status: 'reserved' | 'released' | 'finalized';
@@ -58,7 +58,7 @@ export const createNumberingPortsForDb = (
   },
   async updateReservation(reservation: {
     id: string;
-    kind: 'invoice' | 'offer' | 'customer';
+    kind: DocumentNumberKind;
     number: string;
     counterValue: number;
     status: 'reserved' | 'released' | 'finalized';
@@ -71,8 +71,9 @@ export const createNumberingPortsForDb = (
       updatedAt: new Date().toISOString(),
     });
   },
-  async isNumberTaken(kind: 'invoice' | 'offer' | 'customer', number: string) {
-    const entityTable = kind === 'customer' ? 'clients' : kind === 'invoice' ? 'invoices' : 'offers';
+  async isNumberTaken(kind: DocumentNumberKind, number: string) {
+    // Order confirmations and delivery notes are stored as invoice rows with their own number range.
+    const entityTable = kind === 'customer' ? 'clients' : kind === 'offer' ? 'offers' : 'invoices';
     const entityColumn = kind === 'customer' ? 'customer_number' : 'number';
     const entityMatch = await db.query<{ exists: boolean }>(
       `SELECT EXISTS(SELECT 1 FROM ${entityTable} WHERE tenant_id = $1 AND ${entityColumn} = $2) AS exists`,

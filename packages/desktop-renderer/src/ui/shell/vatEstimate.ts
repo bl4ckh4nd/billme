@@ -1,5 +1,5 @@
 import type { AppSettings, Invoice } from '@billme/desktop-core/types';
-import { calculateInvoiceTaxSnapshot, resolveInvoiceTaxMode } from '@billme/server-core/services';
+import { calculateInvoiceTaxSnapshot, isCorrectionDocumentKind, isReceivableDocumentKind, resolveInvoiceTaxMode } from '@billme/server-core/services';
 
 export interface MonthVatEstimate {
   periodLabel: string;
@@ -13,8 +13,10 @@ export interface MonthVatEstimate {
 
 /**
  * Output VAT of one calendar month from the invoices alone (no Vorsteuer).
- * Soll: issued invoices dated in the month. Ist: payments received in the
- * month, capped at the invoice gross and split by the invoice's VAT ratio.
+ * Soll: issued invoices dated in the month, corrections subtracted; order
+ * confirmations and delivery notes bill nothing. Ist, and advance invoices
+ * under Soll too (Mindest-Ist): payments received in the month, capped at
+ * the invoice gross and split by the invoice's VAT ratio.
  */
 export const estimateMonthVat = (
   invoices: Invoice[],
@@ -37,23 +39,32 @@ export const estimateMonthVat = (
       settings,
     );
 
-  if (method === 'ist') {
-    let gross = 0;
-    let vat = 0;
-    for (const inv of invoices) {
-      const paid = (inv.payments ?? []).filter((p) => inMonth(p.date)).reduce((acc, p) => acc + (Number(p.amount) || 0), 0);
-      if (paid <= 0) continue;
-      const snap = snapshotFor(inv);
-      const grossCap = Math.max(0, Number(snap.grossAmount) || 0);
-      const applied = Math.min(paid, grossCap > 0 ? grossCap : paid);
-      gross += applied;
-      vat += applied * (grossCap > 0 ? Math.max(0, (Number(snap.vatAmount) || 0) / grossCap) : 0);
-    }
-    vat = Math.max(0, vat);
-    return { periodLabel, net: Math.max(0, gross - vat), vat, gross, dueDate, dueLabel };
+  const billing = invoices.filter((inv) => inv.status !== 'draft' && (isReceivableDocumentKind(inv.documentKind) || isCorrectionDocumentKind(inv.documentKind)));
+  const cashBasis = (inv: Invoice) => method === 'ist' || inv.documentKind === 'advance_invoice';
+  let gross = 0;
+  let vat = 0;
+  // ponytail: an advance still unpaid when the final invoice is issued is not added at the final's date here;
+  // the dashboard is an estimate, the Voranmeldung itself comes from the accounting engine.
+  for (const inv of billing.filter((candidate) => cashBasis(candidate) && isReceivableDocumentKind(candidate.documentKind))) {
+    const paid = (inv.payments ?? []).filter((p) => inMonth(p.date)).reduce((acc, p) => acc + (Number(p.amount) || 0), 0);
+    if (paid <= 0) continue;
+    const snap = snapshotFor(inv);
+    const grossCap = Math.max(0, Number(snap.grossAmount) || 0);
+    const applied = Math.min(paid, grossCap > 0 ? grossCap : paid);
+    gross += applied;
+    vat += applied * (grossCap > 0 ? Math.max(0, (Number(snap.vatAmount) || 0) / grossCap) : 0);
   }
-
-  const issued = invoices.filter((inv) => inv.status !== 'draft' && inMonth(inv.date));
-  const sum = (pick: (s: ReturnType<typeof snapshotFor>) => number) => issued.reduce((acc, inv) => acc + (pick(snapshotFor(inv)) || 0), 0);
-  return { periodLabel, net: sum((s) => s.netAmount), vat: sum((s) => s.vatAmount), gross: sum((s) => s.grossAmount), dueDate, dueLabel };
+  let net = gross - vat;
+  if (method === 'soll') {
+    // Corrections of an advance tax nothing back: the advance was taxed only as it was paid.
+    const advanceIds = new Set(billing.filter((inv) => inv.documentKind === 'advance_invoice').map((inv) => inv.id));
+    for (const inv of billing.filter((candidate) => !cashBasis(candidate) && inMonth(candidate.date) && !advanceIds.has(candidate.sourceDocumentId ?? ''))) {
+      const snap = snapshotFor(inv);
+      const sign = isCorrectionDocumentKind(inv.documentKind) ? -1 : 1;
+      net += sign * Math.abs(Number(snap.netAmount) || 0);
+      vat += sign * Math.abs(Number(snap.vatAmount) || 0);
+      gross += sign * Math.abs(Number(snap.grossAmount) || 0);
+    }
+  }
+  return { periodLabel, net, vat, gross, dueDate, dueLabel };
 };

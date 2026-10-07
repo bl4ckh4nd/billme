@@ -27,6 +27,7 @@ import {
 import { runProNonHappyAccountingScenario } from './pro/nonhappy.mjs';
 import { runProSourceRunScenario } from './pro/source-runs.mjs';
 import { runProOutgoingDocumentChainScenario } from './pro/outgoing-document-chain.mjs';
+import { runProVatEstimateScenario } from './pro/vat-estimate.mjs';
 import { runProIncomingDocumentArchiveScenario } from './pro/incoming-document-archive.mjs';
 
 const level = process.argv[2] === 'full' ? 'full' : 'smoke';
@@ -80,6 +81,7 @@ const buildScenarioList = () => {
       scenarios.push({ name: 'pro-incoming-invoice-ui', kind: 'browser', run: runProIncomingInvoiceUiScenario });
       scenarios.push({ name: 'pro-incoming-document-archive', kind: 'browser', run: runProIncomingDocumentArchiveScenario });
       scenarios.push({ name: 'pro-outgoing-document-chain', kind: 'browser', run: runProOutgoingDocumentChainScenario });
+      scenarios.push({ name: 'pro-vat-estimate', kind: 'browser', run: runProVatEstimateScenario });
       scenarios.push({ name: 'pro-route-guard', kind: 'browser', run: runProRouteGuardScenario });
       scenarios.push({ name: 'pro-worker-flows', kind: 'plain', run: () => runWorkerFlowScenario('pro') });
       scenarios.push({ name: 'pro-source-runs', kind: 'plain', run: runProSourceRunScenario });

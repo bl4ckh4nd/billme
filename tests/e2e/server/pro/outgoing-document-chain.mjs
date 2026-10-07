@@ -26,7 +26,7 @@ const capture = async (page, directory, name) => {
 
 const isoNow = () => new Date().toISOString();
 
-const createAcceptedOffer = async (state, session) => {
+export const createAcceptedOffer = async (state, session) => {
   const offers = await requestJson(state, session, '/api/v1/pro/offers');
   const source = offers.find((offer) => offer.status === 'open');
   if (!source) throw new Error('Seeded Pro offer was not persisted.');
@@ -56,7 +56,7 @@ const createAcceptedOffer = async (state, session) => {
   return saved;
 };
 
-const configureOutgoingPosting = async (state, session) => {
+export const configureOutgoingPosting = async (state, session) => {
   for (const [role, accountNumber] of [
     ['accounts_receivable', '1200'],
     ['revenue', '8400'],
@@ -74,7 +74,7 @@ const configureOutgoingPosting = async (state, session) => {
   }
 };
 
-const createChainDocument = async (state, session, operation, fields, expectedKind) => {
+export const createChainDocument = async (state, session, operation, fields, expectedKind) => {
   const created = await requestJson(state, session, '/api/v1/pro/document-chain/issue', undefined, {
     method: 'POST',
     body: {

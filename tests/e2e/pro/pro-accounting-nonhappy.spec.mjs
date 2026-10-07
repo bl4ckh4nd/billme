@@ -1,6 +1,6 @@
 import { expect, test } from '@playwright/test';
 import { writeFile, unlink } from 'node:fs/promises';
-import { appUrl, invokeDesktopIpc, launchDesktopApp, seedDesktopData, setProAccountingPeriodStatus } from '../support.mjs';
+import { appUrl, approveProDraft, invokeDesktopIpc, launchDesktopApp, seedDesktopData, setProAccountingPeriodStatus } from '../support.mjs';
 
 let desktop;
 let sequence = 0;
@@ -55,7 +55,8 @@ const balancedDraft = ({ transaction, draft }, overrides = {}) => {
     id: draft.id,
     tenantId: 'default',
     transactionId: transaction.id,
-    workflowStatus: overrides.workflowStatus ?? 'approved',
+    // The server owns the workflow: drafts are saved as suggested and walked on with approveProDraft.
+    workflowStatus: overrides.workflowStatus ?? 'suggested',
     postingDate: date,
     documentDate: date,
     bookingText: overrides.bookingText ?? `E2E ${transaction.purpose}`,
@@ -150,6 +151,8 @@ const payment = ({ sourceId, partyType, partyId, amount, openItemId, allocationE
 test.beforeEach(async () => {
   desktop = await launchDesktopApp({ app: 'pro' });
   await seedDesktopData(desktop.page, { app: 'pro' });
+  // Seeding writes past react-query and the onboarding gate; reload so the shell reads the seeded settings.
+  await desktop.page.reload();
   const policy = await invokeDesktopIpc(desktop.page, 'pro:getAccountingPolicy');
   const ledger = await invokeDesktopIpc(desktop.page, 'pro:listLedgerAccounts', { chart: policy.activeChart, limit: 3000, offset: 0 });
   postingAccounts = {
@@ -163,9 +166,6 @@ test.beforeEach(async () => {
     ?? ledger.find((row) => row.accountNumber.startsWith('8') && row.accountNumber !== postingAccounts.expense)?.accountNumber
     ?? ledger.find((row) => row.accountNumber !== postingAccounts.bank && row.accountNumber !== postingAccounts.expense)?.accountNumber;
   expect(postingAccounts.unmapped).toBeTruthy();
-  await invokeDesktopIpc(desktop.page, 'pro:upsertAccountingAccountMapping', { chart: policy.activeChart, role: 'accounts_payable', accountNumber: postingAccounts.expense });
-  await invokeDesktopIpc(desktop.page, 'pro:upsertAccountingAccountMapping', { chart: policy.activeChart, role: 'input_vat', accountNumber: postingAccounts.expense });
-  await invokeDesktopIpc(desktop.page, 'pro:upsertTaxCaseAccountMapping', { chart: policy.activeChart, taxCaseKey: 'DE_STD_19', role: 'input_tax', accountNumber: postingAccounts.expense, reason: 'E2E OPOS mapping' });
 });
 
 test.afterEach(async () => {
@@ -194,6 +194,10 @@ test('unbalanced draft remains unposted and keeps its blocking issue', async () 
     const after = await invokeDesktopIpc(page, 'pro:listJournalEntries', { limit: 500, offset: 0 });
     expect(after).toHaveLength(before.length);
     expect((await invokeDesktopIpc(page, 'pro:getDraftByTransactionId', { transactionId: source.transaction.id })).workflowStatus).toBe('incomplete');
+    await page.goto(appUrl(desktop.baseUrl, '/accounting?view=inbox'));
+    await expect(page.getByRole('button', { name: /^Unvollständig [1-9]/ })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Gebucht 0' })).toBeVisible();
+    await page.screenshot({ path: test.info().outputPath('01-unbalanced-stays-incomplete.png'), fullPage: true });
 });
 
 test('invalid workflow transition is rejected without changing the draft', async () => {
@@ -204,21 +208,36 @@ test('invalid workflow transition is rejected without changing the draft', async
       /Invalid workflow transition: (?:imported|incomplete) -> approved/,
     );
     expect(['imported', 'incomplete']).toContain((await invokeDesktopIpc(page, 'pro:getDraftByTransactionId', { transactionId: source.transaction.id })).workflowStatus);
+    await page.goto(appUrl(desktop.baseUrl, '/accounting?view=inbox'));
+    await expect(page.getByRole('button', { name: 'Freigabe 0' })).toBeVisible();
+    await page.screenshot({ path: test.info().outputPath('01-no-transition.png'), fullPage: true });
 });
 
 test('posting is source-idempotent and posted drafts are immutable', async () => {
   const { page } = desktop;
     const source = await importPendingTransaction(page, 'immutable');
-    const saved = await invokeDesktopIpc(page, 'pro:saveDraft', { draft: balancedDraft(source) });
-    const first = await invokeDesktopIpc(page, 'pro:postDraft', { draftId: saved.id, actorRole: 'accountant', idempotencyKey: unique('post') });
+    const saved = await approveProDraft(page, balancedDraft(source));
+    const key = unique('post');
+    const first = await invokeDesktopIpc(page, 'pro:postDraft', { draftId: saved.id, actorRole: 'accountant', idempotencyKey: key });
     expect(first.entry.id).toBeTruthy();
-    const second = await invokeDesktopIpc(page, 'pro:postDraft', { draftId: saved.id, actorRole: 'accountant', idempotencyKey: unique('post-duplicate') });
-    expect(second.entry.id).toBe(first.entry.id);
-    const entries = await invokeDesktopIpc(page, 'pro:listJournalEntries', { limit: 500, offset: 0 });
-    expect(entries.filter((entry) => entry.id === first.entry.id)).toHaveLength(1);
+    // The same key is a replay: it answers with the entry that was booked.
+    const replay = await invokeDesktopIpc(page, 'pro:postDraft', { draftId: saved.id, actorRole: 'accountant', idempotencyKey: key });
+    expect(replay.entry.id).toBe(first.entry.id);
+    // Another key on an already posted draft is refused instead of booking it a second time.
+    const journalBeforeRefusal = await invokeDesktopIpc(page, 'pro:listJournalEntries', { limit: 500, offset: 0 });
     await expectIpcError(
-      invokeDesktopIpc(page, 'pro:saveDraft', { draft: { ...saved, bookingText: 'Illegally changed after posting' } }),
-      /POSTED_DRAFT_IMMUTABLE/,
+      invokeDesktopIpc(page, 'pro:postDraft', { draftId: saved.id, actorRole: 'accountant', idempotencyKey: unique('post-other') }),
+      /PAYMENT_SOURCE_ALREADY_BOOKED/,
+    );
+    const entries = await invokeDesktopIpc(page, 'pro:listJournalEntries', { limit: 500, offset: 0 });
+    expect(entries).toEqual(journalBeforeRefusal);
+    expect(entries.filter((entry) => entry.sourceDraftId === saved.id)).toHaveLength(1);
+    await page.goto(appUrl(desktop.baseUrl, '/accounting?view=inbox'));
+    await expect(page.getByRole('button', { name: 'Gebucht 1' })).toBeVisible();
+    await page.screenshot({ path: test.info().outputPath('01-posted-once.png'), fullPage: true });
+    await expectIpcError(
+      invokeDesktopIpc(page, 'pro:saveDraft', { draft: { ...saved, workflowStatus: 'suggested', bookingText: 'Illegally changed after posting' } }),
+      /POSTED_DRAFT_IMMUTABLE|immutable|posted/i,
     );
     expect((await invokeDesktopIpc(page, 'pro:getDraftByTransactionId', { transactionId: source.transaction.id })).bookingText).toBe(saved.bookingText);
 });
@@ -226,7 +245,7 @@ test('posting is source-idempotent and posted drafts are immutable', async () =>
 test('duplicate reversal is typed-blocked and leaves one reversal', async () => {
   const { page } = desktop;
     const source = await importPendingTransaction(page, 'reverse');
-    const saved = await invokeDesktopIpc(page, 'pro:saveDraft', { draft: balancedDraft(source) });
+    const saved = await approveProDraft(page, balancedDraft(source));
     const posted = await invokeDesktopIpc(page, 'pro:postDraft', { draftId: saved.id, actorRole: 'accountant' });
     const first = await invokeDesktopIpc(page, 'pro:reverseJournalEntry', { entryId: posted.entry.id, reason: 'E2E correction' });
     expect(first.ok).toBe(true);
@@ -235,7 +254,12 @@ test('duplicate reversal is typed-blocked and leaves one reversal', async () => 
       /cannot be reversed again/,
     );
     const entries = await invokeDesktopIpc(page, 'pro:listJournalEntries', { limit: 500, offset: 0 });
-    expect(entries.filter((entry) => entry.id === posted.entry.id || entry.reversedEntryId === posted.entry.id)).toHaveLength(2);
+    // The original points at its reversal; there is exactly one reversal entry for it.
+    expect(entries.find((entry) => entry.id === posted.entry.id)).toMatchObject({ status: 'reversed', reversedEntryId: first.reversalEntryId });
+    expect(entries.filter((entry) => entry.sourceKey === `reversal:${posted.entry.id}`)).toHaveLength(1);
+    await page.goto(appUrl(desktop.baseUrl, '/accounting?view=inbox'));
+    await expect(page.getByRole('heading', { name: 'Buchungs-Inbox', level: 2 })).toBeVisible();
+    await page.screenshot({ path: test.info().outputPath('01-after-reversal.png'), fullPage: true });
 });
 
 test('OPOS rejects wrong party and preserves atomic residuals', async () => {
@@ -255,7 +279,8 @@ test('OPOS rejects wrong party and preserves atomic residuals', async () => {
     expect(afterPartial.find((item) => item.id === first.item.id).residualAmount).toBe(69);
     const overpaid = await invokeDesktopIpc(page, 'pro:allocateOpenItemPayment', payment({ sourceId: unique('overpaid-payment'), partyType: 'creditor', partyId: second.vendorId, amount: 150, openItemId: second.item.id }));
     expect(overpaid.residualAmount).toBe(31);
-    expect(overpaid.status).toBe('overpaid');
+    // An overpayment settles the item; the surplus stays on the payment (partially allocated), see the OPOS integration tests.
+    expect(overpaid.status).toBe('partially_allocated');
 
     await expectIpcError(
       invokeDesktopIpc(page, 'pro:allocateOpenItemPayment', payment({ sourceId: unique('atomic-overallocation'), partyType: 'creditor', partyId: first.vendorId, amount: 200, openItemId: first.item.id })),
@@ -263,6 +288,9 @@ test('OPOS rejects wrong party and preserves atomic residuals', async () => {
     );
     items = await invokeDesktopIpc(page, 'pro:listOpenItems');
     expect(items.find((item) => item.id === first.item.id).residualAmount).toBe(69);
+    await page.goto(appUrl(desktop.baseUrl, '/accounting?view=opos'));
+    await expect(page.getByRole('table', { name: 'Verbindlichkeiten' }).getByRole('row', { name: /^ER-partial .* 69,00 € Teilweise bezahlt/ })).toBeVisible();
+    await page.screenshot({ path: test.info().outputPath('01-opos-residuals.png'), fullPage: true });
 });
 
 test('EU reverse-charge without evidence is blocked and UI makes no success claim', async () => {
@@ -277,41 +305,52 @@ test('EU reverse-charge without evidence is blocked and UI makes no success clai
       }),
     });
     const check = await invokeDesktopIpc(page, 'pro:validateTaxCompliance', { draftId: saved.id });
-    expect(check.issues.map((issue) => issue.code)).toEqual(expect.arrayContaining(['MISSING_COUNTRY_CODE', 'MISSING_COUNTERPARTY_VAT_ID', 'MISSING_TAX_EVIDENCE']));
+    expect(check.issues.map((issue) => issue.code)).toEqual(expect.arrayContaining(['MISSING_TAX_COUNTRY', 'MISSING_COUNTERPARTY_VAT_ID', 'MISSING_TAX_EVIDENCE']));
     const posted = await invokeDesktopIpc(page, 'pro:postDraft', { draftId: saved.id, actorRole: 'accountant' });
     expect(posted.entry.id).toBe('');
     expect(posted.issues.some((issue) => issue.blocking)).toBeTruthy();
 
-    await page.goto(appUrl(baseUrl, '/accounting'));
-    await expect(page.getByRole('heading', { name: 'Pro Buchhaltung' })).toBeVisible();
-    const row = page.locator('tbody tr').filter({ hasText: source.transaction.counterparty }).first();
-    await expect(row).toBeVisible();
-    await row.click();
-    const expand = page.getByRole('button', { name: 'Erweitern' });
-    if (await expand.count()) await expand.click();
-    await expect(page.getByText('Buchungssatz')).toBeVisible();
-    await page.locator('select[id^="tax-case-"]').first().selectOption('EU_B2B_SERVICE_RC');
-    await page.locator('input[id^="amount-"]').first().fill('121');
-    await page.getByRole('button', { name: 'Speichern', exact: true }).click({ force: true });
-    await expect(page.getByText('Blockiert', { exact: true })).toBeVisible();
+    await page.goto(appUrl(baseUrl, '/accounting?view=inbox'));
+    await page.getByRole('button', { name: `${source.transaction.counterparty} öffnen` }).click();
+    await page.getByRole('button', { name: 'Erweitern' }).click();
+    await expect(page.getByRole('heading', { name: 'Buchung erfassen' })).toBeVisible();
+    await page.getByRole('combobox', { name: 'Steuerfall' }).first().selectOption('EU_B2B_SERVICE_RC');
+    await page.getByRole('spinbutton', { name: 'Betrag' }).first().fill('121');
+    await page.getByRole('button', { name: 'Speichern', exact: true }).click();
+    await expect(page.getByRole('status').filter({ hasText: 'Entwurf gespeichert' })).toBeVisible();
+    await expect(page.getByRole('status').filter({ hasText: /Zur Prüfung geben gesperrt/ })).toBeVisible();
+    await expect(page.getByRole('button', { name: /^Fehler [1-9]/ })).toBeVisible();
     await expect(page.getByText(/Buchung erfolgreich|erfolgreich gebucht/i)).toHaveCount(0);
+    await page.screenshot({ path: test.info().outputPath('01-reverse-charge-blocked.png'), fullPage: true });
 });
 
 test('missing report mapping blocks the report and unsupported 2027 EÜR fails closed', async () => {
-  const { page } = desktop;
+  const { page, baseUrl } = desktop;
     const source = await importPendingTransaction(page, 'unmapped-report');
-    const saved = await invokeDesktopIpc(page, 'pro:saveDraft', { draft: balancedDraft(source, {
+    const saved = await approveProDraft(page, balancedDraft(source, {
       lines: [
-        { id: unique('unmapped'), accountNumber: postingAccounts.unmapped, debitAmount: 120, creditAmount: 0 },
+        { id: unique('unmapped'), accountNumber: postingAccounts.expense, debitAmount: 120, creditAmount: 0 },
         { id: unique('unmapped-bank'), accountNumber: postingAccounts.bank, debitAmount: 0, creditAmount: 120 },
       ],
-    }) });
+    }));
     const posted = await invokeDesktopIpc(page, 'pro:postDraft', { draftId: saved.id, actorRole: 'accountant' });
     expect(posted.entry.id).toBeTruthy();
-    const report = await invokeDesktopIpc(page, 'pro:getGuvReport', { from: '2026-01-01', to: '2026-12-31' });
-    expect(report.unmappedAccounts?.some((row) => row.accountNumber === postingAccounts.unmapped)).toBeTruthy();
-    expect(report.blocking).toBe(true);
-    await expectIpcError(invokeDesktopIpc(page, 'eur:getReport', { taxYear: 2027 }), /EUR_CATALOG_UNAVAILABLE|unavailable|2027/);
+    // EÜR income reports require expense mappings and exclude balance-sheet accounts.
+    const report = await invokeDesktopIpc(page, 'pro:getReportingReport', { kind: 'management-guv', from: '2026-01-01', to: '2026-12-31' });
+    expect(report.mappingHealth.blocking).toBe(true);
+    expect(report.mappingHealth.unmappedAccounts).toContain(postingAccounts.expense);
+    expect(report.mappingHealth.unmappedAccounts).not.toContain(postingAccounts.bank);
+    expect(report.rows).toEqual([]);
+    const health = await invokeDesktopIpc(page, 'pro:getReportMappingHealth', { chart: postingAccounts.chart, statement: 'management-guv', asOfDate: '2026-12-31' });
+    expect(health.unmapped.map((row) => row.accountNumber)).toContain(postingAccounts.expense);
+    expect(health.unmapped.map((row) => row.accountNumber)).not.toContain(postingAccounts.bank);
+    await expectIpcError(invokeDesktopIpc(page, 'eur:getReport', { taxYear: 2027 }), /EUR_CATALOG_UNAVAILABLE|Unsupported EÜR year|unavailable|2027/);
+
+    await page.goto(appUrl(baseUrl, '/accounting?view=reports'));
+    await page.getByRole('group', { name: 'Bericht' }).getByRole('button', { name: 'Management-GuV', exact: true }).click();
+    await expect(page.getByRole('alert').filter({ hasText: 'Auswertung blockiert: Konten-Mapping unvollständig' })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'PDF' })).toBeDisabled();
+    await page.screenshot({ path: test.info().outputPath('01-report-blocked.png'), fullPage: true });
 });
 
 test('period soft-lock requires a runtime override reason before posting', async () => {
@@ -344,16 +383,21 @@ test('period soft-lock requires a runtime override reason before posting', async
   });
   expect(activated.status).toBe('aktiv');
   expect(activated.activationJournalEntryId).toBeTruthy();
+  // No route soft-locks a period: setProAccountingPeriodStatus restarts the app around the period row, so read desktop.page afterwards.
   await expect(setProAccountingPeriodStatus(desktop, '2026-04')).resolves.toMatchObject({ period: '2026-04', status: 'soft_locked' });
+  const { page: restartedPage } = desktop;
   const depreciation = { assetId, year: 2026, postingDate: '2026-04-30', reason: 'E2E soft lock validation' };
   await expectIpcError(
-    invokeDesktopIpc(page, 'pro:runDepreciation', depreciation),
+    invokeDesktopIpc(restartedPage, 'pro:runDepreciation', depreciation),
     /SOFT_LOCK_OVERRIDE_REQUIRED/,
   );
-  const overridden = await invokeDesktopIpc(page, 'pro:runDepreciation', { ...depreciation, softLockOverride: true, overrideReason: 'Owner approval' });
+  const overridden = await invokeDesktopIpc(restartedPage, 'pro:runDepreciation', { ...depreciation, softLockOverride: true, overrideReason: 'Owner approval' });
   expect(overridden.journalEntryId).toBeTruthy();
   expect(overridden.scheduleEntry).toMatchObject({ status: 'posted', journalEntryId: overridden.journalEntryId });
-  expect((await invokeDesktopIpc(page, 'pro:listAssets')).find((asset) => asset.id === assetId)).toMatchObject({ id: assetId, status: 'aktiv' });
+  expect((await invokeDesktopIpc(restartedPage, 'pro:listAssets')).find((asset) => asset.id === assetId)).toMatchObject({ id: assetId, status: 'aktiv' });
+  await restartedPage.goto(appUrl(desktop.baseUrl, '/accounting?view=assets'));
+  await expect(restartedPage.getByRole('heading', { name: 'Anlagen', level: 1 })).toBeVisible();
+  await restartedPage.screenshot({ path: test.info().outputPath('01-assets-after-override.png'), fullPage: true });
 });
 
 test('asset depreciation and disposal reject an unactivated asset', async () => {
@@ -381,4 +425,7 @@ test('asset depreciation and disposal reject an unactivated asset', async () => 
     await expectIpcError(invokeDesktopIpc(page, 'pro:disposeAsset', { assetId, disposalDate: '2026-04-30', proceeds: 10, reason: 'E2E disposal', actorRole: 'accountant' }), /active|aktiv|asset/i);
     const unchanged = (await invokeDesktopIpc(page, 'pro:listAssets')).find((asset) => asset.id === assetId);
     expect(unchanged?.status).toBe('entwurf');
+    await page.goto(appUrl(desktop.baseUrl, '/accounting?view=assets'));
+    await expect(page.getByRole('heading', { name: 'Anlagen', level: 1 })).toBeVisible();
+    await page.screenshot({ path: test.info().outputPath('01-assets-unchanged.png'), fullPage: true });
 });

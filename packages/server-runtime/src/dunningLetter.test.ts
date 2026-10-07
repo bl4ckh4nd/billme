@@ -4,7 +4,8 @@ import { createServer, type AddressInfo, type Socket } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
-import { PgliteServerDatabase } from '@billme/server-data';
+import { PgliteServerDatabase, createPostgresDunningDelivery, createPostgresInvoiceRepository } from '@billme/server-data';
+import { createSingleTenantScope, localIsoDate } from '@billme/server-core';
 import { buildServerApi } from './app.js';
 
 const token = 'dunning-letter-local-access-token';
@@ -96,6 +97,7 @@ test('the embedded dunning run mails the rendered dunning letter as PDF attachme
       getSecret: async () => 'smtp-secret',
       renderDocumentPdf: async (args) => {
         rendered.push(args);
+        await new Promise((resolve) => setTimeout(resolve, 50));
         const path = join(dataDir, `${args.suggestedName}.pdf`);
         await writeFile(path, '%PDF-1.7 dunning letter');
         return { path };
@@ -107,14 +109,16 @@ test('the embedded dunning run mails the rendered dunning letter as PDF attachme
     await database.query(`INSERT INTO tenants (id, slug, display_name, product, created_at, updated_at) VALUES ($1, 'dl', 'DL', 'lite', $2, $2)`, [tenantId, now.toISOString()]);
     await database.query(`INSERT INTO server_settings (tenant_id, settings_json, created_at, updated_at) VALUES ($1, $2, $3, $3)`, [tenantId, JSON.stringify(settings(sink.port)), now.toISOString()]);
     await app.ready();
-    const due = new Date(now.getTime() - 20 * 86_400_000).toISOString().slice(0, 10);
+    const due = localIsoDate(new Date(now.getTime() - 20 * 86_400_000));
     const saved = await app.inject({ method: 'POST', url: '/api/v1/lite/invoices', headers, payload: { reason: 'test', invoice: {
       kind: 'invoice', id: 'overdue-1', number: 'RE-0042', client: 'Kanzlei Weber', clientEmail: 'weber@example.com',
-      date: due, dueDate: due, amount: 100, status: 'open', items: [], payments: [],
+      date: due, dueDate: due, amount: 100, status: 'open', items: [{ kind: 'item', description: 'Beratung', quantity: 1, price: 100, total: 100, taxRate: 0 }], payments: [],
     } } });
     assert.equal(saved.statusCode, 200, saved.body);
 
-    const run = await app.inject({ method: 'POST', url: '/api/v1/lite/dunning/manual-run', headers });
+    const runs = await Promise.all([app.inject({ method: 'POST', url: '/api/v1/lite/dunning/manual-run', headers }), app.inject({ method: 'POST', url: '/api/v1/lite/dunning/manual-run', headers })]);
+    const run = runs.find((response) => response.json().result?.emailsSent === 1)!;
+    assert.equal(runs.reduce((total, response) => total + (response.json().result?.emailsSent ?? 0), 0), 1, 'Concurrent manual and worker-compatible runs must send once');
     assert.equal(run.statusCode, 200, run.body);
     assert.equal(run.json().success, true, run.body);
     assert.deepEqual(run.json().result.errors, []);
@@ -123,8 +127,8 @@ test('the embedded dunning run mails the rendered dunning letter as PDF attachme
     assert.deepEqual(rendered.map(({ kind, id, level }) => ({ kind, id, level })), [{ kind: 'dunning', id: 'overdue-1', level: 2 }]);
     assert.equal(sink.messages.length, 1);
     const mail = sink.messages[0]!;
-    assert.match(mail, /Subject: 1\. Mahnung RE-0042/);
-    assert.match(mail, /filename=.?1\. Mahnung RE-0042\.pdf/);
+    assert.ok(mail.includes(`Subject: 1. Mahnung ${saved.json().number}`));
+    assert.ok(mail.includes(`${saved.json().number}.pdf`));
     assert.match(mail, /Content-Type: application\/pdf/);
 
     // The letter's figures after the run: the fee is on the invoice and in the history, but counted once.
@@ -141,4 +145,47 @@ test('the embedded dunning run mails the rendered dunning letter as PDF attachme
     await sink.close();
     await rm(dataDir, { recursive: true, force: true });
   }
+});
+
+
+test('dunning claims fence expired owners and require audited review after uncertain acceptance', async (t) => {
+  const database = await PgliteServerDatabase.open();
+  const scope = createSingleTenantScope(tenantId, 'lite');
+  const app = await buildServerApi({ database, runtime: 'embedded', product: 'lite', logger: false, sessionSecret: 'dunning-claims-test-session-secret', localAuth: { accessToken: token, tenantId, userId: 'owner', email: 'owner@example.test', fullName: 'Owner' } });
+  t.after(() => app.close());
+  const now = new Date().toISOString();
+  await database.query("INSERT INTO tenants (id,slug,display_name,product,created_at,updated_at) VALUES ($1,$1,$1,'lite',$2,$2)", [tenantId, now]);
+  await database.query('INSERT INTO server_settings (tenant_id,settings_json,created_at,updated_at) VALUES ($1,$2,$3,$3)', [tenantId, JSON.stringify(settings(12345)), now]);
+  const repository = createPostgresInvoiceRepository(database);
+  await repository.save(scope, { kind: 'invoice', tenantId, id: 'claim-invoice', number: 'CLAIM-1', client: 'Buyer', clientEmail: 'buyer@example.test', date: '2026-01-01', dueDate: '2026-01-15', amount: 100, status: 'open', items: [], payments: [], history: [], taxMode: 'small_business_19_ustg' });
+  const delivery = createPostgresDunningDelivery(database);
+  const level = settings(12345).dunning.levels[1];
+  const first = (await delivery.claim(scope, 'claim-invoice', level))!;
+  assert.ok(first);
+  const changedSettings = settings(12345);
+  changedSettings.dunning.levels[1].fee = 99;
+  await database.query('UPDATE server_settings SET settings_json=$2 WHERE tenant_id=$1', [tenantId, JSON.stringify(changedSettings)]);
+  const prepared = await app.inject({ method: 'GET', url: '/api/v1/lite/documents/dunning/claim-invoice/render-context?level=2', headers });
+  assert.equal(prepared.statusCode, 200, prepared.body);
+  assert.equal(prepared.json().dunning.fee, 2.5, 'The prepared PDF must use the claimed fee even when settings change');
+  assert.equal(await delivery.claim(scope, 'claim-invoice', { ...level, id: 3 }), null, 'Cross-level concurrent attempts are blocked');
+  await database.query("UPDATE dunning_deliveries SET lease_expires_at='2020-01-01T00:00:00Z' WHERE id=$1", [first.delivery.id]);
+  const second = (await delivery.claim(scope, 'claim-invoice', level))!;
+  assert.notEqual(second.delivery.id, first.delivery.id);
+  assert.equal(await delivery.begin(scope, first.delivery.id), false, 'Expired owner cannot invoke provider');
+  await delivery.fail(scope, second.delivery.id, 'Render failed');
+  assert.equal((await repository.getById(scope, 'claim-invoice'))!.amount, 100, 'Preparation failure cannot apply fee');
+  const third = (await delivery.claim(scope, 'claim-invoice', level))!;
+  assert.equal(await delivery.begin(scope, third.delivery.id), true);
+  await delivery.fail(scope, third.delivery.id, 'Connection lost after possible acceptance');
+  await assert.rejects(delivery.claim(scope, 'claim-invoice', level), /Versand unklar/);
+  const listed = await app.inject({ method: 'GET', url: '/api/v1/lite/dunning/deliveries', headers });
+  assert.equal(listed.statusCode, 200, listed.body); assert.equal(listed.json()[0].state, 'unknown');
+  const resolved = await app.inject({ method: 'POST', url: '/api/v1/lite/dunning/deliveries/resolve', headers, payload: { id: third.delivery.id, accepted: true, reason: 'Provider log confirms acceptance' } });
+  assert.equal(resolved.statusCode, 200, resolved.body);
+  assert.equal((await repository.getById(scope, 'claim-invoice'))!.amount, 102.5);
+  assert.equal(await delivery.claim(scope, 'claim-invoice', level), null);
+  const replay = await app.inject({ method: 'POST', url: '/api/v1/lite/dunning/deliveries/resolve', headers, payload: { id: third.delivery.id, accepted: true, reason: 'Do not apply fee twice' } });
+  assert.equal(replay.statusCode, 409);
+  assert.equal((await repository.getById(scope, 'claim-invoice'))!.amount, 102.5);
 });

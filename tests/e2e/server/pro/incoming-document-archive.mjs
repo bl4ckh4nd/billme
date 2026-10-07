@@ -2,9 +2,11 @@ import crypto from 'node:crypto';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { expect } from '@playwright/test';
+import { createPdfFixture } from '../pdf-fixture.mjs';
 import { readServerHarnessState } from '../harness.mjs';
 import {
   createOwnerCredentials,
+  createHarnessProTenant,
   ensureHarnessSession,
   openProShell,
   requestJson,
@@ -12,13 +14,13 @@ import {
 } from './helpers.mjs';
 
 const owner = createOwnerCredentials('pro');
-const invoiceId = 'playwright-incoming-document-archive-invoice';
-const vendorId = 'playwright-incoming-document-archive-vendor';
-const invoiceNumber = 'ER-DOC-ARCHIVE-001';
+const invoiceId = `playwright-incoming-document-archive-invoice-${crypto.randomUUID()}`;
+const vendorId = `playwright-incoming-document-archive-vendor-${crypto.randomUUID()}`;
+const invoiceNumber = `ER-DOC-ARCHIVE-${crypto.randomUUID()}`;
 
 const screenshotDirectory = async () => {
   const directory = process.env.E2E_SCREENSHOT_DIR?.trim()
-    || path.join(process.cwd(), 'docs', 'audit', 'screenshots', '2026-09-04-acceptance');
+    || path.join(process.cwd(), 'test-results', 'server-mode', 'incoming-document-archive');
   await fs.mkdir(directory, { recursive: true });
   return directory;
 };
@@ -29,7 +31,7 @@ const capture = async (page, directory, name) => {
   });
 };
 
-const pdfContent = Buffer.from('%PDF-1.7\nBillme incoming document archive E2E\n', 'utf8');
+const pdfContent = await createPdfFixture('Billme incoming document archive E2E');
 const pngContent = Buffer.from([
   0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a,
   0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52,
@@ -115,8 +117,8 @@ const createSavedInvoice = async (state, session) => {
 
 const openOpos = async (page, state, session) => {
   await openProShell(page, state, { route: 'accounting', session });
-  await expect(page.getByRole('heading', { name: 'Ledger, Regeln und Workflow-Snapshots' })).toBeVisible();
-  await page.getByRole('navigation', { name: 'Buchhaltungsbereiche' }).getByRole('button', { name: 'OPOS', exact: true }).click();
+  await expect(page.getByRole('heading', { name: 'Buchen', level: 1 })).toBeVisible();
+  await page.getByRole('navigation', { name: 'Hauptnavigation' }).getByRole('button', { name: 'Offene Posten', exact: true }).click();
   const workspace = page.getByTestId('opos-workspace');
   await expect(workspace).toBeVisible();
   await expect(workspace.getByRole('heading', { name: 'Eingangsrechnungen' })).toBeVisible();
@@ -141,10 +143,12 @@ const upload = async (workspace, file) => {
 
 export const runProIncomingDocumentArchiveScenario = async (page) => {
   const state = await readServerHarnessState();
-  const session = await ensureHarnessSession(state, { product: 'pro', ...owner });
+  const credentials = { ...owner, email: `incoming-archive-${Date.now()}@billme-e2e.local` };
+  await createHarnessProTenant(state, credentials);
+  const session = await ensureHarnessSession(state, { product: 'pro', ...credentials });
   await seedHarnessProTenant(state, {
     tenantId: session.tenantId,
-    namespace: 'incoming-document-archive',
+    namespace: `incoming-document-archive-${Date.now()}`,
     includeEurCashFixtures: true,
   });
   await configurePosting(state, session);
@@ -163,7 +167,7 @@ export const runProIncomingDocumentArchiveScenario = async (page) => {
     mimeType: 'application/pdf',
     buffer: pdfContent,
   });
-  await expect(page.getByRole('status')).toContainText('Originalbeleg archiviert.');
+  await expect(page.getByTestId('opos-feedback')).toContainText('Originalbeleg archiviert.');
   const pdfRow = workspace.locator('tbody tr').filter({ hasText: 'rechnung-original.pdf' });
   await expect(pdfRow).toContainText('Ausstehend');
   await capture(page, directory, '02-pdf-pending');
@@ -193,7 +197,7 @@ export const runProIncomingDocumentArchiveScenario = async (page) => {
   await capture(page, directory, '05-oversize-error');
 
   await pdfRow.getByRole('button', { name: 'Als geprüft markieren' }).click();
-  await expect(page.getByRole('status')).toContainText('als geprüft markiert');
+  await expect(page.getByTestId('opos-feedback')).toContainText('als geprüft markiert');
   await expect(pdfRow).toContainText('Geprüft');
   await capture(page, directory, '06-pdf-accepted');
 
@@ -202,13 +206,13 @@ export const runProIncomingDocumentArchiveScenario = async (page) => {
     mimeType: 'image/png',
     buffer: pngContent,
   });
-  await expect(page.getByRole('status')).toContainText('Originalbeleg archiviert.');
+  await expect(page.getByTestId('opos-feedback')).toContainText('Originalbeleg archiviert.');
   const pngRow = workspace.locator('tbody tr').filter({ hasText: 'rechnung-original.png' });
   await expect(pngRow).toContainText('Ausstehend');
   await capture(page, directory, '07-png-pending');
 
   await pngRow.getByRole('button', { name: 'Ablehnen' }).click();
-  await expect(page.getByRole('status')).toContainText('zur Prüfung abgelehnt');
+  await expect(page.getByTestId('opos-feedback')).toContainText('zur Prüfung abgelehnt');
   await expect(pngRow).toContainText('Abgelehnt');
   await capture(page, directory, '08-png-rejected');
 
@@ -255,7 +259,6 @@ export const runProIncomingDocumentArchiveScenario = async (page) => {
   const pdfPath = path.join(directory, 'downloaded-rechnung-original.pdf');
   await downloadedPdf.saveAs(pdfPath);
   expect(await fs.readFile(pdfPath)).toEqual(pdfContent);
-  await fs.rm(pdfPath, { force: true });
 
   const pngDownload = page.waitForEvent('download');
   await pngRow.getByRole('button', { name: 'Herunterladen' }).click();
@@ -264,11 +267,10 @@ export const runProIncomingDocumentArchiveScenario = async (page) => {
   const pngPath = path.join(directory, 'downloaded-rechnung-original.png');
   await downloadedPng.saveAs(pngPath);
   expect(await fs.readFile(pngPath)).toEqual(pngContent);
-  await fs.rm(pngPath, { force: true });
 
   await page.reload({ waitUntil: 'networkidle' });
-  await expect(page.getByRole('heading', { name: 'Ledger, Regeln und Workflow-Snapshots' })).toBeVisible();
-  await page.getByRole('navigation', { name: 'Buchhaltungsbereiche' }).getByRole('button', { name: 'OPOS', exact: true }).click();
+  await expect(page.getByRole('heading', { name: 'Offene Posten', level: 1 })).toBeVisible();
+  await page.getByRole('navigation', { name: 'Hauptnavigation' }).getByRole('button', { name: 'Offene Posten', exact: true }).click();
   const reloadedWorkspace = page.getByTestId('opos-workspace');
   await selectInvoice(reloadedWorkspace);
   const reloadedPdfRow = reloadedWorkspace.locator('tbody tr').filter({ hasText: 'rechnung-original.pdf' });

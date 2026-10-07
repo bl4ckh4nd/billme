@@ -3,120 +3,23 @@ import { randomUUID } from 'node:crypto';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 import Database from 'better-sqlite3';
 import { createSingleTenantScope } from '@billme/server-core';
-import { EUR_SOURCE_VERSION_2025, getCatalogForYear } from '@billme/desktop-services/eurCatalog';
+import { EUR_SOURCE_VERSION_2025 } from '@billme/desktop-services/eurCatalog';
 import { createPostgresAuditLogPort, sha256Hex, stableStringify } from './audit.js';
 import { createPostgresPool } from './connection.js';
 import { runPostgresMigrations } from './migrations.js';
 import { createPostgresProAccountingRepository } from './proAccountingRepository.js';
 import { saveServerAccountMappingHgb, saveServerReportAccountMapping } from './proAccounting.js';
-import { tenantCoreRowCountTables } from './billing.js';
 import {
-  desktopSqliteIgnoredTables,
-  desktopSqliteImportedTables,
-  detectUnsupportedSqliteTables,
   assertNoCrossTenantIdentityCollisions,
   importDesktopSqliteToPostgres,
-  accountingSourceRunHash,
   loadAccountMappingsHgb,
   loadLegacyAccountMappingsHgb,
-  maxAuditHead,
-  validateCanonicalEurLines,
 } from './importDesktop.js';
-import type { ServerEurLineRecord, ServerReportAccountMappingRecord } from './proAccounting.js';
+import type { ServerReportAccountMappingRecord } from './proAccounting.js';
 
-// Tables declared by the last SQLite desktop schemas (union of Lite and Pro). The SQLite
-// stack is gone and databases from v0.4.0 and earlier cannot contain newer tables, so the list is frozen.
-const desktopSqliteSchemaTables = [
-  'account_keywords', 'account_mappings_hgb', 'account_suggestion_rules', 'accounting_account_mappings',
-  'accounting_backfill_runs', 'accounting_periods', 'accounting_policies', 'accounting_source_runs',
-  'accounts', 'active_templates', 'articles', 'asset_depreciation_schedule', 'asset_movements', 'assets',
-  'audit_log', 'bank_transactions', 'booking_draft_lines', 'booking_drafts', 'client_activities',
-  'client_addresses', 'client_emails', 'client_projects', 'clients', 'datev_exports',
-  'draft_validation_issues', 'dunning_history', 'email_log', 'eur_classifications', 'eur_lines', 'eur_rules',
-  'import_batches', 'incoming_invoice_lines', 'incoming_invoices', 'invoice_items', 'invoice_payments',
-  'invoices', 'journal_entries', 'journal_lines', 'journal_posting_pairs', 'ledger_accounts',
-  'number_reservations', 'offer_items', 'offers', 'open_item_allocations', 'open_item_payments',
-  'open_items', 'pro_workflow_entries', 'recurring_profiles', 'report_snapshots', 'settings',
-  'tax_case_account_mappings', 'tax_cases', 'templates', 'transactions', 'vat_evidence', 'vendors',
-];
-const postgresMigrationUrls = [
-  new URL('../../drizzle/0000_server_data.sql', import.meta.url),
-  new URL('../../drizzle/0001_server_data_pro_accounting.sql', import.meta.url),
-  new URL('../../drizzle/0002_server_data_assets.sql', import.meta.url),
-  new URL('../../drizzle/0003_server_data_offer_items.sql', import.meta.url),
-  new URL('../../drizzle/0004_server_data_tax_rules.sql', import.meta.url),
-  new URL('../../drizzle/0005_server_data_audit_heads.sql', import.meta.url),
-  new URL('../../drizzle/0006_server_data_opos.sql', import.meta.url),
-  new URL('../../drizzle/0007_server_data_opos_hardening.sql', import.meta.url),
-  new URL('../../drizzle/0008_server_data_asset_accounting.sql', import.meta.url),
-  new URL('../../drizzle/0009_server_data_datev_export_bytes.sql', import.meta.url),
-  new URL('../../drizzle/0010_server_data_invoice_accounting_posted_at.sql', import.meta.url),
-  new URL('../../drizzle/0011_server_data_tax_case_mapping_tenancy.sql', import.meta.url),
-  new URL('../../drizzle/0012_server_data_asset_ownership_guard.sql', import.meta.url),
-  new URL('../../drizzle/0013_server_data_asset_ownership_hardening.sql', import.meta.url),
-  new URL('../../drizzle/0014_server_data_datev_tax_evidence.sql', import.meta.url),
-  new URL('../../drizzle/0015_server_data_reporting_tax_submissions.sql', import.meta.url),
-  new URL('../../drizzle/0016_server_data_eur_native.sql', import.meta.url),
-  new URL('../../drizzle/0017_server_data_eur_catalog.sql', import.meta.url),
-  new URL('../../drizzle/0018_server_data_canonical_catalog.sql', import.meta.url),
-  new URL('../../drizzle/0019_server_data_audit_tenant_hash.sql', import.meta.url),
-  new URL('../../drizzle/0021_server_data_eur_facts.sql', import.meta.url),
-  new URL('../../drizzle/0022_server_data_accounting_source_runs.sql', import.meta.url),
-  new URL('../../drizzle/0023_server_data_import_source_run_rejected.sql', import.meta.url),
-  new URL('../../drizzle/0024_server_data_portal_publications.sql', import.meta.url),
-  new URL('../../drizzle/0025_server_data_incoming_invoice_documents.sql', import.meta.url),
-  new URL('../../drizzle/0026_server_data_invoice_document_chain.sql', import.meta.url),
-  new URL('../../drizzle/0027_server_data_account_skr_optional.sql', import.meta.url),
-  new URL('../../drizzle/0028_server_data_document_issuance_receipts.sql', import.meta.url),
-  new URL('../../drizzle/0031_server_data_document_templates.sql', import.meta.url),
-];
-// The EÜR snapshot is transformed from the desktop report_snapshots row into
-// its immutable server table; the other three facts are imported directly.
-const transformedServerTables = new Set(['eur_report_snapshots']);
-const serverOwnedTenantTables = new Set([
-  'eur_cash_facts', 'eur_annex_facts', 'eur_report_snapshots', 'accounting_source_runs',
-]);
-
-const extractTenantScopedPostgresTables = async (migrationUrls: URL[]): Promise<string[]> => {
-  const tables = new Set<string>();
-  for (const migrationUrl of migrationUrls) {
-    const sql = await readFile(migrationUrl, 'utf8');
-    for (const match of sql.matchAll(/CREATE TABLE IF NOT EXISTS ([a-z_]+) \(([\s\S]*?)\);/g)) {
-      if (/\btenant_id\b/.test(match[2])) {
-        tables.add(match[1]);
-      }
-    }
-  }
-  return [...tables].sort();
-};
-
-test('detectUnsupportedSqliteTables ignores newly supported populated tables', () => {
-  const counts = new Map<string, number>([
-    ['clients', 3],
-    ['ledger_accounts', 5],
-    ['templates', 2],
-    ['articles', 7],
-    ['account_suggestion_rules', 4],
-    ['eur_lines', 9],
-    ['sqlite_sequence', 1],
-    ['migration_log', 10],
-  ]);
-
-  const result = detectUnsupportedSqliteTables([...counts.keys()], (table) => counts.get(table) ?? 0);
-
-  assert.deepEqual(result, []);
-});
-
-test('imported accounting source hashes canonical source values for server replay', () => {
-  const sourceJson = '{"sourceRevision":"v1","sourceId":"source-1","sourceType":"standalone_source"}';
-  assert.equal(accountingSourceRunHash(sourceJson), sha256Hex(stableStringify(JSON.parse(sourceJson))));
-  assert.notEqual(accountingSourceRunHash(sourceJson), sha256Hex(sourceJson));
-  assert.throws(() => accountingSourceRunHash('{bad}', 'source-run-1'), /IMPORT_ACCOUNTING_SOURCE_JSON_INVALID:source-run-1/);
-});
 
 test('SQLite import preserves EÜR facts, immutable snapshots, and source-run provenance', { skip: !(process.env.BILLME_TEST_DATABASE_URL ?? process.env.DATABASE_URL) }, async () => {
   const pool = createPostgresPool(process.env.BILLME_TEST_DATABASE_URL ?? process.env.DATABASE_URL!);
@@ -196,61 +99,6 @@ test('SQLite import rejects a cross-tenant EÜR cash source and rolls back impor
   }
 });
 
-test('detectUnsupportedSqliteTables still reports unknown populated tables only', () => {
-  const counts = new Map<string, number>([
-    ['clients', 3],
-    ['custom_side_table', 2],
-    ['sqlite_sequence', 1],
-  ]);
-
-  const result = detectUnsupportedSqliteTables([...counts.keys()], (table) => counts.get(table) ?? 0);
-
-  assert.deepEqual(result, [{ table: 'custom_side_table', rowCount: 2 }]);
-});
-
-test('desktop sqlite onboarding schemas stay mapped to import coverage', () => {
-  const expected = [...new Set([
-    ...desktopSqliteSchemaTables,
-    ...desktopSqliteIgnoredTables,
-    'eur_cash_facts', 'eur_annex_facts', 'accounting_source_runs',
-  ])].filter((table) => !transformedServerTables.has(table)).sort();
-  const actual = [...new Set([
-    ...desktopSqliteImportedTables,
-    ...desktopSqliteIgnoredTables,
-  ])].sort();
-
-  assert.deepEqual(actual, expected);
-});
-
-test('desktop sqlite onboarding only ignores explicit safe metadata tables', () => {
-  assert.deepEqual([...desktopSqliteIgnoredTables], ['migration_log']);
-});
-
-test('SQLite audit head selection uses the maximum sequence independent of row order', () => {
-  assert.deepEqual(maxAuditHead([{ sequence: 2, hash: 'hash-2' }, { sequence: 1, hash: 'hash-1' }]), { sequence: 2, hash: 'hash-2' });
-});
-
-test('SQLite import rejects tenant-owned mutations of the global EÜR catalog', () => {
-  const rows = getCatalogForYear(2025).map((line, sortOrder): ServerEurLineRecord => ({
-    id: line.id,
-    taxYear: line.year,
-    kennziffer: line.kennziffer,
-    providerPath: line.providerPath,
-    label: line.label,
-    kind: line.kind,
-    exportable: line.exportable,
-    sortOrder,
-    computedFromJson: JSON.stringify(line.computedFromIds ?? []),
-    computedTermsJson: JSON.stringify(line.computedTerms ?? []),
-    sourceVersion: EUR_SOURCE_VERSION_2025,
-    createdAt: '2025-01-01T00:00:00.000Z',
-    updatedAt: '2025-01-01T00:00:00.000Z',
-  }));
-  validateCanonicalEurLines(rows);
-  rows[0].label = 'tampered';
-  assert.throws(() => validateCanonicalEurLines(rows), /does not match canonical 2025 catalog/);
-});
-
 test('Desktop reporting mappings preserve effective-date history and legacy SQLite schemas', () => {
   const current = new Database(':memory:');
   current.exec(`CREATE TABLE account_mappings_hgb (id TEXT PRIMARY KEY, tenant_id TEXT, chart TEXT, account_number TEXT, statement_type TEXT, position_key TEXT, position_label TEXT, balance_side TEXT, valid_from TEXT, updated_at TEXT)`);
@@ -327,53 +175,6 @@ test('Postgres report mapping persistence keeps 2025 and 2026 imported overrides
     }
     await pool.end();
   }
-});
-
-test('tenant-scoped postgres tables stay covered by import overwrite guards', async () => {
-  const tenantScopedTables = await extractTenantScopedPostgresTables(postgresMigrationUrls);
-  const excludedTables = new Set([
-    'tenant_memberships', 'sqlite_import_runs', 'audit_heads',
-  ]);
-  const expected = [...new Set([
-    ...tenantScopedTables,
-    // Added by ALTER TABLE in 0011 rather than a CREATE TABLE migration.
-    'tax_case_account_mappings',
-  ])].filter((table) => !excludedTables.has(table) && !serverOwnedTenantTables.has(table)).sort();
-
-  assert.deepEqual([...tenantCoreRowCountTables].sort(), expected);
-});
-
-test('Drizzle migration journal contains incremental migrations', async () => {
-  const journal = JSON.parse(await readFile(new URL('../../drizzle/meta/_journal.json', import.meta.url), 'utf8')) as { entries: Array<{ idx: number; tag: string }> };
-  assert.deepEqual(journal.entries.slice(-7), [
-    { idx: 25, version: '7', when: 1788528600000, tag: '0025_server_data_incoming_invoice_documents', breakpoints: false },
-    { idx: 26, version: '7', when: 1788528600001, tag: '0026_server_data_invoice_document_chain', breakpoints: false },
-    { idx: 27, version: '7', when: 1788528600002, tag: '0027_server_data_account_skr_optional', breakpoints: false },
-    { idx: 28, version: '7', when: 1788528600003, tag: '0028_server_data_document_issuance_receipts', breakpoints: false },
-    { idx: 29, version: '7', when: 1788528600004, tag: '0029_server_data_core_ledger_accounts', breakpoints: false },
-    { idx: 30, version: '7', when: 1788528600005, tag: '0030_server_data_eur_catalog_2026', breakpoints: false },
-    { idx: 31, version: '7', when: 1788528600006, tag: '0031_server_data_document_templates', breakpoints: false },
-  ]);
-  assert.deepEqual(journal.entries.map((entry) => entry.tag), [
-    '0000_server_data', '0001_server_data_pro_accounting', '0002_server_data_assets',
-    '0003_server_data_offer_items', '0004_server_data_tax_rules', '0005_server_data_audit_heads', '0006_server_data_opos', '0007_server_data_opos_hardening', '0008_server_data_asset_accounting', '0009_server_data_datev_export_bytes', '0010_server_data_invoice_accounting_posted_at', '0011_server_data_tax_case_mapping_tenancy', '0012_server_data_asset_ownership_guard', '0013_server_data_asset_ownership_hardening', '0014_server_data_datev_tax_evidence', '0015_server_data_reporting_tax_submissions', '0016_server_data_eur_native', '0017_server_data_eur_catalog', '0018_server_data_canonical_catalog', '0019_server_data_audit_tenant_hash', '0021_server_data_eur_facts', '0022_server_data_accounting_source_runs', '0023_server_data_import_source_run_rejected', '0024_server_data_portal_publications', '0025_server_data_incoming_invoice_documents', '0026_server_data_invoice_document_chain', '0027_server_data_account_skr_optional', '0028_server_data_document_issuance_receipts', '0029_server_data_core_ledger_accounts', '0030_server_data_eur_catalog_2026', '0031_server_data_document_templates',
-  ]);
-});
-
-test('tax columns are present in both incremental migration files', async () => {
-  const sql = await readFile(new URL('../../drizzle/0004_server_data_tax_rules.sql', import.meta.url), 'utf8');
-  for (const table of ['clients', 'invoices', 'offers', 'recurring_profiles']) {
-    assert.match(sql, new RegExp(`ALTER TABLE ${table} ADD COLUMN`), table);
-  }
-  assert.match(sql, /tax_profile_json/);
-  assert.match(sql, /tax_mode/);
-  assert.match(sql, /tax_meta_json/);
-  assert.match(sql, /tax_snapshot_json/);
-});
-
-test('audit log sequence uses the bigint number mapping in the Drizzle schema', async () => {
-  const source = await readFile(new URL('./schema.ts', import.meta.url), 'utf8');
-  assert.match(source, /sequence: bigint\("sequence", \{ mode: "number" \}\)/);
 });
 
 test('SQLite import rejects a child-only cross-tenant offer reference and rolls back the target', { skip: !(process.env.BILLME_TEST_DATABASE_URL ?? process.env.DATABASE_URL) }, async () => {

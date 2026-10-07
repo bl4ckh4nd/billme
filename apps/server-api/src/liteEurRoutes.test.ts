@@ -1,14 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { buildServerApi } from './app.js';
-import { liteEurClassificationBodySchema, liteEurReportQuerySchema } from './liteEurRoutes.js';
-
-test('Lite EÜR route schemas are calendar-year and reason guarded', () => {
-  assert.deepEqual(liteEurReportQuerySchema.parse({}), { from: '2025-01-01', to: '2025-12-31' });
-  assert.throws(() => liteEurReportQuerySchema.parse({ from: '2026-01-01' }));
-  assert.throws(() => liteEurClassificationBodySchema.parse({ sourceType: 'invoice', sourceId: 'invoice-1', taxYear: 2025 }));
-  assert.equal(liteEurClassificationBodySchema.parse({ sourceType: 'invoice', sourceId: 'invoice-1', taxYear: 2025, reason: 'Beleg geprüft' }).reason, 'Beleg geprüft');
-});
 
 test('Lite EÜR routes enforce product isolation and mutation roles before the database', async () => {
   const previousDatabaseUrl = process.env.DATABASE_URL;

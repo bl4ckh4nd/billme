@@ -31,11 +31,11 @@ test('a document picks its own template and intro text, and prints with them', a
 
   await page.goto(appUrl(baseUrl, '/documents'));
   await page.getByRole('button', { name: 'Neue Rechnung' }).first().click();
-  await expect(page.getByRole('heading', { name: 'Rechnung erstellen' })).toBeVisible();
+  await expect(page.getByRole('combobox', { name: 'Kunde auswählen' })).toBeVisible();
   await page.getByRole('combobox', { name: 'Kunde auswählen' }).fill('Musterfirma');
   await page.getByRole('option').filter({ hasText: 'Musterfirma GmbH' }).click();
   await page.getByRole('button', { name: 'Position hinzufügen' }).click();
-  const description = page.getByRole('combobox', { name: 'Beschreibung Position 1' });
+  const description = page.getByRole('combobox', { name: 'Beschreibung Position 1', exact: true }).or(page.getByRole('textbox', { name: 'Beschreibung 1', exact: true }));
   await description.fill('Beratung Vorlagen-Umstellung');
   await page.getByRole('textbox', { name: 'Einzelpreis 1' }).or(page.getByRole('spinbutton', { name: 'Einzelpreis 1' })).fill('480');
 
@@ -54,12 +54,8 @@ test('a document picks its own template and intro text, and prints with them', a
   await page.screenshot({ path: path.join(artifactDir, '02-preview.png') });
   await page.getByRole('button', { name: 'Bearbeiten' }).click();
 
-  // The seeded company is a small business: DATEV needs the exemption evidence.
-  await page.getByRole('button', { name: 'Details bearbeiten' }).click();
-  await page.getByLabel('DATEV Nachweistyp').fill('Kleinunternehmer');
-  await page.getByLabel('DATEV Nachweisreferenz').fill('§ 19 UStG');
   await page.locator('button').filter({ hasText: 'Speichern' }).click();
-  await expect(page).toHaveURL(/#\/documents$/);
+  await expect(page).toHaveURL(/#\/documents(?:\?|$)/);
   const invoices = await invokeDesktopIpc(page, 'invoices:list', {});
   const saved = invoices.find((candidate) => candidate.items.some((item) => item.description === 'Beratung Vorlagen-Umstellung'));
   expect(saved.layout).toEqual({ templateId: red.id, texts: { intro: 'Hallo {{client.company}},\n\nwie vereinbart berechnen wir:' } });
@@ -70,5 +66,6 @@ test('a document picks its own template and intro text, and prints with them', a
   const text = execFileSync('pdftotext', ['-layout', exported.path, '-'], { encoding: 'utf8' });
   expect(text).toContain('Hallo Musterfirma GmbH,');
   expect(text).toContain('wie vereinbart berechnen wir:');
+  expect(text).toContain('ENTWURF');
   fs.copyFileSync(exported.path, path.join(artifactDir, 'invoice-own-template.pdf'));
 });

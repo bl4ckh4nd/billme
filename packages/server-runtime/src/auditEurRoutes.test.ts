@@ -59,7 +59,7 @@ test('embedded Pro audit and EÜR rules are tenant-scoped, audited, and exportab
       headers,
       payload: {
         id: 'rule-local', taxYear: 2025, priority: 10, field: 'purpose', operator: 'contains',
-        value: 'Hosting', targetEurLineId: 'eur-line-test', active: true, reason: 'Regel für Hosting',
+        value: 'Hosting', targetEurLineId: 'E2025_KZ111', active: true, reason: 'Regel für Hosting',
       },
     });
     assert.equal(created.statusCode, 200, created.body);

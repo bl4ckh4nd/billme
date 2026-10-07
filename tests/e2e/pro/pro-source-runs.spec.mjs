@@ -51,6 +51,21 @@ const journalLines = (accounts, amount = 100) => [
   { accountNumber: accounts.bank, debitAmount: 0, creditAmount: amount },
 ];
 
+const seedClosingBalances = async (page, accounts, asOfDate) => {
+  await invokeDesktopIpc(page, 'pro:postAccountingSource', {
+    source: sourceFact({ sourceId: unique('closing-ledger'), date: '2026-04-01', lines: [
+      { accountNumber: accounts.bank, debitAmount: 100, creditAmount: 0 },
+      { accountNumber: accounts.revenue, debitAmount: 0, creditAmount: 100 },
+      { accountNumber: accounts.expense, debitAmount: 50, creditAmount: 0 },
+      { accountNumber: accounts.bank, debitAmount: 0, creditAmount: 50 },
+    ] }),
+    chart: accounts.chart,
+    reason: 'E2E real balances before closing',
+  });
+  return (await invokeDesktopIpc(page, 'pro:getLedgerBalances', { asOfDate }))
+    .filter((row) => [accounts.revenue, accounts.expense].includes(row.accountNumber));
+};
+
 const sourceJournalIds = async (page) => (await invokeDesktopIpc(page, 'pro:listAccountingSourceRuns'))
   .map((run) => run.journalEntryId)
   .filter(Boolean);
@@ -63,8 +78,10 @@ const accountingStateIds = async (page) => ({
 test.beforeEach(async () => {
   desktop = await launchDesktopApp({ app: 'pro' });
   await seedDesktopData(desktop.page, { app: 'pro' });
-  await desktop.page.goto(appUrl(desktop.baseUrl, '/accounting'));
-  await expect(desktop.page.getByRole('heading', { name: 'Pro Buchhaltung' })).toBeVisible();
+  // Seeding writes past react-query and the onboarding gate; reload so the shell reads the seeded settings.
+  await desktop.page.reload();
+  await desktop.page.goto(appUrl(desktop.baseUrl, '/accounting?view=special'));
+  await expect(desktop.page.getByRole('heading', { name: 'Sonderbuchungen & Abschluss', level: 2 })).toBeVisible();
 });
 
 test.afterEach(async () => {
@@ -86,15 +103,18 @@ test('posts, replays, and conflict-blocks one immutable source revision', async 
   const replay = await invokeDesktopIpc(page, 'pro:postAccountingSource', { source, chart: accounts.chart, reason: 'E2E source replay' });
   expect(replay).toMatchObject({ status: 'duplicate', sourceRun: { id: first.sourceRun.id } });
 
-  const conflict = await invokeDesktopIpc(page, 'pro:postAccountingSource', {
+  // Other lines under the same source revision are a conflict, answered as a typed error; nothing is booked.
+  await expect(invokeDesktopIpc(page, 'pro:postAccountingSource', {
     source: { ...source, lines: journalLines(accounts, 90) },
     chart: accounts.chart,
     reason: 'E2E source conflict',
-  });
-  expect(conflict.status).toBe('rejected');
-  expect(conflict.errors.map((issue) => issue.code)).toContain('DUPLICATE_SOURCE_REVISION');
+  })).rejects.toThrow(/ACCOUNTING_SOURCE_RUN_CONFLICT/);
   expect((await sourceJournalIds(page)).filter((id) => id === first.sourceRun.journalEntryId)).toHaveLength(1);
   expect((await invokeDesktopIpc(page, 'pro:getAccountingSourceRun', { id: first.sourceRun.id })).fact.sourceId).toBe(source.sourceId);
+
+  await page.reload();
+  await expect(page.locator('section[aria-labelledby="source-run-history-heading"] li').filter({ hasText: source.sourceId })).toContainText('Gebucht');
+  await page.screenshot({ path: test.info().outputPath('01-source-run-history.png'), fullPage: true });
 });
 
 test('posts a Sonderbuchung through the browser and opens inline journal details', async () => {
@@ -102,11 +122,10 @@ test('posts a Sonderbuchung through the browser and opens inline journal details
   const accounts = await pickPostingAccounts(page);
   const sourceId = unique('ui-source');
 
-  await page.getByRole('button', { name: 'Sonderbuchungen & Abschluss' }).click();
-  await expect(page.getByRole('heading', { name: 'Sonderbuchungen & Abschluss' })).toBeVisible();
 
-  await expect(page.getByRole('alert')).toContainText('Audit-Grund ist erforderlich.');
+  await expect(page.getByRole('status').filter({ hasText: 'Audit-Grund ist erforderlich.' })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Prüfen & verbindlich buchen' })).toBeDisabled();
+  await page.screenshot({ path: test.info().outputPath('01-sonderbuchung-incomplete.png'), fullPage: true });
 
   await page.getByRole('textbox', { name: 'Quellbeleg' }).fill(sourceId);
   await page.getByRole('textbox', { name: 'Buchungsdatum' }).fill('2026-04-15');
@@ -114,15 +133,13 @@ test('posts a Sonderbuchung through the browser and opens inline journal details
   await page.getByText('Fachdaten für Experten bearbeiten').click();
   const factsField = page.getByRole('textbox', { name: 'Domain-Fakten (JSON)' });
   const facts = JSON.parse(await factsField.inputValue());
+  const balances = await seedClosingBalances(page, accounts, facts.closingDate);
   await factsField.fill(JSON.stringify({
     ...facts,
     revenueAccounts: [accounts.revenue],
     expenseAccounts: [accounts.expense],
     retainedEarningsAccount: accounts.retained,
-    balances: [
-      { ...facts.balances[0], accountNumber: accounts.revenue },
-      { ...facts.balances[1], accountNumber: accounts.expense },
-    ],
+    balances,
   }, null, 2));
   await page.getByRole('textbox', { name: 'Audit-Grund', exact: true }).fill('E2E browser source posting');
   await page.getByRole('button', { name: 'Prüfen & verbindlich buchen' }).click();
@@ -138,13 +155,12 @@ test('posts a Sonderbuchung through the browser and opens inline journal details
   await expect(journalDialog.getByRole('heading', { name: /Journal \d+/ })).toBeVisible();
   await expect(journalDialog.getByText(`Konto ${accounts.expense}`)).toBeVisible();
   await expect(journalDialog.getByText(`Konto ${accounts.retained}`)).toBeVisible();
+  await page.screenshot({ path: test.info().outputPath('02-journal-detail.png'), fullPage: true });
 });
 
 test('does not claim success for a noop or source-run conflict in the browser', async () => {
   const { page } = desktop;
   const accounts = await pickPostingAccounts(page);
-  await page.getByRole('button', { name: 'Sonderbuchungen & Abschluss' }).click();
-  await expect(page.getByRole('heading', { name: 'Sonderbuchungen & Abschluss' })).toBeVisible();
 
   await page.getByRole('combobox', { name: 'Workflow' }).selectOption('provision');
   const noopId = unique('ui-noop');
@@ -180,7 +196,14 @@ test('does not claim success for a noop or source-run conflict in the browser', 
   await page.getByRole('button', { name: 'Prüfen & verbindlich buchen' }).click();
   await expect(page.getByRole('alert')).toContainText(/Source revision already exists|Konflikt beim Quelllauf/);
   await expect(page.getByText('Sonderbuchung wurde erfolgreich gebucht.')).toHaveCount(0);
+  await page.screenshot({ path: test.info().outputPath('01-conflict-not-reported-as-success.png'), fullPage: true });
 });
+
+// A schedule is one source run; it books one journal entry per period (sourceKey carries the source id and the schedule position).
+const entriesOfSource = async (page, sourceType, sourceId) =>
+  (await invokeDesktopIpc(page, 'pro:listJournalEntries', { limit: 500, offset: 0 }))
+    .filter((entry) => entry.sourceType === sourceType && entry.sourceKey?.includes(`${sourceId.length}:${sourceId}`))
+    .sort((a, b) => a.postingDate.localeCompare(b.postingDate));
 
 test('persists unique journal entries for multi-period accrual and loan schedules on replay', async () => {
   const { page } = desktop;
@@ -198,26 +221,30 @@ test('persists unique journal entries for multi-period accrual and loan schedule
     expenseAccount: accounts.expense,
     deferralAccount: accounts.provision,
   };
-  const firstAccrual = await invokeDesktopIpc(page, 'pro:postAccountingCommand', {
+  const postAccrual = (reason) => invokeDesktopIpc(page, 'pro:postAccountingCommand', {
     kind: 'accrual',
     source: sourceFact({ sourceType: 'accrual', sourceId: accrualId, date: accrual.startDate, lines: journalLines(accounts) }),
     domainFacts: accrual,
     chart: accounts.chart,
-    reason: 'E2E multi-period accrual',
+    reason,
   });
+  const firstAccrual = await postAccrual('E2E multi-period accrual');
   expect(firstAccrual.status).toBe('posted');
   const accrualRuns = (await invokeDesktopIpc(page, 'pro:listAccountingSourceRuns')).filter((run) => run.sourceType === 'accrual' && run.sourceId === accrualId);
-  expect(accrualRuns).toHaveLength(3);
-  expect(new Set(accrualRuns.map((run) => run.journalEntryId)).size).toBe(3);
-  const replayAccrual = await invokeDesktopIpc(page, 'pro:postAccountingCommand', {
-    kind: 'accrual',
-    source: sourceFact({ sourceType: 'accrual', sourceId: accrualId, date: accrual.startDate, lines: journalLines(accounts) }),
-    domainFacts: accrual,
-    chart: accounts.chart,
-    reason: 'E2E multi-period accrual replay',
-  });
+  expect(accrualRuns).toHaveLength(1);
+  const accrualEntries = await entriesOfSource(page, 'accrual', accrualId);
+  expect(accrualEntries).toHaveLength(3);
+  expect(new Set(accrualEntries.map((entry) => entry.id)).size).toBe(3);
+  expect(accrualEntries.map((entry) => entry.postingDate)).toEqual(['2026-01-01', '2026-02-01', '2026-03-01']);
+  // 300 € over three months: one third per month, expense on the debit side, deferral on the credit side.
+  for (const entry of accrualEntries) {
+    expect(entry.lines.map((line) => [line.accountNumber, line.debitAmount, line.creditAmount])).toEqual([[accounts.expense, 100, 0], [accounts.provision, 0, 100]]);
+  }
+  expect(accrualRuns[0].journalEntryId).toBe(accrualEntries[0].id);
+  const replayAccrual = await postAccrual('E2E multi-period accrual replay');
   expect(replayAccrual.status).toBe('duplicate');
-  expect((await invokeDesktopIpc(page, 'pro:listAccountingSourceRuns')).filter((run) => run.sourceType === 'accrual' && run.sourceId === accrualId)).toHaveLength(3);
+  expect((await invokeDesktopIpc(page, 'pro:listAccountingSourceRuns')).filter((run) => run.sourceType === 'accrual' && run.sourceId === accrualId)).toHaveLength(1);
+  expect((await entriesOfSource(page, 'accrual', accrualId)).map((entry) => entry.id)).toEqual(accrualEntries.map((entry) => entry.id));
 
   const loanId = unique('loan-schedule');
   const loan = {
@@ -234,54 +261,57 @@ test('persists unique journal entries for multi-period accrual and loan schedule
     interestAccount: accounts.expense,
     cashAccount: accounts.bank,
   };
-  const firstLoan = await invokeDesktopIpc(page, 'pro:postAccountingCommand', {
+  const postLoan = (reason) => invokeDesktopIpc(page, 'pro:postAccountingCommand', {
     kind: 'loan_schedule',
     source: sourceFact({ sourceType: 'loan_schedule', sourceId: loanId, date: loan.startDate, lines: journalLines(accounts) }),
     domainFacts: loan,
     chart: accounts.chart,
-    reason: 'E2E multi-period loan',
+    reason,
   });
+  const firstLoan = await postLoan('E2E multi-period loan');
   expect(firstLoan.status).toBe('posted');
   const loanRuns = (await invokeDesktopIpc(page, 'pro:listAccountingSourceRuns')).filter((run) => run.sourceType === 'loan_schedule' && run.sourceId === loanId);
-  expect(loanRuns).toHaveLength(3);
-  expect(new Set(loanRuns.map((run) => run.journalEntryId)).size).toBe(3);
-  const replayLoan = await invokeDesktopIpc(page, 'pro:postAccountingCommand', {
-    kind: 'loan_schedule',
-    source: sourceFact({ sourceType: 'loan_schedule', sourceId: loanId, date: loan.startDate, lines: journalLines(accounts) }),
-    domainFacts: loan,
-    chart: accounts.chart,
-    reason: 'E2E multi-period loan replay',
-  });
+  expect(loanRuns).toHaveLength(1);
+  const loanEntries = await entriesOfSource(page, 'loan_schedule', loanId);
+  expect(loanEntries).toHaveLength(3);
+  expect(new Set(loanEntries.map((entry) => entry.id)).size).toBe(3);
+  const replayLoan = await postLoan('E2E multi-period loan replay');
   expect(replayLoan.status).toBe('duplicate');
-  expect((await invokeDesktopIpc(page, 'pro:listAccountingSourceRuns')).filter((run) => run.sourceType === 'loan_schedule' && run.sourceId === loanId)).toHaveLength(3);
+  expect((await invokeDesktopIpc(page, 'pro:listAccountingSourceRuns')).filter((run) => run.sourceType === 'loan_schedule' && run.sourceId === loanId)).toHaveLength(1);
+  expect((await entriesOfSource(page, 'loan_schedule', loanId)).map((entry) => entry.id)).toEqual(loanEntries.map((entry) => entry.id));
+
+  // The schedule is visible as the last booking runs in the browser.
+  await page.reload();
+  await expect(page.getByRole('heading', { name: 'Letzte Buchungsläufe' })).toBeVisible();
+  await expect(page.locator('section[aria-labelledby="source-run-history-heading"] li').filter({ hasText: accrualId })).toContainText('Gebucht');
+  await page.screenshot({ path: test.info().outputPath('01-schedules-in-history.png'), fullPage: true });
 });
 
 test('keeps the Pro accounting workspace within a 390px viewport', async () => {
   const { page } = desktop;
   await page.setViewportSize({ width: 390, height: 844 });
-  await page.getByRole('button', { name: 'Sonderbuchungen & Abschluss' }).click();
-  await expect(page.getByRole('heading', { name: 'Sonderbuchungen & Abschluss' })).toBeVisible();
+  await page.reload();
+  await expect(page.getByRole('heading', { name: 'Sonderbuchungen & Abschluss', level: 2 })).toBeVisible();
   const overflow = await page.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth || document.body.scrollWidth > document.body.clientWidth);
   expect(overflow).toBe(false);
+  await page.screenshot({ path: test.info().outputPath('01-390px.png'), fullPage: true });
 });
 
 test('keeps invalid account, zero amount, and closed-period postings atomic', async () => {
-  const { page } = desktop;
-  const accounts = await pickPostingAccounts(page);
-  const before = await sourceJournalIds(page);
-  const invalid = await invokeDesktopIpc(page, 'pro:postAccountingSource', {
+  const accounts = await pickPostingAccounts(desktop.page);
+  const before = await sourceJournalIds(desktop.page);
+  // Refusals are typed errors; none of them leaves a run or an entry behind.
+  await expect(invokeDesktopIpc(desktop.page, 'pro:postAccountingSource', {
     source: sourceFact({ sourceId: unique('invalid'), lines: [
       { accountNumber: '999999', debitAmount: 100, creditAmount: 0 },
       { accountNumber: accounts.bank, debitAmount: 0, creditAmount: 100 },
     ] }),
     chart: accounts.chart,
     reason: 'E2E invalid source',
-  });
-  expect(invalid.status).toBe('rejected');
-  expect(invalid.errors.map((issue) => issue.code)).toContain('INVALID_ACCOUNT');
-  expect(await sourceJournalIds(page)).toEqual(before);
+  })).rejects.toThrow(/UNKNOWN_ACCOUNT:999999/);
+  expect(await sourceJournalIds(desktop.page)).toEqual(before);
 
-  await expect(invokeDesktopIpc(page, 'pro:postAccountingSource', {
+  await expect(invokeDesktopIpc(desktop.page, 'pro:postAccountingSource', {
     source: sourceFact({ sourceId: unique('zero-lines'), lines: [
       { accountNumber: '999999', debitAmount: 0, creditAmount: 0 },
       { accountNumber: accounts.bank, debitAmount: 0, creditAmount: 0 },
@@ -289,88 +319,49 @@ test('keeps invalid account, zero amount, and closed-period postings atomic', as
     chart: accounts.chart,
     reason: 'E2E zero source',
   })).rejects.toThrow(/journal line|Debit and credit/i);
-  expect(await sourceJournalIds(page)).toEqual(before);
+  expect(await sourceJournalIds(desktop.page)).toEqual(before);
 
+  const wrongPeriod = sourceFact({ sourceId: unique('wrong-period'), lines: journalLines(accounts) });
+  await expect(invokeDesktopIpc(desktop.page, 'pro:postAccountingSource', {
+    source: { ...wrongPeriod, period: '2026-05' },
+    chart: accounts.chart,
+    reason: 'E2E period does not contain the posting date',
+  })).rejects.toThrow(/PERIOD_MISMATCH/);
+  expect(await sourceJournalIds(desktop.page)).toEqual(before);
+
+  // A closed period is not a route: the app is restarted around the period row (see setProAccountingPeriodStatus).
   const lockedSource = sourceFact({ sourceId: unique('closed'), lines: journalLines(accounts) });
   await expect(setProAccountingPeriodStatus(desktop, lockedSource.period, 'closed')).resolves.toMatchObject({ status: 'closed' });
-  const locked = await invokeDesktopIpc(page, 'pro:postAccountingSource', { source: lockedSource, chart: accounts.chart, reason: 'E2E closed period' });
-  expect(locked.status).toBe('rejected');
-  expect(locked.errors.map((issue) => issue.code)).toContain('PERIOD_MISMATCH');
+  const { page } = desktop;
+  await expect(invokeDesktopIpc(page, 'pro:postAccountingSource', { source: lockedSource, chart: accounts.chart, reason: 'E2E closed period' })).rejects.toThrow(/POSTING_DATE_IN_CLOSED_PERIOD/);
   expect(await sourceJournalIds(page)).toEqual(before);
+  await page.goto(appUrl(desktop.baseUrl, '/accounting?view=special'));
+  await expect(page.getByRole('heading', { name: 'Sonderbuchungen & Abschluss', level: 2 })).toBeVisible();
+  await page.screenshot({ path: test.info().outputPath('01-after-refusals.png'), fullPage: true });
 });
 
-test('posts correction and close/provision/inventory/FX command workflows, while rejecting missing originals', async () => {
-  const { page } = desktop;
-  const accounts = await pickPostingAccounts(page);
-  await invokeDesktopIpc(page, 'pro:upsertTaxCaseAccountMapping', {
-    chart: accounts.chart,
-    taxCaseKey: 'DE_STD_19',
-    role: 'input_tax',
-    accountNumber: accounts.expense,
-  });
-  await invokeDesktopIpc(page, 'pro:upsertAccountingAccountMapping', {
-    chart: accounts.chart,
-    role: 'input_vat',
-    accountNumber: accounts.expense,
-  });
+// The incoming invoice a correction or settlement refers to, booked with the default mappings.
+const postOriginalIncomingInvoice = async (page, accounts) => {
   const vendorId = unique('correction-vendor');
   const originalId = unique('correction-original');
-  const originalLineId = unique('correction-original-line');
   const timestamp = new Date().toISOString();
   await invokeDesktopIpc(page, 'pro:upsertVendor', {
     reason: 'E2E correction original',
-    vendor: {
-      id: vendorId,
-      tenantId: 'default',
-      vendorNumber: unique('vendor-number'),
-      name: 'E2E Correction Vendor',
-      email: 'correction-vendor@example.test',
-      createdAt: timestamp,
-      updatedAt: timestamp,
-    },
+    vendor: { id: vendorId, tenantId: 'default', vendorNumber: unique('vendor-number'), name: 'E2E Correction Vendor', email: 'correction-vendor@example.test', createdAt: timestamp, updatedAt: timestamp },
   });
   await invokeDesktopIpc(page, 'pro:upsertIncomingInvoice', {
     reason: 'E2E correction original',
     invoice: {
-      id: originalId,
-      tenantId: 'default',
-      vendorId,
-      number: unique('ER-correction'),
-      invoiceDate: '2026-04-01',
-      dueDate: '2026-04-30',
-      servicePeriod: '2026-04',
-      netAmount: 100,
-      taxAmount: 19,
-      grossAmount: 119,
-      taxRate: 19,
-      status: 'open',
-      lines: [{
-        id: originalLineId,
-        incomingInvoiceId: originalId,
-        position: 0,
-        description: 'E2E correction original',
-        quantity: 1,
-        unitPrice: 100,
-        netAmount: 100,
-        taxRate: 19,
-        taxAmount: 19,
-        grossAmount: 119,
-        accountNumber: accounts.expense,
-      }],
-      accountingStatus: 'unposted',
-      createdAt: timestamp,
-      updatedAt: timestamp,
+      id: originalId, tenantId: 'default', vendorId, number: unique('ER-correction'), invoiceDate: '2026-04-01', dueDate: '2026-04-30', servicePeriod: '2026-04',
+      netAmount: 100, taxAmount: 19, grossAmount: 119, taxRate: 19, status: 'open', accountingStatus: 'unposted', createdAt: timestamp, updatedAt: timestamp,
+      lines: [{ id: unique('correction-original-line'), incomingInvoiceId: originalId, position: 0, description: 'E2E correction original', quantity: 1, unitPrice: 100, netAmount: 100, taxRate: 19, taxAmount: 19, grossAmount: 119, accountNumber: accounts.expense }],
     },
   });
-  const originalPosting = await invokeDesktopIpc(page, 'pro:postIncomingInvoiceAccounting', {
-    invoiceId: originalId,
-    reason: 'E2E correction original posting',
-  });
-  expect(originalPosting).toMatchObject({ status: 'ready', snapshot: { sourceId: originalId } });
+  const posting = await invokeDesktopIpc(page, 'pro:postIncomingInvoiceAccounting', { invoiceId: originalId, reason: 'E2E correction original posting' });
+  expect(posting).toMatchObject({ status: 'ready', snapshot: { sourceId: originalId } });
   const original = (await invokeDesktopIpc(page, 'pro:listIncomingInvoices')).find((invoice) => invoice.id === originalId);
   expect(original?.accountingSnapshot).toBeTruthy();
-  const originalSnapshot = original.accountingSnapshot;
-  const originalSnapshotHash = snapshotHash(originalSnapshot);
+  const snapshotHashOfOriginal = snapshotHash(original.accountingSnapshot);
   const correctionSource = sourceFact({ sourceType: 'standalone_source', sourceId: unique('correction'), lines: journalLines(accounts, 11.9) });
   const correctionFacts = {
     id: unique('linked-correction'),
@@ -380,14 +371,22 @@ test('posts correction and close/provision/inventory/FX command workflows, while
     original: {
       documentId: original.id,
       documentNumber: original.number,
-      revision: originalSnapshot.sourceVersion,
-      snapshotHash: originalSnapshotHash,
-      currentSnapshotHash: 'changed-snapshot',
+      revision: original.accountingSnapshot.sourceVersion,
+      snapshotHash: snapshotHashOfOriginal,
+      currentSnapshotHash: snapshotHashOfOriginal,
       taxEffectiveDate: original.invoiceDate,
       taxBreakdown: [{ rate: 19, netAmount: 100, taxAmount: 19, grossAmount: 119 }],
     },
     deltas: [{ rate: 19, grossAmount: 11.9 }],
   };
+  return { original, correctionSource, correctionFacts };
+};
+
+test('rejects a settlement or a correction against a missing original without booking anything', async () => {
+  const { page } = desktop;
+  const accounts = await pickPostingAccounts(page);
+  const { correctionSource, correctionFacts } = await postOriginalIncomingInvoice(page, accounts);
+
   const beforeMissingSettlement = await accountingStateIds(page);
   await expect(invokeDesktopIpc(page, 'pro:postAccountingCommand', {
     kind: 'bad_debt',
@@ -396,7 +395,7 @@ test('posts correction and close/provision/inventory/FX command workflows, while
       taxBreakdown: [{ rate: 19, netAmount: 100, taxAmount: 19, grossAmount: 119 }],
       writeOffGrossAmount: 119,
       badDebtExpenseAccount: accounts.expense,
-      facts: { originalDocumentId: unique('missing-settlement-original'), originalDocumentNumber: 'ER-MISSING' },
+      facts: { legalBasis: '§17 UStG', reason: 'bad_debt', originalDocumentId: unique('missing-settlement-original'), originalDocumentNumber: 'ER-MISSING', originalTaxEffectiveDate: '2026-04-01', adjustmentDate: '2026-04-15', evidenceReference: 'E2E Insolvenzbeschluss' },
     },
     chart: accounts.chart,
     reason: 'E2E missing settlement original',
@@ -407,38 +406,54 @@ test('posts correction and close/provision/inventory/FX command workflows, while
   await expect(invokeDesktopIpc(page, 'pro:postAccountingCommand', {
     kind: 'correction',
     source: correctionSource,
-    domainFacts: {
-      ...correctionFacts,
-      original: { ...correctionFacts.original, documentId: unique('missing-original'), currentSnapshotHash: originalSnapshotHash },
-    },
+    domainFacts: { ...correctionFacts, original: { ...correctionFacts.original, documentId: unique('missing-original') } },
     chart: accounts.chart,
     reason: 'E2E correction missing original',
   })).rejects.toThrow(/ORIGINAL_DOCUMENT_NOT_FOUND/);
   expect(await sourceJournalIds(page)).toEqual(beforeCorrection);
+  expect(await accountingStateIds(page)).toEqual(beforeMissingSettlement);
+  await page.screenshot({ path: test.info().outputPath('01-special-workspace.png'), fullPage: true });
+});
+
+test('posts a linked correction against a booked incoming invoice', async () => {
+  const { page } = desktop;
+  const accounts = await pickPostingAccounts(page);
+  const { correctionSource, correctionFacts } = await postOriginalIncomingInvoice(page, accounts);
+  const entriesBefore = (await invokeDesktopIpc(page, 'pro:listJournalEntries', { limit: 500, offset: 0 })).length;
 
   const validCorrection = await invokeDesktopIpc(page, 'pro:postAccountingCommand', {
     kind: 'correction',
     source: correctionSource,
-    domainFacts: { ...correctionFacts, id: unique('linked-correction-ok'), idempotencyKey: unique('correction-key-ok'), original: { ...correctionFacts.original, currentSnapshotHash: originalSnapshotHash } },
+    domainFacts: correctionFacts,
     chart: accounts.chart,
     reason: 'E2E correction accepted',
   });
   expect(validCorrection.status).toBe('posted');
+  expect((await invokeDesktopIpc(page, 'pro:listJournalEntries', { limit: 500, offset: 0 })).length).toBeGreaterThan(entriesBefore);
+});
 
-  const close = await invokeDesktopIpc(page, 'pro:postAccountingCommand', {
+test('posts close, provision, inventory and FX command workflows', async () => {
+  const { page } = desktop;
+  const accounts = await pickPostingAccounts(page);
+  const balances = await seedClosingBalances(page, accounts, '2026-04-30');
+  const closingCommand = {
     kind: 'fiscal_close',
     source: sourceFact({ sourceType: 'fiscal_close', sourceId: unique('close-input'), lines: journalLines(accounts) }),
     domainFacts: {
       sourceId: unique('fiscal-close'), sourceRevision: 'r1', fiscalYear: 2026, period: '2026-04', closingDate: '2026-04-30', currency: 'EUR',
       revenueAccounts: [accounts.revenue], expenseAccounts: [accounts.expense], retainedEarningsAccount: accounts.retained,
-      balances: [
-        { accountNumber: accounts.revenue, openingBalance: 0, debitTurnover: 0, creditTurnover: 100, closingBalance: -100 },
-        { accountNumber: accounts.expense, openingBalance: 0, debitTurnover: 50, creditTurnover: 0, closingBalance: 50 },
-      ],
+      balances,
     },
     chart: accounts.chart,
     reason: 'E2E fiscal close',
-  });
+  };
+  const beforeMismatch = await accountingStateIds(page);
+  await expect(invokeDesktopIpc(page, 'pro:postAccountingCommand', {
+    ...closingCommand,
+    domainFacts: { ...closingCommand.domainFacts, balances: balances.map((row, index) => index === 0 ? { ...row, closingBalance: row.closingBalance + 1 } : row) },
+  })).rejects.toThrow(/LEDGER_BALANCE_MISMATCH/);
+  expect(await accountingStateIds(page)).toEqual(beforeMismatch);
+  const close = await invokeDesktopIpc(page, 'pro:postAccountingCommand', closingCommand);
   expect(close.status).toBe('posted');
 
   const generated = [
@@ -446,25 +461,27 @@ test('posts correction and close/provision/inventory/FX command workflows, while
     ['inventory_closing', { sourceId: unique('inventory'), sourceRevision: 'r1', effectiveDate: '2026-04-15', period: '2026-04', fiscalYear: 2026, currency: 'EUR', items: [{ id: 'stock-1', quantity: 10, unitCost: 10, unitMarketValue: 8, inventoryAccount: accounts.inventory, expenseAccount: accounts.expense }] }],
     ['fx_valuation', { sourceId: unique('fx'), sourceRevision: 'r1', effectiveDate: '2026-04-15', period: '2026-04', fiscalYear: 2026, foreignCurrency: 'USD', functionalCurrency: 'EUR', foreignAmount: 100, closingRate: 1, carryingAmount: 90, position: 'asset', positionAccount: accounts.bank, gainAccount: accounts.gain, lossAccount: accounts.loss }],
   ];
+  const results = {};
   for (const [kind, domainFacts] of generated) {
-    const result = await invokeDesktopIpc(page, 'pro:postAccountingCommand', {
+    results[kind] = await invokeDesktopIpc(page, 'pro:postAccountingCommand', {
       kind,
       source: sourceFact({ sourceType: kind, sourceId: `${domainFacts.sourceId}-input`, lines: journalLines(accounts) }),
       domainFacts,
       chart: accounts.chart,
       reason: `E2E ${kind}`,
     });
-    if (kind === 'provision') {
-      expect(result.status, kind).toBe('noop');
-      expect(result.sourceRun?.result).toMatchObject({ result: { commandId: expect.stringContaining('provision') }, status: 'noop' });
-    } else {
-      expect(result.status, kind).toBe('posted');
-    }
+    expect(results[kind].status, kind).toBe('posted');
   }
+  // Raising the provision from 10 € to 25 books the difference: expense on the debit side, provision on the credit side.
+  const provisionEntry = (await invokeDesktopIpc(page, 'pro:listJournalEntries', { limit: 500, offset: 0 })).find((entry) => entry.id === results.provision.sourceRun.journalEntryId);
+  expect(provisionEntry).toBeTruthy();
+  expect(provisionEntry.lines.map((line) => [line.accountNumber, line.debitAmount, line.creditAmount])).toEqual([[accounts.expense, 15, 0], [accounts.provision, 0, 15]]);
 
   const runs = await invokeDesktopIpc(page, 'pro:listAccountingSourceRuns');
-  expect(runs.map((run) => run.sourceType)).toEqual(expect.arrayContaining(['standalone_source', 'fiscal_close', 'provision', 'inventory_closing', 'fx_valuation']));
-  expect(runs.find((run) => run.fact.provenance?.commandKind === 'correction')?.fact.provenance).toMatchObject({ commandKind: 'correction' });
+  expect(runs.map((run) => run.sourceType)).toEqual(expect.arrayContaining(['fiscal_close', 'provision', 'inventory_closing', 'fx_valuation']));
+  await page.reload();
+  await expect(page.getByRole('heading', { name: 'Letzte Buchungsläufe' })).toBeVisible();
+  await page.screenshot({ path: test.info().outputPath('01-closing-runs.png'), fullPage: true });
 });
 
 test('records valid payroll control totals and rejects a gross-to-net mismatch without a journal', async () => {
@@ -484,7 +501,7 @@ test('records valid payroll control totals and rejects a gross-to-net mismatch w
   expect(valid.sourceRun.result.result.controlTotals).toMatchObject({ employeeCount: 1, gross: 3000, net: 2300, totalEmployerCost: 3500 });
 
   const before = await sourceJournalIds(page);
-  const invalid = await invokeDesktopIpc(page, 'pro:postAccountingCommand', {
+  await expect(invokeDesktopIpc(page, 'pro:postAccountingCommand', {
     kind: 'payroll_batch',
     source: sourceFact({ sourceType: 'payroll_batch', sourceId: unique('payroll-bad'), lines: journalLines(accounts) }),
     domainFacts: {
@@ -493,8 +510,7 @@ test('records valid payroll control totals and rejects a gross-to-net mismatch w
     },
     chart: accounts.chart,
     reason: 'E2E payroll invalid',
-  });
-  expect(invalid.status).toBe('rejected');
-  expect(invalid.errors.map((issue) => issue.code)).toContain('GROSS_TO_NET_MISMATCH');
+  })).rejects.toThrow(/GROSS_TO_NET_MISMATCH/);
   expect(await sourceJournalIds(page)).toEqual(before);
+  await page.screenshot({ path: test.info().outputPath('01-payroll.png'), fullPage: true });
 });

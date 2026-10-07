@@ -1,0 +1,127 @@
+import { expect, test } from '@playwright/test';
+import { appUrl, getDesktopSettings, invokeDesktopIpc, launchDesktopApp, seedDesktopData } from '../support.mjs';
+import { createShooter, seedBankTransactions } from './lite-support.mjs';
+
+/**
+ * Settings sections and the EÜR worklist of the Lite UI, verified through the backend.
+ *
+ * How this can fail:
+ * - settings: a new category, the payment term or a dunning fee not persisted by
+ *   "Einstellungen speichern"; a mail test that reports success without a server;
+ *   the audit check not reachable; the dark theme lost after a reload; the shortcut
+ *   overview not opening
+ * - EÜR: search or direction filter showing other rows; "exclude as private" not
+ *   persisted or not reachable through the "Ausgeschl." filter; undo leaving the
+ *   classification behind
+ */
+
+let desktop;
+
+test.beforeEach(async () => {
+  desktop = await launchDesktopApp();
+  await seedDesktopData(desktop.page);
+  await desktop.page.reload();
+});
+
+test.afterEach(async () => {
+  if (desktop) {
+    await desktop.close();
+    desktop = undefined;
+  }
+});
+
+const section = (page, name) => page.getByRole('button', { name: new RegExp(`^${name}`) }).first();
+
+test('categories, payment term and dunning fee are saved; the mail test, the audit check, the theme and the shortcuts work', async () => {
+  const { page, baseUrl } = desktop;
+  const shot = createShooter(page);
+  const before = await getDesktopSettings(page);
+  const level2 = before.dunning.levels[1];
+  await page.goto(appUrl(baseUrl, '/settings'));
+
+  await section(page, 'Kategorien').click();
+  const categoryCount = before.catalog.categories.length;
+  await page.getByRole('button', { name: 'Kategorie', exact: true }).click();
+  await page.getByLabel('Name', { exact: true }).nth(categoryCount).fill('Workshops');
+
+  await section(page, 'Rechtliches').click();
+  await page.getByLabel('Zahlungsziel (Tage)').fill('21');
+
+  await section(page, 'Mahnwesen').click();
+  await page.getByRole('switch', { name: 'Mahnwesen aktivieren' }).click();
+  await page.getByLabel(`${level2.name}: Gebühr in Euro`).fill('7.5');
+  await shot('dunning-fee');
+
+  await page.getByRole('button', { name: 'Einstellungen speichern' }).click();
+  await expect.poll(async () => {
+    const saved = await getDesktopSettings(page);
+    return [saved.catalog.categories.map((category) => category.name).includes('Workshops'), saved.legal.paymentTermsDays, saved.dunning.levels[1].fee, saved.automation.dunningEnabled];
+  }).toEqual([true, 21, 7.5, true]);
+
+  // A mail server that does not answer: the test must report the failure, never success.
+  await section(page, 'E-Mail').click();
+  await page.getByRole('button', { name: /^SMTP/ }).click();
+  await page.getByLabel('Server (Host)').fill('127.0.0.1');
+  await page.getByLabel('Port', { exact: true }).fill('1');
+  await page.getByLabel('Benutzername', { exact: true }).fill('test@example.com');
+  await page.getByLabel('Passwort', { exact: true }).fill('geheim');
+  await page.getByRole('button', { name: 'Verbindung testen' }).click();
+  const banner = page.locator('p.text-error-text, p[class*="error"]').filter({ hasText: /.+/ }).first();
+  await expect(banner).toBeVisible({ timeout: 20_000 });
+  await expect(page.locator('p[class*="success-text"]')).toHaveCount(0);
+  await shot('mail-test-failed');
+
+  await section(page, 'System').click();
+  await page.getByRole('button', { name: 'Prüfen', exact: true }).click();
+  await expect(page.getByText(/Audit-Log ist intakt: .* geprüft, keine Fehler\./)).toBeVisible();
+
+  await section(page, 'Darstellung').click();
+  await page.getByRole('radiogroup', { name: 'Farbschema' }).getByRole('radio', { name: 'Dunkel' }).click();
+  await expect.poll(() => page.evaluate(() => document.documentElement.dataset.theme ?? document.documentElement.className)).toMatch(/dark/);
+  await page.reload();
+  await expect.poll(() => page.evaluate(() => document.documentElement.dataset.theme ?? document.documentElement.className)).toMatch(/dark/);
+  await shot('dark-theme');
+
+  await page.locator('body').click({ position: { x: 5, y: 5 } });
+  await page.keyboard.press('?');
+  await expect(page.getByRole('dialog', { name: 'Tastenkürzel' })).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(page.getByRole('dialog', { name: 'Tastenkürzel' })).toHaveCount(0);
+});
+
+test('the EÜR worklist searches and filters, an expense is excluded as private and the undo removes it again', async () => {
+  const { page, baseUrl } = desktop;
+  const shot = createShooter(page);
+  await seedBankTransactions(page);
+  await page.reload();
+  const taxYear = new Date().getFullYear();
+  const adobe = async () => (await invokeDesktopIpc(page, 'eur:listItems', { taxYear, sourceType: 'transaction', status: 'all' })).find((item) => item.counterparty === 'Adobe Systems');
+  expect((await adobe()).classification).toBeUndefined();
+
+  await page.goto(appUrl(baseUrl, '/eur'));
+  await page.getByLabel('Einträge durchsuchen').fill('Adobe');
+  await expect(page.getByRole('button', { name: /Adobe Systems/ }).first()).toBeVisible();
+  await expect(page.getByRole('button', { name: /StartUp Berlin AG/ })).toHaveCount(0);
+  await page.getByLabel('Zahlungsrichtung filtern').selectOption({ label: 'Einnahmen' });
+  await expect(page.getByRole('button', { name: /Adobe Systems/ })).toHaveCount(0);
+  await page.getByLabel('Zahlungsrichtung filtern').selectOption({ label: 'Ausgaben' });
+  await page.getByRole('button', { name: /Adobe Systems/ }).first().click();
+
+  const panel = page.getByRole('region', { name: 'Klassifizierung' });
+  await panel.getByRole('radiogroup', { name: 'Art des Vorgangs' }).getByRole('radio', { name: /ausschließen/ }).click();
+  await panel.getByRole('textbox', { name: 'Begründung für EÜR-Änderung' }).fill('Privat bezahlt');
+  await panel.getByRole('button', { name: 'Klassifizierung speichern' }).click();
+  await expect.poll(async () => (await adobe()).classification?.excluded ?? null).toBe(true);
+  await shot('excluded');
+
+  await page.getByLabel('Einträge durchsuchen').fill('');
+  await page.getByRole('button', { name: /^Ausgeschl/ }).click();
+  await expect(page.getByRole('button', { name: /Adobe Systems/ }).first()).toBeVisible();
+  await page.getByRole('button', { name: 'Rückgängig' }).click();
+  // Undo writes the previous state back: no line, not excluded, i.e. open again.
+  await expect.poll(async () => (await invokeDesktopIpc(page, 'eur:listItems', { taxYear, sourceType: 'transaction', status: 'unclassified' })).some((item) => item.counterparty === 'Adobe Systems')).toBe(true);
+  expect((await adobe()).classification?.excluded ?? false).toBe(false);
+  await page.getByRole('button', { name: /^Offen/ }).click();
+  await expect(page.getByRole('button', { name: /Adobe Systems/ }).first()).toBeVisible();
+  await shot('undone');
+});

@@ -1,9 +1,6 @@
-import React, { useState } from 'react';
+import React from 'react';
 import { createRoot } from 'react-dom/client';
 import { BrowserDocumentShell, type BrowserMountContext } from '../../../packages/desktop-renderer/src/BrowserDocumentShell';
-import Workspace from '../../../packages/accounting-ui-pro/src/App';
-import { mockTransactions } from '../../../packages/accounting-ui-pro/src/mocks/transactions';
-import { mockBookingDrafts } from '../../../packages/accounting-ui-pro/src/mocks/bookings';
 import '../../../apps/desktop/index.css';
 
 const params = new URLSearchParams(location.search);
@@ -17,24 +14,7 @@ const mount = async (element: HTMLElement, context: BrowserMountContext) => {
   element.append(label, button);
   return () => element.replaceChildren();
 };
-const makeSeed = (name: string) => ({
-  transactions: structuredClone(mockTransactions).map(tx => ({ ...tx, payee: `${name} ${tx.payee}` })),
-  drafts: structuredClone(mockBookingDrafts).map(draft => ({ ...draft, bookingText: `${name} original` })),
-});
-const seedA = makeSeed('A');
-let rejectA: ((error: Error) => void) | undefined;
-const persistA = () => new Promise<void>((_, reject) => { rejectA = reject; });
-function Workspaces() {
-  const [showA, setShowA] = useState(true);
-  const [seedB, setSeedB] = useState(() => makeSeed('B'));
-  return <>
-    <button onClick={() => setShowA(false)}>A schließen</button>
-    <button onClick={() => rejectA?.(new Error('A offline'))}>A Fehler freigeben</button>
-    <button onClick={() => setSeedB(makeSeed('B'))}>B aktualisieren</button>
-    {showA && <section aria-label="Workspace A"><Workspace seed={seedA} onPersistEntry={persistA} /></section>}
-    <section aria-label="Workspace B"><Workspace seed={seedB} /></section>
-  </>;
-}
-createRoot(document.getElementById('root')!).render(params.has('real') ? <React.Suspense fallback="Lädt…"><RealApp /></React.Suspense> : params.has('workspace') ? <Workspaces /> : <BrowserDocumentShell
-  product={product} defaultApiUrl="http://server-a.test" sessionStorageKey={`${product}.session`} apiUrlStorageKey={`${product}.url`}
+// Server A of servers.mts; the specs switch to server B on 4192.
+createRoot(document.getElementById('root')!).render(params.has('real') ? <React.Suspense fallback="Lädt…"><RealApp /></React.Suspense> : <BrowserDocumentShell
+  product={product} defaultApiUrl="http://127.0.0.1:4191" sessionStorageKey={`${product}.session`} apiUrlStorageKey={`${product}.url`}
   mount={mount} />);

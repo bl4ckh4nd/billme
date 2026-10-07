@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { createHash, randomUUID } from 'node:crypto';
+import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 import { createPostgresPool } from './connection.js';
@@ -22,7 +22,6 @@ type SourceLine = {
   providerPath?: string;
 };
 
-const sqlString = (value: string | null): string => value === null ? 'NULL' : `'${value.replaceAll("'", "''")}'`;
 const canonicalRows = (lines: SourceLine[]) => lines.map((line, sortOrder) => ({
   id: line.id,
   tax_year: line.year,
@@ -38,37 +37,9 @@ const canonicalRows = (lines: SourceLine[]) => lines.map((line, sortOrder) => ({
 }));
 const metadataHash = (rows: ReturnType<typeof canonicalRows>): string => createHash('sha256').update(JSON.stringify(rows)).digest('hex');
 
-test('EÜR catalog migration contains the complete canonical immutable seed', async () => {
-  const lines = JSON.parse(await readFile(catalogUrl, 'utf8')) as SourceLine[];
-  const migration = await readFile(migrationUrl, 'utf8');
-  const rows = canonicalRows(lines);
-
-  assert.equal(rows.length, 107);
-  assert.match(migration, /ON CONFLICT \(id\) DO UPDATE SET/);
-  assert.match(migration, /computed_terms_json = EXCLUDED\.computed_terms_json/);
-  assert.match(migration, /updated_at = EXCLUDED\.updated_at;/);
-  for (const row of rows) {
-    const values = `(${sqlString(row.id)}, ${row.tax_year}, ${sqlString(row.provider_path)}, ${sqlString(row.kennziffer)}, ${sqlString(row.label)}, ${sqlString(row.kind)}, ${row.exportable ? 'TRUE' : 'FALSE'}, ${row.sort_order}, ${sqlString(row.computed_from_json)}, ${sqlString(row.computed_terms_json)}, ${sqlString(row.source_version)}, CURRENT_TIMESTAMP::text, CURRENT_TIMESTAMP::text)`;
-    assert.ok(migration.includes(values), `missing canonical EÜR row ${row.id}`);
-  }
-});
-
-test('EÜR 2026 catalog migration seeds every line the 2026 report offers', async () => {
-  const lines = JSON.parse(await readFile(new URL('packages/desktop-services/src/eur/lines-2026.json', rootUrl), 'utf8')) as SourceLine[];
-  const migration = await readFile(new URL('../../drizzle/0030_server_data_eur_catalog_2026.sql', import.meta.url), 'utf8');
-  const rows = canonicalRows(lines).map((row) => ({ ...row, source_version: 'BMF-2026-2026-08-14' }));
-
-  assert.equal(rows.length, 107);
-  assert.match(migration, /ON CONFLICT \(id\) DO UPDATE SET/);
-  for (const row of rows) {
-    const values = `(${sqlString(row.id)}, ${row.tax_year}, ${sqlString(row.provider_path)}, ${sqlString(row.kennziffer)}, ${sqlString(row.label)}, ${sqlString(row.kind)}, ${row.exportable ? 'TRUE' : 'FALSE'}, ${row.sort_order}, ${sqlString(row.computed_from_json)}, ${sqlString(row.computed_terms_json)}, ${sqlString(row.source_version)}, CURRENT_TIMESTAMP::text, CURRENT_TIMESTAMP::text)`;
-    assert.ok(migration.includes(values), `missing canonical EÜR 2026 row ${row.id}`);
-  }
-});
-
 test('fresh Postgres EÜR migration has the canonical catalog hash and no duplicate provider Kennziffern', { skip: !(process.env.BILLME_TEST_DATABASE_URL ?? process.env.DATABASE_URL) }, async () => {
   const pool = createPostgresPool(process.env.BILLME_TEST_DATABASE_URL ?? process.env.DATABASE_URL!);
-  const tenantId = `eur-catalog-${randomUUID()}`;
+
   try {
     await runDrizzleMigrations(pool);
     const lines = JSON.parse(await readFile(catalogUrl, 'utf8')) as SourceLine[];

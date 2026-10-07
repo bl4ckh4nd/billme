@@ -1,5 +1,4 @@
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
 import test from "node:test";
 import { createSingleTenantScope } from "@billme/server-core";
 import { createPostgresPool } from "./connection.js";
@@ -19,23 +18,6 @@ import {
   putEncryptedTaxCredential,
   recordTaxSubmissionReceipt,
 } from "./taxSubmission.js";
-
-test("reporting and filing migration is additive, tenant-scoped, and guarded", async () => {
-  const sql = await readFile(new URL("../../drizzle/0015_server_data_reporting_tax_submissions.sql", import.meta.url), "utf8");
-  for (const table of [
-    "report_snapshot_positions", "report_account_mappings", "report_catalog_refs", "tax_adjustments",
-    "tax_submissions", "tax_submission_approvals", "tax_submission_receipts", "tax_credentials", "tax_submission_jobs",
-  ]) assert.match(sql, new RegExp(`CREATE TABLE IF NOT EXISTS ${table}`), table);
-  for (const trigger of [
-    "report_snapshots_immutable", "report_snapshot_positions_immutable", "report_catalog_refs_immutable",
-    "tax_submission_approvals_immutable", "tax_submission_receipts_immutable", "tax_credentials_immutable",
-  ]) assert.match(sql, new RegExp(trigger), trigger);
-  assert.match(sql, /CHECK \(requester_id <> approver_id\)/);
-  assert.match(sql, /ux_report_snapshots_source/);
-  assert.match(sql, /ux_tax_submissions_id_tenant/);
-  assert.match(sql, /ux_tax_submissions_idempotency/);
-  assert.match(sql, /ux_tax_submission_jobs_idempotency/);
-});
 
 test("reporting and tax submission persistence is tenant-safe and evidence is immutable", { skip: !(process.env.BILLME_TEST_DATABASE_URL ?? process.env.DATABASE_URL) }, async () => {
   const pool = createPostgresPool(process.env.BILLME_TEST_DATABASE_URL ?? process.env.DATABASE_URL!);

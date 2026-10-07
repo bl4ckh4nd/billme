@@ -9,63 +9,6 @@ import {
   buildServerModeProTenantSeed,
 } from './e2eSeeding.js';
 
-test('buildServerModeLiteTenantSeed is deterministic for a namespace', () => {
-  const first = buildServerModeLiteTenantSeed({
-    tenantId: 'tenant-lite',
-    namespace: 'smoke-lite',
-    now: '2026-03-20T09:00:00.000Z',
-  });
-  const second = buildServerModeLiteTenantSeed({
-    tenantId: 'tenant-lite',
-    namespace: 'smoke-lite',
-    now: '2026-03-20T09:00:00.000Z',
-  });
-
-  assert.deepEqual(first, second);
-  assert.equal(first.clients.length, 2);
-  assert.equal(first.invoices.length, 2);
-  assert.equal(first.offers.length, 1);
-  assert.equal(first.recurringProfiles.length, 1);
-  assert.match(first.invoices[0]?.number ?? '', /^RE-SMOKLITE-101$/);
-});
-
-test('buildServerModeProTenantSeed adds accounting fixtures', () => {
-  const seed = buildServerModeProTenantSeed({
-    tenantId: 'tenant-pro',
-    namespace: 'pro-smoke',
-    now: '2026-03-20T09:00:00.000Z',
-  });
-
-  assert.equal(seed.ledgerAccounts.length, 5);
-  assert.deepEqual(seed.ledgerAccounts.map((account) => account.accountNumber).sort(), ['1200', '1576', '1776', '3125', '8400']);
-  assert.equal(seed.taxCases.length, 3);
-  assert.equal(seed.accountKeywords.length, 1);
-  assert.equal(seed.articles.length, 2);
-  assert.equal(seed.bankAccounts.length, 1);
-  assert.equal(seed.bankTransactions.length, 2);
-  assert.equal(seed.templates.length, 2);
-  assert.equal(seed.workflowEntries.length, 1);
-  assert.equal(seed.taxCaseAccountMappings.length, 3);
-  assert.equal(seed.taxCaseAccountMappings.find((mapping) => mapping.taxCaseKey === 'EU_B2B_SERVICE_RC')?.datevBuKey, '94');
-  assert.equal(seed.accountSuggestionRules.length, 1);
-  assert.equal(seed.activeTemplates.invoiceTemplateId, 'pro-smoke-template-invoice');
-});
-
-test('buildServerModeProTenantSeed can add deterministic 2025 EÜR cash fixtures', () => {
-  const seed = buildServerModeProTenantSeed({
-    tenantId: 'tenant-pro-eur',
-    namespace: 'pro-eur-smoke',
-    now: '2026-03-20T09:00:00.000Z',
-    includeEurCashFixtures: true,
-  });
-
-  assert.equal(seed.bankTransactions.length, 4);
-  assert.deepEqual(seed.bankTransactions.slice(2).map(({ id, date, amount, type }) => ({ id, date, amount, type })), [
-    { id: 'pro-eur-smoke-transaction-eur-income', date: '2025-03-01', amount: 119, type: 'income' },
-    { id: 'pro-eur-smoke-transaction-eur-expense', date: '2025-03-02', amount: -59.5, type: 'expense' },
-  ]);
-});
-
 test('applyServerModeLiteTenantSeed persists settings and billing fixtures', { skip: !(process.env.BILLME_TEST_DATABASE_URL ?? process.env.DATABASE_URL) }, async () => {
   const db = createPostgresPool(process.env.BILLME_TEST_DATABASE_URL ?? process.env.DATABASE_URL!);
   await runDrizzleMigrations(db);

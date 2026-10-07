@@ -43,7 +43,9 @@ const draftFor = async (page, purpose) => {
 };
 
 test('imports a settled bank export as open work, not as posted bookings', async () => {
-  const { page } = desktop;
+  const { page, baseUrl } = desktop;
+  // Seeding already issued invoices, so the ledger is not empty; the import must not add to it.
+  const journalBefore = await invokeDesktopIpc(page, 'pro:listJournalEntries', { limit: 50, offset: 0 });
   expect((await importBankExport(page)).imported).toBe(2);
 
   const rent = await draftFor(page, 'Miete September');
@@ -58,7 +60,13 @@ test('imports a settled bank export as open work, not as posted bookings', async
   expect(income.lines[0]).toMatchObject({ debitAmount: 428.4, creditAmount: 0 });
   expect(income.lines[1]).toMatchObject({ debitAmount: 0, creditAmount: 428.4 });
 
-  expect(await invokeDesktopIpc(page, 'pro:listJournalEntries', { limit: 50, offset: 0 })).toHaveLength(0);
+  expect(await invokeDesktopIpc(page, 'pro:listJournalEntries', { limit: 50, offset: 0 })).toEqual(journalBefore);
+
+  await page.reload();
+  await page.goto(appUrl(baseUrl, '/accounting?view=inbox'));
+  await expect(page.getByRole('button', { name: 'Alle 2' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Gebucht 0' })).toBeVisible();
+  await page.screenshot({ path: test.info().outputPath('01-imported-as-open-work.png') });
 });
 
 test('ships the core SKR accounts the default drafts book against', async () => {
@@ -73,6 +81,10 @@ test('ships the core SKR accounts the default drafts book against', async () => 
   const rent = await draftFor(page, 'Miete September');
   const reviewed = await invokeDesktopIpc(page, 'pro:dispatchDraftAction', { transactionId: rent.transactionId, action: 'submit_for_review' });
   expect(reviewed.validationIssues.filter((issue) => issue.code === 'UNKNOWN_ACCOUNT')).toEqual([]);
+
+  await page.goto(appUrl(desktop.baseUrl, '/accounts'));
+  await expect(page.getByRole('heading', { name: 'SKR03/04 Kontenrahmen' })).toBeVisible();
+  await page.screenshot({ path: test.info().outputPath('01-skr-chart.png'), fullPage: true });
 });
 
 test('shows a blocked draft in the inbox queues instead of hiding it', async () => {
@@ -90,4 +102,5 @@ test('shows a blocked draft in the inbox queues instead of hiding it', async () 
   await page.goto(appUrl(baseUrl, '/accounting'));
   await expect(page.getByRole('button', { name: /^Fehler [1-9]/ })).toBeVisible();
   await expect(page.getByRole('button', { name: /^Unvollständig [1-9]/ })).toBeVisible();
+  await page.screenshot({ path: test.info().outputPath('01-blocked-draft-in-queues.png') });
 });

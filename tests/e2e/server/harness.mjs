@@ -5,6 +5,7 @@ import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { chromium } from '@playwright/test';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, '../../..');
@@ -27,6 +28,9 @@ const supportedEnvKeys = [
   'BILLME_SESSION_SECRET',
   'BILLME_WEB_PORT',
   'BILLME_WEB_PRO_PORT',
+  'BILLME_PORTAL_PORT',
+  'BILLME_PUBLIC_PORTAL_URL',
+  'BILLME_PORTAL_PUBLISH_API_KEY',
   'WORKER_LOG_LEVEL',
   'WORKER_RECURRING_INTERVAL_MS',
   'WORKER_DUNNING_INTERVAL_MS',
@@ -37,7 +41,8 @@ const supportedEnvKeys = [
   'SMTP_PASSWORD',
   'RESEND_API_KEY',
 ];
-const requiredHealthServices = ['postgres', 'server-api', 'server-worker', 'web', 'web-pro'];
+const requiredHealthServices = ['postgres', 'server-api', 'server-worker', 'offer-portal', 'web', 'web-pro'];
+const healthSchedulers = new Map();
 const getStateFilePath = () => process.env.E2E_SERVER_STATE_FILE?.trim() || latestStateFile;
 
 const readRuntimeStateFile = async (stateFile) => ({
@@ -273,19 +278,15 @@ const ensurePodmanService = async (state) => {
     return nextState;
   } catch {}
 
-  await fs.mkdir(path.join(podmanHome, '.local', 'share'), { recursive: true });
+  await fs.mkdir(podmanHome, { recursive: true });
+  nextState.podmanStorageConf = path.join(podmanHome, 'storage.conf');
+  await fs.writeFile(nextState.podmanStorageConf, `[storage]\ndriver = "overlay"\nrunroot = "${podmanHome}/run"\ngraphroot = "${podmanHome}/storage"\n[storage.options.overlay]\nmount_program = "/usr/bin/fuse-overlayfs"\n`);
 
   const servicePid = await startDetachedCommand(
     'podman',
     ['system', 'service', '--time', '1800', `unix://${socketPath}`],
     path.join(state.diagnosticsDir, 'podman-service.txt'),
-    {
-      ...process.env,
-      HOME: podmanHome,
-      STORAGE_DRIVER: 'vfs',
-      TMPDIR: process.env.TMPDIR ?? '/tmp',
-      XDG_DATA_HOME: path.join(podmanHome, '.local', 'share'),
-    }
+    getContainerEnv(nextState)
   );
 
   await waitForPodmanSocket(socketPath);
@@ -298,7 +299,13 @@ const ensurePodmanService = async (state) => {
 };
 
 const getContainerEnv = (state, env = process.env) => {
-  const nextEnv = {
+  const nextEnv = state.podmanStorageConf ? {
+    ...env,
+    CONTAINERS_STORAGE_CONF: state.podmanStorageConf,
+    BUILDAH_FORMAT: 'docker',
+    TMPDIR: env.TMPDIR ?? os.tmpdir(),
+    COMPOSE_PARALLEL_LIMIT: env.COMPOSE_PARALLEL_LIMIT ?? '1',
+  } : {
     ...env,
     HOME: state.podmanHome ?? env.HOME,
     STORAGE_DRIVER: state.podmanHome ? 'vfs' : env.STORAGE_DRIVER,
@@ -334,7 +341,9 @@ const runCompose = async (state, args, options = {}) =>
   });
 
 const inspectComposeServiceHealth = async (state, service) => {
-  const container = await runCompose(state, ['ps', '-q', service], { allowFailure: true });
+  const container = state.containerRuntime === 'podman'
+    ? await runCommand('podman', ['ps', '-aq', '--filter', `label=com.docker.compose.project=${state.projectName}`, '--filter', `label=com.docker.compose.service=${service}`], { allowFailure: true, env: getContainerEnv(state) })
+    : await runCompose(state, ['ps', '-q', service], { allowFailure: true });
   const containerId = container.stdout.trim();
   if (!containerId) return 'missing';
 
@@ -344,6 +353,44 @@ const inspectComposeServiceHealth = async (state, service) => {
     { allowFailure: true, env: getContainerEnv(state) }
   );
   return inspect.stdout.trim() || 'missing';
+};
+
+// Podman's transient health units omit isolated storage settings. Execute each
+// image's declared check in this store; Compose still gates dependencies on it.
+const startPodmanHealthScheduler = (state) => {
+  if (state.containerRuntime !== 'podman') return;
+  const nextCheck = new Map();
+  const scheduler = { timer: null, pending: null };
+  const tick = async () => {
+    const containers = await runCommand('podman', ['ps', '-q', '--filter', `label=com.docker.compose.project=${state.projectName}`], { env: getContainerEnv(state), allowFailure: true });
+    const ids = containers.stdout.trim().split(/\s+/).filter(Boolean);
+    if (!ids.length) return;
+    const result = await runCommand('podman', ['inspect', ...ids], { env: getContainerEnv(state), allowFailure: true });
+    if (result.code !== 0) throw new Error(result.stderr);
+    for (const container of JSON.parse(result.stdout)) {
+      const health = container.Config.Healthcheck;
+      if (!health?.Test?.length || health.Test[0] === 'NONE' || Date.now() < (nextCheck.get(container.Id) ?? 0)) continue;
+      const check = await runCommand('podman', ['healthcheck', 'run', container.Id], { env: getContainerEnv(state), allowFailure: true, timeoutMs: Math.max(30_000, Number(health.Timeout ?? 0) / 1_000_000 + 5_000) });
+      await fs.appendFile(path.join(state.diagnosticsDir, 'podman-health.log'), `${new Date().toISOString()} ${container.Name} exit=${check.code} ${check.stderr.trim()}\n`);
+      if (check.code > 1) throw new Error(`Podman health scheduler: ${check.stderr}`);
+      nextCheck.set(container.Id, Date.now() + Math.max(1_000, Number(health.Interval ?? 30_000_000_000) / 1_000_000));
+    }
+  };
+  scheduler.timer = setInterval(() => {
+    if (!scheduler.pending) scheduler.pending = tick().catch(async (error) => {
+      await fs.appendFile(path.join(state.diagnosticsDir, 'podman-health.log'), `${error.stack}\n`);
+    }).finally(() => { scheduler.pending = null; });
+  }, 1_000);
+  scheduler.timer.unref();
+  healthSchedulers.set(state.projectName, scheduler);
+};
+
+const stopPodmanHealthScheduler = async (state) => {
+  const scheduler = healthSchedulers.get(state.projectName);
+  if (!scheduler) return;
+  clearInterval(scheduler.timer);
+  await scheduler.pending;
+  healthSchedulers.delete(state.projectName);
 };
 
 const waitForServiceHealth = async (state, service) => {
@@ -625,6 +672,10 @@ const startServerModeProcessStack = async (state, startupError) => {
     HOST: '127.0.0.1',
     PORT: String(state.ports.api),
     SESSION_SECRET: env.BILLME_SESSION_SECRET ?? randomValue(),
+    BILLME_PUBLIC_WEB_URL: state.urls.web,
+    BILLME_PUBLIC_WEB_PRO_URL: state.urls.webPro,
+    // The API prints PDFs with the browser the suite itself uses.
+    BILLME_CHROMIUM_PATH: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH || chromium.executablePath(),
   };
   const workerEnv = {
     ...process.env,
@@ -717,6 +768,7 @@ const startServerModeProcessStack = async (state, startupError) => {
   const startedState = {
     ...state,
     mode: 'process',
+    urls: { ...state.urls, portal: undefined },
     bootstrapStatus: {
       lite: liteBootstrapStatus,
       pro: proBootstrapStatus,
@@ -772,6 +824,7 @@ const createRuntimeState = async () => {
   const publicApiUrl =
     processEnv.BILLME_PUBLIC_API_URL ?? userEnv.BILLME_PUBLIC_API_URL ?? `http://127.0.0.1:${apiPort}`;
   const webPort = processEnv.BILLME_WEB_PORT ?? userEnv.BILLME_WEB_PORT ?? String(await getFreePort());
+  const portalPort = processEnv.BILLME_PORTAL_PORT ?? userEnv.BILLME_PORTAL_PORT ?? String(await getFreePort());
   const webProPort = processEnv.BILLME_WEB_PRO_PORT ?? userEnv.BILLME_WEB_PRO_PORT ?? String(await getFreePort());
 
   const env = {
@@ -788,11 +841,16 @@ const createRuntimeState = async () => {
     BILLME_SESSION_SECRET: processEnv.BILLME_SESSION_SECRET ?? userEnv.BILLME_SESSION_SECRET ?? randomValue(),
     BILLME_WEB_PORT: webPort,
     BILLME_WEB_PRO_PORT: webProPort,
+    BILLME_PORTAL_PORT: portalPort,
+    BILLME_PUBLIC_PORTAL_URL: `http://127.0.0.1:${portalPort}`,
+    BILLME_PORTAL_PUBLISH_API_KEY: randomValue(),
+    BILLME_PUBLIC_WEB_URL: `http://127.0.0.1:${webPort}`,
+    BILLME_PUBLIC_WEB_PRO_URL: `http://127.0.0.1:${webProPort}`,
     WORKER_LOG_LEVEL: sourceEnv.WORKER_LOG_LEVEL ?? 'info',
     WORKER_RECURRING_INTERVAL_MS: sourceEnv.WORKER_RECURRING_INTERVAL_MS ?? '900000',
     WORKER_DUNNING_INTERVAL_MS: sourceEnv.WORKER_DUNNING_INTERVAL_MS ?? '900000',
-    WORKER_EMAIL_QUEUE_INTERVAL_MS: sourceEnv.WORKER_EMAIL_QUEUE_INTERVAL_MS ?? '60000',
-    WORKER_PORTAL_SYNC_INTERVAL_MS: sourceEnv.WORKER_PORTAL_SYNC_INTERVAL_MS ?? '60000',
+    WORKER_EMAIL_QUEUE_INTERVAL_MS: sourceEnv.WORKER_EMAIL_QUEUE_INTERVAL_MS ?? '900000',
+    WORKER_PORTAL_SYNC_INTERVAL_MS: sourceEnv.WORKER_PORTAL_SYNC_INTERVAL_MS ?? '900000',
     WORKER_MAINTENANCE_INTERVAL_MS: sourceEnv.WORKER_MAINTENANCE_INTERVAL_MS ?? '86400000',
     WORKER_RUN_ONCE: sourceEnv.WORKER_RUN_ONCE ?? '0',
     SMTP_PASSWORD: sourceEnv.SMTP_PASSWORD ?? '',
@@ -810,6 +868,7 @@ const createRuntimeState = async () => {
     containerRuntime: null,
     mode: 'compose',
     podmanHome: null,
+    podmanStorageConf: null,
     podmanServicePid: null,
     podmanSocketActivated: false,
     podmanSocketPath: null,
@@ -821,6 +880,7 @@ const createRuntimeState = async () => {
       api: Number(apiPort),
       web: Number(webPort),
       webPro: Number(webProPort),
+      portal: Number(portalPort),
     },
     projectName,
     stateFile: runStateFile,
@@ -833,6 +893,7 @@ const createRuntimeState = async () => {
       webHealth: `http://127.0.0.1:${webPort}/health`,
       webPro: `http://127.0.0.1:${webProPort}`,
       webProHealth: `http://127.0.0.1:${webProPort}/health`,
+      portal: `http://127.0.0.1:${portalPort}`,
     },
   };
 };
@@ -900,6 +961,7 @@ export async function stopServerModeStack(currentState = null) {
     return;
   }
 
+  await stopPodmanHealthScheduler(state);
   if (state.mode === 'process') {
     for (const pid of Object.values(state.processPids ?? {})) {
       if (pid) {
@@ -976,6 +1038,7 @@ export async function startServerModeStack() {
 
   try {
     debugLog('stack:using-compose-mode');
+    startPodmanHealthScheduler(state);
     await runCompose(state, ['up', '-d', '--build', '--remove-orphans'], {
       timeoutMs: bootTimeoutMs,
     });

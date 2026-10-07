@@ -1,9 +1,11 @@
 import { expect, test } from '@playwright/test';
 import { mkdir } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
+import { createPdfFixture } from '../pdf-fixture.mjs';
 import { readServerHarnessState } from '../harness.mjs';
 import {
   createOwnerCredentials,
+  createHarnessProTenant,
   ensureHarnessSession,
   openProShell,
   requestJson,
@@ -11,14 +13,11 @@ import {
 } from './helpers.mjs';
 
 const owner = createOwnerCredentials('pro');
-const screenshotDirectory = fileURLToPath(
-  new URL('../../../../docs/audit/screenshots/2026-09-04-acceptance/', import.meta.url),
-);
-
 const attachScreenshot = async (page, testInfo, name, target) => {
   if (target) await target.scrollIntoViewIfNeeded();
-  await mkdir(screenshotDirectory, { recursive: true });
-  const screenshotPath = `${screenshotDirectory}/${name}.png`;
+  const directory = process.env.E2E_SCREENSHOT_DIR || fileURLToPath(new URL('../../../../test-results/server-mode/incoming-invoice-ui/', import.meta.url));
+  await mkdir(directory, { recursive: true });
+  const screenshotPath = `${directory}/${name}.png`;
   const screenshot = await page.screenshot({ path: screenshotPath, fullPage: true });
   if (testInfo?.attach) {
     await testInfo.attach(name, {
@@ -93,15 +92,17 @@ const configureIncomingPosting = async (state, session, suffix) => {
 
 export const runProIncomingInvoiceUiScenario = async (page, testInfo = { workerIndex: 0 }) => {
   const state = await readServerHarnessState();
-  const session = await ensureHarnessSession(state, { product: 'pro', ...owner });
   const suffix = `${Date.now()}-${testInfo.workerIndex}`;
+  const credentials = { ...owner, email: `incoming-ui-${suffix}@billme-e2e.local` };
+  await createHarnessProTenant(state, credentials);
+  const session = await ensureHarnessSession(state, { product: 'pro', ...credentials });
   await seedHarnessProTenant(state, { tenantId: session.tenantId, namespace: `incoming-ui-${suffix}` });
   const { vendorId } = await configureIncomingPosting(state, session, suffix);
   const invoiceNumber = `ER-UI-${suffix}`;
 
   await openProShell(page, state, { route: 'accounting', session });
-  await expect(page.getByRole('heading', { name: 'Ledger, Regeln und Workflow-Snapshots' })).toBeVisible();
-  await page.getByRole('button', { name: 'OPOS' }).click();
+  await expect(page.getByRole('heading', { name: 'Buchen', level: 1 })).toBeVisible();
+  await page.getByRole('navigation', { name: 'Hauptnavigation' }).getByRole('button', { name: 'Offene Posten', exact: true }).click();
   const incomingHeading = page.getByRole('heading', { name: 'Eingangsrechnungen' });
   await expect(incomingHeading).toBeVisible();
   const incomingSection = page.locator('section[aria-labelledby="incoming-heading"]');
@@ -134,12 +135,12 @@ export const runProIncomingInvoiceUiScenario = async (page, testInfo = { workerI
   await page.getByRole('button', { name: 'Entfernen' }).last().click();
 
   await page.getByRole('button', { name: 'Entwurf speichern' }).click();
-  await expect(page.getByRole('status')).toContainText('als Entwurf gespeichert');
+  await expect(page.getByTestId('opos-feedback')).toContainText('als Entwurf gespeichert');
   await expect(incomingSection.getByTestId('incoming-invoice-summary')).toContainText('2 Positionen gespeichert');
 
   await page.reload({ waitUntil: 'networkidle' });
-  await expect(page).toHaveURL(/#\/accounting$/);
-  await page.getByRole('button', { name: 'OPOS' }).click();
+  await expect(page).toHaveURL(/#\/accounting(?:\?view=opos)?$/);
+  await page.getByRole('navigation', { name: 'Hauptnavigation' }).getByRole('button', { name: 'Offene Posten', exact: true }).click();
   await expect(incomingHeading).toBeVisible();
   const storedInvoice = page.getByRole('combobox', { name: 'Gespeicherten Beleg wählen' });
   await expect(storedInvoice.locator('option').filter({ hasText: invoiceNumber })).toHaveCount(1);
@@ -153,7 +154,7 @@ export const runProIncomingInvoiceUiScenario = async (page, testInfo = { workerI
   await expect(page.getByText('Vorschau: bereit')).toBeVisible();
   await attachScreenshot(page, testInfo, 'incoming-04-saved-refetched', incomingHeading);
 
-  const pdf = Buffer.from('%PDF-1.4\n1 0 obj\n<<>>\nendobj\n%%EOF');
+  const pdf = await createPdfFixture(invoiceNumber);
   await page.getByLabel('Datei archivieren').setInputFiles({
     name: `${invoiceNumber}.pdf`,
     mimeType: 'application/pdf',
@@ -166,8 +167,8 @@ export const runProIncomingInvoiceUiScenario = async (page, testInfo = { workerI
   await expect(page.getByText('Geprüft', { exact: true })).toBeVisible();
 
   await page.getByRole('button', { name: 'Für Buchung freigeben' }).click();
-  await expect(page.getByRole('status')).toContainText('zur Buchung freigegeben');
-  await page.getByRole('button', { name: 'Buchen' }).click();
+  await expect(page.getByTestId('opos-feedback')).toContainText('zur Buchung freigegeben');
+  await page.getByTestId('opos-workspace').getByRole('button', { name: 'Buchen', exact: true }).click();
   await expect(page.getByText('Eingangsrechnung gebucht.', { exact: true })).toBeVisible();
   await expect(page.getByText(/Journal /)).toBeVisible();
   await expect(page.getByText('Geprüft', { exact: true })).toBeVisible();

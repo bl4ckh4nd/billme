@@ -4,7 +4,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
-import { createSingleTenantScope } from '@billme/server-core';
+import { createSingleTenantScope, localIsoDate } from '@billme/server-core';
 import { buildPostgresTaxAuditExportArtifact, createPostgresClientRepository, createPostgresInvoiceRepository, createPostgresOfferRepository, createPostgresRecurringProfileRepository, PgliteServerDatabase, type PostgresQueryable } from '@billme/server-data';
 import { buildServerApi } from './app.js';
 
@@ -190,7 +190,7 @@ test('portal bearer reservations survive an external publish failure without ent
     await app.ready();
 
     const failed = await app.inject({ method: 'POST', url: '/api/v1/lite/portal/publish-invoice', headers: { 'x-billme-local-token': reservationToken }, payload: { invoiceId: reservationInvoice.id } });
-    assert.equal(failed.statusCode, 500, failed.body);
+    assert.equal(failed.statusCode, 503, failed.body);
     const reserved = await database.query<{ token: string; token_hash: string }>(
       'SELECT token, token_hash FROM portal_publications WHERE tenant_id = $1 AND document_type = $2 AND document_id = $3',
       [reservationTenantId, 'invoice', reservationInvoice.id],
@@ -199,6 +199,10 @@ test('portal bearer reservations survive an external publish failure without ent
     assert.notEqual(reserved.rows[0]!.token, createHash('sha256').update(`billme:${reservationTenantId}:invoice:${reservationInvoice.id}`).digest('hex'));
     const failedAudit = await database.query<{ before_json: string | null; after_json: string | null }>('SELECT before_json, after_json FROM audit_log WHERE tenant_id = $1', [reservationTenantId]);
     assert.ok(failedAudit.rows.every((row) => !JSON.stringify(row).includes(reserved.rows[0]!.token)));
+
+    const verification = await app.inject({ method: 'GET', url: '/api/v1/lite/audit/verify', headers: { 'x-billme-local-token': reservationToken } });
+    assert.equal(verification.statusCode, 200, verification.body);
+    assert.equal(verification.json().ok, true, verification.body);
 
     failPublish = false;
     const retried = await app.inject({ method: 'POST', url: '/api/v1/lite/portal/publish-invoice', headers: { 'x-billme-local-token': reservationToken }, payload: { invoiceId: reservationInvoice.id } });
@@ -329,7 +333,7 @@ test('recurring manual runs commit good profiles and report legacy empty profile
     assert.equal((await invoiceRepository.list(scope)).length, 1);
     const storedValidProfile = await profileRepository.getById(scope, 'recurring-valid-profile');
     assert.equal(storedValidProfile?.nextRun, '2000-02-01');
-    assert.equal(storedValidProfile?.lastRun, new Date().toISOString().slice(0, 10));
+    assert.equal(storedValidProfile?.lastRun, localIsoDate(new Date()));
     const storedInvalidProfile = await profileRepository.getById(scope, 'recurring-invalid-profile');
     assert.equal(storedInvalidProfile?.nextRun, '2000-01-01');
     assert.equal(storedInvalidProfile?.lastRun, undefined);
@@ -391,7 +395,7 @@ test('concurrent recurring manual runs claim one overdue profile exactly once', 
     assert.equal((await invoiceRepository.list(scope)).length, 1);
     const storedProfile = await profileRepository.getById(scope, 'recurring-concurrent-profile');
     assert.equal(storedProfile?.nextRun, '2000-02-01');
-    assert.equal(storedProfile?.lastRun, new Date().toISOString().slice(0, 10));
+    assert.equal(storedProfile?.lastRun, localIsoDate(new Date()));
     const settingsRow = await database.query<{ settings_json: string }>('SELECT settings_json FROM server_settings WHERE tenant_id = $1', [concurrentTenantId]);
     assert.equal(JSON.parse(settingsRow.rows[0]!.settings_json).numbers.nextInvoiceNumber, 2);
   } finally {

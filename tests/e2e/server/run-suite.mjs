@@ -3,7 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import process from 'node:process';
 import { chromium } from '@playwright/test';
-import { startServerModeStack, stopServerModeStack } from './harness.mjs';
+import { readServerHarnessState, startServerModeStack, stopServerModeStack } from './harness.mjs';
 import { runStackSmokeScenario } from './scenarios.mjs';
 import {
   runLiteAuthScenario,
@@ -12,6 +12,7 @@ import {
   runLiteVatPersistenceScenario,
   runLiteWorkflowScenario,
 } from './lite/scenarios.mjs';
+import { runLiteCliScenario } from './lite/cli.mjs';
 import { runWorkerFlowScenario } from './worker-flows.mjs';
 import {
   runProAccountingScenario,
@@ -57,6 +58,8 @@ const buildScenarioList = () => {
       scenarios.push({ name: 'lite-workflow', kind: 'browser', run: (page) => runLiteWorkflowScenario(page, 'runner-lite-workflow') });
       scenarios.push({ name: 'lite-worker-flows', kind: 'plain', run: () => runWorkerFlowScenario('lite') });
     }
+    // Last in the Lite list: it completes onboarding and turns on e-invoicing in the tenant the others share.
+    scenarios.push({ name: 'lite-cli', kind: 'browser', run: async (page) => runLiteCliScenario((await readServerHarnessState()).urls.api, page) });
   }
 
   if (includePro) {
@@ -81,28 +84,49 @@ const buildScenarioList = () => {
   return scenarios;
 };
 
-const runBrowserScenario = async (browser, run) => {
+const runBrowserScenario = async (browser, run, directory, exchanges) => {
   const context = await browser.newContext();
+  await context.tracing.start({ screenshots: true, snapshots: true, sources: true });
+  context.on('response', (response) => {
+    const url = new URL(response.url());
+    if (url.pathname.startsWith('/api/')) exchanges.push({ method: response.request().method(), path: url.pathname, status: response.status() });
+  });
+  const page = await context.newPage();
   try {
-    const page = await context.newPage();
     await run(page);
   } finally {
+    await page.screenshot({ path: path.join(directory, 'page.png'), fullPage: true }).catch(() => {});
+    await fs.writeFile(path.join(directory, 'page.html'), await page.content()).catch(() => {});
+    await context.tracing.stop({ path: path.join(directory, 'trace.zip') });
     await context.close();
   }
 };
 
 const main = async () => {
-  const scenarios = buildScenarioList();
+  const scenarios = buildScenarioList().filter((scenario) => !process.env.SERVER_E2E_SCENARIO || scenario.name === process.env.SERVER_E2E_SCENARIO);
   if (scenarios.length === 0) {
     throw new Error(`No server-mode scenarios selected for scope "${scope}".`);
   }
 
   console.log(`Running server-mode ${level} suite (${scope}) with ${scenarios.length} scenario(s)...`);
 
-  const state = await startServerModeStack();
+  const reuse = process.env.SERVER_E2E_REUSE_STACK === '1';
+  const keep = process.env.SERVER_E2E_KEEP_STACK === '1';
+  const state = reuse ? await readServerHarnessState() : await startServerModeStack();
   const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), 'billme-server-e2e-'));
   const stableStateFile = path.join(stateDir, 'runtime-state.json');
   let browser = null;
+  const resultsDir = path.resolve(process.env.SERVER_E2E_RESULTS_DIR || `test-results/server-mode/runs/${Date.now()}`);
+  await fs.mkdir(resultsDir, { recursive: true });
+  const report = { startedAt: new Date().toISOString(), level, scope, mode: state.mode, freshStack: !reuse, projectName: state.projectName, healthChecks: state.containerRuntime === 'podman' && state.mode === 'compose' ? 'declared checks scheduled by harness' : 'runtime', scenarios: [] };
+  let exchanges = [];
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (input, init) => {
+    const response = await originalFetch(input, init);
+    const url = new URL(response.url);
+    exchanges.push({ method: init?.method ?? 'GET', path: url.pathname, status: response.status });
+    return response;
+  };
 
   try {
     await fs.writeFile(stableStateFile, JSON.stringify({ ...state, stateFile: stableStateFile }, null, 2));
@@ -116,17 +140,36 @@ const main = async () => {
 
     for (const scenario of scenarios) {
       console.log(`→ ${scenario.name}`);
-      if (scenario.kind === 'browser') {
-        await runBrowserScenario(browser, scenario.run);
-      } else {
-        await scenario.run();
+      const directory = path.join(resultsDir, scenario.name);
+      await fs.mkdir(directory, { recursive: true });
+      exchanges = [];
+      const result = { name: scenario.name, status: 'failed', startedAt: new Date().toISOString() };
+      process.env.E2E_SCREENSHOT_DIR = directory;
+      try {
+        if (scenario.kind === 'browser') await runBrowserScenario(browser, scenario.run, directory, exchanges);
+        else await scenario.run();
+        result.status = 'passed';
+        console.log(`✓ ${scenario.name}`);
+      } catch (error) {
+        result.error = error.stack ?? String(error);
+        throw error;
+      } finally {
+        result.finishedAt = new Date().toISOString();
+        report.scenarios.push(result);
+        await fs.writeFile(path.join(directory, 'requests.json'), JSON.stringify(exchanges, null, 2));
       }
-      console.log(`✓ ${scenario.name}`);
     }
   } finally {
+    globalThis.fetch = originalFetch;
+    report.finishedAt = new Date().toISOString();
+    report.selected = scenarios.length;
+    report.passed = report.scenarios.filter((result) => result.status === 'passed').length;
+    await fs.writeFile(path.join(resultsDir, 'summary.json'), JSON.stringify(report, null, 2));
+    console.log(`Server-mode artifacts: ${resultsDir}`);
     await browser?.close().catch(() => {});
-    await stopServerModeStack(state).catch(() => {});
-    await fs.rm(stateDir, { recursive: true, force: true }).catch(() => {});
+    if (!keep && !reuse) await stopServerModeStack(state).catch(() => {});
+    if (!keep) await fs.rm(stateDir, { recursive: true, force: true }).catch(() => {});
+    else console.log(`Retained isolated stack state: ${stableStateFile}`);
   }
 };
 

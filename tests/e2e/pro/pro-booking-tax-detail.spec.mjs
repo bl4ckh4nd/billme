@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test';
-import { appUrl, importPendingProTransaction, invokeDesktopIpc, launchDesktopApp, seedDesktopData } from '../support.mjs';
+import { appUrl, approveProDraft, importPendingProTransaction, invokeDesktopIpc, launchDesktopApp, seedDesktopData } from '../support.mjs';
 
 let desktop;
 
@@ -46,47 +46,45 @@ const saveDraftForTx = async (page, { txId, accountNumber, bankAccount, taxCaseK
   const abs = Math.abs(Number(tx.amount));
   const postingDate = tx.date;
   const lineNonce = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-  const draft = await invokeDesktopIpc(page, 'pro:saveDraft', {
-    draft: {
-      id: existing.id,
-      tenantId: 'default',
-      transactionId: txId,
-      workflowStatus: 'approved',
-      postingDate,
-      documentDate: postingDate,
-      bookingText: `E2E Tax ${taxCaseKey}`,
-      reference: txId,
-      period: postingDate.slice(0, 7),
-      fiscalYear: Number(postingDate.slice(0, 4)),
-      lines: [
-        {
-          id: `line-${txId}-1-${lineNonce}`,
-          accountNumber,
-          debitAmount: abs,
-          creditAmount: 0,
-          taxCaseKey,
-          taxCode: taxCaseKey,
-          taxRate: taxPayload?.taxRate,
-          netAmount: taxPayload?.netAmount,
-          taxAmount: taxPayload?.taxAmount,
-          grossAmount: taxPayload?.grossAmount,
-          destinationVatRate: taxPayload?.destinationVatRate,
-          countryCode: taxPayload?.countryCode,
-          counterpartyVatId: taxPayload?.counterpartyVatId,
-          evidenceType: taxPayload?.evidenceType,
-          evidenceReference: taxPayload?.evidenceReference,
-          datevSachverhaltLl: taxPayload?.datevSachverhaltLl,
-        },
-        {
-          id: `line-${txId}-2-${lineNonce}`,
-          accountNumber: bankAccount,
-          debitAmount: 0,
-          creditAmount: abs,
-        },
-      ],
-      validationIssues: [],
-      updatedAt: new Date().toISOString(),
-    },
+  const draft = await approveProDraft(page, {
+    id: existing.id,
+    tenantId: 'default',
+    transactionId: txId,
+    workflowStatus: 'suggested',
+    postingDate,
+    documentDate: postingDate,
+    bookingText: `E2E Tax ${taxCaseKey}`,
+    reference: txId,
+    period: postingDate.slice(0, 7),
+    fiscalYear: Number(postingDate.slice(0, 4)),
+    lines: [
+      {
+        id: `line-${txId}-1-${lineNonce}`,
+        accountNumber,
+        debitAmount: abs,
+        creditAmount: 0,
+        taxCaseKey,
+        taxCode: taxCaseKey,
+        taxRate: taxPayload?.taxRate,
+        netAmount: taxPayload?.netAmount,
+        taxAmount: taxPayload?.taxAmount,
+        grossAmount: taxPayload?.grossAmount,
+        destinationVatRate: taxPayload?.destinationVatRate,
+        countryCode: taxPayload?.countryCode,
+        counterpartyVatId: taxPayload?.counterpartyVatId,
+        evidenceType: taxPayload?.evidenceType,
+        evidenceReference: taxPayload?.evidenceReference,
+        datevSachverhaltLl: taxPayload?.datevSachverhaltLl,
+      },
+      {
+        id: `line-${txId}-2-${lineNonce}`,
+        accountNumber: bankAccount,
+        debitAmount: 0,
+        creditAmount: abs,
+      },
+    ],
+    validationIssues: [],
+    updatedAt: new Date().toISOString(),
   });
 
   return draft;
@@ -95,6 +93,8 @@ const saveDraftForTx = async (page, { txId, accountNumber, bankAccount, taxCaseK
 test.beforeEach(async () => {
   desktop = await launchDesktopApp({ app: 'pro' });
   await seedDesktopData(desktop.page, { app: 'pro' });
+  // Seeding writes past react-query and the onboarding gate; reload so the shell reads the seeded settings.
+  await desktop.page.reload();
 });
 
 test.afterEach(async () => {
@@ -126,20 +126,17 @@ test('booking detail UI enforces tax-case requirements and clears blockers after
     },
   });
 
-  await page.goto(appUrl(baseUrl, '/accounting'));
-  await expect(page.getByRole('heading', { name: 'Pro Buchhaltung' })).toBeVisible();
+  await page.goto(appUrl(baseUrl, '/accounting?view=inbox'));
+  await expect(page.getByRole('heading', { name: 'Buchen', level: 1 })).toBeVisible();
 
-  const row = page.locator('tbody tr').filter({ hasText: targetTx.counterparty }).first();
-  await expect(row).toBeVisible();
-  await row.click();
-  await expect(page.getByRole('button', { name: 'Erweitern' })).toBeVisible();
+  await page.getByRole('button', { name: `${targetTx.counterparty} öffnen` }).click();
   await page.getByRole('button', { name: 'Erweitern' }).click();
 
   await expect(page.getByRole('heading', { name: 'Buchung erfassen' })).toBeVisible();
-  await expect(page.getByText('Buchungssatz')).toBeVisible();
-  await expect(page.locator('div.col-span-2').filter({ hasText: /^Steuerfall$/ }).first()).toBeVisible();
-
-  const taxCaseSelect = page.locator('select[id^="tax-case-"]').first();
+  await expect(page.getByRole('heading', { name: /^Buchungssatz/ })).toBeVisible();
+  const taxCaseSelect = page.getByRole('combobox', { name: 'Steuerfall' }).first();
+  await expect(taxCaseSelect).toBeVisible();
+  await page.screenshot({ path: test.info().outputPath('01-booking-editor.png'), fullPage: true });
 
   await taxCaseSelect.selectOption('DE_KU19');
   await page.getByRole('button', { name: 'Entwurf speichern' }).click();
@@ -147,10 +144,8 @@ test('booking detail UI enforces tax-case requirements and clears blockers after
   let check = await invokeDesktopIpc(page, 'pro:validateTaxCompliance', { transactionId: targetTx.id });
   expect(check.issues.some((issue) => issue.code === 'MISSING_TAX_EVIDENCE')).toBeTruthy();
 
-  const kuEvidenceType = page.locator('label:has-text("Nachweisart")').locator('xpath=following-sibling::input[1]').first();
-  const kuEvidenceRef = page.locator('label:has-text("Nachweis-Referenz")').locator('xpath=following-sibling::input[1]').first();
-  await kuEvidenceType.fill('KU-Hinweis');
-  await kuEvidenceRef.fill('KU-REF-001');
+  await page.getByLabel('Nachweisart').fill('KU-Hinweis');
+  await page.getByLabel('Nachweis-Referenz').fill('KU-REF-001');
   await page.getByRole('button', { name: 'Entwurf speichern' }).click();
 
   check = await invokeDesktopIpc(page, 'pro:validateTaxCompliance', { transactionId: targetTx.id });
@@ -160,25 +155,22 @@ test('booking detail UI enforces tax-case requirements and clears blockers after
   await page.getByRole('button', { name: 'Entwurf speichern' }).click();
 
   check = await invokeDesktopIpc(page, 'pro:validateTaxCompliance', { transactionId: targetTx.id });
-  expect(check.issues.some((issue) => issue.code === 'MISSING_COUNTRY_CODE')).toBeTruthy();
+  expect(check.issues.some((issue) => issue.code === 'MISSING_TAX_COUNTRY')).toBeTruthy();
   expect(check.issues.some((issue) => issue.code === 'MISSING_COUNTERPARTY_VAT_ID')).toBeTruthy();
 
-  const rcCountry = page.locator('label:has-text("Land")').locator('xpath=following-sibling::input[1]').first();
-  const rcVatId = page.locator('label:has-text("USt-IdNr.")').locator('xpath=following-sibling::input[1]').first();
-  const rcEvidenceType = page.locator('label:has-text("Nachweisart")').locator('xpath=following-sibling::input[1]').first();
-  const rcEvidenceRef = page.locator('label:has-text("Nachweis-Referenz")').locator('xpath=following-sibling::input[1]').first();
-  await rcCountry.fill('FR');
-  await rcVatId.fill('FR12345678901');
-  await rcEvidenceType.fill('Invoice PDF');
-  await rcEvidenceRef.fill('RC-REF-001');
+  await page.getByLabel('Land', { exact: true }).fill('FR');
+  await page.getByLabel('USt-IdNr.').fill('FR12345678901');
+  await page.getByLabel('Nachweisart').fill('Invoice PDF');
+  await page.getByLabel('Nachweis-Referenz').fill('RC-REF-001');
   await page.getByRole('button', { name: 'Entwurf speichern' }).click();
 
   check = await invokeDesktopIpc(page, 'pro:validateTaxCompliance', { transactionId: targetTx.id });
-  expect(check.issues.some((issue) => issue.code === 'MISSING_COUNTRY_CODE')).toBe(false);
+  expect(check.issues.some((issue) => issue.code === 'MISSING_TAX_COUNTRY')).toBe(false);
   expect(check.issues.some((issue) => issue.code === 'MISSING_COUNTERPARTY_VAT_ID')).toBe(false);
   expect(check.issues.some((issue) => issue.code === 'MISSING_TAX_EVIDENCE')).toBe(false);
-  expect(check.issues.some((issue) => issue.code === 'MISSING_DESTINATION_VAT_RATE')).toBeTruthy();
-  expect(check.issues.some((issue) => issue.code === 'MISSING_DATEV_SACHVERHALT')).toBeTruthy();
+  // The editor's Steuersatz % doubles as the destination rate; only the DATEV Sachverhalt has no control in the editor.
+  expect(check.issues.map((issue) => issue.code)).toEqual(['MISSING_DATEV_SACHVERHALT']);
+  await page.screenshot({ path: test.info().outputPath('02-reverse-charge-fields.png'), fullPage: true });
 
   // The current booking editor has no controls for these DATEV-only fields.
   // Seed them through the typed IPC contract, then validate and explicitly
@@ -190,7 +182,7 @@ test('booking detail UI enforces tax-case requirements and clears blockers after
   const enriched = await invokeDesktopIpc(page, 'pro:saveDraft', {
     draft: {
       ...persisted,
-      workflowStatus: 'pending_approval',
+      workflowStatus: 'suggested',
       lines: persisted.lines.map((line) => line.id === rcLine.id
         ? { ...line, destinationVatRate: 20, datevSachverhaltLl: '13' }
         : line),
@@ -202,6 +194,7 @@ test('booking detail UI enforces tax-case requirements and clears blockers after
   check = await invokeDesktopIpc(page, 'pro:validateTaxCompliance', { transactionId: targetTx.id });
   expect(check.ok).toBe(true);
   expect(check.issues.filter((issue) => issue.blocking)).toEqual([]);
+  await invokeDesktopIpc(page, 'pro:dispatchDraftAction', { transactionId: targetTx.id, action: 'submit_for_review' });
   const approved = await invokeDesktopIpc(page, 'pro:dispatchDraftAction', {
     transactionId: targetTx.id,
     action: 'approve',
@@ -211,8 +204,8 @@ test('booking detail UI enforces tax-case requirements and clears blockers after
 
 test('posts tax-case variants and verifies VAT summary rows for mixed tax versions', async () => {
   const { page, baseUrl } = desktop;
-  await page.goto(appUrl(baseUrl, '/accounting'));
-  await expect(page.getByRole('heading', { name: 'Pro Buchhaltung' })).toBeVisible();
+  await page.goto(appUrl(baseUrl, '/accounting?view=inbox'));
+  await expect(page.getByRole('heading', { name: 'Buchen', level: 1 })).toBeVisible();
 
   const { transaction: txStd } = await importPendingProTransaction(page, 'tax-standard');
   const { transaction: txRc } = await importPendingProTransaction(page, 'tax-reverse-charge');
@@ -329,4 +322,9 @@ test('posts tax-case variants and verifies VAT summary rows for mixed tax versio
     grossAmount: 119,
     lineCount: 1,
   });
+
+  // The workbench shows the three tax-case drafts as booked.
+  await page.reload();
+  await expect(page.getByRole('button', { name: 'Gebucht 3' })).toBeVisible();
+  await page.screenshot({ path: test.info().outputPath('01-three-tax-cases-posted.png'), fullPage: true });
 });

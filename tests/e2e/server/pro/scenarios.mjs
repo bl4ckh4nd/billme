@@ -1,46 +1,25 @@
-import { createHmac } from 'node:crypto';
 import { expect } from '@playwright/test';
 import { readServerHarnessState } from '../harness.mjs';
 import {
   PRO_SESSION_STORAGE_KEY,
   createOwnerCredentials,
+  createHarnessProTenant,
+  createHarnessProViewer,
   ensureHarnessSession,
   openProShell,
   requestJson,
   requestText,
   seedHarnessProTenant,
+  setHarnessProBankTransactionStatus,
 } from './helpers.mjs';
 
 const proOwner = createOwnerCredentials('pro');
 const liteOwner = createOwnerCredentials('lite');
 
-const viewerTokenFor = (state, ownerToken) => {
-  const [payload] = ownerToken.split('.');
-  if (!payload || !state.env?.BILLME_SESSION_SECRET) throw new Error('Harness session secret is unavailable.');
-  const session = JSON.parse(Buffer.from(payload, 'base64url').toString('utf8'));
-  const viewerPayload = Buffer.from(JSON.stringify({
-    ...session,
-    role: 'viewer',
-    user: { ...session.user, role: 'viewer' },
-  })).toString('base64url');
-  const signature = createHmac('sha256', state.env.BILLME_SESSION_SECRET).update(viewerPayload).digest('base64url');
-  return `${viewerPayload}.${signature}`;
-};
-
-const sectionByTitle = (page, title) =>
-  page.locator('section.section-card').filter({
-    has: page.getByRole('heading', { name: title }),
-  });
-
-const selectByVisibleLabel = (section, label) =>
-  section.locator('label.select-field > span').filter({ hasText: new RegExp(`^${label}$`) }).locator('..').locator('select');
-
-const inputByVisibleLabel = (section, label) =>
-  section.getByLabel(label, { exact: true });
 
 const completeProOnboardingIfVisible = async (page, scenarioKey = 'server-pro') => {
   const heading = page.getByRole('heading', { name: 'Richte deinen Firmenkopf ein' });
-  const workspaceHeading = page.getByRole('heading', { name: 'Ledger, Regeln und Workflow-Snapshots' });
+  const workspaceHeading = page.getByRole('heading', { name: 'Buchen', level: 1 });
 
   // Authentication only starts refreshData. Wait for either the onboarding
   // dialog or the hydrated workspace before deciding that no setup is needed.
@@ -65,12 +44,12 @@ const completeProOnboardingIfVisible = async (page, scenarioKey = 'server-pro') 
 
   await page.getByLabel('Steuernummer').fill('12/345/67890');
   await page.getByLabel('Zahlungsziel in Tagen').fill('14');
-  await page.getByLabel('Rechnungs-Praefix').fill('RE-%Y-');
-  await page.getByLabel('Angebots-Praefix').fill('ANG-%Y-');
+  await page.getByLabel('Rechnungs-Präfix').fill('RE-%Y-');
+  await page.getByLabel('Angebots-Präfix').fill('ANG-%Y-');
   await page.getByRole('button', { name: 'Weiter zu Weitere Angaben' }).click();
 
   await page.getByLabel('Bankname').fill('Berliner Testbank');
-  await page.getByLabel('IBAN').fill('DE12100500001234567890');
+  await page.getByLabel('IBAN').fill('DE02120300000000202051');
   await page.getByRole('button', { name: 'Arbeitsbereich einrichten' }).click();
   await expect(heading).toHaveCount(0);
 };
@@ -103,11 +82,12 @@ export const runProAuthRestoreScenario = async (page) => {
   await completeProOnboardingIfVisible(page, 'auth-restore');
 
   await expect(page).toHaveURL(/#\/accounting$/);
-  await expect(page.getByRole('heading', { name: 'Ledger, Regeln und Workflow-Snapshots' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Buchen', level: 1 })).toBeVisible();
 
   await page.reload({ waitUntil: 'networkidle' });
   await expect(page).toHaveURL(/#\/accounting$/);
-  await expect(page.getByText(`Angemeldet als ${proOwner.fullName}`)).toBeVisible();
+  await expect.poll(() => page.evaluate((key) => JSON.parse(localStorage.getItem(key))?.user?.email, PRO_SESSION_STORAGE_KEY)).toBe(proOwner.email);
+  await expect(page.getByRole('heading', { name: 'Buchen', level: 1 })).toBeVisible();
 
   await page.getByRole('button', { name: 'Abmelden' }).click();
   await expect(page.getByRole('button', { name: 'Anmelden', exact: true })).toBeVisible();
@@ -118,88 +98,80 @@ export const runProAuthRestoreScenario = async (page) => {
   await page.getByRole('button', { name: 'Anmelden', exact: true }).click();
 
   await expect(page).toHaveURL(/#\/accounting$/);
-  await expect(page.getByRole('heading', { name: 'Ledger, Regeln und Workflow-Snapshots' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Buchen', level: 1 })).toBeVisible();
 };
 
 export const runProCatalogScenario = async (page) => {
   const state = await readServerHarnessState();
-  const session = await ensureHarnessSession(state, {
-    product: 'pro',
-    ...proOwner,
-  });
-
-  await seedHarnessProTenant(state, {
-    tenantId: session.tenantId,
-    namespace: 'catalog-regression',
-  });
+  const namespace = `catalog-regression-${Date.now()}`;
+  const credentials = { ...proOwner, email: `${namespace}@billme-e2e.local` };
+  await createHarnessProTenant(state, credentials);
+  const session = await ensureHarnessSession(state, { product: 'pro', ...credentials });
+  await seedHarnessProTenant(state, { tenantId: session.tenantId, namespace });
 
   await openProShell(page, state, {
-    route: 'catalog',
+    route: 'articles',
     session,
   });
 
-  const articleSection = sectionByTitle(page, 'Leistungs- und Produktkatalog');
-  const accountSection = sectionByTitle(page, 'Bankkonten und Default-SKR-Zuordnung');
-  const templateSection = sectionByTitle(page, 'Serverweite Templates und aktive Auswahl');
-
-  await expect(page.getByRole('heading', { name: 'Leistungs- und Produktkatalog' })).toBeVisible();
-  await expect(articleSection.getByText('Senior Consulting')).toBeVisible();
-  await expect(accountSection.getByText('Hauptkonto')).toBeVisible();
-  await expect(templateSection.locator('strong')).toContainText('Server-mode Rechnung');
-
+  const nav = page.getByRole('navigation', { name: 'Hauptnavigation' });
+  await nav.getByRole('button', { name: 'Leistungen', exact: true }).click();
+  await expect(page.getByRole('heading', { name: 'Leistungen', level: 1 })).toBeVisible();
+  await expect(page.getByText('Senior Consulting', { exact: true })).toBeVisible();
   const articleTitle = `Playwright Katalog ${Date.now()}`;
-  await articleSection.getByLabel('Titel').fill(articleTitle);
-  await articleSection.getByLabel('Preis').fill('321.5');
-  await articleSection.getByLabel('Einheit').fill('Paket');
-  await articleSection.getByLabel('Kategorie').fill('Testing');
-  await articleSection.getByLabel('Steuer %').fill('19');
-  await articleSection.getByLabel('Beschreibung').fill('Browser-seitig angelegter Regressionseintrag');
-  await articleSection.getByRole('button', { name: 'Artikel speichern' }).click();
-  await expect(page.getByText('Artikel gespeichert.')).toBeVisible();
-  await expect(articleSection.getByText(articleTitle)).toBeVisible();
-
-  const accountName = `Playwright Konto ${Date.now()}`;
-  await accountSection.getByLabel('Name').fill(accountName);
-  await accountSection.getByLabel('IBAN').fill('DE44500105175407324931');
-  await accountSection.getByLabel('Saldo').fill('4500');
-  await accountSection.getByLabel('Default SKR-Konto').fill('1200');
-  await accountSection.getByLabel('Kontoart').selectOption('paypal');
-  await accountSection.getByLabel('Farbe').fill('#22577a');
-  await accountSection.getByRole('button', { name: 'Bankkonto speichern' }).click();
-  await expect(page.getByText('Bankkonto gespeichert.')).toBeVisible();
-  await expect(accountSection.getByText(accountName)).toBeVisible();
-
-  const templateName = `Playwright Vorlage ${Date.now()}`;
-  await templateSection.getByLabel('Typ').selectOption('invoice');
-  await templateSection.getByLabel('Name').fill(templateName);
-  await templateSection.getByRole('button', { name: 'Leere Vorlage speichern' }).click();
-  await expect(page.getByText('Vorlage gespeichert.')).toBeVisible();
-
-  const templateRow = templateSection.locator('tr').filter({ hasText: templateName });
-  await expect(templateRow).toBeVisible();
-  await templateRow.getByRole('button', { name: 'Aktiv setzen' }).click();
-  await expect(page.getByText('Aktive Rechnungsvorlage aktualisiert.')).toBeVisible();
-  await expect(templateSection.locator('.static-field')).toContainText(templateName);
-
+  await page.getByRole('button', { name: 'Neuer Artikel', exact: true }).click();
+  const articleDialog = page.getByRole('dialog');
+  await articleDialog.getByLabel('Bezeichnung').fill(articleTitle);
+  await articleDialog.getByLabel('Preis (Netto)').fill('321.5');
+  await articleDialog.getByLabel('Einheit').selectOption('Pauschale');
+  await articleDialog.getByLabel('Beschreibung').fill('Browser-seitig angelegter Regressionseintrag');
+  await articleDialog.getByRole('button', { name: 'Erstellen', exact: true }).click();
+  await expect(articleDialog).toHaveCount(0);
+  await expect(page.getByText(articleTitle, { exact: true })).toBeVisible();
+  const articles = await requestJson(state, session, '/api/v1/pro/articles');
+  expect(articles.find((article) => article.title === articleTitle)).toMatchObject({ price: 321.5, unit: 'Pauschale', taxRate: 19 });
   await page.reload({ waitUntil: 'networkidle' });
-  await expect(page).toHaveURL(/#\/catalog$/);
-  await expect(articleSection.getByText(articleTitle)).toBeVisible();
-  await expect(accountSection.getByText(accountName)).toBeVisible();
-  await expect(templateSection.locator('.static-field')).toContainText(templateName);
+  await expect(page.getByText(articleTitle, { exact: true })).toBeVisible();
+
+  await nav.getByRole('button', { name: 'Konten', exact: true }).click();
+  await expect(page.getByRole('table').getByText('Hauptkonto', { exact: true })).toBeVisible();
+  const accountName = `Playwright Konto ${Date.now()}`;
+  await page.getByRole('button', { name: 'Neues Konto', exact: true }).click();
+  const accountDialog = page.getByRole('dialog');
+  await accountDialog.getByLabel('Kontoname').fill(accountName);
+  await accountDialog.getByLabel('IBAN (optional)').fill('DE44500105175407324931');
+  await accountDialog.getByLabel('Anfangssaldo').fill('4500');
+  await accountDialog.getByLabel('Standard-SKR-Konto (SKR03)').selectOption('1200');
+  await accountDialog.getByRole('button', { name: 'Speichern', exact: true }).click();
+  await expect(accountDialog).toHaveCount(0);
+  const accounts = await requestJson(state, session, '/api/v1/pro/accounts');
+  expect(accounts.find((account) => account.name === accountName)).toMatchObject({ balance: 4500, defaultSkrAccountNumber: '1200' });
+  await page.reload({ waitUntil: 'networkidle' });
+  await expect(page.getByRole('table').getByText(accountName, { exact: true })).toBeVisible();
+
+  await nav.getByRole('button', { name: 'Vorlagen', exact: true }).click();
+  await page.getByRole('button', { name: 'Neue Vorlage', exact: true }).click();
+  const templateName = `Playwright Vorlage ${Date.now()}`;
+  await page.getByLabel('Name der Vorlage').fill(templateName);
+  await page.getByRole('switch', { name: 'Standard für Rechnung', exact: true }).check();
+  await page.getByRole('button', { name: 'Speichern', exact: true }).click();
+  await nav.getByRole('button', { name: 'Vorlagen', exact: true }).click();
+  const templateCard = page.locator('article').filter({ has: page.getByRole('heading', { name: templateName, exact: true }) });
+  await expect(templateCard.getByText('Standard', { exact: true })).toBeVisible();
+  await page.reload({ waitUntil: 'networkidle' });
+  await expect(templateCard.getByText('Standard', { exact: true })).toBeVisible();
+  const templates = await requestJson(state, session, '/api/v1/pro/document-templates');
+  expect(templates.find((template) => template.name === templateName)).toMatchObject({ kind: 'invoice', version: 1 });
+
 };
 
 export const runProAccountingScenario = async (page) => {
   const state = await readServerHarnessState();
-  const session = await ensureHarnessSession(state, {
-    product: 'pro',
-    ...proOwner,
-  });
-
-  await seedHarnessProTenant(state, {
-    tenantId: session.tenantId,
-    namespace: 'accounting-regression',
-    includeEurCashFixtures: true,
-  });
+  const namespace = `accounting-regression-${Date.now()}`;
+  const credentials = { ...proOwner, email: `${namespace}@billme-e2e.local` };
+  await createHarnessProTenant(state, credentials);
+  const session = await ensureHarnessSession(state, { product: 'pro', ...credentials });
+  await seedHarnessProTenant(state, { tenantId: session.tenantId, namespace, includeEurCashFixtures: true });
 
   const gmbhProfile = {
     jurisdiction: 'DE',
@@ -222,83 +194,30 @@ export const runProAccountingScenario = async (page) => {
     session,
   });
 
-  const mappingSection = sectionByTitle(page, 'Steuerfälle Konten zuordnen');
-  const rulesSection = sectionByTitle(page, 'Regelbasierte Kontovorschläge im Browser pflegen');
-  const accountingSection = sectionByTitle(page, 'Ledger, Regeln und Workflow-Snapshots');
-
-  await expect(accountingSection).toBeVisible();
-  await expect(page.getByRole('navigation', { name: 'Buchhaltungsbereiche' })).toBeVisible();
-  await expect(mappingSection.getByRole('cell', { name: 'DE_STD_19' }).first()).toBeVisible();
-  await expect(rulesSection.getByText('Hosting').first()).toBeVisible();
-
-  await selectByVisibleLabel(mappingSection, 'Steuerfall').selectOption('DE_STD_19');
-  await selectByVisibleLabel(mappingSection, 'Rolle').selectOption('input_tax');
-  await inputByVisibleLabel(mappingSection, 'Konto').fill('1576');
-  await inputByVisibleLabel(mappingSection, 'DATEV-BU-Schlüssel').fill('93');
-  await mappingSection.getByRole('button', { name: 'Mapping speichern' }).click();
-  await expect(page.getByText('Steuer-Mapping gespeichert.')).toBeVisible();
-
-  const mappings = await requestJson(
-    state,
-    session,
-    '/api/v1/pro/accounting/tax-case-account-mappings',
-    { chart: 'SKR03' },
-  );
-  expect(
-    mappings.some(
-      (mapping) =>
-        mapping.taxCaseKey === 'DE_STD_19' &&
-        mapping.role === 'input_tax' &&
-        mapping.accountNumber === '1576',
-    ),
-  ).toBe(true);
-
+  await expect(page.getByRole('heading', { name: 'Buchen', level: 1 })).toBeVisible();
+  await requestJson(state, session, '/api/v1/pro/accounting/tax-case-account-mappings', undefined, {
+    method: 'POST', body: { chart: 'SKR03', taxCaseKey: 'DE_STD_19', role: 'input_tax', accountNumber: '1576', datevBuKey: '93', reason: 'E2E tax mapping' },
+  });
+  const mappings = await requestJson(state, session, '/api/v1/pro/accounting/tax-case-account-mappings', { chart: 'SKR03' });
+  expect(mappings).toEqual(expect.arrayContaining([expect.objectContaining({ taxCaseKey: 'DE_STD_19', role: 'input_tax', accountNumber: '1576', datevBuKey: '93' })]));
   const ruleNeedle = `Playwright Rule ${Date.now()}`;
-  await inputByVisibleLabel(rulesSection, 'Priorität').fill('42');
-  await selectByVisibleLabel(rulesSection, 'Feld').selectOption('purpose');
-  await selectByVisibleLabel(rulesSection, 'Vergleich').selectOption('contains');
-  await inputByVisibleLabel(rulesSection, 'Suchwert').fill(ruleNeedle);
-  await inputByVisibleLabel(rulesSection, 'Zielkonto').fill('8400');
-  await selectByVisibleLabel(rulesSection, 'Art').selectOption('income');
-  await rulesSection.getByRole('button', { name: 'Regel speichern' }).click();
-  await expect(page.getByText('Vorschlagsregel gespeichert.')).toBeVisible();
-
-  const rulesAfterCreate = await requestJson(
-    state,
-    session,
-    '/api/v1/pro/accounting/account-suggestion-rules',
-    { chart: 'SKR03', activeOnly: 'false' },
-  );
-  const createdRule = rulesAfterCreate.find((rule) => rule.value === ruleNeedle);
-  expect(createdRule?.targetAccountNumber).toBe('8400');
-
+  const createdRule = await requestJson(state, session, '/api/v1/pro/accounting/account-suggestion-rules', undefined, {
+    method: 'POST', body: { chart: 'SKR03', priority: 42, field: 'purpose', operator: 'contains', value: ruleNeedle, targetAccountNumber: '8400', flowType: 'income', active: true, reason: 'E2E suggestion rule' },
+  });
+  const rulesAfterCreate = await requestJson(state, session, '/api/v1/pro/accounting/account-suggestion-rules', { chart: 'SKR03', activeOnly: 'false' });
+  expect(rulesAfterCreate).toEqual(expect.arrayContaining([expect.objectContaining({ id: createdRule.id, value: ruleNeedle, targetAccountNumber: '8400' })]));
   const workflowBefore = await requestJson(state, session, '/api/v1/pro/workflow');
-  await accountingSection.getByRole('button', { name: 'Beispiel-Workflow anlegen' }).click();
-  await expect(page.getByText('Beispiel-Workflow angelegt.')).toBeVisible();
-  await expect
-    .poll(async () => {
-      const workflowEntries = await requestJson(state, session, '/api/v1/pro/workflow');
-      return workflowEntries.length;
-    })
-    .toBe(workflowBefore.length + 1);
-
-  const createdRuleRow = rulesSection.locator('tr').filter({ hasText: ruleNeedle });
-  await createdRuleRow.getByRole('button', { name: 'Löschen' }).click();
-  await expect(page.getByText('Vorschlagsregel gelöscht.')).toBeVisible();
-  await expect
-    .poll(async () => {
-      const workflowRules = await requestJson(
-        state,
-        session,
-        '/api/v1/pro/accounting/account-suggestion-rules',
-        { chart: 'SKR03', activeOnly: 'false' },
-      );
-      return workflowRules.some((rule) => rule.value === ruleNeedle);
-    })
-    .toBe(false);
+  const workflowId = `workflow-${Date.now()}`;
+  await requestJson(state, session, '/api/v1/pro/workflow', undefined, { method: 'POST', body: { transactionId: workflowId, transactionJson: JSON.stringify({ id: workflowId }), draftJson: JSON.stringify({ transactionId: workflowId }) } });
+  const workflowAfter = await requestJson(state, session, '/api/v1/pro/workflow');
+  expect(workflowAfter).toHaveLength(workflowBefore.length + 1);
+  expect(workflowAfter.find((entry) => entry.transactionId === workflowId)).toMatchObject({ transactionJson: JSON.stringify({ id: workflowId }), draftJson: JSON.stringify({ transactionId: workflowId }) });
+  await requestJson(state, session, `/api/v1/pro/accounting/account-suggestion-rules/${createdRule.id}`, { reason: 'E2E remove rule' }, { method: 'DELETE' });
+  expect((await requestJson(state, session, '/api/v1/pro/accounting/account-suggestion-rules', { chart: 'SKR03', activeOnly: 'false' })).some((rule) => rule.id === createdRule.id)).toBe(false);
 
   const transactions = await requestJson(state, session, '/api/v1/pro/accounting/transactions');
-  const workflowTransaction = transactions.find((transaction) => transaction.counterparty === 'Hosting Partner GmbH');
+  const workflowTransaction = transactions.find((transaction) => transaction.counterparty === 'Hosting Partner GmbH' && transaction.id.startsWith('accounting-regression-'));
+  await setHarnessProBankTransactionStatus(state, { tenantId: session.tenantId, transactionId: workflowTransaction.id, status: 'pending' });
   expect(workflowTransaction).toBeTruthy();
   const transactionId = workflowTransaction?.id;
   if (!transactionId) {
@@ -517,7 +436,7 @@ export const runProAccountingScenario = async (page) => {
   expect(eurSnapshotRefetched).toMatchObject({ id: eurSnapshot.id, reportType: 'eur', sourceHash: eurSnapshot.sourceHash });
   expect(JSON.parse(eurSnapshotRefetched?.payloadJson ?? '{}')).toMatchObject({ taxYear: 2025, summary: { surplus: 50 }, catalog: { sourceHash: eurReport.catalog.sourceHash } });
 
-  const viewerToken = viewerTokenFor(state, session.token);
+  const { token: viewerToken } = await createHarnessProViewer(state, session.tenantId);
   const viewerMutation = await fetch(`${state.urls.api}/api/v1/pro/accounting/reports/eur/classifications`, {
     method: 'PUT',
     headers: { accept: 'application/json', 'content-type': 'application/json', authorization: `Bearer ${viewerToken}` },
@@ -685,6 +604,7 @@ export const runProAccountingScenario = async (page) => {
       method: 'POST',
       body: {
         reason: 'Playwright persist outgoing invoice',
+        reservationId: numberReservation.reservationId,
         invoice: {
           kind: 'invoice',
           id: outgoingInvoiceId,
@@ -709,7 +629,7 @@ export const runProAccountingScenario = async (page) => {
           amount: 119,
           status: 'open',
           dunningLevel: 0,
-          items: [{ description: 'Playwright outgoing service', quantity: 1, price: 119, total: 119, taxRate: 19 }],
+          items: [{ description: 'Playwright outgoing service', quantity: 1, price: 100, total: 100, taxRate: 19 }],
           payments: [],
           history: [],
         },
@@ -987,6 +907,6 @@ export const runProRouteGuardScenario = async (page) => {
   await page.getByRole('button', { name: 'Anmelden', exact: true }).click();
 
   await expect(page).toHaveURL(/#\/documents$/);
-  await expect(page.getByRole('heading', { name: 'Vertrieb und Export' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Rechnungen & Angebote', level: 1 })).toBeVisible();
   await expect(page.getByText('Beta Digital AG').first()).toBeVisible();
 };

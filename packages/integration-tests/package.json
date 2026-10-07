@@ -1,0 +1,29 @@
+{
+  "name": "@billme/integration-tests",
+  "private": true,
+  "version": "0.0.0",
+  "license": "FSL-1.1-ALv2",
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "node -e \"require('fs').rmSync('../../test-results/integration',{recursive:true,force:true})\" && node --import tsx --test --test-concurrency=4 src/*.test.ts",
+    "coverage": "node --import tsx src/route-coverage.ts"
+  },
+  "dependencies": {
+    "@billme/accounting-shared": "workspace:*",
+    "@billme/desktop-contracts": "workspace:*",
+    "@billme/desktop-contracts-pro": "workspace:*",
+    "@billme/desktop-services": "workspace:*",
+    "@billme/server-core": "workspace:*",
+    "@billme/server-data": "workspace:*",
+    "@billme/server-runtime": "workspace:*",
+    "@hono/node-server": "^1.19.0",
+    "pdf-lib": "^1.17.1",
+    "tsx": "^4.20.5",
+    "zod": "^3.25.76"
+  },
+  "devDependencies": {
+    "@types/node": "^22.19.7",
+    "typescript": "~5.8.3"
+  }
+}

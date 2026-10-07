@@ -30,7 +30,7 @@ for (const product of ['lite', 'pro'] as const) test(`${product} document workfl
   const offer: Offer = {
     kind: 'offer', tenantId, id: randomUUID(), number: 'AN-1', client: 'Snapshot buyer', clientEmail: 'buyer@example.test',
     clientAddress: 'Snapshot address', date: '2026-09-01', validUntil: '2026-09-30', amount: 119,
-    status: 'open', history: [], items: [{ kind: 'item', description: 'Snapshot work', quantity: 1, price: 100, total: 100, taxRate: 19, unit: 'Stk' }],
+    status: 'accepted', history: [], items: [{ kind: 'item', description: 'Snapshot work', quantity: 1, price: 100, total: 100, taxRate: 19, unit: 'Stk' }],
     taxMode: 'standard_vat', taxMeta: { defaultVatRate: 19 },
     taxSnapshot: { vatRateApplied: 19, vatAmount: 19, netAmount: 100, grossAmount: 119, einvoiceCategoryCode: 'S' },
     share: { token: 'original-publication-token' },
@@ -44,6 +44,11 @@ for (const product of ['lite', 'pro'] as const) test(`${product} document workfl
   assert.equal(first.statusCode, 200, first.body);
   assert.equal(replay.statusCode, 200, replay.body);
   assert.equal(first.json().number, replay.json().number);
+  const conversions = await database.query<{ invoice_id: string }>('SELECT invoice_id FROM offer_invoice_conversions WHERE tenant_id=$1 AND product=$2 AND offer_id=$3', [tenantId, product, offer.id]);
+  assert.deepEqual(conversions.rows, [{ invoice_id: invoiceId }]);
+  const duplicateIntent = await app.inject({ method: 'POST', url, headers, payload: { offerId: offer.id, invoiceId: randomUUID() } });
+  assert.equal(duplicateIntent.statusCode, 200, duplicateIntent.body);
+  assert.equal(duplicateIntent.json().id, first.json().id, 'repeating conversion with another request id must not create another invoice');
   const refetched = await app.inject({ method: 'GET', url: `/api/v1/${product}/invoices/${invoiceId}`, headers });
   assert.equal(refetched.statusCode, 200);
   const stored = refetched.json();
@@ -55,7 +60,38 @@ for (const product of ['lite', 'pro'] as const) test(`${product} document workfl
   assert.equal((await repositories.auditLog.listBySubject(scope, { entityType: 'invoice', entityId: invoiceId })).length, 1);
   const reservation = await database.query<{ status: string }>('SELECT status FROM number_reservations WHERE tenant_id=$1 AND document_id=$2', [tenantId, invoiceId]);
   assert.deepEqual(reservation.rows, [{ status: 'finalized' }]);
-  const other = await app.inject({ method: 'POST', url, headers, payload: { offerId: offer.id, invoiceId: randomUUID() } });
+  const reserve = async (kind: 'invoice' | 'offer') => {
+    const response = await app.inject({ method: 'POST', url: `/api/v1/${product}/numbers/reserve`, headers, payload: { kind } });
+    assert.equal(response.statusCode, 200, response.body); return response.json();
+  };
+  const draft = { ...stored, id: randomUUID(), number: 'DRAFT-NUMBER', status: 'draft', sourceDocumentId: undefined, rootDocumentId: undefined, layout: undefined };
+  const saveDraft = (reservationId?: string, number = draft.number) => app.inject({ method: 'POST', url: `/api/v1/${product}/invoices`, headers, payload: { invoice: { ...draft, number }, reservationId, reason: 'Reservation ownership regression' } });
+  assert.equal((await saveDraft('missing-reservation')).statusCode, 409, 'unknown reservation must not commit a document');
+  assert.equal(await repositories.invoiceRepo.getById(scope, draft.id), null);
+  const wrongKind = await reserve('offer');
+  assert.equal((await saveDraft(wrongKind.reservationId, wrongKind.number)).statusCode, 409);
+  const bindOffer = await app.inject({ method: 'POST', url: `/api/v1/${product}/offers`, headers, payload: {
+    offer: { ...offer, id: randomUUID(), number: wrongKind.number, status: 'draft', share: undefined },
+    reservationId: wrongKind.reservationId, reason: 'Bind offer reservation to its own document',
+  } });
+  assert.equal(bindOffer.statusCode, 200, bindOffer.body);
+  const reserved = await reserve('invoice');
+  assert.equal((await saveDraft(reserved.reservationId)).statusCode, 409, 'document number must match its reservation');
+  assert.equal((await saveDraft(reserved.reservationId, reserved.number)).statusCode, 200);
+  const steal = await app.inject({ method: 'POST', url: `/api/v1/${product}/invoices`, headers, payload: { invoice: { ...draft, id: randomUUID(), number: reserved.number }, reservationId: reserved.reservationId, reason: 'No rebinding' } });
+  assert.equal(steal.statusCode, 409);
+  const finalize = (reservationId: string, documentId: string) => app.inject({ method: 'POST', url: `/api/v1/${product}/numbers/finalize`, headers, payload: { reservationId, documentId } });
+  const beforeUnknown = await database.query('SELECT * FROM number_reservations WHERE tenant_id=$1 ORDER BY id', [tenantId]);
+  const unknown = await finalize('missing-reservation', draft.id);
+  assert.equal(unknown.statusCode, 200, unknown.body);
+  assert.deepEqual(unknown.json(), { ok: true });
+  assert.deepEqual((await database.query('SELECT * FROM number_reservations WHERE tenant_id=$1 ORDER BY id', [tenantId])).rows, beforeUnknown.rows, 'unknown finalization is a no-op');
+  assert.equal((await finalize(wrongKind.reservationId, draft.id)).statusCode, 409);
+  assert.equal((await finalize(reserved.reservationId, randomUUID())).statusCode, 409);
+  assert.equal((await finalize(reserved.reservationId, draft.id)).statusCode, 200);
+  const otherOffer = { ...offer, id: randomUUID(), number: 'AN-OTHER' };
+  await repositories.offerRepo.save(scope, otherOffer);
+  const other = await app.inject({ method: 'POST', url, headers, payload: { offerId: otherOffer.id, invoiceId: randomUUID() } });
   assert.equal(other.statusCode, 200, other.body);
   assert.notEqual(other.json().number, stored.number);
   const conflict = await app.inject({ method: 'POST', url, headers, payload: { offerId: 'different-offer', invoiceId } });
@@ -69,7 +105,7 @@ for (const product of ['lite', 'pro'] as const) test(`${product} document workfl
   await repositories.invoiceRepo.save(foreignScope, foreignInvoice);
   const collision = await app.inject({ method: 'POST', url, headers, payload: { offerId: offer.id, invoiceId: foreignInvoice.id } });
   assert.equal(collision.statusCode, 409);
-  await assert.rejects(async () => repositories.invoiceRepo.save(scope, { ...foreignInvoice, tenantId }), /another tenant/);
+  await assert.rejects(async () => repositories.invoiceRepo.save(scope, { ...foreignInvoice, tenantId }), { statusCode: 404, message: 'Rechnung nicht gefunden.' });
   assert.equal((await repositories.invoiceRepo.getById(foreignScope, foreignInvoice.id))?.number, 'FOREIGN-1');
 
   const decision = { decision: 'accepted' as const, decidedAt: now, acceptedName: 'Buyer', acceptedEmail: 'buyer@example.test', decisionTextVersion: 'v1', acceptedUserAgent: 'Test browser' };
@@ -96,7 +132,7 @@ for (const product of ['lite', 'pro'] as const) test(`${product} document workfl
   await database.query(`CREATE TRIGGER ${trigger} BEFORE INSERT ON audit_log FOR EACH ROW EXECUTE FUNCTION ${trigger}()`);
   try {
     const before = await database.query('SELECT settings_json FROM server_settings WHERE tenant_id=$1', [tenantId]);
-    const failed = await app.inject({ method: 'POST', url, headers, payload: { offerId: offer.id, invoiceId: failInvoiceId } });
+    const failed = await app.inject({ method: 'POST', url, headers, payload: { offerId: failOffer.id, invoiceId: failInvoiceId } });
     assert.equal(failed.statusCode, 500, failed.body);
     assert.equal(await repositories.invoiceRepo.getById(scope, failInvoiceId), null);
     assert.deepEqual((await database.query('SELECT settings_json FROM server_settings WHERE tenant_id=$1', [tenantId])).rows, before.rows);

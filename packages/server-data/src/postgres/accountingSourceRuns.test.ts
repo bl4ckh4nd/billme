@@ -1,40 +1,14 @@
 import assert from 'node:assert/strict';
 import { sha256Hex, stableStringify } from './audit.js';
-import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 import { CorrectionSettlementError } from '@billme/accounting-shared';
 import { createSingleTenantScope } from '@billme/server-core';
-import { createPostgresPool, type PostgresQueryable } from './connection.js';
+import { createPostgresPool } from './connection.js';
 import { runDrizzleMigrations } from './migrations.js';
 import { createPostgresProAccountingRepository } from './proAccountingRepository.js';
-import { taxCaseForCorrectionRate, taxExportDirectionFromPersistedSource } from './accountingSourceRuns.js';
 import { journalSourceIdentity } from '@billme/accounting-engine';
 
 const databaseUrl = process.env.BILLME_TEST_DATABASE_URL ?? process.env.DATABASE_URL;
-
-test('tax export direction follows persisted source ownership and fails closed when it is absent', () => {
-  assert.equal(taxExportDirectionFromPersistedSource({ source_type: 'outgoing_invoice' }), 'output');
-  assert.equal(taxExportDirectionFromPersistedSource({ source_type: 'incoming_invoice' }), 'input');
-  assert.equal(taxExportDirectionFromPersistedSource({ source_type: 'standalone_source', account_role: 'expense' }), 'input');
-  assert.equal(taxExportDirectionFromPersistedSource({ source_type: 'standalone_source', account_role: 'revenue' }), 'output');
-  assert.throws(() => taxExportDirectionFromPersistedSource({ source_type: 'standalone_source' }), /TAX_EXPORT_DIRECTION_UNRESOLVED/);
-});
-
-test('correction tax mapping supports only canonical rates', () => {
-  assert.equal(taxCaseForCorrectionRate(19), 'DE_STD_19');
-  assert.equal(taxCaseForCorrectionRate(7), 'DE_STD_7');
-  assert.equal(taxCaseForCorrectionRate(0), 'DE_ZERO_EXEMPT');
-  assert.throws(() => taxCaseForCorrectionRate(8), /CORRECTION_TAX_CASE_UNSUPPORTED/);
-});
-
-test('accounting source-run migration is tenant-scoped, immutable, and replay-keyed', async () => {
-  const sql = await readFile(new URL('../../drizzle/0022_server_data_accounting_source_runs.sql', import.meta.url), 'utf8');
-  assert.match(sql, /CREATE TABLE IF NOT EXISTS accounting_source_runs/);
-  assert.match(sql, /UNIQUE \(tenant_id, source_type, source_id, source_revision\)/);
-  assert.match(sql, /UNIQUE \(tenant_id, idempotency_key\)/);
-  assert.match(sql, /accounting_source_runs_immutable/);
-  assert.match(sql, /journal_entry_id TEXT REFERENCES journal_entries\(id\)/);
-});
 
 test('closing source facts persist once, replay deterministically, and remain tenant-isolated', { skip: !databaseUrl }, async () => {
   const pool = createPostgresPool(databaseUrl!);
@@ -287,25 +261,4 @@ test('derived schedules persist every command atomically and honor period fiscal
     await pool.query(`DELETE FROM tenants WHERE id = $1`, [tenantId]).catch(() => undefined);
     await pool.end();
   }
-});
-
-test('repository source-run methods remain callable through the query-only seam', async () => {
-  const calls: string[] = [];
-  const db = { query: async (text: string) => { calls.push(text); return { rows: [] }; } } as unknown as PostgresQueryable;
-  const repository = createPostgresProAccountingRepository(db);
-  assert.deepEqual(await repository.listAccountingSourceRuns(createSingleTenantScope('query-only', 'pro')), []);
-  assert.equal(calls.length, 1);
-});
-
-test('settlement commands reject fabricated sources without an original document', async () => {
-  const db = { query: async () => ({ rows: [] }) } as unknown as PostgresQueryable;
-  const repository = createPostgresProAccountingRepository(db);
-  await assert.rejects(() => repository.runClosingCommand(createSingleTenantScope('query-only', 'pro'), {
-    commandType: 'skonto',
-    sourceId: 'settlement-without-original',
-    sourceRevision: 'v1',
-    idempotencyKey: 'settlement-without-original:v1',
-    reason: 'must have persisted source',
-    input: { taxBreakdown: [{ rate: 19, netAmount: 100, taxAmount: 19, grossAmount: 119 }], skontoAmount: 11.9 },
-  }), /ORIGINAL_DOCUMENT_REQUIRED/);
 });

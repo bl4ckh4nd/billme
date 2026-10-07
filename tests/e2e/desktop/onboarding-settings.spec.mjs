@@ -58,3 +58,19 @@ test('saves company settings and shows the saved toast', async () => {
 
   await expect(page.getByText('Einstellungen gespeichert!')).toBeVisible();
 });
+
+test('reports a failed credential save and keeps it available for retry', async () => {
+  const { page, baseUrl } = desktop;
+  await page.goto(appUrl(baseUrl, '/settings'));
+  await page.getByRole('button', { name: 'E-Mail', exact: true }).click();
+  await page.getByRole('button', { name: /SMTP Eigener Mail-Server/ }).click();
+  await page.getByLabel('Passwort', { exact: true }).fill('synthetic-e2e-password');
+  await desktop.app.evaluate(({ ipcMain }) => {
+    ipcMain.removeHandler('secrets:set');
+    ipcMain.handle('secrets:set', async () => { throw new Error('Synthetic keychain unavailable'); });
+  });
+  await page.getByRole('button', { name: 'Einstellungen speichern' }).click();
+  await expect(page.getByText(/Zugangsdaten konnten nicht gespeichert werden/)).toBeVisible();
+  await expect(page.getByText('Einstellungen gespeichert!')).toHaveCount(0);
+  await expect(page.getByLabel('Passwort', { exact: true })).toHaveValue('synthetic-e2e-password');
+});

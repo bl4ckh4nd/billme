@@ -86,6 +86,11 @@ export const createHarnessProTenant = async (state, { email, password, fullName 
   '--full-name', fullName,
 ]);
 
+export const createHarnessProViewer = (state, tenantId) => runFixtureHelper([
+  'create-pro-viewer', '--state-file', state.stateFile, '--tenant-id', tenantId,
+  '--email', `viewer-${crypto.randomUUID()}@billme-e2e.local`, '--password', 'billme-server-123',
+]);
+
 export const seedHarnessProTenant = async (state, { tenantId, namespace, includeEurCashFixtures = false, includeEurCatalog2026 = false }) => {
   const args = [
     'seed-pro',
@@ -100,6 +105,10 @@ export const seedHarnessProTenant = async (state, { tenantId, namespace, include
   if (includeEurCatalog2026) args.push('--include-eur-catalog-2026', 'true');
   return runFixtureHelper(args);
 };
+
+export const markHarnessProInvoiceIssued = (state, { tenantId, invoiceId }) => runFixtureHelper([
+  'mark-pro-invoice-issued', '--state-file', state.stateFile, '--tenant-id', tenantId, '--invoice-id', invoiceId,
+]);
 
 export const setHarnessProPeriodStatus = async (state, { tenantId, period, status }) =>
   runFixtureHelper([

@@ -1,26 +1,12 @@
 import { expect, test } from '@playwright/test';
-import { appUrl, invokeDesktopIpc, launchDesktopApp, seedDesktopData } from '../support.mjs';
+import { appUrl, launchDesktopApp, PRO_DOUBLE_ENTRY_SETTINGS, seedDesktopData } from '../support.mjs';
 
 let desktop;
 
 test.beforeEach(async () => {
   desktop = await launchDesktopApp({ app: 'pro' });
-  await seedDesktopData(desktop.page, {
-    app: 'pro',
-    settingsOverrides: {
-      businessReportingProfile: {
-        jurisdiction: 'DE',
-        legalForm: 'gmbh',
-        profitDetermination: 'double_entry',
-        hgbSizeClass: 'small',
-        fiscalYearStart: '01-01',
-        chart: 'SKR03',
-        vatMethod: 'soll',
-      },
-    },
-  });
-  const settings = await invokeDesktopIpc(desktop.page, 'settings:get');
-  expect(settings.businessReportingProfile?.legalForm).toBe('gmbh');
+  await seedDesktopData(desktop.page, { app: 'pro', settingsOverrides: PRO_DOUBLE_ENTRY_SETTINGS });
+  // Seeding writes past react-query; reload so views read the seeded rows.
   await desktop.page.reload();
 });
 
@@ -31,46 +17,38 @@ test.afterEach(async () => {
   }
 });
 
-test('shows pro report summaries and opens Auswertungen workspace', async () => {
+test('shows the SuSa from the seeded postings and keeps the other reports closed until their accounts are mapped', async () => {
   const { page, baseUrl } = desktop;
 
-  await page.goto(appUrl(baseUrl, '/accounting'));
-  await expect(page.getByRole('heading', { name: 'Pro Buchhaltung' })).toBeVisible();
+  await page.goto(appUrl(baseUrl, '/'));
+  await page.getByRole('navigation', { name: 'Hauptnavigation' }).getByRole('button', { name: 'Auswertungen' }).click();
+  await expect(page.getByRole('heading', { name: 'Auswertungen', level: 1 })).toBeVisible();
+  const main = page.getByRole('main');
+  const tabs = main.getByRole('group', { name: 'Bericht' });
+  for (const label of ['SuSa', 'BWA01', 'Management-GuV', 'HGB-GuV', 'Bilanz']) {
+    await expect(tabs.getByRole('button', { name: label, exact: true })).toBeVisible();
+  }
+  await expect(tabs.getByRole('button', { name: 'SuSa', exact: true })).toHaveAttribute('aria-pressed', 'true');
 
-  await page.getByRole('button', { name: 'Auswertungen' }).click();
-  await expect(page.getByRole('heading', { name: 'EÜR und Finanzberichte' })).toBeVisible();
-  await expect(page.getByRole('button', { name: 'SuSa' })).toBeVisible();
-  await expect(page.getByRole('button', { name: 'BWA01' })).toBeVisible();
-  await expect(page.getByRole('button', { name: 'Management-GuV' })).toBeVisible();
-  await expect(page.getByRole('button', { name: 'HGB-GuV' })).toBeVisible();
-  await expect(page.getByRole('button', { name: 'Bilanz' })).toBeVisible();
+  // The seed issued RE-…200 (1.250 €, paid) and RE-…201 (3.450,50 €, open): receivable, revenue and the payment.
+  const susa = main.getByRole('table', { name: 'Summen- und Saldenliste' });
+  await expect(susa).toBeVisible();
+  await expect(susa.getByRole('row', { name: /^1200 Bank 0,00 € 1\.250,00 € 0,00 € 1\.250,00 €/ })).toBeVisible();
+  await expect(susa.getByRole('row', { name: /^1400 Forderungen aus Lieferungen und Leistungen 0,00 € 4\.700,50 € 1\.250,00 € 3\.450,50 €/ })).toBeVisible();
+  await expect(susa.getByRole('row', { name: /^8400 Erlöse 19 % USt 0,00 € 0,00 € 4\.700,50 € -4\.700,50 €/ })).toBeVisible();
+  // Double entry: debit turnover equals credit turnover and the closing balances net to zero.
+  await expect(susa.getByRole('row', { name: /^Summen 0,00 € 5\.950,50 € 5\.950,50 € 0,00 €/ })).toBeVisible();
+  await expect(main.getByText('Live-Daten')).toBeVisible();
+  await page.screenshot({ path: test.info().outputPath('01-susa.png'), fullPage: true });
 
-  const susaAccountsCard = page.locator('div.rounded-xl').filter({ hasText: 'Konten' }).first();
-  const susaWarningsCard = page.locator('div.rounded-xl').filter({ hasText: 'Warnungen' }).first();
-  await expect(susaAccountsCard).toContainText(/\d+/);
-  await expect(susaWarningsCard).toContainText(/\d+/);
-  await expect(page.getByText('Summen- und Saldenliste', { exact: true })).toBeVisible();
-
-  await page.getByRole('button', { name: 'BWA01' }).click();
-  await expect(page.getByText('BWA01', { exact: true }).last()).toBeVisible();
-  await expect(page.locator('div.rounded-xl').filter({ hasText: 'Ergebnis' }).first()).toContainText('€');
-  await expect(page.getByText('Alle Konten sind report-spezifisch zugeordnet.')).toBeVisible();
-  await expect(page.getByText(/Live-Daten/)).toBeVisible();
-
-  await page.getByRole('button', { name: 'Management-GuV' }).click();
-  const guvRevenueCard = page.locator('div.rounded-xl').filter({ hasText: 'Umsätze' }).first();
-  const guvResultCard = page.locator('div.rounded-xl').filter({ hasText: 'Ergebnis' }).first();
-  await expect(guvRevenueCard).toContainText('€');
-  await expect(guvResultCard).toContainText('€');
-  await expect(page.getByRole('button', { name: 'Management-GuV' })).toBeVisible();
-
-  await page.getByRole('button', { name: 'HGB-GuV' }).click();
-  await expect(page.getByText('Gewinn- und Verlustrechnung nach HGB', { exact: true })).toBeVisible();
-
-  await page.getByRole('button', { name: 'Bilanz' }).click();
-  const bilanzAktivaCard = page.locator('div.rounded-xl').filter({ hasText: 'Aktiva' }).first();
-  const bilanzDifferenzCard = page.locator('div.rounded-xl').filter({ hasText: 'Differenz' }).first();
-  await expect(bilanzAktivaCard).toContainText('€');
-  await expect(bilanzDifferenzCard).toContainText('€');
-  await expect(page.getByText('Bilanz (HGB)')).toBeVisible();
+  // No mapping is guessed: every other report refuses to show numbers and to export.
+  for (const [tab, label] of [['BWA01', 'BWA01'], ['Management-GuV', 'Management-GuV'], ['HGB-GuV', 'Gewinn- und Verlustrechnung nach HGB'], ['Bilanz', 'Bilanz']]) {
+    await tabs.getByRole('button', { name: tab, exact: true }).click();
+    await expect(tabs.getByRole('button', { name: tab, exact: true })).toHaveAttribute('aria-pressed', 'true');
+    await expect(main.getByRole('alert').filter({ hasText: `Mapping unvollständig für ${label}` })).toBeVisible();
+    await expect(main.getByRole('alert').filter({ hasText: 'Auswertung blockiert: Konten-Mapping unvollständig' })).toBeVisible();
+    await expect(main.getByRole('button', { name: 'PDF' })).toBeDisabled();
+    await expect(main.getByRole('button', { name: 'CSV' })).toBeDisabled();
+    await page.screenshot({ path: test.info().outputPath(`02-${tab}-blocked.png`), fullPage: true });
+  }
 });

@@ -1,29 +1,20 @@
 import assert from 'node:assert/strict';
-import { createHmac } from 'node:crypto';
 import { readServerHarnessState } from '../harness.mjs';
 import {
   createOwnerCredentials,
+  createHarnessProTenant,
+  createHarnessProViewer,
   ensureHarnessSession,
   requestJson,
   requestText,
   seedHarnessProTenant,
   setHarnessProBankTransactionStatus,
   setHarnessProPeriodStatus,
+  markHarnessProInvoiceIssued,
 } from './helpers.mjs';
 
 const owner = createOwnerCredentials('pro');
 
-const viewerTokenFor = (state, ownerToken) => {
-  const [payload] = ownerToken.split('.');
-  const session = JSON.parse(Buffer.from(payload, 'base64url').toString('utf8'));
-  const viewerPayload = Buffer.from(JSON.stringify({
-    ...session,
-    role: 'viewer',
-    user: { ...session.user, role: 'viewer' },
-  })).toString('base64url');
-  const signature = createHmac('sha256', state.env.BILLME_SESSION_SECRET).update(viewerPayload).digest('base64url');
-  return `${viewerPayload}.${signature}`;
-};
 
 const rawRequest = async (state, session, requestPath, query, options = {}) => {
   const url = new URL(requestPath, `${state.urls.api}/`);
@@ -171,20 +162,22 @@ const makeInvoice = async (state, session, client, id, date = '2026-08-20', tax 
     dueDate: date,
     servicePeriod: date.slice(0, 7),
     amount: tax.amount ?? 119,
-    status: 'open',
+    status: 'draft',
     dunningLevel: 0,
-    items: [{ description: 'Adversarial server accounting case', quantity: 1, price: tax.amount ?? 119, total: tax.amount ?? 119, taxRate: tax.taxRate ?? 19 }],
+    items: [{ description: 'Adversarial server accounting case', quantity: 1, price: tax.taxSnapshot?.netAmount ?? 100, total: tax.taxSnapshot?.netAmount ?? 100, taxRate: tax.taxRate ?? 19 }],
     payments: [],
     history: [],
   };
   await json(state, session, '/api/v1/pro/invoices', undefined, {
     method: 'POST',
-    body: { reason: `nonhappy create ${id}`, invoice },
+    body: { reason: `nonhappy create ${id}`, invoice, reservationId: reservation.reservationId },
   });
   await json(state, session, '/api/v1/pro/numbers/finalize', undefined, {
     method: 'POST',
     body: { reservationId: reservation.reservationId, documentId: id },
   });
+  await markHarnessProInvoiceIssued(state, { tenantId: session.tenantId, invoiceId: id });
+  invoice.status = 'open';
   return { invoice, reservation };
 };
 
@@ -206,8 +199,10 @@ const expectNoDocumentAccounting = async (state, session, id, before, label, bef
 
 export const runProNonHappyAccountingScenario = async () => {
   const state = await readServerHarnessState();
-  const session = await ensureHarnessSession(state, { product: 'pro', ...owner });
   const namespace = `nonhappy-${Date.now()}`;
+  const credentials = { ...owner, email: `${namespace}@billme-e2e.local` };
+  await createHarnessProTenant(state, credentials);
+  const session = await ensureHarnessSession(state, { product: 'pro', ...credentials });
   await seedHarnessProTenant(state, { tenantId: session.tenantId, namespace });
 
   // The isolated non-happy run does not depend on the preceding browser
@@ -234,7 +229,7 @@ export const runProNonHappyAccountingScenario = async () => {
   let cases = 0;
 
   // 1. Viewer cannot mutate Pro accounting, and the protected state is unchanged.
-  const viewerSession = { ...session, token: viewerTokenFor(state, session.token) };
+  const viewerSession = await createHarnessProViewer(state, session.tenantId);
   const beforeViewer = await counts(state, session);
   await expectError(state, viewerSession, '/api/v1/pro/accounting/mappings', undefined, {
     method: 'POST',
@@ -252,6 +247,7 @@ export const runProNonHappyAccountingScenario = async () => {
   cases++;
 
   const transactionId = `${namespace}-workflow-transaction`;
+  await setHarnessProBankTransactionStatus(state, { tenantId: session.tenantId, transactionId, status: 'pending' });
   const draftBefore = await json(state, session, `/api/v1/pro/accounting/drafts/${encodeURIComponent(transactionId)}`);
   assert.ok(draftBefore?.id, 'seeded workflow draft missing');
 
@@ -428,9 +424,8 @@ export const runProNonHappyAccountingScenario = async () => {
   const stale = await makeInvoice(state, session, client, `${namespace}-backfill-stale`, '2026-08-25');
   const backfill = await requestJson(state, session, '/api/v1/pro/accounting/backfill/preview');
   assert.ok(backfill.candidates.some((candidate) => candidate.sourceId === stale.invoice.id));
-  await json(state, session, '/api/v1/pro/invoices', undefined, {
-    method: 'POST', body: { reason: 'nonhappy make backfill source terminal', invoice: { ...stale.invoice, status: 'cancelled' } },
-  });
+  const postedAfterPreview = await postInvoice(state, session, stale.invoice.id, stale.reservation.reservationId, 'nonhappy post after backfill preview');
+  assert.equal(postedAfterPreview.status, 'ready');
   const beforeStaleBackfillPublic = await publicDocumentState(state, session, stale.invoice.id);
   const beforeStaleBackfill = await counts(state, session);
   await expectError(state, session, '/api/v1/pro/accounting/backfill/confirm', undefined, {

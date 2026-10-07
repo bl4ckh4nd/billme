@@ -1,5 +1,6 @@
 import fs from 'node:fs/promises';
 import { z } from 'zod';
+import { localIsoDate } from '@billme/server-core/domain';
 import { createServerApiClient, createSingleTenantScope, queueEmailDelivery } from '@billme/server-core';
 import {
   applyServerModeLiteTenantSeed,
@@ -64,14 +65,14 @@ const buildDatabaseUrl = (env: Record<string, string>): string => {
 };
 
 const now = new Date();
-const todayIso = now.toISOString().slice(0, 10);
+const todayIso = localIsoDate(now);
 const currentRunTime = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
 const overdueDate = new Date(now);
-overdueDate.setUTCDate(overdueDate.getUTCDate() - 10);
-const overdueIso = overdueDate.toISOString().slice(0, 10);
+overdueDate.setDate(overdueDate.getDate() - 10);
+const overdueIso = localIsoDate(overdueDate);
 const issuedDate = new Date(now);
-issuedDate.setUTCDate(issuedDate.getUTCDate() - 24);
-const issuedIso = issuedDate.toISOString().slice(0, 10);
+issuedDate.setDate(issuedDate.getDate() - 24);
+const issuedIso = localIsoDate(issuedDate);
 
 const main = async () => {
   const payload = payloadSchema.parse(JSON.parse(process.argv[2] ?? '{}'));

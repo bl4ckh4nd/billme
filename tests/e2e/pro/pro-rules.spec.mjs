@@ -6,6 +6,7 @@ let desktop;
 test.beforeEach(async () => {
   desktop = await launchDesktopApp({ app: 'pro' });
   await seedDesktopData(desktop.page, { app: 'pro' });
+  await desktop.page.reload();
 });
 
 test.afterEach(async () => {
@@ -19,64 +20,45 @@ test('creates, updates, toggles and deletes pro account suggestion rules', async
   const { page, baseUrl } = desktop;
   const value = `e2e-telekom-${Date.now()}`;
   const updatedValue = `${value}-updated`;
+  const rules = () => invokeDesktopIpc(page, 'pro:listAccountSuggestionRules', { chart: 'SKR03' });
 
-  await page.goto(appUrl(baseUrl, '/accounting'));
-  await expect(page.getByRole('heading', { name: 'Pro Buchhaltung' })).toBeVisible();
+  await page.goto(appUrl(baseUrl, '/accounting?view=inbox'));
+  await expect(page.getByRole('heading', { name: 'Buchen', level: 1 })).toBeVisible();
   await page.getByRole('button', { name: 'Regeln' }).click();
-  const modal = page.locator('div.w-\\[760px\\]').filter({ hasText: 'Kontierungsvorschlag-Regeln' });
+  const modal = page.getByRole('dialog', { name: 'Kontierungsvorschlag-Regeln' });
   await expect(modal).toBeVisible();
+  await expect(modal.getByText('Keine Regeln vorhanden')).toBeVisible();
 
   await modal.getByRole('button', { name: 'Neue Regel' }).click();
-  await modal.getByPlaceholder('z.B. telefon, telekom, aws').fill(value);
-  const targetAccountSelect = modal
-    .locator('label:has-text("Zielkonto")')
-    .locator('xpath=following-sibling::select[1]');
-  const firstSelectableValue = await targetAccountSelect
-    .locator('option')
-    .nth(1)
-    .evaluate((option) => option.getAttribute('value'));
+  await modal.getByLabel('Wert').fill(value);
+  const targetAccount = modal.getByLabel('Zielkonto');
+  const firstSelectableValue = await targetAccount.locator('option').nth(1).getAttribute('value');
   expect(firstSelectableValue).toBeTruthy();
-  await targetAccountSelect.selectOption(firstSelectableValue);
+  await targetAccount.selectOption(firstSelectableValue);
   await modal.getByRole('button', { name: 'Regel erstellen' }).click();
 
+  await expect(modal.getByText(`"${value}"`)).toBeVisible();
   let createdRuleId = null;
-  await expect
-    .poll(async () => {
-      const rules = await invokeDesktopIpc(page, 'pro:listAccountSuggestionRules', { chart: 'SKR03' });
-      const found = rules.find((rule) => rule.value === value);
-      createdRuleId = found?.id ?? null;
-      return createdRuleId;
-    })
-    .not.toBeNull();
+  await expect.poll(async () => {
+    createdRuleId = (await rules()).find((rule) => rule.value === value)?.id ?? null;
+    return createdRuleId;
+  }).not.toBeNull();
+  expect((await rules()).find((rule) => rule.id === createdRuleId)).toMatchObject({ targetAccountNumber: firstSelectableValue, active: true });
+  await page.screenshot({ path: test.info().outputPath('01-rule-created.png') });
 
-  const row = modal.locator('div.space-y-2 > div').filter({ hasText: `"${value}"` }).first();
-  await row.getByRole('button', { name: 'Aktiv', exact: true }).click();
+  await modal.getByRole('button', { name: 'Aktiv', exact: true }).click();
+  await expect(modal.getByRole('button', { name: 'Inaktiv', exact: true })).toBeVisible();
+  await expect.poll(async () => (await rules()).find((rule) => rule.id === createdRuleId)?.active ?? true).toBe(false);
 
-  await expect
-    .poll(async () => {
-      const rules = await invokeDesktopIpc(page, 'pro:listAccountSuggestionRules', { chart: 'SKR03' });
-      return rules.find((rule) => rule.id === createdRuleId)?.active ?? true;
-    })
-    .toBe(false);
-
-  await row.getByRole('button', { name: 'Bearbeiten' }).click();
-  await modal.getByPlaceholder('z.B. telefon, telekom, aws').fill(updatedValue);
+  await modal.getByRole('button', { name: 'Bearbeiten' }).click();
+  await modal.getByLabel('Wert').fill(updatedValue);
   await modal.getByRole('button', { name: 'Aktualisieren' }).click();
+  await expect(modal.getByText(`"${updatedValue}"`)).toBeVisible();
+  await expect.poll(async () => (await rules()).find((rule) => rule.id === createdRuleId)?.value ?? null).toBe(updatedValue);
+  await page.screenshot({ path: test.info().outputPath('02-rule-updated.png') });
 
-  await expect
-    .poll(async () => {
-      const rules = await invokeDesktopIpc(page, 'pro:listAccountSuggestionRules', { chart: 'SKR03' });
-      return rules.find((rule) => rule.id === createdRuleId)?.value ?? null;
-    })
-    .toBe(updatedValue);
-
-  const updatedRow = modal.locator('div.space-y-2 > div').filter({ hasText: `"${updatedValue}"` }).first();
-  await updatedRow.locator('button').last().click();
-
-  await expect
-    .poll(async () => {
-      const rules = await invokeDesktopIpc(page, 'pro:listAccountSuggestionRules', { chart: 'SKR03' });
-      return rules.some((rule) => rule.id === createdRuleId);
-    })
-    .toBe(false);
+  await modal.getByRole('button', { name: 'Regel löschen' }).click();
+  await expect(modal.getByText('Keine Regeln vorhanden')).toBeVisible();
+  await expect.poll(async () => (await rules()).some((rule) => rule.id === createdRuleId)).toBe(false);
+  await page.screenshot({ path: test.info().outputPath('03-rule-deleted.png') });
 });

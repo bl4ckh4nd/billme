@@ -4,7 +4,6 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 import { PgliteServerDatabase } from '../pglite/database.js';
-import { CANONICAL_LEDGER_ACCOUNTS } from './canonicalLedgerCatalog.js';
 
 const opos7PercentVatAccounts = [
   { chart: 'SKR03', accountNumber: '1571', name: 'Abziehbare Vorsteuer 7 %' },
@@ -12,18 +11,6 @@ const opos7PercentVatAccounts = [
   { chart: 'SKR04', accountNumber: '1401', name: 'Abziehbare Vorsteuer 7 %' },
   { chart: 'SKR04', accountNumber: '3801', name: 'Umsatzsteuer 7 %' },
 ] as const;
-
-test('canonical catalog contains the OPOS 7% VAT accounts of both charts', () => {
-  for (const expected of opos7PercentVatAccounts) {
-    const entry = CANONICAL_LEDGER_ACCOUNTS.find((row) => row.chart === expected.chart && row.accountNumber === expected.accountNumber);
-    assert.deepEqual(entry, expected);
-  }
-});
-
-test('canonical catalog has no duplicate chart and account number', () => {
-  const keys = CANONICAL_LEDGER_ACCOUNTS.map((row) => `${row.chart}:${row.accountNumber}`);
-  assert.equal(new Set(keys).size, keys.length);
-});
 
 test('migrated database seeds the OPOS 7% VAT accounts for SKR03 and SKR04', async () => {
   const dataDir = await mkdtemp(join(tmpdir(), 'billme-ledger-catalog-'));

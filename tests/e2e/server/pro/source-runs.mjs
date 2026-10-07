@@ -106,9 +106,9 @@ const makeEurInvoiceAndPayment = async (state, session, namespace, client) => {
     number: reservation.number, client: client.company, clientEmail: client.email, clientAddress: client.address,
     taxMode: 'standard_vat', taxSnapshot: { vatRateApplied: 19, vatAmount: 19, netAmount: 100, grossAmount: 119, einvoiceCategoryCode: 'S', vatBreakdown: [{ rate: 19, netAmount: 100, vatAmount: 19 }] },
     date: '2026-02-10', dueDate: '2026-02-20', servicePeriod: '2026-02', amount: 119, status: 'open', dunningLevel: 0,
-    items: [{ description: 'EÜR 2026 source invoice', quantity: 1, price: 119, total: 119, taxRate: 19 }], payments: [], history: [],
+    items: [{ description: 'EÜR 2026 source invoice', quantity: 1, price: 100, total: 100, taxRate: 19 }], payments: [], history: [],
   };
-  await json(state, session, '/api/v1/pro/invoices', undefined, { method: 'POST', body: { reason: 'EÜR source invoice', invoice } });
+  await json(state, session, '/api/v1/pro/invoices', undefined, { method: 'POST', body: { reason: 'EÜR source invoice', invoice, reservationId: reservation.reservationId } });
   await json(state, session, '/api/v1/pro/numbers/finalize', undefined, { method: 'POST', body: { reservationId: reservation.reservationId, documentId: invoiceId } });
   await json(state, session, '/api/v1/pro/accounting/outgoing-invoices/post', undefined, { method: 'POST', body: { reason: 'EÜR source invoice post', invoiceId, reservationId: reservation.reservationId } });
   const openItems = await requestJson(state, session, '/api/v1/pro/accounting/open-items');
@@ -162,8 +162,10 @@ const makePersistedIncomingInvoice = async (state, session, namespace) => {
 
 export const runProSourceRunScenario = async () => {
   const state = await readServerHarnessState();
-  const session = await ensureHarnessSession(state, { product: 'pro', ...owner });
   const namespace = `source-runs-${Date.now()}`;
+  const credentials = { ...owner, email: `${namespace}@billme-e2e.local` };
+  await createHarnessProTenant(state, credentials);
+  const session = await ensureHarnessSession(state, { product: 'pro', ...credentials });
   await seedHarnessProTenant(state, { tenantId: session.tenantId, namespace, includeEurCatalog2026: true });
   const mapped = await mapAccounts(state, session);
 
@@ -194,6 +196,10 @@ export const runProSourceRunScenario = async () => {
   }, 409, /SOURCE_RUN_CONFLICT/);
   cases++;
 
+  await closing(state, session, {
+    command: 'source_fact', sourceId: `${namespace}-expense`, sourceRevision: 'v1', idempotencyKey: `${namespace}-expense-key`, reason: 'Persist expense before fiscal close',
+    input: sourceFact(namespace, `${namespace}-expense`, { lines: [{ accountNumber: '3125', debitAmount: 40, creditAmount: 0 }, { accountNumber: '1200', debitAmount: 0, creditAmount: 40 }] }),
+  });
   const fiscal = await closing(state, session, {
     command: 'fiscal_close', sourceId: `${namespace}-close`, sourceRevision: 'v1', idempotencyKey: `${namespace}-close-key`, reason: 'fiscal close',
     input: { fiscalYear: 2026, period: '2026-12', closingDate: '2026-12-31', currency: 'EUR', revenueAccounts: ['8400'], expenseAccounts: ['3125'], retainedEarningsAccount: '1200', balances: [
@@ -268,7 +274,7 @@ export const runProSourceRunScenario = async () => {
       input: {
         sourceId: missingSettlementId, sourceRevision: 'v1', effectiveDate: '2026-11-20', postingDate: '2026-11-20', period: '2026-11', fiscalYear: 2026, currency: 'EUR',
         taxBreakdown: [{ rate: 19, netAmount: 100, taxAmount: 19, grossAmount: 119 }], writeOffGrossAmount: 119, badDebtExpenseAccount: mapped.expense,
-        facts: { originalDocumentId: `${namespace}-missing-settlement-original`, originalDocumentNumber: 'ER-MISSING' },
+        facts: { legalBasis: '§17 UStG', reason: 'bad_debt', originalDocumentId: `${namespace}-missing-settlement-original`, originalDocumentNumber: 'ER-MISSING', originalTaxEffectiveDate: '2026-11-15', adjustmentDate: '2026-11-20', evidenceReference: 'E2E documented loss' },
       },
     }, }, 404, /ORIGINAL_DOCUMENT_NOT_FOUND/);
   assert.deepEqual(await accountingState(state, session), beforeMissingSettlement);

@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { expect, test } from '@playwright/test';
 import { appUrl, getDesktopSettings, invokeDesktopIpc, launchDesktopApp, readEmbeddedFacturX, seedDesktopData, setDesktopSettings } from '../support.mjs';
+import { createShooter } from './lite-support.mjs';
 
 let desktop;
 
@@ -63,7 +64,8 @@ test('prints every document kind in the flow layout, paginates 40 positions and 
   const summary = [];
   for (const entry of documents) {
     const id = `flow-${entry.documentKind}`;
-    await invokeDesktopIpc(page, 'invoices:upsert', {
+    // The server numbers every document it issues, so the number to look for is the one it returns.
+    const saved = await invokeDesktopIpc(page, 'invoices:upsert', {
       reason: 'E2E Fluss-Layout',
       invoice: {
         ...base, id, number: entry.number, documentKind: entry.documentKind, sourceDocumentId: entry.sourceDocumentId,
@@ -73,13 +75,14 @@ test('prints every document kind in the flow layout, paginates 40 positions and 
     const result = await invokeDesktopIpc(page, 'pdf:export', { kind: 'invoice', id });
     const bytes = fs.readFileSync(result.path);
     expect(bytes.subarray(0, 5).toString()).toBe('%PDF-');
-    expect(path.basename(result.path)).toContain(entry.number);
+    expect(saved.number).toMatch(/^\S+-\d{4}-\d{3}$/);
+    expect(path.basename(result.path)).toContain(saved.number);
     const pdfPages = pdfPageCount(bytes);
     expect(pdfPages).toBeGreaterThanOrEqual(2);
     const facturX = await readEmbeddedFacturX(bytes);
     if (entry.zugferd) {
       expect(facturX).toContain('CrossIndustryInvoice');
-      expect(facturX).toContain(`<ram:ID>${entry.number}</ram:ID>`);
+      expect(facturX).toContain(`<ram:ID>${saved.number}</ram:ID>`);
       expect(facturX).toContain(`<ram:TypeCode>${entry.documentKind === 'credit_note' ? '381' : '380'}</ram:TypeCode>`);
       fs.writeFileSync(path.join(artifactDir, `${entry.documentKind}.factur-x.xml`), facturX);
     } else {
@@ -98,7 +101,7 @@ test('prints every document kind in the flow layout, paginates 40 positions and 
     if (entry.documentKind !== 'delivery_note') await expect(lastPage.locator('.bf-totals')).toBeVisible();
     await page.screenshot({ path: path.join(artifactDir, `${entry.documentKind}.png`), fullPage: true });
     fs.copyFileSync(result.path, path.join(artifactDir, `${entry.documentKind}.pdf`));
-    summary.push({ ...entry, pdfPages, domPages, file: path.basename(result.path) });
+    summary.push({ ...entry, number: saved.number, pdfPages, domPages, file: path.basename(result.path) });
   }
 
   const offerResult = await invokeDesktopIpc(page, 'pdf:export', { kind: 'offer', id: 'offer-open-1' });
@@ -142,18 +145,25 @@ test('marks an invoice paid once recorded payments cover it', async () => {
 
 test('assigns the next customer number to a client created in the UI', async () => {
   const { page, baseUrl } = desktop;
+  const shot = createShooter(page);
   const settings = await getDesktopSettings(page);
   await page.goto(appUrl(baseUrl, '/clients'));
   await page.getByRole('button', { name: 'Neuer Kunde' }).click();
-  await page.getByLabel('Firma').fill('Nummernkreis GmbH');
-  await page.getByLabel('E-Mail-Adresse').fill('nk@example.com');
-  await page.getByLabel('Straße').fill('Testweg 1');
-  await page.getByLabel('PLZ').fill('10115');
-  await page.getByLabel('Stadt').fill('Berlin');
-  await page.getByRole('button', { name: 'Speichern' }).click();
+  // The list rows are named "<company> öffnen", so a plain "Firma" label also matches them: stay inside the dialog.
+  const dialog = page.getByRole('dialog', { name: 'Neuer Kunde' });
+  await dialog.getByRole('textbox', { name: 'Firma', exact: true }).fill('Nummernkreis GmbH');
+  await dialog.getByRole('textbox', { name: 'E-Mail-Adresse', exact: true }).fill('nk@example.com');
+  await dialog.getByRole('textbox', { name: 'Straße', exact: true }).fill('Testweg 1');
+  await dialog.getByRole('textbox', { name: 'PLZ', exact: true }).fill('10115');
+  await dialog.getByRole('textbox', { name: 'Stadt', exact: true }).fill('Berlin');
+  await shot('client-dialog');
+  await dialog.getByRole('button', { name: 'Speichern' }).click();
 
   await expect.poll(async () => (await invokeDesktopIpc(page, 'clients:list', {})).find((row) => row.company === 'Nummernkreis GmbH')?.customerNumber ?? null)
     .toMatch(new RegExp(`^${settings.numbers.customerPrefix}`));
+  // Saving opens the new client's detail page.
+  await expect(page.getByRole('heading', { name: 'Nummernkreis GmbH', level: 1 })).toBeVisible();
+  await shot('client-created');
 });
 
 test('records a phone acceptance and converts the offer into an invoice', async () => {
@@ -201,14 +211,15 @@ test('opens a new invoice again after a discarded draft released its number', as
     await page.goto(appUrl(baseUrl, '/documents'));
     await page.getByRole('button', { name: 'Neue Rechnung' }).click();
     await expect(page.getByRole('heading', { name: 'Rechnung erstellen' })).toBeVisible();
+    return await page.getByRole('textbox', { name: 'Rechnungs-Nr.' }).inputValue();
   };
-  await openNewInvoice();
+  const firstNumber = await openNewInvoice();
   await page.getByRole('button', { name: 'Position hinzufügen' }).click();
   await page.getByRole('button', { name: 'Zurück' }).click();
   await page.getByRole('button', { name: 'Änderungen verwerfen' }).click();
-  await expect(page.getByRole('heading', { name: 'Dokumente' })).toBeVisible();
+  await expect(page.getByRole('banner').getByRole('heading', { name: 'Rechnungen & Angebote', level: 1 })).toBeVisible();
 
-  await openNewInvoice();
+  expect(await openNewInvoice()).toBe(firstNumber);
 });
 
 test('runs due recurring profiles in the background without a server worker', async () => {
@@ -263,10 +274,10 @@ test('reprints an issued invoice unchanged after template and company changes, a
 
   // Dunning letter for the open invoice at level 2.
   const letter = await invokeDesktopIpc(page, 'pdf:export', { kind: 'dunning', id: 'inv-open-1', level: 2 });
-  expect(path.basename(letter.path)).toMatch(/^1\. Mahnung-RE-2026-002-/);
+  expect(path.basename(letter.path)).toMatch(new RegExp(`^1\\. Mahnung-${issued.number}-`));
   const letterText = text(letter.path);
   expect(letterText).toContain('1. Mahnung');
-  expect(letterText).toContain('Dies ist die erste Mahnung zur Rechnung RE-2026-002.');
+  expect(letterText).toContain(`Dies ist die erste Mahnung zur Rechnung ${issued.number}.`);
   expect(letterText).toContain('Mahngebühr');
   expect(letterText).toContain('Offener Betrag');
   expect(await readEmbeddedFacturX(fs.readFileSync(letter.path))).toBeNull();

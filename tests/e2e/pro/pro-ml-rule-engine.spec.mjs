@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test';
-import { appUrl, importPendingProTransaction, invokeDesktopIpc, launchDesktopApp, seedDesktopData } from '../support.mjs';
+import { appUrl, approveProDraft, importPendingProTransaction, invokeDesktopIpc, launchDesktopApp, seedDesktopData } from '../support.mjs';
 
 let desktop;
 
@@ -35,11 +35,11 @@ const postExpenseDraft = async (page, { txId, amount, trainingAccount, bankAccou
   const abs = Math.abs(Number(amount));
   const postingDate = tx.date;
   const lineNonce = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-  const draft = {
+  const saved = await approveProDraft(page, {
     id: existingDraft.id,
     tenantId: 'default',
     transactionId: txId,
-    workflowStatus: 'approved',
+    workflowStatus: 'suggested',
     postingDate,
     documentDate: postingDate,
     bookingText,
@@ -68,9 +68,7 @@ const postExpenseDraft = async (page, { txId, amount, trainingAccount, bankAccou
     ],
     validationIssues: [],
     updatedAt: new Date().toISOString(),
-  };
-
-  const saved = await invokeDesktopIpc(page, 'pro:saveDraft', { draft });
+  });
   const post = await invokeDesktopIpc(page, 'pro:postDraft', {
     draftId: saved.id,
     actorRole: 'accountant',
@@ -82,6 +80,8 @@ const postExpenseDraft = async (page, { txId, amount, trainingAccount, bankAccou
 test.beforeEach(async () => {
   desktop = await launchDesktopApp({ app: 'pro' });
   await seedDesktopData(desktop.page, { app: 'pro' });
+  // Seeding writes past react-query and the onboarding gate; reload so the shell reads the seeded settings.
+  await desktop.page.reload();
 });
 
 test.afterEach(async () => {
@@ -93,8 +93,8 @@ test.afterEach(async () => {
 
 test('covers rule engine and ML suggestion layers (rule, counterparty, bayes)', async () => {
   const { page, baseUrl } = desktop;
-  await page.goto(appUrl(baseUrl, '/accounting'));
-  await expect(page.getByRole('heading', { name: 'Pro Buchhaltung' })).toBeVisible();
+  await page.goto(appUrl(baseUrl, '/accounting?view=reconciliation'));
+  await expect(page.getByRole('heading', { name: 'Bankabgleich Workbench' })).toBeVisible();
 
   const { chart, bankAccount, trainingAccount } = await resolveLedgerAccounts(page);
   const trainingCounterparty = `E2E ML Training ${process.pid}-${Date.now()}`;
@@ -127,6 +127,12 @@ test('covers rule engine and ML suggestion layers (rule, counterparty, bayes)', 
       return rows.find((row) => row.id === bayesProbeTx.id)?.suggestionLayer;
     })
     .toBe('rule');
+
+  // The workbench shows the rule's account as the proposal, with the rule's confidence.
+  await page.reload();
+  await page.getByRole('button', { name: new RegExp(ruleNeedle) }).click();
+  await expect(page.getByText(new RegExp(`${trainingAccount}\\s*Kontierungsvorschlag\\s*Sicherheit 99 %`))).toBeVisible();
+  await page.screenshot({ path: test.info().outputPath('01-rule-suggestion-in-workbench.png'), fullPage: true });
 
   const rulesAfter = await invokeDesktopIpc(page, 'pro:listAccountSuggestionRules', { chart });
   const addedRule = rulesAfter.find((row) => row.value === ruleNeedle);

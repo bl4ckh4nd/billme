@@ -1,5 +1,4 @@
 import { execFile } from 'node:child_process';
-import http from 'node:http';
 import net from 'node:net';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -182,38 +181,22 @@ const createSmtpSink = async () => {
   };
 };
 
-const createPortalMock = async ({ shareToken, decision }) => {
-  const requests = [];
-  const server = http.createServer((req, res) => {
-    const url = new URL(req.url ?? '/', 'http://127.0.0.1');
-    const match = /^\/offers\/([^/]+)\/status$/u.exec(url.pathname);
+const startWorkerPortal = async (state, product) => {
+  if (state.urls.portal) return { baseUrl: state.urls.portal, apiKey: state.env.BILLME_PORTAL_PUBLISH_API_KEY, close: async () => {} };
+  const { register } = await import('tsx/esm/api');
+  const unregister = register();
+  try {
+    const { startPortal } = await import('../../../packages/integration-tests/src/offer-portal-fixtures.ts');
+    return await startPortal({ suite: `server-worker-${product}` });
+  } finally { unregister(); }
+};
 
-    if (req.method === 'GET' && match) {
-      const requestedToken = decodeURIComponent(match[1]);
-      requests.push(requestedToken);
-      res.writeHead(200, {
-        'content-type': 'application/json',
-      });
-      res.end(JSON.stringify({
-        decision: requestedToken === shareToken ? decision : null,
-      }));
-      return;
-    }
-
-    res.writeHead(404, {
-      'content-type': 'application/json',
-    });
-    res.end(JSON.stringify({ error: 'not_found' }));
+const portalJson = async (portal, path, body, headers = {}) => {
+  const response = await fetch(`${portal.baseUrl}${path}`, {
+    method: body ? 'POST' : 'GET', headers: { 'content-type': 'application/json', ...headers }, body: body ? JSON.stringify(body) : undefined,
   });
-
-  const address = await waitForServerListen(server);
-  return {
-    baseUrl: `http://127.0.0.1:${address.port}`,
-    requests,
-    async close() {
-      await closeServer(server);
-    },
-  };
+  expect(response.ok, `Portal ${path}: ${response.status} ${await response.clone().text()}`).toBeTruthy();
+  return response.json();
 };
 
 const runJsonCommand = async (command, args, options = {}) => {
@@ -311,10 +294,7 @@ export const runWorkerFlowScenario = async (product) => {
   };
 
   const smtp = await createSmtpSink();
-  const portal = await createPortalMock({
-    shareToken,
-    decision: portalDecision,
-  });
+  const portal = await startWorkerPortal(state, product);
 
   try {
     const metadata = await seedWorkerScenario({
@@ -327,7 +307,12 @@ export const runWorkerFlowScenario = async (product) => {
       portalBaseUrl: portal.baseUrl,
     });
 
-    await runWorkerOnce(metadata.databaseUrl, metadata.tenantId);
+    const offerSnapshot = (await fetchJson(`${state.urls.api}/api/v1/${product}/offers`, metadata.token)).find((offer) => offer.id === metadata.offerId);
+    await portalJson(portal, '/offers', { token: shareToken, snapshot: offerSnapshot }, { 'x-api-key': portal.apiKey });
+    const savedDecision = await portalJson(portal, `/offers/${shareToken}/decision`, portalDecision, { origin: portal.baseUrl });
+    expect(savedDecision.decision).toMatchObject({ decision: 'accepted', acceptedEmail: portalDecision.acceptedEmail });
+    const worker = await runWorkerOnce(metadata.databaseUrl, metadata.tenantId);
+    console.log(worker.stdout, worker.stderr);
 
     const messages = await smtp.waitForMessageCount(2);
     const invoices = await fetchJson(`${state.urls.api}/api/v1/${product}/invoices`, metadata.token);
@@ -358,7 +343,7 @@ export const runWorkerFlowScenario = async (product) => {
     expect(offer.share?.decision).toBe('accepted');
     expect(offer.share?.acceptedEmail).toBe(portalDecision.acceptedEmail);
 
-    expect(portal.requests.filter((token) => token === shareToken).length).toBeGreaterThanOrEqual(1);
+    expect((await portalJson(portal, `/offers/${shareToken}/status`)).decision).toEqual(savedDecision.decision);
 
     const pool = new Pool({
       connectionString: metadata.databaseUrl,

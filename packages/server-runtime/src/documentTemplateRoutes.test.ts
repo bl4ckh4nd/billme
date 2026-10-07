@@ -40,9 +40,11 @@ const boot = (database: PgliteServerDatabase) => buildServerApi({
   localAuth: { accessToken: token, tenantId, userId: 'owner', email: 'owner@example.com', fullName: 'Owner' },
 });
 
+/** The server prices a draft from its lines, so the amount follows them. */
+const line = (total: number) => [{ kind: 'item', description: 'Beratung', quantity: 1, price: total, total, taxRate: 0 }];
 const invoice = (id: string, extra: Record<string, unknown> = {}) => ({
   kind: 'invoice', id, number: `RE-${id}`, client: 'Kanzlei Weber', clientEmail: 'weber@example.com',
-  date: '2026-09-24', dueDate: '2026-10-08', amount: 100, status: 'draft', items: [], payments: [], ...extra,
+  date: '2026-09-24', dueDate: '2026-10-08', amount: 100, status: 'draft', items: line(100), payments: [], ...extra,
 });
 
 test('document templates: versions, defaults, per-document layout, render context and legacy conversion', async () => {
@@ -126,7 +128,7 @@ test('document templates: versions, defaults, per-document layout, render contex
     assert.deepEqual(reloaded.layout, layout);
 
     // A writer that does not send layout (older shell, payment update) keeps the stored one.
-    await app.inject({ method: 'POST', url: '/api/v1/lite/invoices', headers, payload: { reason: 'test', invoice: invoice('1', { amount: 200 }) } });
+    await app.inject({ method: 'POST', url: '/api/v1/lite/invoices', headers, payload: { reason: 'test', invoice: invoice('1', { amount: 200, items: line(200) }) } });
     const kept = (await app.inject({ method: 'GET', url: '/api/v1/lite/invoices/1', headers })).json();
     assert.equal(kept.amount, 200);
     assert.deepEqual(kept.layout, layout);
@@ -185,8 +187,12 @@ test('document templates: versions, defaults, per-document layout, render contex
       payload: { template: { id: current.id, kind: 'invoice', name: 'Ausgestellt', body: { ...body, accentColor: '#654321' } } } });
     await app.inject({ method: 'PUT', url: '/api/v1/lite/settings', headers,
       payload: { settings: { ...settings, company: { ...settings.company, name: 'Holzwerk Neu' } } } });
-    // A later writer without layout, or with its own snapshot, cannot replace the frozen one.
-    await app.inject({ method: 'POST', url: '/api/v1/lite/invoices', headers, payload: { reason: 'test', invoice: invoice('3', { status: 'paid' }) } });
+    // A later writer without layout cannot touch the issued invoice at all; the frozen snapshot stays.
+    const staleUpdate = await app.inject({ method: 'POST', url: '/api/v1/lite/invoices', headers, payload: { reason: 'test', invoice: invoice('3', { number: issued.number, status: 'paid' }) } });
+    assert.equal(staleUpdate.statusCode, 409, staleUpdate.body);
+    assert.deepEqual((await app.inject({ method: 'GET', url: '/api/v1/lite/invoices/3', headers })).json().layout, issued.layout);
+    const payment = await app.inject({ method: 'POST', url: '/api/v1/lite/invoices/3/payments', headers, payload: { payment: { id: 'template-payment', date: '2026-09-25', amount: 100, method: 'Bank' }, reason: 'Payment preserves frozen template' } });
+    assert.equal(payment.statusCode, 200, payment.body);
     const frozen = (await app.inject({ method: 'GET', url: '/api/v1/lite/documents/invoice/3/render-context', headers })).json();
     assert.equal(frozen.template.version, 1);
     assert.equal(frozen.template.body.accentColor, '#123456');

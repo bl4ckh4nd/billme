@@ -1,4 +1,7 @@
 import fs from 'node:fs/promises';
+import { randomUUID } from 'node:crypto';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 import path from 'node:path';
 import { expect } from '@playwright/test';
 import { readServerHarnessState } from '../harness.mjs';
@@ -29,7 +32,10 @@ const createAcceptedOffer = async (state, session) => {
   if (!source) throw new Error('Seeded Pro offer was not persisted.');
   const accepted = {
     ...source,
-    amount: 120,
+    id: randomUUID(),
+    number: `CHAIN-${randomUUID()}`,
+    layout: undefined,
+    amount: 140.4,
     status: 'accepted',
     items: [
       { kind: 'item', description: 'Beratung 19%', quantity: 1, price: 100, total: 100, taxRate: 19 },
@@ -46,7 +52,7 @@ const createAcceptedOffer = async (state, session) => {
     method: 'POST',
     body: { reason: 'E2E: angenommenes Angebot für Auftragskette', offer: accepted },
   });
-  expect(saved).toMatchObject({ id: source.id, status: 'accepted', amount: 120 });
+  expect(saved).toMatchObject({ id: accepted.id, status: 'accepted', amount: 140.4 });
   return saved;
 };
 
@@ -68,7 +74,7 @@ const configureOutgoingPosting = async (state, session) => {
   }
 };
 
-const createIssuedDocument = async (state, session, operation, fields, expectedKind) => {
+const createChainDocument = async (state, session, operation, fields, expectedKind) => {
   const created = await requestJson(state, session, '/api/v1/pro/document-chain/issue', undefined, {
     method: 'POST',
     body: {
@@ -80,7 +86,7 @@ const createIssuedDocument = async (state, session, operation, fields, expectedK
       ...fields,
     },
   });
-  expect(created).toMatchObject({ id: fields.id, documentKind: expectedKind, status: 'open' });
+  expect(created).toMatchObject({ id: fields.id, documentKind: expectedKind, status: operation === 'revision' ? 'draft' : 'open' });
   expect(created.number).toBeTruthy();
   return { document: created };
 };
@@ -100,45 +106,45 @@ export const runProOutgoingDocumentChainScenario = async (page) => {
   await configureOutgoingPosting(state, session);
 
   const offer = await createAcceptedOffer(state, session);
-  const order = await createIssuedDocument(state, session, 'order_confirmation', {
+  const order = await createChainDocument(state, session, 'order_confirmation', {
     id: `outgoing-chain-order-${suffix}`,
     offerId: offer.id,
     reason: 'E2E: Auftragsbestätigung aus Angebot',
   }, 'order_confirmation');
-  const delivery = await createIssuedDocument(state, session, 'delivery_note', {
+  const delivery = await createChainDocument(state, session, 'delivery_note', {
     id: `outgoing-chain-delivery-${suffix}`,
     orderId: order.document.id,
     reason: 'E2E: Lieferschein aus Auftrag',
   }, 'delivery_note');
-  const advance = await createIssuedDocument(state, session, 'settlement_invoice', {
+  const advance = await createChainDocument(state, session, 'settlement_invoice', {
     id: `outgoing-chain-advance-${suffix}`,
     orderId: order.document.id,
     kind: 'advance_invoice',
     amount: 40,
     reason: 'E2E: Abschlagsrechnung',
   }, 'advance_invoice');
-  const partial = await createIssuedDocument(state, session, 'settlement_invoice', {
+  const partial = await createChainDocument(state, session, 'settlement_invoice', {
     id: `outgoing-chain-partial-${suffix}`,
     orderId: order.document.id,
     kind: 'partial_invoice',
     amount: 30,
     reason: 'E2E: Teilrechnung',
   }, 'partial_invoice');
-  const final = await createIssuedDocument(state, session, 'settlement_invoice', {
+  const final = await createChainDocument(state, session, 'settlement_invoice', {
     id: `outgoing-chain-final-${suffix}`,
     orderId: order.document.id,
     kind: 'final_invoice',
-    amount: 50,
+    amount: 70.4,
     reason: 'E2E: Schlussrechnung',
   }, 'final_invoice');
-  const credit = await createIssuedDocument(state, session, 'correction', {
+  const credit = await createChainDocument(state, session, 'correction', {
     id: `outgoing-chain-credit-${suffix}`,
     invoiceId: final.document.id,
     kind: 'credit_note',
     amount: 20,
     reason: 'E2E: Teilgutschrift',
   }, 'credit_note');
-  const revision = await createIssuedDocument(state, session, 'revision', {
+  const revision = await createChainDocument(state, session, 'revision', {
     id: `outgoing-chain-revision-${suffix}`,
     invoiceId: final.document.id,
     reason: 'E2E: Revision mit korrigiertem Dokumentstand',
@@ -165,7 +171,7 @@ export const runProOutgoingDocumentChainScenario = async (page) => {
     expect.objectContaining({ id: order.document.id, documentKind: 'order_confirmation', rootDocumentId: order.document.id }),
     expect.objectContaining({ id: delivery.document.id, documentKind: 'delivery_note', rootDocumentId: order.document.id }),
     expect.objectContaining({ id: credit.document.id, documentKind: 'credit_note', sourceDocumentId: final.document.id, rootDocumentId: order.document.id }),
-    expect.objectContaining({ id: revision.document.id, revisionOfId: final.document.id, revisionNumber: 1 }),
+    expect.objectContaining({ id: revision.document.id, revisionOfId: final.document.id, revisionNumber: 1, status: 'draft' }),
   ]));
 
   const journal = await requestJson(state, session, '/api/v1/pro/accounting/journal');
@@ -182,7 +188,7 @@ export const runProOutgoingDocumentChainScenario = async (page) => {
 
   const openItems = await requestJson(state, session, '/api/v1/pro/accounting/open-items');
   const finalItem = openItems.find((item) => item.sourceId === final.document.id);
-  expect(finalItem).toMatchObject({ sourceId: final.document.id, allocatedAmount: 20, residualAmount: 30, status: 'partially_paid' });
+  expect(finalItem).toMatchObject({ sourceId: final.document.id, allocatedAmount: 20, residualAmount: 50.4, status: 'partially_paid' });
   expect(openItems.some((item) => item.sourceId === credit.document.id)).toBe(false);
 
   // Retrying the explicit posting command exercises the persisted source-key
@@ -202,9 +208,24 @@ export const runProOutgoingDocumentChainScenario = async (page) => {
   expect(creditAfterPost.history.some((entry) => entry.action.includes('accounting_post'))).toBe(true);
 
   const directory = await captureDirectory();
+  const pdfResponse = await fetch(`${state.urls.api}/api/v1/pro/documents/invoice/${encodeURIComponent(credit.document.id)}/pdf`, {
+    headers: { authorization: `Bearer ${session.token}` },
+  });
+  expect(pdfResponse.status).toBe(200);
+  const creditPdf = path.join(directory, 'credit-note.pdf');
+  const pdf = Buffer.from(await pdfResponse.arrayBuffer());
+  expect(pdf.subarray(0, 5).toString()).toBe('%PDF-');
+  await fs.writeFile(creditPdf, pdf);
+  const { stdout: text } = await promisify(execFile)('pdftotext', ['-layout', creditPdf, '-']);
+  expect(text).toContain('20,00');
+  expect(text).toContain('0,1424');
+  expect(text).toContain('14,24');
+  await fs.writeFile(path.join(directory, 'credit-note.txt'), text);
+  await promisify(execFile)('pdftoppm', ['-png', '-singlefile', '-scale-to', '1600', creditPdf, path.join(directory, 'credit-note')]);
   await openProShell(page, state, { route: 'documents', session });
-  await expect(page.getByRole('heading', { name: 'Dokumentkette und Revisionen' })).toBeVisible();
-  const chainOverview = page.getByTestId('document-chain-overview');
+  await expect(page.getByRole('heading', { name: 'Rechnungen & Angebote', level: 1 })).toBeVisible();
+  await page.getByRole('row', { name: `Schlussrechnung ${final.document.number} öffnen`, exact: true }).dblclick();
+  const chainOverview = page.getByTestId('document-chain-panel');
   await expect(chainOverview).toContainText('Auftragsbestätigung');
   await expect(chainOverview).toContainText('Lieferschein');
   await expect(chainOverview).toContainText('Gutschrift');
@@ -212,7 +233,8 @@ export const runProOutgoingDocumentChainScenario = async (page) => {
   await capture(page, directory, '01-chain-and-revision');
 
   await page.reload({ waitUntil: 'networkidle' });
-  await expect(page.getByTestId('document-chain-overview')).toContainText('Schlussrechnung');
-  await expect(page.getByTestId('document-chain-overview')).toContainText('Gutschrift');
+  await page.getByRole('row', { name: `Schlussrechnung ${final.document.number} öffnen`, exact: true }).dblclick();
+  await expect(chainOverview).toContainText('Schlussrechnung');
+  await expect(chainOverview).toContainText('Gutschrift');
   await capture(page, directory, '02-chain-after-reload');
 };

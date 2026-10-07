@@ -1,4 +1,5 @@
 import { expect } from '@playwright/test';
+import { randomUUID } from 'node:crypto';
 import { readServerHarnessState } from '../harness.mjs';
 import {
   apiJson,
@@ -97,7 +98,8 @@ export const runLiteRegressionScenario = async (page, scenarioKey = 'regressions
 
   await applyLiteSession(page, runtime.state, session, '/');
 
-  await page.getByLabel('Suche und Befehle').fill(seed.clients[0].customerNumber);
+  await page.getByRole('button', { name: /Suchen/ }).first().click();
+  await page.getByRole('combobox', { name: 'Suche und Befehle' }).fill(seed.clients[0].customerNumber);
   const clientSearchResult = page
     .locator('button')
     .filter({ hasText: seed.clients[0].company })
@@ -111,12 +113,16 @@ export const runLiteRegressionScenario = async (page, scenarioKey = 'regressions
 
   await page.goto(liteAppUrl(runtime.state, '/documents'), { waitUntil: 'networkidle' });
   await expect(page.getByText(seed.invoices[0].number)).toBeVisible();
-  await page.getByTitle('Auswählen').first().click();
-  await expect(page.getByText('Auswahl aktiv')).toBeVisible();
+  await page.getByRole('checkbox', { name: `${seed.invoices[0].number} auswählen`, exact: true }).check();
+  await expect(page.getByRole('checkbox', { name: `${seed.invoices[0].number}: Auswahl entfernen`, exact: true })).toBeChecked();
+  await expect(page.getByRole('button', { name: 'Export', exact: true })).toBeEnabled();
+  const downloadPromise = page.waitForEvent('download');
   await page.getByRole('button', { name: 'Export' }).click();
-
-  await expect(page.getByText(/PDF Fehler:/)).toBeVisible();
-  await expect(page.getByText(/Billme Lite im Browser noch nicht verfügbar/)).toBeVisible();
+  const download = await downloadPromise;
+  expect(download.suggestedFilename()).toMatch(/\.pdf$/);
+  expect(await download.failure()).toBeNull();
+  const artifact = new URL('../../../../test-results/server-lite-bulk-invoice.pdf', import.meta.url);
+  await download.saveAs(artifact.pathname);
   await expect(page.getByText(seed.invoices[0].number)).toBeVisible();
 };
 
@@ -131,6 +137,7 @@ export const runLiteVatPersistenceScenario = async (scenarioKey = 'vat-persisten
   const source = await apiJson(runtime.state, session, `/api/v1/lite/invoices/${seed.invoices[0].id}`);
   const invoice = {
     ...source,
+    id: randomUUID(), number: `VAT-${randomUUID()}`, status: 'draft', payments: [], layout: undefined,
     taxMode: 'intra_eu_service_reverse_charge',
     taxMeta: {
       sellerCountryCode: 'DE',
@@ -146,6 +153,8 @@ export const runLiteVatPersistenceScenario = async (scenarioKey = 'vat-persisten
       einvoiceCategoryCode: 'AE',
       label: 'EU-Leistung Reverse Charge',
       taxNotice: 'Steuerschuldnerschaft des Leistungsempfängers (Reverse Charge)',
+      taxRuleConfirmed: true,
+      vatBreakdown: [{ rate: 0, netAmount: source.amount, vatAmount: 0 }],
     },
     items: source.items.map((item, index) => ({
       ...item,
@@ -168,6 +177,7 @@ export const runLiteVatPersistenceScenario = async (scenarioKey = 'vat-persisten
   const sourceOffer = await apiJson(runtime.state, session, `/api/v1/lite/offers/${seed.offers[0].id}`);
   const offer = {
     ...sourceOffer,
+    id: randomUUID(), number: `VAT-OFFER-${randomUUID()}`, status: 'draft', share: undefined, layout: undefined,
     taxMode: 'export_third_country',
     taxMeta: { sellerCountryCode: 'DE', buyerCountryCode: 'CH', taxRuleConfirmed: true },
     taxSnapshot: {
@@ -178,6 +188,8 @@ export const runLiteVatPersistenceScenario = async (scenarioKey = 'vat-persisten
       einvoiceCategoryCode: 'G',
       label: 'Drittlandsausfuhr',
       taxNotice: 'Steuerfreie Ausfuhrlieferung',
+      taxRuleConfirmed: true,
+      vatBreakdown: [{ rate: 0, netAmount: sourceOffer.amount, vatAmount: 0 }],
     },
   };
   await apiJson(runtime.state, session, '/api/v1/lite/offers', {
@@ -203,24 +215,24 @@ export const runLiteWorkflowScenario = async (page, scenarioKey = 'workflow') =>
   await applyLiteSession(page, runtime.state, session, '/clients');
 
   await expect(page.getByRole('heading', { name: 'Kunden' })).toBeVisible();
-  await expect(page.getByRole('heading', { name: seed.clients[0].company }).first()).toBeVisible();
+  await expect(page.getByRole('row', { name: `${seed.clients[0].company} öffnen`, exact: true }).first()).toBeVisible();
 
-  const createClientButton = page.locator('button').filter({ has: page.locator('svg.lucide-plus') }).last();
+  const createClientButton = page.getByRole('button', { name: 'Neuer Kunde', exact: true });
   await createClientButton.click();
 
   const clientEditor = page.locator('div').filter({ has: page.getByRole('heading', { name: 'Neuer Kunde' }) }).first();
   await expect(clientEditor).toBeVisible();
   await clientEditor.getByRole('button', { name: 'Speichern' }).click();
-  await expect(page.getByText('Firma ist erforderlich.')).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Firma ist erforderlich.', exact: true })).toBeVisible();
 
   const companyName = `Lite Browserkunde ${identity.namespace}`;
-  await clientEditor.locator('label:has-text("Firma") + input').fill(companyName);
-  await clientEditor.locator('label:has-text("Ansprechpartner") + input').fill('Regression Runner');
-  await clientEditor.locator('label:has-text("Telefon") + input').fill('+49 30 55555555');
-  await clientEditor.locator('label:has-text("E-Mail-Adresse") + input').fill(`billing+${identity.namespace}@billme-e2e.local`);
-  await clientEditor.locator('label:has-text("Straße") + input').fill('Teststrasse 42');
-  await clientEditor.locator('label:has-text("PLZ") + input').fill('10115');
-  await clientEditor.locator('label:has-text("Stadt") + input').fill('Berlin');
+  await clientEditor.getByLabel('Firma', { exact: true }).fill(companyName);
+  await clientEditor.getByLabel('Ansprechpartner', { exact: true }).first().fill('Regression Runner');
+  await clientEditor.getByLabel('Telefon', { exact: true }).fill('+49 30 55555555');
+  await clientEditor.getByLabel('E-Mail-Adresse', { exact: true }).fill(`billing+${identity.namespace}@billme-e2e.local`);
+  await clientEditor.getByLabel('Straße', { exact: true }).fill('Teststrasse 42');
+  await clientEditor.getByLabel('PLZ', { exact: true }).fill('10115');
+  await clientEditor.getByLabel('Stadt', { exact: true }).fill('Berlin');
   await clientEditor.getByRole('button', { name: 'Speichern' }).click();
 
   let createdClient = null;
@@ -239,9 +251,9 @@ export const runLiteWorkflowScenario = async (page, scenarioKey = 'workflow') =>
   await page.goto(liteAppUrl(runtime.state, `/clients?id=${encodeURIComponent(createdClient.id)}`), {
     waitUntil: 'networkidle',
   });
-  await expect(page.getByText(companyName)).toBeVisible();
+  await expect(page.getByRole('heading', { name: companyName, level: 1, exact: true })).toBeVisible();
   await page.getByRole('button', { name: 'Neue Rechnung' }).click();
-  await expect(page.getByRole('heading', { name: 'Rechnung erstellen' })).toBeVisible();
+  await expect(page.getByRole('combobox', { name: 'Kunde auswählen' })).toBeVisible();
   await expect(page.getByRole('combobox', { name: 'Kunde auswählen' })).toHaveValue(companyName);
   const createdInvoice = await page.evaluate(async ({ clientId, description, price }) => {
     const api = globalThis.billmeApi;
@@ -255,11 +267,9 @@ export const runLiteWorkflowScenario = async (page, scenarioKey = 'workflow') =>
       amount: price,
       items: [{ kind: 'item', description, quantity: 1, price, total: price }],
     };
-    delete persisted.numberReservationId;
+
     const saved = await api.invoices.upsert({ invoice: persisted, reason: 'create' });
-    if (reservationId) {
-      await api.numbers.finalize({ reservationId, documentId: saved.id });
-    }
+
     return saved;
   }, {
     clientId: createdClient.id,
@@ -280,11 +290,9 @@ export const runLiteWorkflowScenario = async (page, scenarioKey = 'workflow') =>
       amount: price,
       items: [{ kind: 'item', description, quantity: 1, price, total: price }],
     };
-    delete persisted.numberReservationId;
+
     const saved = await api.offers.upsert({ offer: persisted, reason: 'create' });
-    if (reservationId) {
-      await api.numbers.finalize({ reservationId, documentId: saved.id });
-    }
+
     return saved;
   }, {
     clientId: createdClient.id,
@@ -298,5 +306,5 @@ export const runLiteWorkflowScenario = async (page, scenarioKey = 'workflow') =>
   await expect(page.getByText(createdOffer.number)).toBeVisible();
   await page.getByText(createdOffer.number).first().click();
   await expect(page.getByRole('heading', { name: createdOffer.number })).toBeVisible();
-  await expect(page.getByText(companyName)).toBeVisible();
+  await expect(page.getByRole('main').getByText(companyName, { exact: true })).toBeVisible();
 };

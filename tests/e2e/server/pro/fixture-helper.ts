@@ -3,8 +3,8 @@ import { randomUUID, scryptSync } from 'node:crypto';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { getCatalogForYear, getCatalogManifestForYear } from '@billme/desktop-services/eurCatalog';
-import { createServerApiClient, type ServerProduct } from '@billme/server-core';
-import { createPostgresPool, saveServerEurLine, seedServerModeProTenant } from '@billme/server-data';
+import { createServerApiClient, createSingleTenantScope, type ServerProduct } from '@billme/server-core';
+import { createPostgresBillingDependencies, createPostgresPool, saveServerEurLine, seedServerModeProTenant } from '@billme/server-data';
 
 type HarnessState = {
   env?: Record<string, string>;
@@ -155,6 +155,25 @@ export const createHarnessProTenant = async (options: {
   }
 };
 
+export const createHarnessProViewer = async (options: { stateFile: string; tenantId: string; email: string; password: string }) => {
+  const state = await readHarnessState(options.stateFile);
+  const pool = createPostgresPool(buildDatabaseUrl(state, await readHarnessEnv(state)));
+  const userId = randomUUID();
+  const salt = randomUUID();
+  const now = new Date().toISOString();
+  try {
+    await pool.query('BEGIN');
+    await pool.query(`INSERT INTO user_accounts (id,email,full_name,status,created_at,updated_at) VALUES ($1,$2,'E2E Viewer','active',$3,$3)`, [userId, options.email, now]);
+    await pool.query(`INSERT INTO tenant_memberships (id,tenant_id,user_id,role,created_at,updated_at) VALUES ($1,$2,$3,'viewer',$4,$4)`, [randomUUID(), options.tenantId, userId, now]);
+    await pool.query(`INSERT INTO user_password_credentials (user_id,password_salt,password_hash,password_algorithm,created_at,updated_at) VALUES ($1,$2,$3,'scrypt-64',$4,$4)`, [userId, salt, scryptSync(options.password, salt, 64).toString('hex'), now]);
+    await pool.query('COMMIT');
+  } catch (error) {
+    await pool.query('ROLLBACK');
+    throw error;
+  } finally { await pool.end(); }
+  return createServerApiClient(state.urls.api).ensureSession({ product: 'pro', email: options.email, password: options.password, fullName: 'E2E Viewer' });
+};
+
 export const applyHarnessProSeed = async (options: {
   stateFile: string;
   tenantId: string;
@@ -211,6 +230,22 @@ export const applyHarnessProSeed = async (options: {
         suggestionRules: seed.accountSuggestionRules.length,
       },
     };
+  } finally {
+    await pool.end();
+  }
+};
+
+export const markHarnessProInvoiceIssued = async (options: { stateFile: string; tenantId: string; invoiceId: string }) => {
+  const state = await readHarnessState(options.stateFile);
+  const env = await readHarnessEnv(state);
+  const pool = createPostgresPool(buildDatabaseUrl(state, env));
+  try {
+    const scope = createSingleTenantScope(options.tenantId, 'pro');
+    const { invoiceRepo } = createPostgresBillingDependencies(pool);
+    const invoice = await invoiceRepo.getById(scope, options.invoiceId);
+    if (!invoice || invoice.status !== 'draft') throw new Error('Historical unposted fixture must start as a draft');
+    // Imported historical invoices can be issued without a corresponding journal entry.
+    return await invoiceRepo.save(scope, { ...invoice, status: 'open' });
   } finally {
     await pool.end();
   }
@@ -294,6 +329,12 @@ const runCli = async () => {
     return;
   }
 
+  if (action === 'create-pro-viewer') {
+    const session = await createHarnessProViewer({ stateFile, tenantId: requireFlag(flags, 'tenant-id'), email: requireFlag(flags, 'email'), password: requireFlag(flags, 'password') });
+    process.stdout.write(`${JSON.stringify(session)}\n`);
+    return;
+  }
+
   if (action === 'seed-pro') {
     const seed = await applyHarnessProSeed({
       stateFile,
@@ -303,6 +344,12 @@ const runCli = async () => {
       includeEurCatalog2026: flags.get('include-eur-catalog-2026') === 'true',
     });
     process.stdout.write(`${JSON.stringify(seed)}\n`);
+    return;
+  }
+
+  if (action === 'mark-pro-invoice-issued') {
+    const result = await markHarnessProInvoiceIssued({ stateFile, tenantId: requireFlag(flags, 'tenant-id'), invoiceId: requireFlag(flags, 'invoice-id') });
+    process.stdout.write(`${JSON.stringify(result)}\n`);
     return;
   }
 

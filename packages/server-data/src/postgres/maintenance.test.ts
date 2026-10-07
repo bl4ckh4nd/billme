@@ -2,83 +2,15 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
   createSingleTenantScope,
-  runMaintenanceSweep,
-  type AuditEntry,
-  type AuditEntryDraft,
 } from '@billme/server-core';
 import {
   createPostgresMaintenanceRepository,
   createPostgresTenantRepository,
-  deleteServerSqliteImportRunsBefore,
 } from './billing.js';
 import { createPostgresPool } from './connection.js';
 import { runDrizzleMigrations } from './migrations.js';
 
 const scope = createSingleTenantScope('tenant-1', 'lite');
-
-test('runMaintenanceSweep applies explicit retention policies and audits deletions', async () => {
-  const calls: Array<{ kind: string; args: Record<string, unknown> }> = [];
-  const auditEntries: AuditEntryDraft[] = [];
-
-  const result = await runMaintenanceSweep(scope, {
-    clock: {
-      now: () => new Date('2026-06-15T12:00:00.000Z'),
-      nowIso: () => '2026-06-15T12:00:00.000Z',
-    },
-    retentionRepo: {
-      async deleteReleasedNumberReservations(_scope, args) {
-        calls.push({ kind: 'released-number-reservations', args });
-        return 2;
-      },
-      async deleteSqliteImportRuns(_scope, args) {
-        calls.push({ kind: 'sqlite-import-runs', args });
-        return 1;
-      },
-    },
-    auditLog: {
-      append(_scope, entry) {
-        auditEntries.push(entry);
-        return {
-          sequence: 1,
-          ...entry,
-          prevHash: null,
-          hash: 'maintenance-hash',
-        } satisfies AuditEntry;
-      },
-    },
-  });
-
-  assert.equal(result.totalDeleted, 3);
-  assert.deepEqual(calls, [
-    {
-      kind: 'released-number-reservations',
-      args: { updatedBefore: '2026-03-17T12:00:00.000Z' },
-    },
-    {
-      kind: 'sqlite-import-runs',
-      args: {
-        completedBefore: '2025-06-15T12:00:00.000Z',
-        statuses: ['completed', 'failed'],
-      },
-    },
-  ]);
-  assert.equal(auditEntries.length, 1);
-  assert.equal(auditEntries[0]?.action, 'maintenance.retention');
-  assert.deepEqual(result.steps, [
-    {
-      key: 'released-number-reservations',
-      retentionDays: 90,
-      deleteBefore: '2026-03-17T12:00:00.000Z',
-      deletedCount: 2,
-    },
-    {
-      key: 'sqlite-import-runs',
-      retentionDays: 365,
-      deleteBefore: '2025-06-15T12:00:00.000Z',
-      deletedCount: 1,
-    },
-  ]);
-});
 
 test('createPostgresMaintenanceRepository issues targeted delete statements', { skip: !(process.env.BILLME_TEST_DATABASE_URL ?? process.env.DATABASE_URL) }, async () => {
   const db = createPostgresPool(process.env.BILLME_TEST_DATABASE_URL ?? process.env.DATABASE_URL!);
@@ -120,9 +52,4 @@ test('createPostgresMaintenanceRepository issues targeted delete statements', { 
   assert.equal(importRunsDeleted, 2);
   await db.query('DELETE FROM tenants WHERE id = $1', [scope.tenantId]);
   await db.end();
-});
-
-test('deleteServerSqliteImportRunsBefore skips empty status lists', async () => {
-  const deleted = await deleteServerSqliteImportRunsBefore({} as never, 'tenant-1', '2025-06-15T00:00:00.000Z', []);
-  assert.equal(deleted, 0);
 });

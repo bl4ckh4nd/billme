@@ -72,7 +72,7 @@ const BASE_SETTINGS = {
   },
   finance: {
     bankName: 'Berliner Testbank',
-    iban: 'DE12100500001234567890',
+    iban: 'DE02120300000000202051',
     bic: 'BELADEBEXXX',
     taxId: '12/345/67890',
     vatId: 'DE123456789',
@@ -271,7 +271,7 @@ const BASE_OFFER = {
 const BASE_ACCOUNT = {
   id: 'acc1',
   name: 'Hauptgeschaeftskonto',
-  iban: 'DE12345678901234567890',
+  iban: 'DE89370400440532013000',
   balance: 124500,
   defaultSkrAccountNumber: '1200',
   type: 'bank',
@@ -317,6 +317,19 @@ const BASE_RECURRING = {
   nextRun: todayIso,
   amount: 150,
   items: [{ description: 'Monatliche Wartung', quantity: 1, price: 150, total: 150 }],
+};
+
+/** settingsOverrides for Pro with double-entry bookkeeping (GmbH, SKR03): the shell then shows Ausnahmen, Belege and Offene Posten. */
+export const PRO_DOUBLE_ENTRY_SETTINGS = {
+  businessReportingProfile: {
+    jurisdiction: 'DE',
+    legalForm: 'gmbh',
+    profitDetermination: 'double_entry',
+    hgbSizeClass: 'small',
+    fiscalYearStart: '01-01',
+    chart: 'SKR03',
+    vatMethod: 'soll',
+  },
 };
 
 export const createDesktopSettings = (overrides = {}) => {
@@ -417,7 +430,7 @@ export async function launchDesktopApp(options = {}) {
   const app = options.app ?? 'desktop';
   const { cwd, rendererRoot } = appConfig(app);
   const rendererServer = await startStaticServer(rendererRoot);
-  const userDataDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), `billme-${app}-e2e-`));
+  const userDataDir = options.userDataDir ?? await fs.promises.mkdtemp(path.join(os.tmpdir(), `billme-${app}-e2e-`));
   const cacheDir = path.join(userDataDir, 'cache');
   await fs.promises.mkdir(cacheDir, { recursive: true });
   const launchedApp = await electron.launch({
@@ -434,7 +447,11 @@ export async function launchDesktopApp(options = {}) {
     },
   });
 
+  const proc = launchedApp.process();
   const page = await launchedApp.firstWindow();
+  // A dirty editor registers a beforeunload prompt; Electron answers it itself when the window closes,
+  // so Playwright's own auto-dismiss fails with "No dialog is showing" and hides the real test result.
+  page.on('dialog', (dialog) => void dialog.accept().catch(() => undefined));
   await page.waitForLoadState('domcontentloaded');
   await page.waitForFunction(() => Boolean(window.billmeApi));
 
@@ -444,10 +461,17 @@ export async function launchDesktopApp(options = {}) {
     baseUrl: rendererServer.baseUrl,
     userDataDir,
     targetApp: app,
-    close: async () => {
-      await launchedApp.close();
+    close: async ({ keepData = false } = {}) => {
+      // The native teardown can hang on a pending dialog; do not let it block the suite.
+      await Promise.race([launchedApp.close().catch(() => undefined), new Promise((resolve) => setTimeout(resolve, 8_000))]);
+      // A hung teardown leaves the process holding the data directory (PGlite is single-owner).
+      if (proc.exitCode === null && proc.signalCode === null) {
+        proc.kill('SIGKILL');
+        await new Promise((resolve) => { proc.once('exit', resolve); setTimeout(resolve, 3_000); });
+      }
       await rendererServer.close();
-      await fs.promises.rm(userDataDir, { recursive: true, force: true });
+      // Chromium may still flush files into the profile right after exit: retry instead of failing the test on ENOTEMPTY.
+      if (!keepData) await fs.promises.rm(userDataDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
     },
   };
 }
@@ -491,11 +515,49 @@ export async function seedDesktopData(page, options = {}) {
 
   await invokeDesktopIpc(page, 'articles:upsert', { article: BASE_ARTICLE });
 
-  for (const invoice of BASE_INVOICES) {
-    await invokeDesktopIpc(page, 'invoices:upsert', {
-      reason: 'E2E Seed',
-      invoice,
-    });
+  // Pro books every issued invoice into the ledger, so the chart has to exist first.
+  if (app === 'pro') {
+    const statsBefore = await invokeDesktopIpc(page, 'pro:getLedgerStats');
+    if ((statsBefore?.total ?? 0) === 0) {
+      await invokeDesktopIpc(page, 'pro:importSkr', { preferredSource: 'auto' });
+    }
+  }
+
+  // Invoices go the way the app issues them: reserve a number, save the draft,
+  // issue it, then record payments (the server refuses issued/paid inserts).
+  for (const { payments, status, ...invoice } of BASE_INVOICES) {
+    const reservation = await invokeDesktopIpc(page, 'numbers:reserve', { kind: 'invoice' });
+    // Pro refuses to issue a §19 invoice without its DATEV tax evidence.
+    const evidence = app === 'pro' ? { taxMeta: { datevEvidenceType: 'exemption', datevEvidenceReference: '§19 UStG' } } : {};
+    const draft = { ...invoice, taxMode: 'small_business_19_ustg', ...evidence, number: reservation.number, numberReservationId: reservation.reservationId, status: 'draft', payments: [] };
+    await invokeDesktopIpc(page, 'invoices:upsert', { reason: 'E2E Seed', invoice: draft });
+    await invokeDesktopIpc(page, 'invoices:upsert', { reason: 'E2E Seed gestellt', invoice: { ...draft, status: 'open' } });
+    for (const payment of payments) {
+      if (app !== 'pro') {
+        await invokeDesktopIpc(page, 'invoices:savePayment', { invoiceId: invoice.id, payment, reason: 'E2E Seed Zahlung' });
+        continue;
+      }
+      // Pro settles through Offene Posten; invoices:savePayment on a posted Pro invoice answers 500
+      // (BUG documented at packages/integration-tests/src/pro-accounting.test.ts:823).
+      const { activeChart } = await invokeDesktopIpc(page, 'pro:getAccountingPolicy');
+      const item = (await invokeDesktopIpc(page, 'pro:listOpenItems')).find((row) => row.sourceId === invoice.id);
+      if (!item) throw new Error(`Seed: issuing ${invoice.id} booked no open item in Pro`);
+      await invokeDesktopIpc(page, 'pro:allocateOpenItemPayment', {
+        payment: {
+          sourceType: 'manual',
+          sourceId: payment.id,
+          partyType: item.partyType,
+          partyId: item.partyId,
+          paymentDate: payment.date,
+          amount: payment.amount,
+          bankAccountNumber: activeChart === 'SKR04' ? '1800' : '1200',
+          method: payment.method,
+          allocations: [{ openItemId: item.id, amount: payment.amount }],
+          reason: 'E2E Seed Zahlung',
+          allocationEventId: `seed-${payment.id}`,
+        },
+      });
+    }
   }
 
   await invokeDesktopIpc(page, 'offers:upsert', {
@@ -510,13 +572,6 @@ export async function seedDesktopData(page, options = {}) {
   await invokeDesktopIpc(page, 'recurring:upsert', {
     profile: BASE_RECURRING,
   });
-
-  if (app === 'pro') {
-    const statsBefore = await invokeDesktopIpc(page, 'pro:getLedgerStats');
-    if ((statsBefore?.total ?? 0) === 0) {
-      await invokeDesktopIpc(page, 'pro:importSkr', { preferredSource: 'auto' });
-    }
-  }
 }
 
 export async function importPendingProTransaction(page, label, options = {}) {
@@ -558,30 +613,42 @@ export async function importPendingProTransaction(page, label, options = {}) {
   return { transaction, draft };
 }
 
+/**
+ * Saves a booking draft the way the workbench does, then walks it to "approved" through the draft actions.
+ * The server owns workflowStatus: a client-set approved/posted is refused (proAccountingRoutes.ts CLIENT_CONTROLLED_WORKFLOW_STATUSES).
+ */
+export async function approveProDraft(page, draft) {
+  const saved = await invokeDesktopIpc(page, 'pro:saveDraft', { draft: { ...draft, workflowStatus: 'suggested' } });
+  await invokeDesktopIpc(page, 'pro:dispatchDraftAction', { transactionId: saved.transactionId, action: 'submit_for_review' });
+  return await invokeDesktopIpc(page, 'pro:dispatchDraftAction', { transactionId: saved.transactionId, action: 'approve' });
+}
+
+/**
+ * Pro keeps its ledger in an embedded PGlite that only the app process may open, and no route closes a
+ * period (see withDatabase in packages/integration-tests/src/pro-fixtures.ts). So: stop the app, write the
+ * period row, start it again on the same data. `desktop` is updated in place; read `desktop.page` afterwards.
+ */
 export async function setProAccountingPeriodStatus(desktop, period, status = 'soft_locked') {
-  return desktop.app.evaluate(({ app }, args) => {
-    const pathModule = process.getBuiltinModule('node:path');
-    const { createRequire } = process.getBuiltinModule('node:module');
-    const Database = createRequire(pathModule.join(app.getAppPath(), 'package.json'))('better-sqlite3');
-    const dbPath = pathModule.join(app.getPath('userData'), 'billme-pro-v2.sqlite');
-    const db = new Database(dbPath);
-    try {
-      const periodRow = db.prepare('SELECT period, status FROM accounting_periods WHERE tenant_id = ? AND period = ?').get('default', args.period);
-      if (!periodRow) {
-        const [year, month] = args.period.split('-').map(Number);
-        const startsAt = `${args.period}-01`;
-        const endsAt = new Date(Date.UTC(year, month, 0)).toISOString().slice(0, 10);
-        const now = new Date().toISOString();
-        db.prepare(`INSERT OR IGNORE INTO accounting_periods
-          (id, tenant_id, period, fiscal_year, status, starts_at, ends_at, created_at, updated_at)
-          VALUES (?, 'default', ?, ?, 'open', ?, ?, ?, ?)`).run(`e2e-period-${args.period}`, args.period, year, startsAt, endsAt, now, now);
-      }
-      db.prepare('UPDATE accounting_periods SET status = ?, updated_at = ? WHERE tenant_id = ? AND period = ?').run(args.status, new Date().toISOString(), 'default', args.period);
-      return db.prepare('SELECT period, status FROM accounting_periods WHERE tenant_id = ? AND period = ?').get('default', args.period);
-    } finally {
-      db.close();
-    }
-  }, { period, status });
+  const { userDataDir } = desktop;
+  await desktop.close({ keepData: true });
+  const { PGlite } = await import('@electric-sql/pglite');
+  const db = new PGlite(path.join(userDataDir, 'billme-pro-pglite'));
+  try {
+    await db.waitReady;
+    const [year, month] = period.split('-').map(Number);
+    const endsAt = new Date(Date.UTC(year, month, 0)).toISOString().slice(0, 10);
+    const now = new Date().toISOString();
+    await db.query(
+      `INSERT INTO accounting_periods (id,tenant_id,period,fiscal_year,status,starts_at,ends_at,created_at,updated_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$8)
+       ON CONFLICT (tenant_id,period) DO UPDATE SET status=EXCLUDED.status,updated_at=EXCLUDED.updated_at`,
+      [`e2e-period-${period}`, 'billme-pro-local-tenant', period, year, status, `${period}-01`, endsAt, now],
+    );
+  } finally {
+    await db.close();
+  }
+  Object.assign(desktop, await launchDesktopApp({ app: 'pro', userDataDir }));
+  return { period, status };
 }
 
 /** Returns the embedded Factur-X XML of a PDF, or null when there is none. */

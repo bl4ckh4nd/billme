@@ -12,6 +12,8 @@ export default async function globalSetup() {
     };
   }
 
+  if (process.env.E2E_SKIP_BUILD === '1') return;
+
   execFileSync('pnpm', ['-C', 'apps/desktop', 'build'], {
     cwd: process.cwd(),
     stdio: 'inherit',

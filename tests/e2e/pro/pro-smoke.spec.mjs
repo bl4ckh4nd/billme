@@ -25,4 +25,5 @@ test('old finance hub link lands on Konten and the rail reaches the accounting a
   for (const label of ['Buchen', 'Bankabgleich', 'Auswertungen', 'Steuer']) {
     await expect(nav.getByRole('button', { name: label })).toBeVisible();
   }
+  await page.screenshot({ path: test.info().outputPath('01-konten-with-rail.png') });
 });

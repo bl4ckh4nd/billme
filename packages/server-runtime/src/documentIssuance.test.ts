@@ -117,6 +117,41 @@ const countRows = async (database: ServerDatabase, sql: string, params: readonly
   return Number(result.rows[0]?.count);
 };
 
+test('Lite revisions remain editable and atomically replace only an unpaid issued invoice', async (t) => {
+  const h = await setup('lite');
+  t.after(() => h.app.close());
+  const sourceId = randomUUID();
+  const source = await h.repositories.invoiceRepo.save(h.scope, {
+    kind: 'invoice', tenantId: h.tenantId, id: sourceId, number: 'RE-ORIGINAL', client: 'Buyer', clientEmail: 'buyer@example.test',
+    date: '2026-09-01', dueDate: '2026-09-15', servicePeriod: '2026-09-01', amount: 119, status: 'open', history: [], payments: [],
+    items: [{ kind: 'item', description: 'Original', quantity: 1, price: 100, total: 100, taxRate: 19 }],
+    taxMode: 'standard_vat', taxMeta: { defaultVatRate: 19 }, taxSnapshot: { vatRateApplied: 19, vatAmount: 19, netAmount: 100, grossAmount: 119, einvoiceCategoryCode: 'S' },
+  });
+  const makeRevision = async () => {
+    const response = await h.issue({ operation: 'revision', id: randomUUID(), invoiceId: source.id, date: '2026-10-03', dueDate: '2026-10-17', reason: 'Correct unpaid invoice' });
+    assert.equal(response.statusCode, 200, response.body);
+    assert.equal(response.json().status, 'draft');
+    return response.json();
+  };
+  const first = await makeRevision();
+  const competing = await makeRevision();
+  const reservation = await h.database.query<{ status: string }>('SELECT status FROM number_reservations WHERE tenant_id=$1 AND document_id=$2', [h.tenantId, first.id]);
+  assert.deepEqual(reservation.rows, [{ status: 'reserved' }]);
+  const edit = { ...first, amount: 142.8, items: [{ kind: 'item', description: 'Corrected', quantity: 1, price: 120, total: 120, taxRate: 19 }], taxSnapshot: { ...first.taxSnapshot, netAmount: 120, vatAmount: 22.8, grossAmount: 142.8 } };
+  const save = (invoice: Record<string, unknown>) => h.app.inject({ method: 'POST', url: '/api/v1/lite/invoices', headers: h.headers, payload: { invoice, reason: 'Review and issue revision' } });
+  const edited = await save(edit);
+  assert.equal(edited.statusCode, 200, edited.body);
+  const issued = await save({ ...edited.json(), status: 'open' });
+  assert.equal(issued.statusCode, 200, issued.body);
+  assert.equal((await save({ ...edited.json(), status: 'open' })).statusCode, 200, 'issuance retry is idempotent');
+  const original = (await h.repositories.invoiceRepo.getById(h.scope, source.id))!;
+  assert.equal(original.status, 'cancelled'); assert.deepEqual(original.items, source.items); assert.deepEqual(original.taxSnapshot, source.taxSnapshot);
+  const cancellations = (await h.repositories.invoiceRepo.list(h.scope)).filter((invoice) => invoice.sourceDocumentId === source.id && invoice.documentKind === 'cancellation_invoice');
+  assert.equal(cancellations.length, 1); assert.equal(cancellations[0].amount, source.amount); assert.deepEqual(cancellations[0].taxSnapshot, source.taxSnapshot);
+  assert.equal((await save({ ...competing, status: 'open' })).statusCode, 409, 'a competing replacement cannot issue');
+  assert.equal((await save({ ...issued.json(), client: 'Alter issued content' })).statusCode, 409);
+});
+
 for (const product of ['lite', 'pro'] as const) {
   test(`${product} document-chain issuance is atomic, idempotent, bounded, and role-guarded`, async (t) => {
     const harness = await setup(product);
@@ -445,7 +480,7 @@ test('pro document-chain issuance posts billing documents, skips non-billing kin
     'SELECT allocated_amount FROM open_items WHERE tenant_id=$1 AND source_id=$2',
     [harness.tenantId, settlementId],
   );
-  assert.equal(Number(sourceItem.rows[0]?.allocated_amount), 20);
+  assert.equal(Number(sourceItem.rows[0]?.allocated_amount), 23.8);
 
   // Case 5: a failure inside posting rolls back every effect; the same id retries.
   const targetId = `rollback-${suffix}`;

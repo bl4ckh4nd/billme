@@ -16,10 +16,12 @@ const SCREENSHOT_DIR = path.resolve(
 let desktop;
 const directRunner = process.env.BILLME_DESKTOP_CHAIN_DIRECT_RUNNER === '1';
 
+// The Playwright spec leaves its screenshots in the test output; only the direct runner (outgoing-document-chain.mjs) writes into docs/audit.
 const screenshot = async (page, name) => {
-  fs.mkdirSync(SCREENSHOT_DIR, { recursive: true });
+  const dir = directRunner ? SCREENSHOT_DIR : test.info().outputPath('chain');
+  fs.mkdirSync(dir, { recursive: true });
   await page.screenshot({
-    path: path.join(SCREENSHOT_DIR, `${name}.png`),
+    path: path.join(dir, `${name}.png`),
     fullPage: true,
   });
 };
@@ -136,12 +138,23 @@ export const runProDesktopOutgoingDocumentChainScenario = async (page, baseUrl) 
 
   // The accepted offer is a prerequisite seeded through the typed IPC bridge;
   // every outgoing-chain mutation below is performed by the visible UI.
-  const offer = (await invokeDesktopIpc(page, 'offers:list')).find((entry) => entry.id === 'offer-open-1');
-  expect(offer?.shareDecision).toBe('accepted');
-  await invokeDesktopIpc(page, 'offers:upsert', {
+  const seeded = (await invokeDesktopIpc(page, 'offers:list')).find((entry) => entry.id === 'offer-open-1');
+  // Accepted offers are immutable, so the chain starts from its own offer:
+  // positions are set while it is a draft, then the customer accepts it.
+  const reservation = await invokeDesktopIpc(page, 'numbers:reserve', { kind: 'offer' });
+  const draft = await invokeDesktopIpc(page, 'offers:upsert', {
     reason: 'E2E outgoing chain setup',
     offer: {
-      ...offer,
+      ...seeded,
+      id: 'offer-chain-1',
+      number: reservation.number,
+      numberReservationId: reservation.reservationId,
+      status: 'draft',
+      shareDecision: null,
+      acceptedAt: null,
+      acceptedBy: null,
+      acceptedEmail: null,
+      acceptedUserAgent: null,
       taxMode: 'standard_vat',
       amount: 120,
       items: [
@@ -150,10 +163,16 @@ export const runProDesktopOutgoingDocumentChainScenario = async (page, baseUrl) 
       ],
     },
   });
+  const offer = await invokeDesktopIpc(page, 'offers:upsert', {
+    reason: 'Angebot telefonisch angenommen',
+    offer: { ...draft, shareDecision: 'accepted', acceptedAt: new Date().toISOString(), acceptedBy: seeded.client },
+  });
+  expect(offer.shareDecision).toBe('accepted');
+  await page.reload();
 
   await page.goto(appUrl(baseUrl, '/documents'));
   await page.getByRole('radio', { name: 'Angebote', exact: true }).click();
-  await page.getByText('ANG-2026-001', { exact: true }).click();
+  await page.getByText(offer.number, { exact: true }).click();
   await expect(page.getByRole('button', { name: 'Auftragsbestätigung', exact: true })).toBeVisible();
   await screenshot(page, '01-accepted-offer');
 
@@ -250,12 +269,15 @@ export const runProDesktopOutgoingDocumentChainScenario = async (page, baseUrl) 
     expect.arrayContaining([
       expect.objectContaining({ id: order.id, documentKind: 'order_confirmation', status: 'open' }),
       expect.objectContaining({ id: delivery.id, documentKind: 'delivery_note', status: 'open' }),
-      expect.objectContaining({ id: advance.id, documentKind: 'advance_invoice', amount: 40, status: 'open' }),
+      // Fully credited: nothing is owed any more, so it is no longer open (and no longer dunned).
+      expect.objectContaining({ id: advance.id, documentKind: 'advance_invoice', amount: 40, status: 'paid' }),
       expect.objectContaining({ id: partial.id, documentKind: 'partial_invoice', amount: 30, status: 'open' }),
-      expect.objectContaining({ id: finalInvoice.id, documentKind: 'final_invoice', amount: 50, status: 'open' }),
+      // Replaced by its Stornorechnung.
+      expect.objectContaining({ id: finalInvoice.id, documentKind: 'final_invoice', amount: 50, status: 'cancelled' }),
       expect.objectContaining({ id: creditNote.id, documentKind: 'credit_note', sourceDocumentId: advance.id, status: 'open' }),
       expect.objectContaining({ id: cancellation.id, documentKind: 'cancellation_invoice', sourceDocumentId: finalInvoice.id, status: 'open' }),
-      expect.objectContaining({ id: revision.id, revisionOfId: finalInvoice.id, revisionNumber: 1, status: 'open' }),
+      // A revision starts as a draft: it is edited before it replaces the issued document.
+      expect.objectContaining({ id: revision.id, revisionOfId: finalInvoice.id, revisionNumber: 1, status: 'draft' }),
     ]),
   );
 

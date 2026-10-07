@@ -90,7 +90,7 @@ test('project repository upsert moves a project atomically and preserves unknown
 
     await assert.rejects(
       () => repository.upsert(scope, project({ id: 'project-collision', clientId: 'client-c', code: 'PRJ-2026-001' }), 'Kollision'),
-      /Project code already exists/,
+      { statusCode: 409, message: 'Projektnummer bereits vergeben.' },
     );
   });
 });
@@ -104,7 +104,7 @@ test('project repository archives and filters projects while retaining archived 
     assert.equal(archived.archivedAt !== undefined, true);
     assert.deepEqual(await repository.list(scope), []);
     assert.deepEqual(await repository.list(scope, { includeArchived: true }), [archived]);
-    await assert.rejects(() => repository.archive(scope, 'missing', 'Nicht vorhanden'), /Project not found/);
-    await assert.rejects(() => repository.archive(scope, 'project-a', '   '), /Archive reason is required/);
+    await assert.rejects(() => repository.archive(scope, 'missing', 'Nicht vorhanden'), { statusCode: 404, message: 'Projekt nicht gefunden.' });
+    await assert.rejects(() => repository.archive(scope, 'project-a', '   '), { statusCode: 400, message: 'Archivierungsgrund erforderlich.' });
   });
 });

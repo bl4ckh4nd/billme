@@ -137,6 +137,28 @@ export const workspaceSummarySchema = z.object({
 });
 export type WorkspaceSummary = z.infer<typeof workspaceSummarySchema>;
 
+/** A session for one workspace, as sign-up, switching and invitations return it. */
+export const workspaceSessionSchema = z.object({
+  token: z.string().min(1),
+  user: authUserSchema,
+  tenantId: z.string().min(1),
+  product: serverProductSchema,
+});
+export type WorkspaceSession = z.infer<typeof workspaceSessionSchema>;
+
+export const invitationPreviewSchema = z.object({
+  email: z.string(),
+  role: serverRoleSchema,
+  workspaceName: z.string(),
+  product: serverProductSchema,
+  userExists: z.boolean(),
+});
+
+export const productAppsSchema = z.object({ lite: z.string().optional(), pro: z.string().optional() });
+export const workspaceListSchema = z.array(workspaceSummarySchema);
+export const sessionTenantSchema = z.object({ tenantId: z.string(), user: authUserSchema }).passthrough();
+export const okResultSchema = z.object({ ok: z.literal(true) });
+
 export const deviceLoginStartRequestSchema = z.object({
   product: serverProductSchema,
   label: z.string().trim().min(1).max(80),

@@ -23,6 +23,8 @@ export const completeBusinessOnboardingIfVisible = async (page, {
   const heading = page.getByRole('heading', { name: 'Richte deinen Firmenkopf ein' });
   const ready = page.getByRole('heading', { name: readyHeading, level: 1 });
 
+  // The ready heading renders before settings arrive; decide only once the requests settled.
+  await page.waitForLoadState('networkidle');
   await expect.poll(async () => {
     if (await heading.isVisible().catch(() => false)) return 'onboarding';
     if (await ready.isVisible().catch(() => false)) return 'ready';

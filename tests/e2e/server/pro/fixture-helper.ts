@@ -103,12 +103,14 @@ export const ensureHarnessSession = async (options: {
   fullName: string;
 }) => {
   const state = await readHarnessState(options.stateFile);
+  const env = await readHarnessEnv(state);
   const client = createServerApiClient(state.urls.api);
   return client.ensureSession({
     product: options.product,
     email: options.email,
     password: options.password,
     fullName: options.fullName,
+    ...(env.BILLME_SETUP_TOKEN ? { setupToken: env.BILLME_SETUP_TOKEN } : {}),
   });
 };
 

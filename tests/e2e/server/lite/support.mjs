@@ -119,6 +119,10 @@ export const provisionLiteSession = async ({
   if (namespace) {
     args.push(...cliArg('seed-namespace', namespace));
   }
+  const { env } = await getLiteRuntime();
+  if (env.BILLME_SETUP_TOKEN) {
+    args.push(...cliArg('setup-token', env.BILLME_SETUP_TOKEN));
+  }
 
   return runFixtureCli(args);
 };

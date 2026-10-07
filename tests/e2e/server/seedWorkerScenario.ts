@@ -91,6 +91,7 @@ const main = async () => {
     email: ownerEmail,
     password: 'billme-server-123',
     fullName: payload.product === 'pro' ? 'Billme Pro Owner' : 'Billme Lite Owner',
+    setupToken: state.env?.BILLME_SETUP_TOKEN,
   });
 
   const dunningFee = 12.5;

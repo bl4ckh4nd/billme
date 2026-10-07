@@ -75,6 +75,7 @@ const ensureLiteSession = async (args: Map<string, string>) => {
     email: requireArg(args, 'email'),
     password: requireArg(args, 'password'),
     fullName: requireArg(args, 'full-name'),
+    setupToken: args.get('setup-token')?.trim() || undefined,
   });
 
   const databaseUrl = args.get('database-url')?.trim();

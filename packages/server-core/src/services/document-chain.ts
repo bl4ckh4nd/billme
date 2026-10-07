@@ -294,8 +294,11 @@ const SETTLEMENT_TITLES: Record<SettlementInvoiceKind, string> = {
  * to the cent instead of being re-rounded from the net.
  */
 const finalInvoiceBody = (order: Invoice, earlier: Invoice[]): { items: BillingLineItem[]; taxSnapshot: Invoice['taxSnapshot'] } => {
-  const orderSnapshot = order.taxSnapshot;
-  if (!orderSnapshot) throw new DocumentChainError('Die Auftragsbestätigung hat keine Steuerberechnung; eine Schlussrechnung ist nicht möglich.');
+  // Older orders may lack a stored snapshot; derive it from their lines the same way the order was priced.
+  const orderSnapshot = order.taxSnapshot ?? calculateInvoiceTaxSnapshot(
+    { items: order.items, taxMode: order.taxMode, taxMeta: order.taxMeta },
+    { legal: { defaultVatRate: undefined } },
+  );
   const byRate = new Map<number, { net: number; vat: number }>();
   for (const entry of orderSnapshot.vatBreakdown ?? [{ rate: orderSnapshot.vatRateApplied, netAmount: orderSnapshot.netAmount, vatAmount: orderSnapshot.vatAmount }]) {
     byRate.set(entry.rate, { net: cents(entry.netAmount), vat: cents(entry.vatAmount) });

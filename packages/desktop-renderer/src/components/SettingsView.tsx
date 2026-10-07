@@ -803,6 +803,64 @@ const SettingsForm: React.FC<{ initialSettings: AppSettings }> = ({ initialSetti
             </section>
 
             <section className="flex flex-col gap-3 border-t border-border pt-3">
+              <h3 className="text-label text-foreground">Auftragsbestätigungen</h3>
+              <div className="grid grid-cols-2 gap-3">
+                <Input
+                  id="settings-ab-prefix"
+                  label="Präfix Format"
+                  type="text"
+                  fullWidth
+                  className="font-mono"
+                  value={settings.numbers.orderConfirmationPrefix ?? 'AB-%Y-'}
+                  onChange={(e) => updateNested('numbers', 'orderConfirmationPrefix', e.target.value)}
+                />
+                <Input
+                  id="settings-ab-next"
+                  label="Nächste Nummer"
+                  type="number"
+                  fullWidth
+                  className="tabular-nums"
+                  value={settings.numbers.nextOrderConfirmationNumber ?? 1}
+                  min={1}
+                  onChange={(e) => updateNested(
+                    'numbers',
+                    'nextOrderConfirmationNumber',
+                    parsePositiveInteger(e.target.value, settings.numbers.nextOrderConfirmationNumber ?? 1),
+                  )}
+                />
+              </div>
+            </section>
+
+            <section className="flex flex-col gap-3 border-t border-border pt-3">
+              <h3 className="text-label text-foreground">Lieferscheine</h3>
+              <div className="grid grid-cols-2 gap-3">
+                <Input
+                  id="settings-ls-prefix"
+                  label="Präfix Format"
+                  type="text"
+                  fullWidth
+                  className="font-mono"
+                  value={settings.numbers.deliveryNotePrefix ?? 'LS-%Y-'}
+                  onChange={(e) => updateNested('numbers', 'deliveryNotePrefix', e.target.value)}
+                />
+                <Input
+                  id="settings-ls-next"
+                  label="Nächste Nummer"
+                  type="number"
+                  fullWidth
+                  className="tabular-nums"
+                  value={settings.numbers.nextDeliveryNoteNumber ?? 1}
+                  min={1}
+                  onChange={(e) => updateNested(
+                    'numbers',
+                    'nextDeliveryNoteNumber',
+                    parsePositiveInteger(e.target.value, settings.numbers.nextDeliveryNoteNumber ?? 1),
+                  )}
+                />
+              </div>
+            </section>
+
+            <section className="flex flex-col gap-3 border-t border-border pt-3">
               <div className="flex flex-wrap items-baseline justify-between gap-2">
                 <h3 className="text-label text-foreground">Kunden</h3>
                 <p className="text-caption text-muted">

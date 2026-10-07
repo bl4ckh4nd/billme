@@ -8,6 +8,7 @@ import {
 import { SkeletonLoader } from '../ui/components/SkeletonLoader';
 import { useClientsQuery } from '../hooks/useClients';
 import { useInvoicesQuery } from '../hooks/useInvoices';
+import { billingDocuments } from '../billingDocuments';
 import { useOffersQuery } from '../hooks/useOffers';
 import { useProjectsQuery } from '../hooks/useProjects';
 
@@ -72,7 +73,8 @@ export const ProjectDetailView: React.FC = () => {
     return { paidApplied, remaining };
   };
 
-  const issuedInvoices = projectInvoices.filter((i) => i.status !== 'draft');
+  // Sums count billing documents only, lowered by their credit notes; orders and delivery notes are no revenue.
+  const issuedInvoices = billingDocuments(projectInvoices).filter((i) => i.status !== 'draft');
   const openInvoices = issuedInvoices.filter((i) => i.status === 'open');
   const overdueInvoices = issuedInvoices.filter((i) => i.status === 'overdue');
   const paidInvoices = issuedInvoices.filter((i) => i.status === 'paid');

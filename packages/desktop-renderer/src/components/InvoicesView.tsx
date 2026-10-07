@@ -10,6 +10,7 @@ import {
   PageHeader, SegmentedControl, Select, Table, TableBody, TableCell, TableHead, TableHeader, TableRow, Textarea, Timeline, formatEmptyValue, nextSort,
   cn, useActionFeedback, type SortDirection,
 } from '@billme/ui';
+import type { BadgeStatus } from '@billme/ui';
 import {
   getInvoiceDocumentLabel,
   isBillingDocumentKind,
@@ -31,6 +32,12 @@ import { CHAIN_START_LABELS, ChainSourcePicker, type ChainStartAction } from './
 import {
   calculateDaysOverdue,
   calculateInvoiceTaxSnapshot,
+  correctableAmount,
+  correctionBlocker,
+  isReceivableDocumentKind,
+  orderConfirmationBlocker,
+  orderSettlement,
+  revisionBlocker,
   determineDunningLevel,
   getInvoiceTaxExemptionReason,
   getInvoiceTaxModeDefinition,
@@ -105,6 +112,16 @@ const KIND_FILTERS: Record<Exclude<KindFilter, 'all'>, ReadonlyArray<NonNullable
   settlement: ['advance_invoice', 'partial_invoice', 'final_invoice'],
   correction: ['credit_note', 'cancellation_invoice'],
 };
+
+const isAcceptedOffer = (offer: Offer): boolean => offer.status === 'accepted' || offer.shareDecision === 'accepted';
+/** The chain rules read the portal decision from `share`; the renderer keeps it flat. */
+const toChainOffer = (offer: Offer) => ({ id: offer.id, amount: offer.amount, status: offer.status, share: { decision: offer.shareDecision ?? undefined } }) as never;
+
+/** Order confirmations, delivery notes and corrections are issued, not open receivables. */
+const DocumentStatusBadge: React.FC<{ document: { status: Invoice['status'] | Offer['status']; documentKind?: Invoice['documentKind'] } }> = ({ document }) =>
+  document.status === 'open' && !isReceivableDocumentKind(document.documentKind)
+    ? <Badge tone="neutral">Ausgestellt</Badge>
+    : <Badge status={document.status as BadgeStatus} />;
 
 type AmountChainAction = Extract<ChainAction, 'advance_invoice' | 'partial_invoice' | 'final_invoice' | 'credit_note' | 'cancellation_invoice'>;
 
@@ -230,6 +247,9 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
   const selectedInvoice = documentType === 'invoice' ? invoices.find(i => i.id === selectedId) : undefined;
   const selectedOffer = documentType === 'offer' ? offers.find(i => i.id === selectedId) : undefined;
   const selectedDocument = selectedInvoice ?? selectedOffer;
+  const offerOrder = selectedOffer
+    ? invoices.find((invoice) => invoice.documentKind === 'order_confirmation' && invoice.sourceDocumentId === selectedOffer.id)
+    : undefined;
   React.useEffect(() => setNoteDraft(''), [selectedId]);
   const selectedChain = React.useMemo(() => {
     if (!selectedDocument) return [];
@@ -523,7 +543,11 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
     if (action !== 'order_confirmation' && sourceIsOffer) return;
     if (action === 'delivery_note' && source.documentKind !== 'order_confirmation') return;
     if (isAmountChainAction(action)) {
-      setChainAmountInput(source.amount.toFixed(2));
+      // Pre-fill what can still be billed or credited, the same arithmetic the server checks.
+      const open = action === 'credit_note' || action === 'cancellation_invoice'
+        ? correctableAmount(source, invoices)
+        : orderSettlement(invoices, source).remaining;
+      setChainAmountInput(open.toFixed(2));
       setChainAmountError(null);
       setChainAmountDialog({ action, source });
       return;
@@ -531,13 +555,18 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
     persistChainDocument(action, undefined, source);
   };
 
+  const canSettle = (order: Invoice) => {
+    const settlement = orderSettlement(invoices, order);
+    return settlement.remaining > 0 && !settlement.finalIssued;
+  };
+
   /** Documents a follow-up from the "Neu" menu may start from. */
   const chainSources = (action: ChainStartAction | null): Array<Invoice | Offer> => {
-    if (action === 'order_confirmation') return offers.filter((offer) => offer.status === 'accepted' || offer.shareDecision === 'accepted');
-    if (action === 'delivery_note' || action === 'advance_invoice') return invoices.filter((invoice) => invoice.documentKind === 'order_confirmation');
-    if (action === 'credit_note' || action === 'cancellation_invoice') {
-      return invoices.filter((invoice) => isBillingDocumentKind(invoice.documentKind) && invoice.status !== 'draft' && invoice.status !== 'cancelled');
-    }
+    const orders = invoices.filter((invoice) => invoice.documentKind === 'order_confirmation' && invoice.status !== 'draft');
+    if (action === 'order_confirmation') return offers.filter((offer) => !orderConfirmationBlocker(toChainOffer(offer), invoices));
+    if (action === 'delivery_note') return orders;
+    if (action === 'advance_invoice' || action === 'partial_invoice' || action === 'final_invoice') return orders.filter((order) => canSettle(order));
+    if (action === 'credit_note' || action === 'cancellation_invoice') return invoices.filter((invoice) => !correctionBlocker(invoice, invoices, action));
     return [];
   };
 
@@ -1249,7 +1278,7 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
                 toolbar={
                   <>
                     <div className="flex flex-wrap items-center gap-2">
-                      <Badge status={selectedDocument.status} />
+                      <DocumentStatusBadge document={selectedDocument} />
                       {documentType === 'offer' ? (
                         <Badge tone="info">Angebot</Badge>
                       ) : (
@@ -1270,9 +1299,20 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
                         </>
                       )}
 
-                      {documentType === 'offer' && selectedDocument.shareDecision === 'accepted' && (
+                      {documentType === 'offer' && offerOrder && (
+                        <Button
+                          variant="secondary"
+                          onClick={() => { setDocumentType('invoice'); setSelectedId(offerOrder.id); setViewMode('detail'); }}
+                          title="Dieses Angebot wird über die Auftragsbestätigung abgerechnet"
+                        >
+                          <FileText size={16} aria-hidden="true" />
+                          Auftragsbestätigung {offerOrder.number}
+                        </Button>
+                      )}
+
+                      {documentType === 'offer' && isAcceptedOffer(selectedDocument as Offer) && !offerOrder && (
                         <>
-                          <Button
+                          {!orderConfirmationBlocker(toChainOffer(selectedDocument as Offer), invoices) && <Button
                             variant="secondary"
                             onClick={() => handleCreateChainDocument('order_confirmation')}
                             disabled={chainIssuePending}
@@ -1280,7 +1320,7 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
                           >
                             <FileText size={16} aria-hidden="true" />
                             Auftragsbestätigung
-                          </Button>
+                          </Button>}
                           <Button
                             variant="secondary"
                             onClick={handleConvertOfferToInvoice}
@@ -1297,6 +1337,7 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
                           <Button variant="secondary" onClick={() => handleCreateChainDocument('delivery_note')} disabled={chainIssuePending} title="Lieferschein aus Auftragsbestätigung erstellen">
                             <FileText size={16} aria-hidden="true" /> Lieferschein
                           </Button>
+                          {canSettle(selectedDocument as Invoice) && <>
                           <Button variant="secondary" onClick={() => handleCreateChainDocument('advance_invoice')} disabled={chainIssuePending} title="Abschlagsrechnung erstellen">
                             <Euro size={16} aria-hidden="true" /> Abschlag
                           </Button>
@@ -1306,20 +1347,21 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
                           <Button variant="secondary" onClick={() => handleCreateChainDocument('final_invoice')} disabled={chainIssuePending} title="Schlussrechnung erstellen">
                             <CheckCircle size={16} aria-hidden="true" /> Schlussrechnung
                           </Button>
+                          </>}
                         </>
                       )}
 
-                      {documentType === 'invoice' && isBillingDocumentKind(selectedDocument.documentKind) && selectedDocument.status !== 'draft' && (
+                      {documentType === 'invoice' && selectedDocument.status !== 'draft' && (
                         <>
-                          <Button variant="secondary" onClick={() => handleCreateChainDocument('credit_note')} disabled={chainIssuePending} title="Gutschrift aus dieser Rechnung erstellen">
+                          {!correctionBlocker(selectedDocument as Invoice, invoices, 'credit_note') && <Button variant="secondary" onClick={() => handleCreateChainDocument('credit_note')} disabled={chainIssuePending} title="Gutschrift aus dieser Rechnung erstellen">
                             <ArrowLeft size={16} aria-hidden="true" /> Gutschrift
-                          </Button>
-                          <Button variant="secondary" onClick={() => handleCreateChainDocument('cancellation_invoice')} disabled={chainIssuePending} title="Stornorechnung aus dieser Rechnung erstellen">
+                          </Button>}
+                          {!correctionBlocker(selectedDocument as Invoice, invoices, 'cancellation_invoice') && <Button variant="secondary" onClick={() => handleCreateChainDocument('cancellation_invoice')} disabled={chainIssuePending} title="Stornorechnung aus dieser Rechnung erstellen">
                             <RefreshCw size={16} aria-hidden="true" /> Storno
-                          </Button>
-                          <Button variant="secondary" onClick={() => handleCreateChainDocument('revision')} disabled={chainIssuePending} title="Neue Revision aus dieser Rechnung erstellen">
+                          </Button>}
+                          {!revisionBlocker(selectedDocument as Invoice, invoices) && <Button variant="secondary" onClick={() => handleCreateChainDocument('revision')} disabled={chainIssuePending} title="Neue Revision aus dieser Rechnung erstellen">
                             <FileText size={16} aria-hidden="true" /> Revision
-                          </Button>
+                          </Button>}
                         </>
                       )}
 
@@ -1421,10 +1463,14 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
                               </TableRow>
                           </TableHeader>
                           <TableBody>
-                              {selectedDocument.items.map((item, i) => (
+                              {selectedDocument.items.map((item, i) => item.kind === 'text' || item.kind === 'group' ? (
+                                  <TableRow key={i}>
+                                      <TableCell colSpan={4} className="text-muted">{item.description}</TableCell>
+                                  </TableRow>
+                              ) : (
                                   <TableRow key={i}>
                                       <TableCell className="font-medium">{item.description}</TableCell>
-                                      <TableCell numeric muted>{item.quantity}</TableCell>
+                                      <TableCell numeric muted>{new Intl.NumberFormat('de-DE', { maximumFractionDigits: 4 }).format(item.quantity)}</TableCell>
                                       <TableCell numeric muted>{formatCurrency(item.price)}</TableCell>
                                       <TableCell numeric className="font-medium">{formatCurrency(item.total)}</TableCell>
                                   </TableRow>
@@ -1535,7 +1581,7 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
                               </div>
                           )}
                           <div className="flex items-center gap-2">
-                               <Badge status={selectedDocument.status} />
+                               <DocumentStatusBadge document={selectedDocument} />
                                <span className="text-caption text-muted">
                                {selectedDocument.status === 'paid'
                                  ? (() => {
@@ -1561,8 +1607,8 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
                           </div>
                       </Card>
 
-                      {/* Payments (Invoices only) */}
-                      {documentType === 'invoice' && (
+                      {/* Payments: billing documents only, never an order, delivery note or correction */}
+                      {documentType === 'invoice' && isReceivableDocumentKind(selectedDocument.documentKind) && (
                         <Card padding="none">
                           <CardHeader
                             className="border-b border-border px-3.5 py-3"
@@ -1875,7 +1921,7 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
                   Folgebeleg
                 </Button>
               )}
-              items={(['order_confirmation', 'delivery_note', 'advance_invoice', 'credit_note', 'cancellation_invoice'] as const).map((action) => ({
+              items={(['order_confirmation', 'delivery_note', 'advance_invoice', 'partial_invoice', 'final_invoice', 'credit_note', 'cancellation_invoice'] as const).map((action) => ({
                 id: `new-${action}`,
                 label: `${CHAIN_START_LABELS[action]} …`,
                 onSelect: () => setChainStart(action),
@@ -2041,7 +2087,7 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
                        <TableCell muted className={cn('hidden tabular-nums', !previewDocument && 'lg:table-cell')}>{formatDate(doc.date)}</TableCell>
                        <TableCell className="hidden tabular-nums lg:table-cell">{formatDate(doc.dueDate)}</TableCell>
                        <TableCell numeric>{formatCurrency(doc.amount)}</TableCell>
-                       <TableCell><Badge status={doc.status} /></TableCell>
+                       <TableCell><DocumentStatusBadge document={doc} /></TableCell>
                        <TableCell className="py-0 text-right">
                          <IconButton
                            size="sm"
@@ -2105,7 +2151,7 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
                 <h2 className="truncate text-section tabular-nums text-foreground">{doc.number}</h2>
                 <p className="text-caption text-muted">{documentType === 'offer' ? 'Angebot' : getInvoiceDocumentLabel(doc.documentKind)}</p>
               </div>
-              <Badge status={doc.status} />
+              <DocumentStatusBadge document={doc} />
             </div>
             <div className="flex flex-col gap-3 p-3.5">
             {/* T-Konto: one figure split into net and gross. */}

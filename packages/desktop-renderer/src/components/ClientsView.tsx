@@ -15,6 +15,7 @@ import { useClientsQuery, useDeleteClientMutation, useUpsertClientMutation } fro
 import { useDeferredDelete } from '../hooks/useDeferredDelete';
 import { useCreateIntent } from '../hooks/useCreateIntent';
 import { useInvoicesQuery } from '../hooks/useInvoices';
+import { billingDocuments } from '../billingDocuments';
 import { useCreateDocumentFromClientMutation } from '../hooks/useDocuments';
 import { useNavigate, useRouterState } from '@tanstack/react-router';
 import { useUiStore } from '../ui-store';
@@ -225,7 +226,7 @@ export const ClientsView: React.FC = () => {
         list.find((a) => a.isDefaultShipping) ?? list.find((a) => a.kind === 'shipping') ?? defaultBillingAddress(list) ?? null;
 
     const openBalanceByClient = new Map<string, number>();
-    for (const inv of invoices) {
+    for (const inv of billingDocuments(invoices)) {
         if (!inv.clientId || !['open', 'overdue'].includes(inv.status)) continue;
         openBalanceByClient.set(inv.clientId, (openBalanceByClient.get(inv.clientId) ?? 0) + inv.amount);
     }
@@ -376,16 +377,18 @@ export const ClientsView: React.FC = () => {
 
         // Calculations
         const clientInvoices = invoices.filter(inv => inv.clientId === selectedClient.id);
-        const totalRevenue = clientInvoices.filter(i => i.status === 'paid').reduce((acc, curr) => acc + curr.amount, 0);
-        const outstandingAmount = clientInvoices.filter(i => ['open', 'overdue'].includes(i.status)).reduce((acc, curr) => acc + curr.amount, 0);
-        const paidCount = clientInvoices.filter(i => i.status === 'paid').length;
+        // The table lists every document; the figures count billing documents only.
+        const clientBilling = billingDocuments(clientInvoices);
+        const totalRevenue = clientBilling.filter(i => i.status === 'paid').reduce((acc, curr) => acc + curr.amount, 0);
+        const outstandingAmount = clientBilling.filter(i => ['open', 'overdue'].includes(i.status)).reduce((acc, curr) => acc + curr.amount, 0);
+        const paidCount = clientBilling.filter(i => i.status === 'paid').length;
         const openCount = clientInvoices.filter(i => ['open', 'overdue'].includes(i.status)).length;
 
         // Paid revenue per month over the last year, oldest first, for the trend beside the total.
         const now = new Date();
         const paidTrend = Array.from({ length: 12 }, (_, index) => {
             const month = new Date(now.getFullYear(), now.getMonth() - 11 + index, 1);
-            return clientInvoices
+            return clientBilling
                 .filter((inv) => inv.status === 'paid')
                 .filter((inv) => {
                     const d = new Date(inv.date);

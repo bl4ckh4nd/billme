@@ -5,12 +5,14 @@ import { getInvoiceDocumentLabel, type Invoice, type Offer } from '@billme/deskt
 import { formatCurrency } from '@billme/desktop-utils';
 
 /** Follow-up documents the "Neu" menu can start; each needs its source document. */
-export type ChainStartAction = 'order_confirmation' | 'delivery_note' | 'advance_invoice' | 'credit_note' | 'cancellation_invoice';
+export type ChainStartAction = 'order_confirmation' | 'delivery_note' | 'advance_invoice' | 'partial_invoice' | 'final_invoice' | 'credit_note' | 'cancellation_invoice';
 
 export const CHAIN_START_LABELS: Record<ChainStartAction, string> = {
   order_confirmation: 'Auftragsbestätigung',
   delivery_note: 'Lieferschein',
   advance_invoice: 'Abschlagsrechnung',
+  partial_invoice: 'Teilrechnung',
+  final_invoice: 'Schlussrechnung',
   credit_note: 'Gutschrift',
   cancellation_invoice: 'Stornorechnung',
 };
@@ -27,6 +29,14 @@ const SOURCE_TEXT: Record<ChainStartAction, { question: string; empty: string }>
   advance_invoice: {
     question: 'Zu welcher Auftragsbestätigung?',
     empty: 'Eine Abschlagsrechnung gehört zu einer Auftragsbestätigung. Lege zuerst eine aus einem angenommenen Angebot an.',
+  },
+  partial_invoice: {
+    question: 'Zu welcher Auftragsbestätigung?',
+    empty: 'Eine Teilrechnung gehört zu einer Auftragsbestätigung mit offenem Restbetrag.',
+  },
+  final_invoice: {
+    question: 'Welcher Auftrag wird abgerechnet? Die Schlussrechnung zieht alle Abschläge und Teilrechnungen ab.',
+    empty: 'Eine Schlussrechnung gehört zu einer Auftragsbestätigung mit offenem Restbetrag.',
   },
   credit_note: {
     question: 'Für welche gestellte Rechnung?',

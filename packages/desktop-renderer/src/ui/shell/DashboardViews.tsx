@@ -14,7 +14,7 @@ import { useInvoicesQuery } from '../../hooks/useInvoices';
 import { useArticlesQuery } from '../../hooks/useArticles';
 import { useSettingsQuery, useSetSettingsMutation } from '../../hooks/useSettings';
 import { useOffersQuery } from '../../hooks/useOffers';
-import { calculateInvoiceTaxSnapshot, resolveInvoiceTaxMode } from '@billme/server-core/services';
+import { calculateInvoiceTaxSnapshot, isCorrectionDocumentKind, isReceivableDocumentKind, resolveInvoiceTaxMode } from '@billme/server-core/services';
 import { estimateMonthVat } from './vatEstimate';
 import { getRendererProduct } from '../../runtime-api';
 import { useLiteVatReport, vatMonthPeriod } from '../../components/eur/LiteVatPanel';
@@ -202,16 +202,23 @@ const DashboardHomeContent: React.FC<ViewProps & { settings: AppSettings }> = ({
       return snapshotFor(inv).grossAmount;
     };
 
-    const outstanding = invoices.filter((i) => i.status === 'open' || i.status === 'overdue');
+    // Receivables are billing documents only; an order confirmation or delivery note is no claim, and
+    // payments and issued credit notes lower what is still open.
+    const creditedFor = (inv: Invoice) => invoices
+      .filter((doc) => doc.sourceDocumentId === inv.id && isCorrectionDocumentKind(doc.documentKind) && doc.status !== 'draft')
+      .reduce((acc, doc) => acc + doc.amount, 0);
+    const paidFor = (inv: Invoice) => (inv.payments ?? []).reduce((acc, payment) => acc + (Number(payment.amount) || 0), 0);
+    const openAmountFor = (inv: Invoice) => Math.max(0, Math.round((amountFor(inv) - paidFor(inv) - creditedFor(inv)) * 100) / 100);
+    const outstanding = invoices.filter((i) => (i.status === 'open' || i.status === 'overdue') && isReceivableDocumentKind(i.documentKind) && openAmountFor(i) > 0);
     const overdue = outstanding.filter((i) => i.status === 'overdue');
 
-    const outstandingTotal = outstanding.reduce((acc, inv) => acc + amountFor(inv), 0);
-    const overdueTotal = overdue.reduce((acc, inv) => acc + amountFor(inv), 0);
+    const outstandingTotal = outstanding.reduce((acc, inv) => acc + openAmountFor(inv), 0);
+    const overdueTotal = overdue.reduce((acc, inv) => acc + openAmountFor(inv), 0);
 
     const now = new Date();
     const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
     const dueSoon = outstanding
-      .map((inv) => ({ inv, days: daysUntil(inv.dueDate, today), amount: amountFor(inv) }))
+      .map((inv) => ({ inv, days: daysUntil(inv.dueDate, today), amount: openAmountFor(inv) }))
       .filter((row) => row.days >= 0 && row.days <= dash.dueSoonDays)
       .sort((a, b) => a.days - b.days);
     const dueSoonTotal = dueSoon.reduce((acc, row) => acc + row.amount, 0);
@@ -225,7 +232,7 @@ const DashboardHomeContent: React.FC<ViewProps & { settings: AppSettings }> = ({
     ];
     for (const inv of outstanding) {
       const late = -daysUntil(inv.dueDate, today);
-      aging[!(late > 0) ? 0 : late <= 30 ? 1 : late <= 60 ? 2 : 3].amount += amountFor(inv);
+      aging[!(late > 0) ? 0 : late <= 30 ? 1 : late <= 60 ? 2 : 3].amount += openAmountFor(inv);
     }
 
     const currentYear = now.getFullYear();
@@ -236,7 +243,13 @@ const DashboardHomeContent: React.FC<ViewProps & { settings: AppSettings }> = ({
         const d = new Date(inv.date);
         return d.getFullYear() === currentYear && d.getMonth() === currentMonth;
       });
-    const netOf = (inv: (typeof invoices)[number]) => (inv.items ?? []).reduce((s, it) => s + (Number(it.total) || 0), 0);
+    // Net revenue: billing documents count, credit notes and Stornos subtract, orders and delivery notes are zero.
+    const netOf = (inv: (typeof invoices)[number]) => {
+      const sign = isReceivableDocumentKind(inv.documentKind) ? 1 : isCorrectionDocumentKind(inv.documentKind) ? -1 : 0;
+      if (sign === 0) return 0;
+      const net = inv.taxSnapshot?.netAmount ?? (inv.items ?? []).reduce((s, it) => s + (Number(it.total) || 0), 0);
+      return sign * net;
+    };
     const monthRevenueNet = monthIssued.reduce((acc, inv) => acc + netOf(inv), 0);
     // The same measure for the five months before, oldest first, for the trend line.
     const revenueTrend = Array.from({ length: 6 }, (_, index) => {

@@ -7,6 +7,7 @@ import { useInvoicesQuery } from '../../hooks/useInvoices';
 import { useClientsQuery } from '../../hooks/useClients';
 import { useSettingsQuery } from '../../hooks/useSettings';
 import { SkeletonLoader } from '../components/SkeletonLoader';
+import { billingDocuments } from '../../billingDocuments';
 
 const formatCurrency = (amount: number) => {
   return new Intl.NumberFormat('de-DE', { style: 'currency', currency: 'EUR' }).format(amount);
@@ -54,7 +55,7 @@ export const StatisticsView: React.FC<StatisticsViewProps> = ({ title, toolbar }
 
   return (
     <StatisticsContent
-      invoices={invoicesQuery.data}
+      invoices={billingDocuments(invoicesQuery.data)}
       clients={clientsQuery.data}
       settings={settingsQuery.data}
       title={title}

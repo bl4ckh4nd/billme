@@ -421,10 +421,13 @@ export const runLiteWorkspacesScenario = async (page, scenarioKey = 'workspaces'
 };
 
 /**
- * Lite web navigation and the document kinds beyond invoice and offer: projects
- * and services are reachable, a follow-up document is started from the list's
- * "Folgebeleg" menu with its source picked there, and the kind filter narrows the
- * list to that kind.
+ * Lite web navigation and the document chain through the UI: projects and
+ * services are reachable; from the list's "Folgebeleg" menu an order
+ * confirmation (AB- range) comes from an accepted offer, a delivery note (LS-
+ * range) from the order, then an advance invoice and the final invoice that
+ * deducts it, and a credit note. Order and delivery note are "Ausgestellt",
+ * take no payment and are no receivable: the dashboard's open receivables grow
+ * by the billed amounts only and shrink by the credit note.
  */
 export const runLiteDocumentKindsScenario = async (page, scenarioKey = 'document-kinds') => {
   const runtime = await getLiteRuntime();
@@ -439,16 +442,27 @@ export const runLiteDocumentKindsScenario = async (page, scenarioKey = 'document
   }
   await shot(page, '01-services');
 
+  const euros = (text) => Number(text.match(/-?[\d.]+,\d{2}/)[0].replace(/\./g, '').replace(',', '.'));
+  const receivables = async () => {
+    await page.goto(liteAppUrl(runtime.state, '/'), { waitUntil: 'networkidle' });
+    await page.reload({ waitUntil: 'networkidle' });
+    const tile = page.locator('.rounded-tile').filter({ hasText: 'Offene Forderungen' }).first();
+    await expect(tile).toBeVisible();
+    return euros(await tile.innerText());
+  };
+  const baseline = await receivables();
+
   const offer = await page.evaluate(async ({ clientId }) => {
     const api = globalThis.billmeApi;
     const draft = await api.documents.createFromClient({ kind: 'offer', clientId });
-    const saved = await api.offers.upsert({ offer: { ...draft, amount: 300, items: [{ kind: 'item', description: 'Montage', quantity: 1, price: 300, total: 300 }] }, reason: 'create' });
+    const saved = await api.offers.upsert({ offer: { ...draft, amount: 357, items: [{ kind: 'item', description: 'Montage', quantity: 1, price: 300, total: 300, taxRate: 19 }] }, reason: 'create' });
     return api.offers.upsert({ offer: { ...saved, status: 'open', shareDecision: 'accepted', acceptedAt: new Date().toISOString() }, reason: 'Angebot angenommen' });
   }, { clientId: seed.clients[0].id });
 
   await page.goto(liteAppUrl(runtime.state, '/documents'), { waitUntil: 'networkidle' });
   // A hash route does not reload the app; reload so the list sees the offer created through the API.
   await page.reload({ waitUntil: 'networkidle' });
+  const headingNumber = async () => (await page.getByRole('heading', { level: 1 }).innerText()).trim();
   const startFollowUp = async (label, sourceNumber) => {
     await page.getByRole('button', { name: 'Folgebeleg' }).click();
     await page.getByRole('menuitem', { name: `${label} …` }).click();
@@ -456,35 +470,80 @@ export const runLiteDocumentKindsScenario = async (page, scenarioKey = 'document
     await expect(dialog).toBeVisible();
     await dialog.getByRole('button', { name: new RegExp(sourceNumber) }).click();
   };
+  const confirmAmount = async (label, prefilled, amount) => {
+    const dialog = page.getByRole('dialog').filter({ has: page.getByRole('heading', { name: `${label} erstellen` }) });
+    const input = dialog.getByLabel('Betrag (EUR)');
+    await expect(input).toHaveValue(prefilled, { timeout: 5000 });
+    if (amount !== undefined) await input.fill(amount);
+    await dialog.getByRole('button', { name: `${label} erstellen` }).click();
+    await expect(page.getByText(new RegExp(`^${label} .* erstellt\\.$`))).toBeVisible();
+  };
+  const backToList = () => page.getByRole('button', { name: 'Zurück zur Liste' }).click();
 
   await startFollowUp('Auftragsbestätigung', offer.number);
   await expect(page.getByText(/^Auftragsbestätigung .* erstellt\.$/)).toBeVisible();
-  const order = page.getByRole('heading', { level: 1 });
-  const orderNumber = (await order.innerText()).trim();
-  await page.getByRole('button', { name: 'Zurück zur Liste' }).click();
+  const orderNumber = await headingNumber();
+  expect(orderNumber).toMatch(/^AB-\d{4}-\d{3}$/);
+  await expect(page.getByText('Ausgestellt', { exact: true }).first()).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Zahlungen' })).toHaveCount(0);
+  await backToList();
 
   await startFollowUp('Lieferschein', orderNumber);
   await expect(page.getByText(/^Lieferschein .* erstellt\.$/)).toBeVisible();
-  const deliveryNumber = (await page.getByRole('heading', { level: 1 }).innerText()).trim();
+  const deliveryNumber = await headingNumber();
+  expect(deliveryNumber).toMatch(/^LS-\d{4}-\d{3}$/);
+  await expect(page.getByRole('heading', { name: 'Zahlungen' })).toHaveCount(0);
   await shot(page, '02-delivery-note');
-  await page.getByRole('button', { name: 'Zurück zur Liste' }).click();
+  await backToList();
+
+  await startFollowUp('Abschlagsrechnung', orderNumber);
+  await confirmAmount('Abschlagsrechnung', '357.00', '100');
+  const advanceNumber = await headingNumber();
+  expect(advanceNumber).toMatch(/^RE-/);
+  await expect(page.getByText(/^Abschlagsrechnung zur Auftragsbestätigung /).first()).toBeVisible();
+  await backToList();
+
+  await startFollowUp('Schlussrechnung', orderNumber);
+  await confirmAmount('Schlussrechnung', '257.00');
+  await expect(page.getByText(new RegExp(`^Abzüglich Abschlagsrechnung ${advanceNumber} `)).first()).toBeVisible();
+  await shot(page, '03-final-invoice');
+  const finalNumber = await headingNumber();
+  const finalId = await page.evaluate(async (number) => (await globalThis.billmeApi.invoices.list()).find((doc) => doc.number === number)?.id, finalNumber);
+  const pdf = await page.request.get(`${runtime.state.urls.api}/api/v1/lite/documents/invoice/${finalId}/pdf`, { headers: { authorization: `Bearer ${session.token}` } });
+  expect(pdf.status()).toBe(200);
+  const bytes = await pdf.body();
+  expect(bytes.subarray(0, 5).toString()).toBe('%PDF-');
+  if (process.env.E2E_SCREENSHOT_DIR) await (await import('node:fs/promises')).writeFile(`${process.env.E2E_SCREENSHOT_DIR}/03-final-invoice.pdf`, bytes);
+  await backToList();
+
+  // The order is fully billed: it is no longer offered for a settlement.
+  await page.getByRole('button', { name: 'Folgebeleg' }).click();
+  await page.getByRole('menuitem', { name: 'Teilrechnung …' }).click();
+  await expect(page.getByRole('dialog', { name: 'Teilrechnung erstellen' }).getByRole('button', { name: new RegExp(orderNumber) })).toHaveCount(0);
+  await page.getByRole('dialog', { name: 'Teilrechnung erstellen' }).getByRole('button', { name: 'Abbrechen' }).click();
+
+  await startFollowUp('Gutschrift', advanceNumber);
+  await confirmAmount('Gutschrift', '100.00', '10');
+  const creditNumber = await headingNumber();
+  await backToList();
 
   await page.getByLabel('Belegart').selectOption('delivery_note');
   const rows = page.getByRole('table').getByRole('row');
   await expect(rows.filter({ hasText: deliveryNumber })).toHaveCount(1);
   await expect(rows.filter({ hasText: orderNumber })).toHaveCount(0);
-  await page.getByLabel('Belegart').selectOption('order_confirmation');
-  await expect(rows.filter({ hasText: orderNumber })).toHaveCount(1);
-  await expect(rows.filter({ hasText: deliveryNumber })).toHaveCount(0);
-  await shot(page, '03-kind-filter');
+  await page.getByLabel('Belegart').selectOption('correction');
+  await expect(rows.filter({ hasText: creditNumber })).toHaveCount(1);
+  await shot(page, '04-kind-filter');
 
-  // A credit note is offered only issued invoices as its source, never the order or delivery note.
+  // A credit note is never offered as the source of another correction.
   await page.getByRole('button', { name: 'Folgebeleg' }).click();
   await page.getByRole('menuitem', { name: 'Gutschrift …' }).click();
-  const creditSources = page.getByRole('dialog', { name: 'Gutschrift erstellen' }).getByRole('list', { name: 'Mögliche Ausgangsbelege' });
-  await expect(creditSources.getByRole('button').first()).toContainText('Rechnung');
+  const creditSources = page.getByRole('dialog', { name: 'Gutschrift erstellen' });
+  await expect(creditSources.getByRole('button', { name: new RegExp(creditNumber) })).toHaveCount(0);
   await expect(creditSources.getByRole('button', { name: new RegExp(orderNumber) })).toHaveCount(0);
-  await expect(creditSources.getByRole('button', { name: new RegExp(deliveryNumber) })).toHaveCount(0);
-  await shot(page, '04-credit-sources');
-  await page.getByRole('dialog', { name: 'Gutschrift erstellen' }).getByRole('button', { name: 'Abbrechen' }).click();
+  await creditSources.getByRole('button', { name: 'Abbrechen' }).click();
+
+  // Receivables: +100 advance, +257 final, −10 credit; order and delivery note add nothing.
+  expect(await receivables()).toBeCloseTo(baseline + 347, 2);
+  await shot(page, '05-dashboard');
 };

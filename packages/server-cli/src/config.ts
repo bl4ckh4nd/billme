@@ -1,4 +1,4 @@
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { homedir } from 'node:os';
 import { z } from 'zod';
@@ -8,6 +8,9 @@ const cliProfileSchema = z.object({
   baseUrl: z.string().url().optional(),
   product: serverProductSchema.optional(),
   token: z.string().min(1).optional(),
+  /** `desktop` profiles have no fixed URL: the app picks a new port on every start. */
+  target: z.enum(['desktop', 'server']).optional(),
+  label: z.string().min(1).optional(),
 });
 
 const cliConfigSchema = z.object({
@@ -40,8 +43,10 @@ export const readBillmeCliConfig = async (env: NodeJS.ProcessEnv): Promise<Billm
 
 export const writeBillmeCliConfig = async (env: NodeJS.ProcessEnv, config: BillmeCliConfig) => {
   const path = defaultConfigPath(env);
-  await mkdir(dirname(path), { recursive: true });
-  await writeFile(path, `${JSON.stringify(cliConfigSchema.parse(config), null, 2)}\n`, 'utf8');
+  // The file holds tokens: readable by its owner only, also where an older version created it wider.
+  await mkdir(dirname(path), { recursive: true, mode: 0o700 });
+  await writeFile(path, `${JSON.stringify(cliConfigSchema.parse(config), null, 2)}\n`, { encoding: 'utf8', mode: 0o600 });
+  await chmod(path, 0o600);
   return path;
 };
 

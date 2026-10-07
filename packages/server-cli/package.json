@@ -8,18 +8,22 @@
     "billme": "./bin/billme.mjs"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.json",
-    "typecheck": "tsc --noEmit -p tsconfig.json"
+    "build": "esbuild src/bin.ts --bundle --platform=node --format=esm --target=node20 --outfile=dist/billme.mjs",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "node --import tsx --test src/*.e2e.test.ts"
   },
   "dependencies": {
     "@billme/desktop-contracts": "workspace:*",
     "@billme/desktop-contracts-pro": "workspace:*",
+    "@billme/desktop-services": "workspace:*",
+    "@billme/embedded-server-runtime": "workspace:*",
     "@billme/server-core": "workspace:*",
     "tsx": "^4.20.5",
     "zod": "^3.25.76"
   },
   "devDependencies": {
     "@types/node": "^22.19.7",
+    "esbuild": "^0.27.3",
     "typescript": "~5.8.3"
   },
   "exports": {

@@ -1,3 +1,3 @@
-export * from './client.js';
+export * from './actions.js';
 export * from './config.js';
 export * from './cli.js';

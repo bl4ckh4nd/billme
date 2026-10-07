@@ -120,17 +120,17 @@ const InvoiceIllustration: React.FC<{ product: 'lite' | 'pro' }> = ({ product })
   <div aria-hidden="true" className="relative h-44 max-w-sm">
     <div className="absolute left-0 top-0 grid w-full gap-2 rounded-md border border-dark-border bg-dark-1 px-4 py-3 opacity-60 -rotate-2">
       <div className="flex items-center justify-between gap-3 text-xs text-dark-muted">
-        <span className="font-semibold text-background">RE-2026-0141</span>
-        <span className="rounded-full border border-status-open-border px-2 py-0.5 font-semibold">Offen</span>
+        <span className="font-semibold text-inverse-foreground">RE-2026-0141</span>
+        <span className="rounded-full border border-status-open-border px-2 py-0.5 font-semibold text-inverse-foreground">Offen</span>
       </div>
-      <span className="text-xl font-semibold tabular-nums text-background">2.380,00 €</span>
+      <span className="text-xl font-semibold tabular-nums text-inverse-foreground">2.380,00 €</span>
     </div>
     <div className="absolute left-4 top-10 grid w-full gap-2.5 rounded-md border border-dark-border bg-dark-2 px-4 py-3 rotate-1">
       <div className="flex items-center justify-between gap-3 text-xs">
-        <span className="font-semibold text-background">RE-2026-0142 · Nordlicht GmbH</span>
+        <span className="font-semibold text-inverse-foreground">RE-2026-0142 · Nordlicht GmbH</span>
         <span className="rounded-full bg-status-paid px-2 py-0.5 font-semibold text-status-paid-text">Bezahlt</span>
       </div>
-      <span className="text-xl font-semibold tabular-nums text-background">1.248,50 €</span>
+      <span className="text-xl font-semibold tabular-nums text-inverse-foreground">1.248,50 €</span>
       <span className="h-1.5 rounded-full bg-accent" />
       <div className="flex justify-between gap-3 text-xs text-dark-muted">
         <span>Zahlung eingegangen</span>
@@ -248,7 +248,7 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
   return (
     <div className="grid min-h-screen bg-background text-foreground [color-scheme:light] lg:grid-cols-2">
       <aside className="hidden flex-col justify-between gap-10 overflow-hidden bg-dark-base px-12 py-10 text-inverse-foreground lg:flex">
-        <BillmeLogo className="h-10 w-auto self-start text-background" />
+        <BillmeLogo className="h-10 w-auto self-start text-inverse-foreground" />
         <div className="grid gap-10">
           <div className="grid gap-4">
             <p className="max-w-md text-4xl font-extrabold leading-tight tracking-tight text-balance">

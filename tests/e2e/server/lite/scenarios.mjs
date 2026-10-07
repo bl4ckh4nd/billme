@@ -547,3 +547,96 @@ export const runLiteDocumentKindsScenario = async (page, scenarioKey = 'document
   expect(await receivables()).toBeCloseTo(baseline + 347, 2);
   await shot(page, '05-dashboard');
 };
+
+/**
+ * German invoicing rules as a user meets them in the browser, with the printed PDF as evidence:
+ * - §14 Abs. 4 UStG: "Als gestellt markieren" on a draft without the customer's address is refused
+ *   with the missing Pflichtangabe in the notification, and works once the address is there.
+ * - §19 UStG: a Kleinunternehmer's invoice issued with the editor's default tax mode prints no VAT
+ *   line, gross = net, and the §19 notice.
+ * - Dunning: the letter for a partly paid and partly credited invoice demands only the open
+ *   balance plus the fee, and the invoice amount itself is never raised by the fee.
+ */
+export const runLiteLegalScenario = async (page, scenarioKey = 'legal') => {
+  const { execFileSync } = await import('node:child_process');
+  const { writeFile } = await import('node:fs/promises');
+  const runtime = await getLiteRuntime();
+  const identity = createLiteIdentity(scenarioKey);
+  const { session, seed } = await provisionLiteSession({ apiBaseUrl: runtime.state.urls.api, databaseUrl: runtime.databaseUrl, ...identity });
+  expect(seed).not.toBeNull();
+  await applyLiteSession(page, runtime.state, session, '/documents');
+  const clientId = seed.clients[0].id;
+  const out = process.env.E2E_SCREENSHOT_DIR;
+
+  const pdfTextOf = async (path, name) => {
+    const response = await page.request.get(`${runtime.state.urls.api}/api/v1/lite${path}`, { headers: { authorization: `Bearer ${session.token}` } });
+    expect(response.status(), path).toBe(200);
+    const bytes = await response.body();
+    expect(bytes.subarray(0, 5).toString()).toBe('%PDF-');
+    const file = `${out ?? (await import('node:os')).tmpdir()}/${name}.pdf`;
+    await writeFile(file, bytes);
+    const text = execFileSync('pdftotext', ['-layout', file, '-'], { encoding: 'utf8' });
+    if (out) await writeFile(`${out}/${name}.txt`, text);
+    return text.replace(/\s+/g, ' ');
+  };
+  const draftFor = (patch) => page.evaluate(async ({ clientId, patch }) => {
+    const api = globalThis.billmeApi;
+    const draft = await api.documents.createFromClient({ kind: 'invoice', clientId });
+    return api.invoices.upsert({ invoice: { ...draft, items: [{ kind: 'item', description: 'Beratung', quantity: 1, price: 300, total: 300, taxRate: 19 }], ...patch }, reason: 'create' });
+  }, { clientId, patch });
+  const openFromList = async (number) => {
+    await page.goto(liteAppUrl(runtime.state, '/documents'), { waitUntil: 'networkidle' });
+    await page.reload({ waitUntil: 'networkidle' });
+    await page.getByText(number).first().click();
+    await expect(page.getByRole('heading', { name: number })).toBeVisible();
+  };
+  const markIssued = () => page.getByRole('button', { name: 'Als gestellt markieren (Entwurf zu Offen)' }).click();
+
+  // §14: the customer address is a Pflichtangabe.
+  const missing = await draftFor({ clientAddress: '', billingAddressJson: undefined });
+  await openFromList(missing.number);
+  await markIssued();
+  await expect(page.getByText(/Finalisieren fehlgeschlagen: .*Anschrift des Kunden fehlt/)).toBeVisible();
+  await shot(page, 'legal-01-missing-address');
+  await page.evaluate(async (invoice) => globalThis.billmeApi.invoices.upsert({ invoice: { ...invoice, clientAddress: 'Hauptstraße 1\n10115 Berlin' }, reason: 'Anschrift ergänzt' }), missing);
+  await openFromList(missing.number);
+  await markIssued();
+  await expect(page.getByText('Rechnung als gestellt markiert')).toBeVisible();
+
+  // §19: the tenant is a Kleinunternehmer; the editor still sends its default tax mode.
+  const settings = await page.evaluate(() => globalThis.billmeApi.settings.get());
+  await page.evaluate((s) => globalThis.billmeApi.settings.set({ settings: { ...s, legal: { ...s.legal, smallBusinessRule: true } } }), settings);
+  try {
+    const ku = await draftFor({ taxMode: 'standard_vat' });
+    await openFromList(ku.number);
+    await markIssued();
+    await expect(page.getByText('Rechnung als gestellt markiert')).toBeVisible();
+    await shot(page, 'legal-02-small-business');
+    const text = await pdfTextOf(`/documents/invoice/${ku.id}/pdf`, 'legal-02-small-business');
+    expect(text).toContain('Kleinunternehmerregelung nach §19 UStG');
+    expect(text).not.toMatch(/USt\. \d+ %/);
+    expect(text).not.toContain('Nettobetrag');
+    expect(text).toMatch(/Gesamtbetrag 300,00 €/);
+  } finally {
+    await page.evaluate((s) => globalThis.billmeApi.settings.set({ settings: s }), settings);
+  }
+
+  // Dunning: 357,00 € invoice, 50,00 € paid, 23,80 € credited → 283,20 € open.
+  const day = (offset) => new Date(Date.now() + offset * 86_400_000).toISOString().slice(0, 10);
+  const late = await draftFor({ date: day(-40), dueDate: day(-20), servicePeriod: day(-40) });
+  const overdue = await page.evaluate(async ({ invoice }) => {
+    const api = globalThis.billmeApi;
+    const open = await api.invoices.upsert({ invoice: { ...invoice, status: 'open' }, reason: 'Rechnung gestellt' });
+    await api.invoices.savePayment({ invoiceId: open.id, payment: { id: crypto.randomUUID(), date: new Date().toISOString().slice(0, 10), amount: 50, method: 'bank' }, reason: 'Teilzahlung' });
+    await api.documents.chainIssue({ operation: 'correction', id: crypto.randomUUID(), invoiceId: open.id, kind: 'credit_note', amount: 23.8, date: new Date().toISOString().slice(0, 10), reason: 'Teilgutschrift' });
+    return open;
+  }, { invoice: late });
+  expect(overdue.amount).toBe(357);
+  const letter = await pdfTextOf(`/documents/dunning/${overdue.id}/pdf?level=1`, 'legal-03-dunning-letter');
+  expect(letter).toMatch(/Rechnungsbetrag 357,00 €/);
+  expect(letter).toMatch(/Bereits gezahlt [−-]50,00 €/);
+  expect(letter).toMatch(/Gutgeschrieben [−-]23,80 €/);
+  expect(letter).toMatch(/Offener Betrag 283,20 €/);
+  const stored = await page.evaluate(async (id) => (await globalThis.billmeApi.invoices.list()).find((doc) => doc.id === id), overdue.id);
+  expect(stored.amount).toBe(357);
+};

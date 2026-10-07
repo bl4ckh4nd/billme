@@ -3,11 +3,11 @@ import { BrowserDocumentShell, type BrowserMountContext } from '@billme/desktop-
 import { mountDesktopRendererApp } from '@billme/desktop-renderer';
 import { createLiteWebBillmeApi } from './api/createLiteWebApi';
 
-const mount = (element: HTMLElement, { apiUrl, token, onLogout, signal }: BrowserMountContext) => {
+const mount = (element: HTMLElement, { apiUrl, token, onLogout, signal, workspaces }: BrowserMountContext) => {
   const api = createLiteWebBillmeApi({ baseUrl: apiUrl, token, onAuthFailure: onLogout, onRequestClose: onLogout });
   return mountDesktopRendererApp(element, { api, signal, runtime: {
     shell: 'web', product: 'lite', navigation: ['dashboard', 'clients', 'documents', 'finance'],
-    onLogout, validateVatId: api.validateVatId,
+    onLogout, validateVatId: api.validateVatId, workspaces,
   } });
 };
 

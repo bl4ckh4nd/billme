@@ -5,6 +5,8 @@ import { Bell, CheckCheck, Plus, X, type LucideIcon } from 'lucide-react';
 import { BillmeLogo, Button, IconButton, Kbd, KontorIcon, Portal, SegmentedControl, cn, popoverExitClass, useAnchoredPosition, useExitTransition, useThemePreference, type ThemePreference } from '@billme/ui';
 import { useSettingsQuery } from '../../hooks/useSettings';
 import { useNotificationsStore, type AppNotification } from '@billme/desktop-core/state/notificationsStore';
+import { getRendererProduct, getRendererRuntime } from '../../runtime-api';
+import { WorkspaceSwitcher } from './WorkspaceSwitcher';
 import { CommandPalette, isMacPlatform, type ShellCommand } from './CommandPalette';
 
 /**
@@ -300,20 +302,25 @@ export const DashboardLayout: React.FC<DashboardLayoutProps> = ({ children, isEd
           {/* Collapsed: crop the wordmark's viewBox to the mark. */}
           <BillmeLogo className="h-6 w-auto text-foreground" {...(compact ? { viewBox: '300 505 265 375' } : {})} />
         </div>
-        {!compact && settings && (
-          <div className="rounded-card border border-border bg-surface-sunken px-2.5 py-2" aria-label="Unternehmen">
-            <div className="truncate text-label font-semibold text-foreground">{settings.company.name || 'Unternehmen'}</div>
-            <div className="truncate text-micro text-muted">
-              {[
+        {!compact && settings && (() => {
+          const companyName = settings.company.name || 'Unternehmen';
+          const detail = [
                 profile && LEGAL_FORM[profile.legalForm],
                 profile && (profile.profitDetermination === 'eur' ? 'EÜR' : 'Doppelte Buchführung'),
                 profile?.chart,
               ]
                 .filter(Boolean)
-                .join(' · ') || 'Buchführung noch nicht eingerichtet'}
+                .join(' · ') || 'Buchführung noch nicht eingerichtet';
+          const workspaces = getRendererRuntime().workspaces;
+          return workspaces ? (
+            <WorkspaceSwitcher workspaces={workspaces} product={getRendererProduct()} companyName={companyName} detail={detail} />
+          ) : (
+            <div className="rounded-card border border-border bg-surface-sunken px-2.5 py-2" aria-label="Unternehmen">
+              <div className="truncate text-label font-semibold text-foreground">{companyName}</div>
+              <div className="truncate text-micro text-muted">{detail}</div>
             </div>
-          </div>
-        )}
+          );
+        })()}
       </div>
       <nav aria-label="Hauptnavigation" className="scrollbar-hide min-h-0 flex-1 overflow-y-auto px-2 pb-2 pt-1">
         {GROUPS.map((group) => {

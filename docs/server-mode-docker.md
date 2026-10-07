@@ -59,6 +59,17 @@ Open:
 
 On a clean database, open one of the browser shells and complete the bootstrap flow for the first owner account with the setup code (or `billme auth bootstrap --setup-token …`). The new tenant starts with default settings, so the business onboarding wizard opens right after the first login.
 
+### Workspaces, team and password reset
+
+A server hosts many workspaces. Anyone with the setup code creates one from the
+login screen ("Neuen Workspace anlegen", Lite or Pro); a signed-in person adds
+more from the workspace switcher in the sidebar and switches between them. Owners
+and admins invite people under Einstellungen → Team with a role; the link is
+mailed through useSend (`USESEND_API_KEY`, `BILLME_MAIL_FROM`) and shown for
+copying when mail is not configured. "Passwort vergessen?" mails a one-hour link.
+The worker serves every active workspace. The server-wide `SMTP_PASSWORD` only
+goes to `SMTP_HOST`, the portal key only to `BILLME_PUBLIC_PORTAL_URL`.
+
 ## Operations
 
 Check health:

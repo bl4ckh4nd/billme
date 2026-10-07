@@ -323,3 +323,99 @@ export const runLiteWorkflowScenario = async (page, scenarioKey = 'workflow') =>
   await expect(page.getByRole('heading', { name: createdOffer.number })).toBeVisible();
   await expect(page.getByRole('main').getByText(companyName, { exact: true })).toBeVisible();
 };
+
+const shot = async (page, name) => {
+  if (process.env.E2E_SCREENSHOT_DIR) await page.screenshot({ path: `${process.env.E2E_SCREENSHOT_DIR}/${name}.png`, fullPage: false });
+};
+
+/**
+ * Hosted server as a multi-workspace service, through the UI only: a person
+ * signs up with the setup code, finishes onboarding, invites an accountant who
+ * joins in a second browser, changes that role, then creates a second workspace
+ * from the switcher and switches back.
+ */
+export const runLiteWorkspacesScenario = async (page, scenarioKey = 'workspaces') => {
+  const { state } = await getLiteRuntime();
+  const ns = `${scenarioKey}-${Date.now().toString(36)}`;
+  const owner = { email: `owner+${ns}@billme-e2e.local`, name: 'Wanda Workspace' };
+
+  await page.goto(state.urls.web, { waitUntil: 'networkidle' });
+  const signupLink = page.getByRole('button', { name: 'Neuen Workspace anlegen' });
+  if (await signupLink.isVisible().catch(() => false)) await signupLink.click();
+  await expect(page.getByRole('heading', { name: /^(Neuen Workspace anlegen|Billme einrichten)$/ })).toBeVisible();
+  await fillSetupCodeIfAsked(page, state);
+  await page.getByLabel('Name des Workspace').fill(`Erste ${ns}`);
+  await page.getByLabel('Dein Name').fill(owner.name);
+  await page.getByLabel('E-Mail-Adresse').fill(owner.email);
+  await page.getByLabel('Passwort', { exact: true }).fill(litePassword);
+  await page.getByRole('button', { name: /^(Workspace anlegen|Konto anlegen und loslegen)$/ }).click();
+  expect(await completeBusinessOnboardingIfVisible(page, { scenarioKey: `${ns}-a`, readyHeading: 'Übersicht', company: 'Erste' })).toBe(true);
+  await shot(page, '01-first-workspace');
+
+  // Invite an accountant. The harness has no mail service, so the UI shows the link to pass on.
+  await page.getByRole('button', { name: 'Einstellungen' }).click();
+  await page.getByRole('button', { name: /^Team/ }).first().click();
+  const team = page.getByRole('main');
+  const memberEmail = `nina+${ns}@billme-e2e.local`;
+  await team.getByLabel('E-Mail-Adresse').fill(memberEmail);
+  await team.getByLabel('Rolle', { exact: true }).selectOption('accountant');
+  await team.getByRole('button', { name: 'Einladen' }).click();
+  await expect(team.getByText(`Gib ${memberEmail} diesen Link`)).toBeVisible();
+  const inviteUrl = (await team.locator('code').first().innerText()).trim();
+  expect(inviteUrl.startsWith(`${state.urls.web.replace(/\/+$/, '')}/?invite=`)).toBe(true);
+  await expect(team.getByRole('region', { name: 'Offene Einladungen' }).getByText(memberEmail)).toBeVisible();
+  await shot(page, '02-invited');
+
+  const memberContext = await page.context().browser().newContext();
+  try {
+    const member = await memberContext.newPage();
+    await member.goto(inviteUrl, { waitUntil: 'networkidle' });
+    await expect(member.getByRole('heading', { name: `Einladung zu Erste ${ns}` })).toBeVisible();
+    await expect(member.getByText('Buchhaltung', { exact: true })).toBeVisible();
+    await member.getByLabel('Dein Name').fill('Nina Neu');
+    await member.getByLabel('Passwort', { exact: true }).fill(litePassword);
+    await member.getByRole('button', { name: 'Konto anlegen und beitreten' }).click();
+    await expect(member.getByRole('heading', { name: 'Übersicht', level: 1 })).toBeVisible();
+    await expect(member.getByRole('heading', { name: 'Richte deinen Firmenkopf ein' })).toHaveCount(0);
+    expect(new URL(member.url()).searchParams.get('invite')).toBeNull();
+    await member.getByRole('button', { name: 'Einstellungen' }).click();
+    await expect(member.getByRole('button', { name: /^Team/ })).toHaveCount(0);
+    await shot(member, '03-member-joined');
+
+    // The used link is dead.
+    await member.goto(inviteUrl, { waitUntil: 'networkidle' });
+    await expect(member.getByRole('heading', { name: 'Dieser Link gilt nicht mehr' })).toBeVisible();
+  } finally {
+    await memberContext.close();
+  }
+
+  await page.reload({ waitUntil: 'networkidle' });
+  await page.getByRole('button', { name: /^Team/ }).first().click();
+  const members = page.getByRole('region', { name: 'Mitglieder' });
+  await expect(members.getByText('Nina Neu')).toBeVisible();
+  await members.getByLabel('Rolle von Nina Neu').selectOption('viewer');
+  await expect(members.getByLabel('Rolle von Nina Neu')).toHaveValue('viewer');
+  await page.reload({ waitUntil: 'networkidle' });
+  await page.getByRole('button', { name: /^Team/ }).first().click();
+  await expect(page.getByRole('region', { name: 'Mitglieder' }).getByLabel('Rolle von Nina Neu')).toHaveValue('viewer');
+  await shot(page, '04-team');
+
+  // A second workspace from the switcher starts with its own onboarding.
+  await page.getByRole('button', { name: new RegExp(`^Erste ${ns}`) }).click();
+  await page.getByRole('menuitem', { name: 'Neuen Workspace anlegen' }).click();
+  const dialog = page.getByRole('dialog', { name: 'Neuen Workspace anlegen' });
+  await expect(dialog.getByLabel('Name des Workspace')).toBeVisible();
+  const code = dialog.getByLabel('Einrichtungscode');
+  if (await code.isVisible().catch(() => false)) await code.fill(state.env.BILLME_SETUP_TOKEN);
+  await dialog.getByLabel('Name des Workspace').fill(`Zweite ${ns}`);
+  await dialog.getByRole('button', { name: 'Anlegen' }).click();
+  await expect(page.getByRole('heading', { name: 'Richte deinen Firmenkopf ein' }), 'the new workspace opens its own onboarding').toBeVisible();
+  expect(await completeBusinessOnboardingIfVisible(page, { scenarioKey: `${ns}-b`, readyHeading: /^(Übersicht|Einstellungen)$/, company: 'Zweite' })).toBe(true);
+  await expect(page.getByRole('button', { name: new RegExp(`^Zweite ${ns}`) })).toBeVisible();
+  await shot(page, '05-second-workspace');
+
+  await page.getByRole('button', { name: new RegExp(`^Zweite ${ns}`) }).click();
+  await page.getByRole('menuitemradio', { name: new RegExp(`Erste ${ns}`) }).or(page.getByRole('menuitem', { name: new RegExp(`Erste ${ns}`) })).click();
+  await expect(page.getByRole('button', { name: new RegExp(`^Erste ${ns}`) })).toBeVisible();
+  await shot(page, '06-switched-back');
+};

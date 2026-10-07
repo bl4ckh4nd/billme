@@ -3,9 +3,9 @@ import { BrowserDocumentShell, type BrowserMountContext } from '@billme/desktop-
 import { mountProDesktopRendererApp } from '@billme/desktop-renderer/pro';
 import { createProWebBillmeApi } from './createProWebApi';
 
-const mount = (element: HTMLElement, { apiUrl, token, onLogout, signal }: BrowserMountContext) => {
+const mount = (element: HTMLElement, { apiUrl, token, onLogout, signal, workspaces }: BrowserMountContext) => {
   const api = createProWebBillmeApi({ baseUrl: apiUrl, token, onRequestClose: onLogout });
-  return mountProDesktopRendererApp(element, { api, signal, runtime: { shell: 'web', product: 'pro', onLogout } });
+  return mountProDesktopRendererApp(element, { api, signal, runtime: { shell: 'web', product: 'pro', onLogout, workspaces } });
 };
 
 export default function App() {

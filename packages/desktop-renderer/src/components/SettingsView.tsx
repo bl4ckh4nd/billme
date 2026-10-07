@@ -4,7 +4,7 @@ import { DunningDeliveryReview } from './DunningDeliveryReview';
 import React, { useState } from 'react';
 import {
   Building2, Landmark, FileDigit, Scale,
-  Save, AlertCircle, Megaphone, Globe, Tags, Plus, Trash2, AlertTriangle, Mail, Monitor, Moon, Sun, SunMoon
+  Save, AlertCircle, Megaphone, Globe, Tags, Plus, Trash2, AlertTriangle, Mail, Monitor, Moon, Sun, SunMoon, Users
 } from 'lucide-react';
 import {
   Badge, Button, Card, CardHeader, Checkbox, ConfirmDialog, EmptyState, ErrorState, Field, IconButton, Input, PageHeader,
@@ -19,8 +19,15 @@ import { v4 as uuidv4 } from 'uuid';
 import { DunningResultModal } from '../ui/components/DunningResultModal';
 import { DunningLevelPreviewModal } from '../ui/components/DunningLevelPreviewModal';
 import { CliAccessSection } from './CliAccessSection';
+import { TeamSection } from './TeamSection';
 
-type SettingsTab = 'company' | 'catalog' | 'finance' | 'numbers' | 'dunning' | 'legal' | 'portal' | 'system' | 'email' | 'appearance';
+const canManageTeam = (): boolean => {
+  const workspaces = getRendererRuntime().workspaces;
+  const role = workspaces?.list.find((workspace) => workspace.tenantId === workspaces.currentTenantId)?.role;
+  return role === 'owner' || role === 'admin';
+};
+
+type SettingsTab = 'company' | 'catalog' | 'finance' | 'numbers' | 'dunning' | 'legal' | 'portal' | 'system' | 'email' | 'appearance' | 'team';
 
 const normalizeCategoryName = (value: string): string => value.trim();
 const formatCount = (count: number, singular: string, plural: string): string => `${count} ${count === 1 ? singular : plural}`;
@@ -471,6 +478,8 @@ const SettingsForm: React.FC<{ initialSettings: AppSettings }> = ({ initialSetti
     {
       label: 'System',
       items: [
+        // Only a hosted server has a team (the desktop runs for one person), and only owners and admins manage it.
+        ...(canManageTeam() ? [{ id: 'team', label: 'Team', icon: Users, desc: 'Mitglieder & Einladungen' }] : []),
         { id: 'system', label: 'System', icon: AlertCircle, desc: 'Backup, Audit & CLI' },
         { id: 'appearance', label: 'Darstellung', icon: SunMoon, desc: 'Hell, Dunkel, System' },
       ],
@@ -1429,6 +1438,8 @@ const SettingsForm: React.FC<{ initialSettings: AppSettings }> = ({ initialSetti
         );
       case 'appearance':
         return <AppearanceSettings />;
+      case 'team':
+        return <TeamSection />;
       case 'system':
         return (
           <>

@@ -23,35 +23,38 @@ export const completeBusinessOnboardingIfVisible = async (page, {
   const heading = page.getByRole('heading', { name: 'Richte deinen Firmenkopf ein' });
   const ready = page.getByRole('heading', { name: readyHeading, level: 1 });
 
-  // The ready heading renders before settings arrive; decide only once the requests settled.
-  await page.waitForLoadState('networkidle');
   await expect.poll(async () => {
     if (await heading.isVisible().catch(() => false)) return 'onboarding';
     if (await ready.isVisible().catch(() => false)) return 'ready';
     return 'loading';
   }, { timeout: 30_000 }).toMatch(/^(onboarding|ready)$/);
+  // The ready heading renders before the settings arrive and the wizard can open a moment later.
+  // ("networkidle" does not help: in a single-page app it was reached on the first load.)
+  await heading.waitFor({ state: 'visible', timeout: 5_000 }).catch(() => undefined);
 
   if (!(await heading.isVisible().catch(() => false))) return false;
 
   const slug = scenarioKey.replace(/[^a-z0-9-]+/gi, '-').toLowerCase();
+  // The page behind the wizard may have fields with the same labels (Einstellungen).
+  const wizard = page.getByRole('dialog', { name: /^Billme( Pro)? einrichten$/ });
 
-  await page.getByLabel('Firmenname').fill(`${company} ${slug}`);
-  await page.getByLabel('Inhaber oder Geschäftsführung').fill(`${company} Owner`);
-  await page.getByLabel('Straße und Hausnummer').fill('Teststrasse 1');
-  await page.getByLabel('PLZ').fill('10115');
-  await page.getByLabel('Stadt').fill('Berlin');
-  await page.getByLabel('E-Mail für Angebote und Rechnungen').fill(`owner+${slug}@billme-e2e.local`);
-  await page.getByRole('button', { name: 'Weiter zu Abrechnung' }).click();
+  await wizard.getByLabel('Firmenname').fill(`${company} ${slug}`);
+  await wizard.getByLabel('Inhaber oder Geschäftsführung').fill(`${company} Owner`);
+  await wizard.getByLabel('Straße und Hausnummer').fill('Teststrasse 1');
+  await wizard.getByLabel('PLZ').fill('10115');
+  await wizard.getByLabel('Stadt').fill('Berlin');
+  await wizard.getByLabel('E-Mail für Angebote und Rechnungen').fill(`owner+${slug}@billme-e2e.local`);
+  await wizard.getByRole('button', { name: 'Weiter zu Abrechnung' }).click();
 
-  await page.getByLabel(taxNumber.label, { exact: true }).fill(taxNumber.value);
-  await page.getByLabel('Zahlungsziel in Tagen').fill('14');
-  await page.getByLabel('Rechnungs-Präfix').fill('RE-%Y-');
-  await page.getByLabel('Angebots-Präfix').fill('ANG-%Y-');
-  await page.getByRole('button', { name: 'Weiter zu Weitere Angaben' }).click();
+  await wizard.getByLabel(taxNumber.label, { exact: true }).fill(taxNumber.value);
+  await wizard.getByLabel('Zahlungsziel in Tagen').fill('14');
+  await wizard.getByLabel('Rechnungs-Präfix').fill('RE-%Y-');
+  await wizard.getByLabel('Angebots-Präfix').fill('ANG-%Y-');
+  await wizard.getByRole('button', { name: 'Weiter zu Weitere Angaben' }).click();
 
-  await page.getByLabel('Bankname').fill('Berliner Testbank');
-  await page.getByLabel('IBAN').fill('DE02120300000000202051');
-  await page.getByRole('button', { name: /^(Arbeitsbereich einrichten|Einrichtung abschließen)$/ }).click();
+  await wizard.getByLabel('Bankname').fill('Berliner Testbank');
+  await wizard.getByLabel('IBAN').fill('DE02120300000000202051');
+  await wizard.getByRole('button', { name: /^(Arbeitsbereich einrichten|Einrichtung abschließen)$/ }).click();
   await expect(heading).toHaveCount(0);
   await expect(ready).toBeVisible();
   return true;

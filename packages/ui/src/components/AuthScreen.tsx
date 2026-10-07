@@ -1,12 +1,19 @@
 import React from 'react';
-import { AlertCircle, Info, Lock, WifiOff } from 'lucide-react';
+import { Info, Lock, WifiOff } from 'lucide-react';
 import { cn } from '../utils/cn';
 import { BillmeLogo } from './BillmeLogo';
 import { Button } from './Button';
 import { Input } from './Input';
 import { Modal } from './Modal';
+import { FormAlert, InvalidLinkNotice, InviteForm, LinkButton, ResetConfirmForm, ResetRequestForm, type InvitationPreview } from './auth/AuthFlows';
+import { PasswordField } from './auth/PasswordField';
 
-export type AuthScreenMode = 'checking' | 'login' | 'setup' | 'unreachable';
+export type AuthScreenMode =
+  | 'checking' | 'login' | 'setup' | 'unreachable'
+  /** Another workspace with the setup code, from the login screen. */
+  | 'signup'
+  | 'invite' | 'reset-request' | 'reset-confirm' | 'invalid-link';
+export type { InvitationPreview };
 
 export interface AuthScreenCredentials {
   fullName: string;
@@ -14,6 +21,9 @@ export interface AuthScreenCredentials {
   password: string;
   /** Only sent while setting up a server that requires a setup code. */
   setupToken?: string;
+  /** Set up and sign-up: the new workspace's name and product. */
+  workspaceName?: string;
+  product?: 'lite' | 'pro';
 }
 
 export interface AuthScreenProps {
@@ -26,6 +36,16 @@ export interface AuthScreenProps {
   notice?: string | null;
   /** The server only accepts the first account together with its setup code (BILLME_SETUP_TOKEN). */
   setupTokenRequired?: boolean;
+  /** Offers "Neuen Workspace anlegen" on the login screen. */
+  signupAvailable?: boolean;
+  /** The invitation behind an `?invite=` link (mode `invite`). */
+  invitation?: InvitationPreview;
+  /** Why a link is dead (mode `invalid-link`). */
+  invalidLinkMessage?: string;
+  onAcceptInvitation?: (input: { password: string; fullName?: string }) => Promise<void>;
+  onRequestReset?: (email: string) => Promise<void>;
+  onConfirmReset?: (password: string) => Promise<void>;
+  onModeChange?: (mode: AuthScreenMode) => void;
   initialCredentials?: Partial<AuthScreenCredentials>;
   /** Rejects with the server error; the screen translates it for the user. */
   onSubmit: (credentials: AuthScreenCredentials) => Promise<void>;
@@ -65,6 +85,12 @@ export const describeAuthError = (error: unknown): string => {
   if (/invalid email or password/i.test(message)) {
     return 'E-Mail oder Passwort stimmt nicht. Prüfe beides und versuche es noch einmal.';
   }
+  if (/no longer valid/i.test(message)) {
+    return 'Dieser Link gilt nicht mehr. Bitte lass dir einen neuen schicken.';
+  }
+  if (/too many|zu viele/i.test(message)) {
+    return 'Zu viele Versuche. Bitte in 15 Minuten erneut versuchen.';
+  }
   if (/invalid setup token/i.test(message)) {
     return 'Der Einrichtungscode stimmt nicht. Du findest ihn in der Server-Konfiguration unter BILLME_SETUP_TOKEN.';
   }
@@ -72,7 +98,7 @@ export const describeAuthError = (error: unknown): string => {
     return 'Billme ist bereits eingerichtet. Lade die Seite neu und melde dich mit deinem Konto an.';
   }
   if (/already exists/i.test(message)) {
-    return 'Für diese E-Mail-Adresse gibt es schon ein Konto.';
+    return 'Für diese E-Mail-Adresse gibt es schon ein Konto. Melde dich an und lege den Workspace über den Workspace-Wechsler an.';
   }
   if (error instanceof TypeError || /failed to fetch|networkerror|load failed/i.test(message)) {
     return 'Der Server antwortet nicht. Prüfe deine Internetverbindung und versuche es erneut.';
@@ -114,43 +140,6 @@ const InvoiceIllustration: React.FC<{ product: 'lite' | 'pro' }> = ({ product })
   </div>
 );
 
-const PasswordField: React.FC<{
-  value: string;
-  onChange: (value: string) => void;
-  autoComplete: 'current-password' | 'new-password';
-  hint?: string;
-  error?: string;
-}> = ({ value, onChange, autoComplete, hint, error }) => {
-  const id = React.useId();
-  const [visible, setVisible] = React.useState(false);
-  return (
-    <div>
-      <div className="mb-1.5 flex items-baseline justify-between gap-3">
-        <label htmlFor={id} className="text-label text-foreground">Passwort</label>
-        <button
-          type="button"
-          onClick={() => setVisible((current) => !current)}
-          aria-controls={id}
-          className="rounded-sm text-xs font-semibold text-muted underline-offset-4 hover:text-foreground hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
-        >
-          {visible ? 'Passwort verbergen' : 'Passwort anzeigen'}
-        </button>
-      </div>
-      <Input
-        id={id}
-        fullWidth
-        type={visible ? 'text' : 'password'}
-        autoComplete={autoComplete}
-        placeholder="Passwort eingeben"
-        value={value}
-        onChange={(event) => onChange(event.target.value)}
-        hint={hint}
-        error={error}
-      />
-    </div>
-  );
-};
-
 export const AuthScreen: React.FC<AuthScreenProps> = ({
   product,
   mode,
@@ -158,6 +147,13 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
   defaultServerUrl,
   notice,
   setupTokenRequired = false,
+  signupAvailable = false,
+  invitation,
+  invalidLinkMessage,
+  onAcceptInvitation,
+  onRequestReset,
+  onConfirmReset,
+  onModeChange,
   initialCredentials,
   onSubmit,
   onRetry,
@@ -169,6 +165,8 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
   const [email, setEmail] = React.useState(initialCredentials?.email ?? '');
   const [password, setPassword] = React.useState(initialCredentials?.password ?? '');
   const [setupToken, setSetupToken] = React.useState('');
+  const [workspaceName, setWorkspaceName] = React.useState('');
+  const [signupProduct, setSignupProduct] = React.useState<'lite' | 'pro'>(product);
   const [fieldErrors, setFieldErrors] = React.useState<Partial<Record<keyof AuthScreenCredentials, string>>>({});
   const [submitError, setSubmitError] = React.useState<string | null>(null);
   const [submitting, setSubmitting] = React.useState(false);
@@ -180,8 +178,10 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
   const serverTitleId = React.useId();
   const serverDescriptionId = React.useId();
 
-  const isSetup = mode === 'setup';
+  const isSignup = mode === 'signup';
+  const isSetup = mode === 'setup' || isSignup;
   const needsSetupToken = isSetup && setupTokenRequired;
+  const backToLogin = () => onModeChange?.('login');
 
   const handleSubmit = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -205,6 +205,7 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
         email: email.trim(),
         password,
         ...(needsSetupToken ? { setupToken: setupToken.trim() } : {}),
+        ...(isSetup ? { workspaceName: workspaceName.trim() || fullName.trim(), product: isSignup ? signupProduct : product } : {}),
       });
     } catch (error) {
       setSubmitError(describeAuthError(error));
@@ -242,7 +243,7 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
     unreachable: { dot: 'bg-error', text: `Keine Verbindung zu ${host}` },
     login: { dot: 'bg-success', text: `Verbunden mit ${host}` },
     setup: { dot: 'bg-success', text: `Verbunden mit ${host}` },
-  }[mode];
+  }[mode === 'checking' || mode === 'unreachable' || mode === 'setup' ? mode : 'login'];
 
   return (
     <div className="grid min-h-screen bg-background text-foreground [color-scheme:light] lg:grid-cols-2">
@@ -290,22 +291,29 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
                   <Button variant="secondary" fullWidth onClick={openServerDialog}>Server-Adresse ändern</Button>
                 </div>
               </div>
+            ) : mode === 'invite' && invitation && onAcceptInvitation ? (
+              <InviteForm invitation={invitation} onAccept={onAcceptInvitation} describeError={describeAuthError} />
+            ) : mode === 'reset-request' && onRequestReset ? (
+              <ResetRequestForm initialEmail={email} onRequest={onRequestReset} onBack={backToLogin} describeError={describeAuthError} />
+            ) : mode === 'reset-confirm' && onConfirmReset ? (
+              <ResetConfirmForm onConfirm={onConfirmReset} onBack={backToLogin} describeError={describeAuthError} />
+            ) : mode === 'invalid-link' ? (
+              <InvalidLinkNotice message={invalidLinkMessage ?? 'Bitte lass dir einen neuen Link schicken.'} onBack={backToLogin} />
             ) : (
               <form noValidate onSubmit={(event) => void handleSubmit(event)} className="grid gap-5">
                 <div className="grid gap-1.5">
-                  <h1 className="text-2xl font-semibold tracking-tight">{isSetup ? 'Billme einrichten' : 'Willkommen zurück'}</h1>
+                  <h1 className="text-2xl font-semibold tracking-tight">{isSignup ? 'Neuen Workspace anlegen' : isSetup ? 'Billme einrichten' : 'Willkommen zurück'}</h1>
                   <p className="text-sm text-muted">
-                    {isSetup
-                      ? 'Lege das erste Konto an. Es erhält alle Rechte.'
-                      : `Melde dich bei ${brand.name} an.`}
+                    {isSignup
+                      ? 'Für ein neues Unternehmen: Du wirst Inhaber des Workspace und lädst danach dein Team ein.'
+                      : isSetup
+                        ? 'Lege das erste Konto an. Es erhält alle Rechte.'
+                        : `Melde dich bei ${brand.name} an.`}
                   </p>
                 </div>
 
                 {submitError ? (
-                  <div role="alert" className="flex gap-2.5 rounded-md border border-error-border bg-error-bg px-4 py-3 text-sm text-error-text">
-                    <AlertCircle aria-hidden="true" className="mt-0.5 size-4 shrink-0" />
-                    <p>{submitError}</p>
-                  </div>
+                  <FormAlert message={submitError} />
                 ) : notice ? (
                   <div role="status" className="flex gap-2.5 rounded-md border border-border bg-surface-muted px-4 py-3 text-sm text-foreground">
                     <Info aria-hidden="true" className="mt-0.5 size-4 shrink-0 text-muted" />
@@ -324,6 +332,38 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
                     onChange={(event) => setSetupToken(event.target.value)}
                     error={fieldErrors.setupToken}
                   />
+                ) : null}
+                {isSetup ? (
+                  <Input
+                    label="Name des Workspace"
+                    fullWidth
+                    autoComplete="organization"
+                    placeholder="z. B. Muster GmbH"
+                    hint="Meist der Firmenname. Leer lassen übernimmt deinen Namen."
+                    value={workspaceName}
+                    onChange={(event) => setWorkspaceName(event.target.value)}
+                  />
+                ) : null}
+                {isSignup ? (
+                  <fieldset className="grid gap-2">
+                    <legend className="mb-1.5 text-label text-foreground">Produkt</legend>
+                    <div className="grid grid-cols-2 gap-2">
+                      {(['lite', 'pro'] as const).map((option) => (
+                        <label
+                          key={option}
+                          className={cn(
+                            'flex cursor-pointer flex-col gap-0.5 rounded-md border px-3 py-2.5 text-sm has-focus-visible:outline-2 has-focus-visible:outline-focus-ring',
+                            signupProduct === option ? 'border-foreground bg-surface-muted' : 'border-border',
+                          )}
+                        >
+                          <input type="radio" name="signup-product" value={option} checked={signupProduct === option}
+                            onChange={() => setSignupProduct(option)} className="sr-only" />
+                          <span className="font-semibold text-foreground">{BRAND[option].name}</span>
+                          <span className="text-xs text-muted">{option === 'lite' ? 'Rechnungen und Angebote' : 'Mit Buchhaltung und DATEV'}</span>
+                        </label>
+                      ))}
+                    </div>
+                  </fieldset>
                 ) : null}
                 {isSetup ? (
                   <Input
@@ -356,14 +396,20 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
                 />
 
                 <Button type="submit" fullWidth loading={submitting}>
-                  {isSetup ? 'Konto anlegen und loslegen' : 'Anmelden'}
+                  {isSignup ? 'Workspace anlegen' : isSetup ? 'Konto anlegen und loslegen' : 'Anmelden'}
                 </Button>
 
-                {/* ponytail: the server has no password-reset endpoint; replace this hint with a reset link once one exists. */}
                 {!isSetup ? (
-                  <p className="text-xs text-muted">
-                    Passwort vergessen? <span className="font-semibold text-foreground">Frag die Person, die Billme bei euch eingerichtet hat.</span>
-                  </p>
+                  <div className="flex flex-wrap justify-between gap-3 text-sm text-muted">
+                    {onRequestReset ? (
+                      <LinkButton onClick={() => onModeChange?.('reset-request')}>Passwort vergessen?</LinkButton>
+                    ) : (
+                      <span className="text-xs">Passwort vergessen? Frag die Person, die Billme bei euch eingerichtet hat.</span>
+                    )}
+                    {signupAvailable ? <LinkButton onClick={() => onModeChange?.('signup')}>Neuen Workspace anlegen</LinkButton> : null}
+                  </div>
+                ) : isSignup ? (
+                  <p className="text-sm text-muted">Schon ein Konto? <LinkButton onClick={backToLogin}>Anmelden</LinkButton></p>
                 ) : null}
               </form>
             )}

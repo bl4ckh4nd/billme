@@ -140,6 +140,7 @@ describe('workspaces, team and password reset', () => {
       const pro = await h.http('POST', '/api/v1/auth/workspaces', { token: owner.token, body: { name: 'Pro Firma', product: 'pro', setupToken: SETUP } });
       assert.equal(pro.status, 200, pro.text);
       assert.equal(pro.body.product, 'pro');
+      assert.deepEqual((await h.http('GET', '/api/v1/auth/apps')).body, { lite: 'https://billme.example' }, 'only configured apps are named');
       assert.equal((await h.http('POST', '/api/v1/auth/switch?product=lite', { token: owner.token, body: { tenantId: pro.body.tenantId } })).status, 400, 'a Lite session does not switch into Pro');
       const login = await h.http('POST', '/api/v1/pro/auth/login', { body: { email: owner.email, password: PASSWORD } });
       assert.equal(login.status, 200, login.text);

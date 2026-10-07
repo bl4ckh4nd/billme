@@ -5,6 +5,9 @@ import {
   createSingleTenantScope,
   serverProductSchema,
   serverRoleSchema,
+  teamInviteResultSchema,
+  teamSchema,
+  workspaceSummarySchema,
   type ServerProduct,
   type ServerRole,
 } from '@billme/server-core';
@@ -30,9 +33,6 @@ const productQuerySchema = z.object({ product: serverProductSchema.default('lite
 const passwordSchema = z.string().min(12);
 const workspaceNameSchema = z.string().trim().min(1).max(120);
 const authResponseSchema = z.object({ token: z.string().min(1), user: authUserSchema, tenantId: z.string().min(1), product: serverProductSchema });
-const workspaceSummarySchema = z.object({ tenantId: z.string(), name: z.string(), product: serverProductSchema, role: serverRoleSchema });
-const memberSchema = z.object({ userId: z.string(), email: z.string(), fullName: z.string(), role: serverRoleSchema, joinedAt: z.string() });
-const invitationSchema = z.object({ id: z.string(), email: z.string(), role: serverRoleSchema, createdAt: z.string(), expiresAt: z.string() });
 const okSchema = z.object({ ok: z.literal(true) });
 
 /**
@@ -99,6 +99,19 @@ export const registerWorkspaceRoutes = (app: FastifyInstance, options: Workspace
   };
 
   // ---- sign-up and workspaces ----------------------------------------------------------
+
+  /** Where each product's web app lives, so one app can send people to the other. */
+  typedRoute(app, {
+    method: 'GET',
+    url: '/api/v1/auth/apps',
+    response: z.object({ lite: z.string().optional(), pro: z.string().optional() }),
+    async handler() {
+      return {
+        ...(options.webUrls.lite ? { lite: options.webUrls.lite } : {}),
+        ...(options.webUrls.pro ? { pro: options.webUrls.pro } : {}),
+      };
+    },
+  });
 
   typedRoute(app, {
     method: 'POST',
@@ -248,7 +261,7 @@ export const registerWorkspaceRoutes = (app: FastifyInstance, options: Workspace
     typedRoute(app, {
       method: 'GET',
       url: `${prefix}/team`,
-      response: z.object({ members: z.array(memberSchema), invitations: z.array(invitationSchema) }),
+      response: teamSchema,
       async handler({ request }) {
         const session = await manager(request);
         return access().listMembers(session.scope.tenantId);
@@ -259,7 +272,7 @@ export const registerWorkspaceRoutes = (app: FastifyInstance, options: Workspace
       method: 'POST',
       url: `${prefix}/team/invitations`,
       body: z.object({ email: z.string().email(), role: serverRoleSchema }),
-      response: z.object({ invitation: invitationSchema, inviteUrl: z.string(), mailSent: z.boolean() }),
+      response: teamInviteResultSchema,
       async handler({ request, body }) {
         const session = await manager(request);
         assertMayAssign(session, body.role);

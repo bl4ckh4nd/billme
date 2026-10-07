@@ -37,6 +37,7 @@ export {
   type AuthScreenCredentials,
   type AuthScreenMode,
   type AuthScreenProps,
+  type InvitationPreview,
 } from './components/AuthScreen';
 export { BillmeLogo } from './components/BillmeLogo';
 export { IconButton, type IconButtonProps, type IconButtonVariant, type IconButtonSize } from './components/IconButton';

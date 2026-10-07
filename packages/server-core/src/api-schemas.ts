@@ -101,6 +101,42 @@ export const cliTokenSummarySchema = z.object({
 });
 export type CliTokenSummary = z.infer<typeof cliTokenSummarySchema>;
 
+/** Members and open invitations of one workspace (hosted server mode). */
+export const teamMemberSchema = z.object({
+  userId: z.string().min(1),
+  email: z.string(),
+  fullName: z.string(),
+  role: serverRoleSchema,
+  joinedAt: z.string(),
+});
+export type TeamMember = z.infer<typeof teamMemberSchema>;
+
+export const teamInvitationSchema = z.object({
+  id: z.string().min(1),
+  email: z.string(),
+  role: serverRoleSchema,
+  createdAt: z.string(),
+  expiresAt: z.string(),
+});
+export type TeamInvitation = z.infer<typeof teamInvitationSchema>;
+
+export const teamSchema = z.object({ members: z.array(teamMemberSchema), invitations: z.array(teamInvitationSchema) });
+
+export const teamInviteResultSchema = z.object({
+  invitation: teamInvitationSchema,
+  /** Shown to the inviting person so they can pass it on when mail is not configured. */
+  inviteUrl: z.string(),
+  mailSent: z.boolean(),
+});
+
+export const workspaceSummarySchema = z.object({
+  tenantId: z.string().min(1),
+  name: z.string(),
+  product: serverProductSchema,
+  role: serverRoleSchema,
+});
+export type WorkspaceSummary = z.infer<typeof workspaceSummarySchema>;
+
 export const deviceLoginStartRequestSchema = z.object({
   product: serverProductSchema,
   label: z.string().trim().min(1).max(80),

@@ -55,6 +55,12 @@ services:
       SMTP_HOST: ${SMTP_HOST:-}
       SMTP_PASSWORD: ${SMTP_PASSWORD:-}
       RESEND_API_KEY: ${RESEND_API_KEY:-}
+      # Invitation and password-reset mail through useSend; without a key the app shows the links instead.
+      USESEND_API_KEY: ${USESEND_API_KEY:-}
+      USESEND_BASE_URL: ${USESEND_BASE_URL:-https://usesend.mnemonicc.com}
+      BILLME_MAIL_FROM: ${BILLME_MAIL_FROM:-}
+      # Set to 1 behind a reverse proxy so per-IP limits see the client address.
+      BILLME_TRUST_PROXY: ${BILLME_TRUST_PROXY:-0}
       PORTAL_API_KEY: ${BILLME_PORTAL_PUBLISH_API_KEY:?set BILLME_PORTAL_PUBLISH_API_KEY in .env.server-mode}
       BILLME_PUBLIC_PORTAL_URL: ${BILLME_PUBLIC_PORTAL_URL:-http://localhost:3001}
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}

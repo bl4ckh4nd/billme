@@ -255,6 +255,8 @@ const runWorkerOnce = async (databaseUrl, tenantId) => {
           ...process.env,
           DATABASE_URL: databaseUrl,
           SMTP_PASSWORD: smtpPassword,
+          // The seeded workspace sends through the local SMTP stub; the password only goes to this host.
+          SMTP_HOST: '127.0.0.1',
           WORKER_TENANT_ID: tenantId,
           WORKER_RUN_ONCE: '1',
           WORKER_LOG_LEVEL: 'info',

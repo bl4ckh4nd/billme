@@ -1,6 +1,6 @@
 import type { BillmeApi as LiteBillmeApi } from '@billme/desktop-contracts/api';
 import type { BillmeApi as ProBillmeApi } from '@billme/desktop-contracts-pro/api';
-import type { VatValidationResult } from '@billme/server-core';
+import type { VatValidationResult, WorkspaceSummary } from '@billme/server-core';
 
 export type RendererProduct = 'lite' | 'pro';
 
@@ -9,11 +9,24 @@ export type VatValidationClient = (args: {
   vatNumber: string;
 }) => Promise<VatValidationResult>;
 
+/** The signed-in person's workspaces; only a hosted server has more than one. */
+export type RendererWorkspaces = {
+  currentTenantId: string;
+  currentUserId: string;
+  list: WorkspaceSummary[];
+  /** Web app per product, to open a workspace of the other product. */
+  appUrls: Partial<Record<RendererProduct, string>>;
+  setupTokenRequired: boolean;
+  switchTo: (tenantId: string) => Promise<void>;
+  create: (input: { name: string; product: RendererProduct; setupToken?: string }) => Promise<void>;
+};
+
 export type RendererRuntime = {
   product?: RendererProduct;
   shell?: 'desktop' | 'web';
   validateVatId?: VatValidationClient;
   onLogout?: () => void;
+  workspaces?: RendererWorkspaces;
 };
 
 type RendererApi = LiteBillmeApi | ProBillmeApi;

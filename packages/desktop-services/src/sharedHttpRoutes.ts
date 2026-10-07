@@ -78,6 +78,7 @@ const SHARED_HTTP_ROUTE_KEYS = new Set<string>([
   'finance:importPreview', 'finance:importCommit', 'finance:listImportBatches',
   'finance:getImportBatchDetails', 'finance:rollbackImportBatch',
   'cliAccess:pending', 'cliAccess:decide', 'cliAccess:list', 'cliAccess:revoke',
+  'team:list', 'team:invite', 'team:revokeInvitation', 'team:changeRole', 'team:remove',
 ]);
 
 export const isSharedHttpRoute = (key: string): boolean => SHARED_HTTP_ROUTE_KEYS.has(key);
@@ -304,6 +305,18 @@ export const createSharedHttpInvoke = ({ product, routes, reasons, transport }: 
         return requestJson('GET', `${prefix}/cli-access/tokens`, resultOf(key));
       case 'cliAccess:revoke':
         return requestJson('DELETE', `${prefix}/cli-access/tokens/${encodeURIComponent((args as IpcArgs<'cliAccess:revoke'>).id)}`, okSchema);
+      case 'team:list':
+        return requestJson('GET', `${prefix}/team`, resultOf(key));
+      case 'team:invite':
+        return requestJson('POST', `${prefix}/team/invitations`, resultOf(key), args);
+      case 'team:revokeInvitation':
+        return requestJson('DELETE', `${prefix}/team/invitations/${encodeURIComponent((args as IpcArgs<'team:revokeInvitation'>).id)}`, okSchema);
+      case 'team:changeRole': {
+        const { userId, role } = args as IpcArgs<'team:changeRole'>;
+        return requestJson('PUT', `${prefix}/team/members/${encodeURIComponent(userId)}`, okSchema, { role });
+      }
+      case 'team:remove':
+        return requestJson('DELETE', `${prefix}/team/members/${encodeURIComponent((args as IpcArgs<'team:remove'>).userId)}`, okSchema);
       case 'documents:renderContext': {
         const parsed = args as IpcArgs<'documents:renderContext'>;
         const context = await requestJson(

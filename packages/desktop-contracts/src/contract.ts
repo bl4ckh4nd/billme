@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { dunningDeliverySchema, resolveDunningDeliverySchema } from '@billme/server-core';
 import { liteVatPeriodSchema, liteVatReportSchema, liteVatExportSchema } from '@billme/server-core';
+import { serverRoleSchema, teamInviteResultSchema, teamSchema } from '@billme/server-core';
 import { cliAccessRequestSchema, cliTokenSummarySchema, liteCashEntryInputSchema, liteCashEntrySchema, liteReceiptInputSchema, liteReceiptSchema, liteReceiptFileSchema, liteReceiptUploadSchema } from '@billme/server-core';
 import { taxFilingRoutes } from './taxFiling';
 import {
@@ -963,6 +964,33 @@ export const ipcRoutes = {
   'cliAccess:revoke': {
     channel: 'cliAccess:revoke',
     args: deleteByIdSchema,
+    result: okSchema,
+  },
+
+  // The workspace's people (hosted server mode only; owners and admins).
+  'team:list': {
+    channel: 'team:list',
+    args: z.undefined(),
+    result: teamSchema,
+  },
+  'team:invite': {
+    channel: 'team:invite',
+    args: z.object({ email: z.string().email(), role: serverRoleSchema }),
+    result: teamInviteResultSchema,
+  },
+  'team:revokeInvitation': {
+    channel: 'team:revokeInvitation',
+    args: deleteByIdSchema,
+    result: okSchema,
+  },
+  'team:changeRole': {
+    channel: 'team:changeRole',
+    args: z.object({ userId: z.string().min(1), role: serverRoleSchema }),
+    result: okSchema,
+  },
+  'team:remove': {
+    channel: 'team:remove',
+    args: z.object({ userId: z.string().min(1) }),
     result: okSchema,
   },
 

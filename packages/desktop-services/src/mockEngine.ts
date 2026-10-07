@@ -4778,6 +4778,14 @@ const invoke = async <K extends IpcRouteKey>(key: K, args: IpcArgs<K>): Promise<
       throw new Error('Unbekannter oder abgelaufener Code.');
     case 'cliAccess:revoke':
       throw new Error('Unbekanntes CLI-Token.');
+    // Teams exist only on a hosted server; the demo has one person.
+    case 'team:list':
+      return { members: [], invitations: [] } as IpcResult<K>;
+    case 'team:invite':
+    case 'team:revokeInvitation':
+    case 'team:changeRole':
+    case 'team:remove':
+      throw new Error('Teams gibt es nur auf einem Billme-Server.');
     default:
       throw new Error(`Unsupported IPC route in mock backend: ${String(key)}`);
   }

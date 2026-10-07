@@ -7,6 +7,7 @@ import { readServerHarnessState, startServerModeStack, stopServerModeStack } fro
 import { runStackSmokeScenario } from './scenarios.mjs';
 import {
   runLiteAuthScenario,
+  runLiteWorkspacesScenario,
   runLiteRegressionScenario,
   runLiteSmokeScenario,
   runLiteVatPersistenceScenario,
@@ -53,6 +54,7 @@ const buildScenarioList = () => {
     scenarios.push({ name: 'lite-smoke', kind: 'browser', run: runLiteSmokeScenario });
     if (level === 'full') {
       scenarios.push({ name: 'lite-auth', kind: 'browser', run: (page) => runLiteAuthScenario(page, 'runner-lite-auth') });
+      scenarios.push({ name: 'lite-workspaces', kind: 'browser', run: (page) => runLiteWorkspacesScenario(page, 'runner-lite-workspaces') });
       scenarios.push({ name: 'lite-regressions', kind: 'browser', run: (page) => runLiteRegressionScenario(page, 'runner-lite-regressions') });
       scenarios.push({ name: 'lite-vat-persistence', kind: 'plain', run: () => runLiteVatPersistenceScenario('runner-lite-vat-persistence') });
       scenarios.push({ name: 'lite-workflow', kind: 'browser', run: (page) => runLiteWorkflowScenario(page, 'runner-lite-workflow') });

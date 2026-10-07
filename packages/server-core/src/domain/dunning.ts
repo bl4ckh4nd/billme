@@ -86,7 +86,8 @@ export type InvoiceDunningStatus = z.infer<typeof invoiceDunningStatusSchema>;
 /** Document kinds that create a receivable and can therefore fall overdue. */
 const RECEIVABLE_DOCUMENT_KINDS = new Set(['invoice', 'advance_invoice', 'partial_invoice', 'final_invoice']);
 
-const localIsoDate = (now: Date): string => {
+/** The calendar day where the business is: documents, dunning and recurring runs are dated by it, never by UTC. */
+export const localIsoDate = (now: Date): string => {
   const month = String(now.getMonth() + 1).padStart(2, '0');
   const day = String(now.getDate()).padStart(2, '0');
   return `${now.getFullYear()}-${month}-${day}`;

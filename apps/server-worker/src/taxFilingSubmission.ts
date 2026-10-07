@@ -30,6 +30,11 @@ export const submitQueuedTaxFilings = async (input: {
   let retryableFailed = 0;
   for (const job of batch) {
     try {
+      const filing = await input.service.get(input.scope, job.submissionId);
+      if (!filing || filing.status !== 'queued') {
+        await input.jobs.complete(input.scope, job.id);
+        continue;
+      }
       const result: TaxFilingRecord = await input.service.submit(input.scope, job.submissionId, {
       actorId: 'billme-server-worker',
       reason: 'Tax filing transmission worker',

@@ -1,4 +1,4 @@
-export type EurListFilterSourceType = 'transaction' | 'invoice';
+export type EurListFilterSourceType = 'transaction' | 'invoice' | 'manual';
 export type EurListFilterFlowType = 'income' | 'expense';
 export type EurListFilterStatus = 'all' | 'unclassified' | 'classified' | 'excluded';
 export type EurListFilterFactKind = 'income' | 'expense' | 'private-withdrawal' | 'private-contribution' | 'pass-through';

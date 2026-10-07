@@ -50,12 +50,12 @@ export class InMemoryAuthStore implements AuthStore {
   bootstrap(product: ServerProduct, input: BootstrapRequest): AuthenticatedPrincipal {
     const users = this.usersByProduct.get(product) ?? new Map<string, UserRecord>();
     if (users.size > 0) {
-      throw new Error(`Bootstrap already completed for ${product}`);
+      throw Object.assign(new Error(`Bootstrap already completed for ${product}`), { statusCode: 409 });
     }
 
     const email = normalizeEmailAddress(input.email);
     if (users.has(email)) {
-      throw new Error('A user with this email already exists');
+      throw Object.assign(new Error('A user with this email already exists'), { statusCode: 409 });
     }
 
     const salt = createSalt();
@@ -91,12 +91,12 @@ export class InMemoryAuthStore implements AuthStore {
     const email = normalizeEmailAddress(input.email);
     const user = users?.get(email);
     if (!user) {
-      throw new Error('Invalid email or password');
+      throw Object.assign(new Error('Invalid email or password'), { statusCode: 401 });
     }
 
     const candidateHash = derivePasswordHash(input.password, user.salt);
     if (candidateHash !== user.passwordHash) {
-      throw new Error('Invalid email or password');
+      throw Object.assign(new Error('Invalid email or password'), { statusCode: 401 });
     }
 
     return {

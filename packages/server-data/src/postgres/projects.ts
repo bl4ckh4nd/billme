@@ -3,6 +3,14 @@ import { clientProjectSchema, type ClientProject, type TenantScope } from '@bill
 import type { Pool } from 'pg';
 import type { ServerDatabase } from '../database.js';
 import { withSerializablePostgresTransaction } from './connection.js';
+import { createPostgresAuditLogPort } from './audit.js';
+import type { AuditActor } from '@billme/server-core/ports';
+
+class ProjectError extends Error {
+  constructor(public readonly statusCode: number, message: string) {
+    super(message);
+  }
+}
 
 type ProjectQueryResult<Row> = { rows: Row[]; rowCount?: number | null; affectedRows?: number };
 type ProjectQueryable = {
@@ -75,12 +83,7 @@ const withMutationTransaction = async <T>(
     return db.transaction({ isolation: 'serializable' }, (session) => work(session));
   }
   if ('connect' in db && typeof db.connect === 'function') {
-    return withSerializablePostgresTransaction(db as unknown as Pool, async (client) => work({
-      query: async <Row = Record<string, unknown>>(text: string, values?: readonly unknown[]) => {
-        const result = await client.query(text, values ? [...values] : undefined);
-        return { rows: result.rows as Row[], rowCount: result.rowCount };
-      },
-    }));
+    return withSerializablePostgresTransaction(db as unknown as Pool, (client) => work(client));
   }
   return work(db);
 };
@@ -101,11 +104,14 @@ const updateClientProjects = async (
     [JSON.stringify(projects), updatedAt, scope.tenantId, clientId],
   );
   if ((result.rowCount ?? result.affectedRows ?? 0) < 1) {
-    throw new Error('Client not found');
+    throw new ProjectError(404, 'Kunde nicht gefunden.');
   }
 };
 
-export const createPostgresProjectRepository = (db: ProjectDatabase): ServerProjectRepository => ({
+export const createPostgresProjectRepository = (
+  db: ProjectDatabase,
+  actor: AuditActor = { type: 'service', displayName: 'server-projects' },
+): ServerProjectRepository => ({
   async list(scope, options) {
     const rows = await readRows(db, scope);
     const projects = allProjects(rows)
@@ -121,13 +127,13 @@ export const createPostgresProjectRepository = (db: ProjectDatabase): ServerProj
   },
 
   async upsert(scope, project, reason) {
-    if (!reason.trim()) throw new Error('Edit reason is required');
-    if (!project.clientId) throw new Error('clientId is required');
+    if (!reason.trim()) throw new ProjectError(400, 'Änderungsgrund erforderlich.');
+    if (!project.clientId) throw new ProjectError(400, 'Kunde erforderlich.');
 
     return withMutationTransaction(db, async (session) => {
       const rows = await readRows(session, scope, true);
       const target = rows.find((row) => row.id === project.clientId);
-      if (!target) throw new Error('Client not found');
+      if (!target) throw new ProjectError(404, 'Kunde nicht gefunden.');
 
       const existing = allProjects(rows).find(({ project: candidate }) => candidate.id === project.id);
       const year = project.startDate.slice(0, 4);
@@ -142,7 +148,7 @@ export const createPostgresProjectRepository = (db: ProjectDatabase): ServerProj
       const codeCollision = allProjects(rows).some(({ project: candidate }) =>
         candidate.id !== project.id && candidate.code === nextCode,
       );
-      if (codeCollision) throw new Error('Project code already exists');
+      if (codeCollision) throw new ProjectError(409, 'Projektnummer bereits vergeben.');
 
       const now = new Date().toISOString();
       const next: StoredProject = {
@@ -163,25 +169,37 @@ export const createPostgresProjectRepository = (db: ProjectDatabase): ServerProj
         }
       }
 
-      return toProject(next, project.clientId);
+      const saved = toProject(next, project.clientId);
+      await createPostgresAuditLogPort(session).append(scope, {
+        occurredAt: now, action: 'project.upsert', reason, actor,
+        subject: { entityType: 'project', entityId: saved.id, tenantId: scope.tenantId },
+        change: { before: existing?.project, after: saved },
+      });
+      return saved;
     });
   },
 
   async archive(scope, id, reason) {
-    if (!reason.trim()) throw new Error('Archive reason is required');
+    if (!reason.trim()) throw new ProjectError(400, 'Archivierungsgrund erforderlich.');
 
     return withMutationTransaction(db, async (session) => {
       const rows = await readRows(session, scope, true);
       const existing = allProjects(rows).find(({ project }) => project.id === id);
-      if (!existing) throw new Error('Project not found');
+      if (!existing) throw new ProjectError(404, 'Projekt nicht gefunden.');
 
       const now = new Date().toISOString();
       const next: StoredProject = { ...existing.raw, archivedAt: now, updatedAt: now };
       const owner = rows.find((row) => row.id === existing.clientId);
-      if (!owner) throw new Error('Client not found');
+      if (!owner) throw new ProjectError(404, 'Kunde nicht gefunden.');
       const nextProjects = parseStoredProjects(owner.projects_json).map((candidate) => candidate.id === id ? next : candidate);
       await updateClientProjects(session, scope, owner.id, nextProjects, now);
-      return toProject(next, owner.id);
+      const saved = toProject(next, owner.id);
+      await createPostgresAuditLogPort(session).append(scope, {
+        occurredAt: now, action: 'project.archive', reason, actor,
+        subject: { entityType: 'project', entityId: saved.id, tenantId: scope.tenantId },
+        change: { before: existing.project, after: saved },
+      });
+      return saved;
     });
   },
 });

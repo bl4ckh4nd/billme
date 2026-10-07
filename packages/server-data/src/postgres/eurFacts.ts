@@ -8,7 +8,7 @@ import { runInTransaction, type PostgresQueryable, type PostgresTransactionClien
 import { assertServerEurCashSource, type ServerEurReportResult } from './eurReport.js';
 
 type EurCashFactKind = 'income' | 'expense' | 'private-withdrawal' | 'private-contribution' | 'pass-through';
-type EurSourceType = 'transaction' | 'invoice';
+type EurSourceType = 'transaction' | 'invoice' | 'manual';
 type EurActor = { id: string; displayName?: string };
 type EurProvenance = { catalogId: string; catalogVersion: string; catalogSourceHash: string; sourceSnapshotHash?: string };
 

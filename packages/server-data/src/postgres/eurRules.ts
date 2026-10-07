@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { getCatalogForYear } from '@billme/desktop-services/eurCatalog';
 import type { TenantScope } from '@billme/server-core';
 import type { PostgresQueryable } from './connection.js';
 import type { ServerEurRuleRecord } from './proAccounting.js';
@@ -57,6 +58,10 @@ export const upsertServerEurRule = async (
   scope: TenantScope,
   input: ServerEurRuleInput,
 ): Promise<ServerEurRuleRecord> => {
+  const target = getCatalogForYear(input.taxYear).find((line) => line.id === input.targetEurLineId);
+  if (!target || !['income', 'expense'].includes(target.kind)) {
+    throw new Error('EUR_RULE_TARGET_INVALID: Bitte wählen Sie eine buchbare EÜR-Zeile des Steuerjahres.');
+  }
   const id = input.id ?? randomUUID();
   const existing = (await query<EurRuleRow>(db, `
     SELECT id,tenant_id,tax_year,priority,field,operator,value,target_eur_line_id,active,created_at,updated_at

@@ -218,6 +218,48 @@
       "when": 1788528600006,
       "tag": "0031_server_data_document_templates",
       "breakpoints": false
+    },
+    {
+      "idx": 32,
+      "version": "7",
+      "when": 1790726400000,
+      "tag": "0032_server_data_cli_tokens",
+      "breakpoints": false
+    },
+    {
+      "idx": 33,
+      "version": "7",
+      "when": 1790985600000,
+      "tag": "0033_server_data_lite_cash",
+      "breakpoints": false
+    },
+    {
+      "idx": 34,
+      "version": "7",
+      "when": 1790985600001,
+      "tag": "0034_server_data_offer_conversions",
+      "breakpoints": false
+    },
+    {
+      "idx": 35,
+      "version": "7",
+      "when": 1790985600002,
+      "tag": "0035_server_data_dunning_deliveries",
+      "breakpoints": false
+    },
+    {
+      "idx": 36,
+      "version": "7",
+      "when": 1790985600003,
+      "tag": "0036_server_data_persistence_guards",
+      "breakpoints": false
+    },
+    {
+      "idx": 37,
+      "version": "7",
+      "when": 1790985600004,
+      "tag": "0037_server_data_posted_invoice_projections",
+      "breakpoints": false
     }
   ]
 }

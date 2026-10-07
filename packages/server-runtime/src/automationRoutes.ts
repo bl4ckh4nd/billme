@@ -1,5 +1,7 @@
 import { randomBytes, randomUUID } from 'node:crypto';
-import type { FastifyInstance } from 'fastify';
+import { readFile } from 'node:fs/promises';
+import { basename } from 'node:path';
+import type { FastifyInstance, FastifyReply } from 'fastify';
 import { z } from 'zod';
 import { sendEmail, testEmailConfig } from '@billme/desktop-core/services/emailService';
 import { isRetryableEmailError } from '@billme/desktop-core/utils/retry';
@@ -9,6 +11,8 @@ import {
 } from '@billme/desktop-contracts-pro/schemas';
 import {
   processDunningRun,
+  dunningDeliverySchema,
+  resolveDunningDeliverySchema,
   queueEmailDelivery,
   summarizeInvoiceDunningStatus,
   type AuditActor,
@@ -24,6 +28,9 @@ import {
   createPostgresBillingDependencies,
   createPostgresBillingUnitOfWork,
   createPostgresDunningHistoryRepository,
+  createPostgresDunningDelivery,
+  listDunningDeliveries,
+  resolveDunningDelivery,
   createPostgresEmailOutboxRepository,
   createPostgresInvoiceRepository,
   createPostgresOfferRepository,
@@ -289,6 +296,7 @@ export interface EmbeddedDesktopIntegration {
     level?: number;
     suggestedName: string;
   }) => Promise<{ path: string }>;
+  readonly renderEurPdf?: (args: { taxYear: number; from?: string; to?: string }) => Promise<{ path: string }>;
 }
 
 const ENV_SECRET_NAMES: Record<EmbeddedSecretKey, string> = {
@@ -312,6 +320,22 @@ const isDailyRunDue = (enabled: boolean | undefined, runTime: string | undefined
   return last.getFullYear() !== now.getFullYear() || last.getMonth() !== now.getMonth() || last.getDate() !== now.getDate();
 };
 
+/**
+ * Hosted-server PDF rendering. The server has no Electron print window, so the
+ * composition root may supply a renderer; `token` is a short-lived session of
+ * the requesting user, which keeps the render inside that user's tenant.
+ */
+export type ServerDocumentPdfRenderer = (args: {
+  product: 'lite' | 'pro';
+  print:
+    | { kind: 'invoice' | 'offer' | 'dunning'; id: string; level?: number }
+    | { kind: 'eur'; taxYear: number; from?: string; to?: string };
+  token: string;
+  user: AuthSession['user'];
+}) => Promise<{ bytes: Uint8Array; fileName: string }>;
+
+const PDF_RENDER_SESSION_TTL_SECONDS = 60;
+
 export interface RegisterAutomationRoutesOptions {
   readonly requireSession: (
     app: FastifyInstance,
@@ -320,6 +344,7 @@ export interface RegisterAutomationRoutesOptions {
   ) => Promise<AuthSession>;
   readonly requireDatabase: (app: FastifyInstance) => ServerDatabase;
   readonly desktopIntegration?: EmbeddedDesktopIntegration;
+  readonly renderDocumentPdf?: ServerDocumentPdfRenderer;
 }
 
 export const registerAutomationRoutes = (
@@ -334,6 +359,59 @@ export const registerAutomationRoutes = (
   const integration = options.desktopIntegration;
   const secretFor = async (key: EmbeddedSecretKey): Promise<string | undefined> =>
     (integration ? await integration.getSecret(key) : process.env[ENV_SECRET_NAMES[key]]) || undefined;
+
+  type RenderedPdf = { bytes: Uint8Array; fileName: string };
+  const fromFile = async (exported: Promise<{ path: string }>): Promise<RenderedPdf> => {
+    const { path } = await exported;
+    return { bytes: await readFile(path), fileName: basename(path) };
+  };
+  const renderOnServer = (session: AuthSession, print: Parameters<ServerDocumentPdfRenderer>[0]['print']): Promise<RenderedPdf> => {
+    if (!options.renderDocumentPdf) {
+      throw new ApiError(501, 'PDF rendering is not configured on this server (set BILLME_PUBLIC_WEB_URL)');
+    }
+    return options.renderDocumentPdf({
+      product,
+      print,
+      token: app.tokenService.sign(session, PDF_RENDER_SESSION_TTL_SECONDS),
+      user: session.user,
+    });
+  };
+  const sendPdf = (reply: FastifyReply, pdf: RenderedPdf): Uint8Array => {
+    reply.header('content-type', 'application/pdf');
+    reply.header('content-disposition', `attachment; filename*=UTF-8''${encodeURIComponent(pdf.fileName)}`);
+    return pdf.bytes;
+  };
+
+  // The printed document as a file, for clients without a print window of their own (the CLI).
+  // Desktop: the same export as "PDF exportieren", including ZUGFeRD. Server: the configured renderer.
+  typedRoute(app, {
+    method: 'GET',
+    url: `${prefix}/documents/:kind/:id/pdf`,
+    params: z.object({ kind: z.enum(['invoice', 'offer', 'dunning']), id: z.string().min(1) }),
+    query: z.object({ level: z.coerce.number().int().positive().optional() }),
+    async handler({ request, reply, params, query }) {
+      const session = await sessionFor(request.headers.authorization);
+      const print = { ...params, level: query.level };
+      return sendPdf(reply, integration
+        ? await fromFile(integration.renderDocumentPdf({ ...print, suggestedName: `${params.kind}-${params.id}` }))
+        : await renderOnServer(session, print));
+    },
+  });
+
+  typedRoute(app, {
+    method: 'GET',
+    url: `${prefix}/reports/eur/pdf`,
+    query: z.object({ taxYear: z.coerce.number().int().min(2025), from: z.string().optional(), to: z.string().optional() }),
+    async handler({ request, reply, query }) {
+      const session = await sessionFor(request.headers.authorization);
+      if (integration && !integration.renderEurPdf) {
+        throw new ApiError(501, 'EÜR PDF export is not available in this app');
+      }
+      return sendPdf(reply, integration?.renderEurPdf
+        ? await fromFile(integration.renderEurPdf(query))
+        : await renderOnServer(session, { kind: 'eur', ...query }));
+    },
+  });
   const missingSecretSuffix = integration ? 'Bitte in den Einstellungen hinterlegen.' : 'Bitte auf dem Server konfigurieren.';
 
   const resolveEmailDelivery = async (settings: RuntimeSettings) => {
@@ -439,7 +517,21 @@ export const registerAutomationRoutes = (
     response: z.object({ ok: z.boolean(), ts: z.string() }),
     async handler({ request, query }) {
       await sessionFor(request.headers.authorization);
-      return portalClient.health(query.baseUrl);
+      try {
+        return await portalClient.health(query.baseUrl);
+      } catch (error) {
+        if (error instanceof Error) {
+          if (/^(?:Die )?Portal-Basis-URL /.test(error.message)) {
+            throw new ApiError(400, error.message);
+          }
+          const portalError = error as Error & { category?: unknown; userMessage?: unknown; statusCode?: number };
+          if (typeof portalError.userMessage === 'string' && ['network', 'client', 'server', 'timeout'].includes(String(portalError.category))) {
+            const status = portalError.statusCode && portalError.statusCode >= 400 && portalError.statusCode < 500 ? portalError.statusCode : 503;
+            throw new ApiError(status, portalError.userMessage);
+          }
+        }
+        throw error;
+      }
     },
   });
 
@@ -674,15 +766,11 @@ export const registerAutomationRoutes = (
           settingsRepo: {
             get: async () => parsedSettings,
             save: async (_scope, nextSettings) => {
-              await saveServerSettings(queryable, {
-                tenantId: session.scope.tenantId,
-                settingsJson: JSON.stringify(appSettingsSchema.parse(nextSettings)),
-                createdAt: settings.createdAt,
-                updatedAt: nowIso(),
-              });
+              await queryable.query("UPDATE server_settings SET settings_json=jsonb_set(settings_json::jsonb,'{automation,lastDunningRun}',to_jsonb($2::text),true)::text,updated_at=$3 WHERE tenant_id=$1", [session.scope.tenantId, nextSettings.automation.lastDunningRun, nowIso()]);
             },
           },
           dunningHistoryRepo: createPostgresDunningHistoryRepository(queryable),
+          delivery: createPostgresDunningDelivery(queryable),
           emailPort: {
             send: async (provider, providerConfig, message) => sendEmail(provider, providerConfig, {
               from: message.from,
@@ -735,6 +823,16 @@ export const registerAutomationRoutes = (
       return summarizeInvoiceDunningStatus(invoice, history);
     },
   });
+
+  typedRoute(app, { method: 'GET', url: `${prefix}/dunning/deliveries`, response: z.array(dunningDeliverySchema), async handler({ request }) {
+    const session = await sessionFor(request.headers.authorization);
+    return listDunningDeliveries(queryTarget(database()), session.scope);
+  } });
+  typedRoute(app, { method: 'POST', url: `${prefix}/dunning/deliveries/resolve`, body: resolveDunningDeliverySchema, response: z.object({ ok: z.literal(true) }), async handler({ request, body }) {
+    const session = await requireAutomationMutationSession(sessionFor, request.headers.authorization);
+    try { return await resolveDunningDelivery(queryTarget(database()), session.scope, body.id, body.accepted, { actor: actorFor(session), reason: body.reason }); }
+    catch (error) { throw new ApiError(409, error instanceof Error ? error.message : String(error)); }
+  } });
 
   typedRoute(app, {
     method: 'POST',

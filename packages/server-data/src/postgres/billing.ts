@@ -64,7 +64,7 @@ import {
   sql,
 } from "drizzle-orm";
 import { schema, tryCreateDrizzle } from "./drizzle.js";
-import { withPostgresTransaction } from "./connection.js";
+import { runInTransaction, withPostgresTransaction } from "./connection.js";
 import { createPostgresAuditLogPort } from "./audit.js";
 import { resolveLayoutForSave } from "./documentLayoutFreeze.js";
 
@@ -211,6 +211,7 @@ type RecurringProfileRow = {
   name: string;
   interval: RecurringProfile["interval"];
   next_run: string;
+  anchor_day: number | null;
   last_run: string | null;
   end_date: string | null;
   amount: string | number;
@@ -425,6 +426,7 @@ const rowToRecurringProfile = (row: RecurringProfileRow): RecurringProfile =>
     name: row.name,
     interval: row.interval,
     nextRun: row.next_run,
+    anchorDay: row.anchor_day ?? undefined,
     lastRun: row.last_run ?? undefined,
     endDate: row.end_date ?? undefined,
     amount: toNumber(row.amount),
@@ -634,6 +636,7 @@ const toRecurringRow = (r: any): RecurringProfileRow => ({
   name: r.name!,
   interval: r.interval,
   next_run: r.nextRun!,
+  anchor_day: r.anchorDay ?? null,
   last_run: r.lastRun ?? null,
   end_date: r.endDate ?? null,
   amount: r.amount as any,
@@ -875,7 +878,7 @@ export const createPostgresClientRepository = (
       updatedAt: client.updatedAt ?? nowIso(),
     };
     const drizzleDb = requireDrizzle(db);
-      await drizzleDb
+      const saved = await drizzleDb
         .insert(schema.clients)
         .values({
           id: nextClient.id,
@@ -902,6 +905,7 @@ export const createPostgresClientRepository = (
         })
         .onConflictDoUpdate({
           target: schema.clients.id,
+          setWhere: eq(schema.clients.tenantId, scope.tenantId),
           set: {
             tenantId: scope.tenantId,
             customerNumber: nextClient.customerNumber ?? null,
@@ -923,7 +927,8 @@ export const createPostgresClientRepository = (
               : null,
             updatedAt: nextClient.updatedAt ?? null,
           },
-        });
+        }).returning({ id: schema.clients.id });
+      if (!saved.length) throw Object.assign(new Error("Eintrag nicht gefunden."), { statusCode: 404 });
       return nextClient;
       },
   async remove(scope, id) {
@@ -970,7 +975,7 @@ export const createPostgresInvoiceRepository = (
         .limit(1);
       return rows[0] ? rowToInvoice(toInvoiceRow(rows[0])) : null;
       },
-  async save(scope, invoice) {
+  async save(scope, invoice, options) {
     const nextInvoice: Invoice = {
       ...invoice,
       tenantId: scope.tenantId,
@@ -1057,8 +1062,8 @@ export const createPostgresInvoiceRepository = (
             status: nextInvoice.status,
             dunningLevel: nextInvoice.dunningLevel ?? 0,
             itemsJson: toJson(nextInvoice.items ?? []),
-            paymentsJson: toJson(nextInvoice.payments ?? []),
-            historyJson: toJson(nextInvoice.history ?? []),
+            paymentsJson: options?.replacePayments ? toJson(nextInvoice.payments ?? []) : sql`${schema.invoices.paymentsJson}`,
+            historyJson: sql`CASE WHEN ${schema.invoices.accountingStatus} IN ('posted', 'reversed') THEN ${schema.invoices.historyJson} ELSE ${toJson(nextInvoice.history ?? [])} END`,
             taxMode: nextInvoice.taxMode ?? "standard_vat",
             taxMetaJson: nextInvoice.taxMeta
               ? toJson(nextInvoice.taxMeta)
@@ -1071,9 +1076,28 @@ export const createPostgresInvoiceRepository = (
             updatedAt: nextInvoice.updatedAt ?? null,
           },
         }).returning({ id: schema.invoices.id });
-      if (!saved.length) throw new Error('Invoice id already belongs to another tenant');
-      return nextInvoice;
+      if (!saved.length) throw Object.assign(new Error("Rechnung nicht gefunden."), { statusCode: 404 });
+      return (await createPostgresInvoiceRepository(db).getById(scope, nextInvoice.id))!;
       },
+  async patchDunning(scope, id, patch) {
+    return runInTransaction(db, async (session) => {
+      const locked = await session.query<{ accounting_status: string | null }>('SELECT accounting_status FROM invoices WHERE tenant_id=$1 AND id=$2 FOR UPDATE', [scope.tenantId, id]);
+      const repository = createPostgresInvoiceRepository(session);
+      const current = await repository.getById(scope, id);
+      if (!current) throw new Error('INVOICE_NOT_FOUND');
+      // ponytail: a posted (Pro) receivable keeps its journal amount, so the fee is not charged there;
+      // booking it needs its own Mahngebühr entry and open item.
+      const posted = ['posted', 'reversed'].includes(String(locked.rows[0]?.accounting_status));
+      const eligible = !posted && !['draft', 'paid', 'cancelled'].includes(current.status);
+      return repository.save(scope, {
+        ...current,
+        amount: current.amount + (eligible ? patch.fee ?? 0 : 0),
+        dunningLevel: patch.dunningLevel === undefined ? current.dunningLevel : Math.max(current.dunningLevel ?? 0, patch.dunningLevel),
+        history: patch.historyEntry ? [patch.historyEntry, ...current.history] : current.history,
+        updatedAt: nowIso(),
+      });
+    });
+  },
   async remove(scope, id) {
     const drizzleDb = requireDrizzle(db);
       await drizzleDb
@@ -1134,7 +1158,7 @@ export const createPostgresOfferRepository = (
       layout: nextOffer.layout,
     });
     const drizzleDb = requireDrizzle(db);
-      await drizzleDb
+      const saved = await drizzleDb
         .insert(schema.offers)
         .values({
           id: nextOffer.id,
@@ -1170,6 +1194,7 @@ export const createPostgresOfferRepository = (
         })
         .onConflictDoUpdate({
           target: schema.offers.id,
+          setWhere: eq(schema.offers.tenantId, scope.tenantId),
           set: {
             tenantId: scope.tenantId,
             clientId: nextOffer.clientId ?? null,
@@ -1201,7 +1226,8 @@ export const createPostgresOfferRepository = (
             layoutJson: nextOffer.layout ? toJson(nextOffer.layout) : sql`${schema.offers.layoutJson}`,
             updatedAt: nextOffer.updatedAt ?? null,
           },
-        });
+        }).returning({ id: schema.offers.id });
+      if (!saved.length) throw Object.assign(new Error("Eintrag nicht gefunden."), { statusCode: 404 });
       return nextOffer;
       },
   async remove(scope, id) {
@@ -1270,7 +1296,7 @@ export const createPostgresRecurringProfileRepository = (
       updatedAt: profile.updatedAt ?? nowIso(),
     };
     const drizzleDb = requireDrizzle(db);
-      await drizzleDb
+      const saved = await drizzleDb
         .insert(schema.recurringProfiles)
         .values({
           id: nextProfile.id,
@@ -1280,6 +1306,7 @@ export const createPostgresRecurringProfileRepository = (
           name: nextProfile.name,
           interval: nextProfile.interval,
           nextRun: nextProfile.nextRun,
+          anchorDay: nextProfile.anchorDay ?? Number(nextProfile.nextRun.slice(8, 10)),
           lastRun: nextProfile.lastRun ?? null,
           endDate: nextProfile.endDate ?? null,
           amount: String(nextProfile.amount),
@@ -1291,6 +1318,7 @@ export const createPostgresRecurringProfileRepository = (
         })
         .onConflictDoUpdate({
           target: schema.recurringProfiles.id,
+          setWhere: eq(schema.recurringProfiles.tenantId, scope.tenantId),
           set: {
             tenantId: scope.tenantId,
             clientId: nextProfile.clientId,
@@ -1298,6 +1326,7 @@ export const createPostgresRecurringProfileRepository = (
             name: nextProfile.name,
             interval: nextProfile.interval,
             nextRun: nextProfile.nextRun,
+            anchorDay: nextProfile.anchorDay ?? sql`${schema.recurringProfiles.anchorDay}`,
             lastRun: nextProfile.lastRun ?? null,
             endDate: nextProfile.endDate ?? null,
             amount: String(nextProfile.amount),
@@ -1308,8 +1337,9 @@ export const createPostgresRecurringProfileRepository = (
               : null,
             updatedAt: nextProfile.updatedAt ?? null,
           },
-        });
-      return nextProfile;
+        }).returning();
+      if (!saved.length) throw Object.assign(new Error("Eintrag nicht gefunden."), { statusCode: 404 });
+      return rowToRecurringProfile(toRecurringRow(saved[0]));
       },
   async remove(scope, id) {
     const drizzleDb = requireDrizzle(db);
@@ -1499,9 +1529,9 @@ export const createPostgresEmailOutboxRepository = (
     const rows = await drizzleDb
       .update(schema.emailOutbox)
       .set({
-        status: sql`CASE WHEN ${schema.emailOutbox.attemptCount} + 1 >= ${schema.emailOutbox.maxAttempts} OR ${args.retryAt ?? null} IS NULL THEN 'failed' ELSE 'pending' END`,
+        status: sql`CASE WHEN ${schema.emailOutbox.attemptCount} + 1 >= ${schema.emailOutbox.maxAttempts} OR ${args.retryAt ?? null}::text IS NULL THEN 'failed' ELSE 'pending' END`,
         attemptCount: sql`${schema.emailOutbox.attemptCount} + 1`,
-        nextAttemptAt: sql`CASE WHEN ${schema.emailOutbox.attemptCount} + 1 >= ${schema.emailOutbox.maxAttempts} OR ${args.retryAt ?? null} IS NULL THEN ${args.failedAt} ELSE ${args.retryAt} END`,
+        nextAttemptAt: sql`CASE WHEN ${schema.emailOutbox.attemptCount} + 1 >= ${schema.emailOutbox.maxAttempts} OR ${args.retryAt ?? null}::text IS NULL THEN ${args.failedAt} ELSE ${args.retryAt ?? null}::text END`,
         lastAttemptAt: args.failedAt,
         lastError: args.error,
         provider: args.provider,

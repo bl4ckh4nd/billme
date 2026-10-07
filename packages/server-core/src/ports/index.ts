@@ -169,7 +169,8 @@ export interface ClientRepository {
 export interface InvoiceRepository {
   list(scope: TenantScope): MaybePromise<Invoice[]>;
   getById(scope: TenantScope, id: string): MaybePromise<Invoice | null>;
-  save(scope: TenantScope, invoice: Invoice): MaybePromise<Invoice>;
+  save(scope: TenantScope, invoice: Invoice, options?: { replacePayments: true }): MaybePromise<Invoice>;
+  patchDunning?(scope: TenantScope, id: string, patch: { fee?: number; dunningLevel?: number; historyEntry?: { date: string; action: string } }): MaybePromise<Invoice>;
   remove(scope: TenantScope, id: string): MaybePromise<void>;
 }
 

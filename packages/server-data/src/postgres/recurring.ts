@@ -137,7 +137,18 @@ export const createServerRecurringDependencies = (
       remove: (innerScope, id) => profileRepository().remove(innerScope, id),
     },
     clientPort: { getById: (innerScope, id) => clientRepository().getById(innerScope, id) },
-    invoicePort: { save: (innerScope, params) => invoiceRepository().save(innerScope, params.invoice) },
+    invoicePort: { save: async (innerScope, params) => {
+      const saved = await invoiceRepository().save(innerScope, params.invoice);
+      await auditLog.append(innerScope, {
+        occurredAt: nowIso(options.clock),
+        action: 'invoice.create',
+        reason: params.reason,
+        actor: options.actor ?? { type: 'system', displayName: 'Abo-Automatik' },
+        subject: { entityType: 'invoice', entityId: saved.id, tenantId: innerScope.tenantId },
+        change: { before: null, after: saved },
+      });
+      return saved;
+    } },
     numberingPort: {
       getSettings: async () => (await readSettings())?.settings ?? null,
       reserve: (kind, at) => reserveDocumentNumber(numbering, kind, at),

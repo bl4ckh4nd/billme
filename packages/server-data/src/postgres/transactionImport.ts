@@ -18,6 +18,9 @@ export interface ServerTransactionRecord {
   counterparty: string;
   purpose: string;
   linkedInvoiceId?: string;
+  matchedManualEntryId?: string;
+  appliedAmountCents?: number;
+  unallocatedAmountCents?: number;
   status: 'pending' | 'booked';
   dedupHash?: string;
   importBatchId?: string;
@@ -240,6 +243,7 @@ export const commitServerTransactionImport = async (
       session,
       `${importBatchSelect}
        WHERE tenant_id = $1 AND account_id = $2 AND file_sha256 = $3
+         AND (rolled_back_at IS NULL OR rolled_back_at = '') AND imported_count > 0
        ORDER BY created_at ASC, id ASC LIMIT 1`,
       [tenant(scope), input.accountId, committed.fileSha256],
     );
@@ -394,10 +398,11 @@ export const getServerImportBatchDetails = async (
     [tenant(scope), batchId],
   );
   const linked = transactions.rows.filter((row) => typeof row.linked_invoice_id === 'string' && row.linked_invoice_id).length;
+  const manual = await query(database, 'SELECT id FROM lite_cash_entries WHERE tenant_id=$1 AND deleted_at IS NULL AND matched_transaction_id IN (SELECT id FROM transactions WHERE tenant_id=$1 AND import_batch_id=$2)', [tenant(scope), batchId]);
   return {
     batch,
     transactions: transactions.rows.map(toTransaction),
-    canRollback: linked === 0 && !batch.rolledBackAt,
+    canRollback: linked === 0 && manual.rows.length === 0 && !batch.rolledBackAt,
     linkedInvoiceCount: linked,
   };
 };
@@ -419,7 +424,7 @@ export const rollbackServerImportBatch = async (
       `SELECT id FROM transactions
        WHERE tenant_id = $1 AND import_batch_id = $2
          AND (deleted_at IS NULL OR deleted_at = '')
-         AND linked_invoice_id IS NOT NULL AND linked_invoice_id <> ''
+         AND ((linked_invoice_id IS NOT NULL AND linked_invoice_id <> '') OR EXISTS (SELECT 1 FROM lite_cash_entries m WHERE m.tenant_id=transactions.tenant_id AND m.matched_transaction_id=transactions.id AND m.deleted_at IS NULL))
        FOR UPDATE`,
       [tenant(scope), batchId],
     );
@@ -433,6 +438,12 @@ export const rollbackServerImportBatch = async (
          AND (deleted_at IS NULL OR deleted_at = '')
        RETURNING id`,
       [rolledBackAt, tenant(scope), batchId],
+    );
+    await query(session,
+      `DELETE FROM bank_transactions
+       WHERE tenant_id = $1 AND source_transaction_id IN
+         (SELECT id FROM transactions WHERE tenant_id = $1 AND import_batch_id = $2)`,
+      [tenant(scope), batchId],
     );
     await query(session,
       `UPDATE import_batches
@@ -465,7 +476,7 @@ const transactionWhere = (scope: TenantScope, filters: TransactionListFilters = 
   if (filters.accountId) add('account_id = $VALUE', filters.accountId);
   if (filters.type) add('type = $VALUE', filters.type);
   if (filters.linkedOnly) clauses.push("linked_invoice_id IS NOT NULL AND linked_invoice_id <> ''");
-  if (filters.unlinkedOnly) clauses.push("(linked_invoice_id IS NULL OR linked_invoice_id = '')");
+  if (filters.unlinkedOnly) clauses.push("(linked_invoice_id IS NULL OR linked_invoice_id = '') AND NOT EXISTS (SELECT 1 FROM lite_cash_entries m WHERE m.tenant_id=transactions.tenant_id AND m.matched_transaction_id=transactions.id AND m.deleted_at IS NULL)");
   return { clauses, values };
 };
 
@@ -482,7 +493,15 @@ export const listServerTransactions = async (
      ORDER BY date DESC, amount DESC, id ASC`,
     where.values,
   );
-  return result.rows.map(toTransaction);
+  const manual = await query<{ id: string; matched_transaction_id: string }>(database, 'SELECT id,matched_transaction_id FROM lite_cash_entries WHERE tenant_id=$1 AND deleted_at IS NULL AND matched_transaction_id IS NOT NULL', [tenant(scope)]);
+  const invoices = await createPostgresBillingDependencies(database).invoiceRepo.list(scope);
+  return result.rows.map((row) => {
+    const transaction = toTransaction(row);
+    transaction.matchedManualEntryId = manual.rows.find((entry) => entry.matched_transaction_id === transaction.id)?.id;
+    const payment = invoices.find((invoice) => invoice.id === transaction.linkedInvoiceId)?.payments.find((entry) => entry.id === transactionPaymentId(transaction.id));
+    if (payment) { transaction.appliedAmountCents = Math.round(payment.amount * 100); transaction.unallocatedAmountCents = Math.round(transaction.amount * 100) - transaction.appliedAmountCents; }
+    return transaction;
+  });
 };
 
 const getTransaction = async (
@@ -555,10 +574,13 @@ export const findServerTransactionMatches = async (
   const sourceId = bankSource.rows[0]?.source_transaction_id || transactionId;
   const transaction = await getTransaction(database, scope, sourceId);
   if (!transaction) throw new Error('TRANSACTION_NOT_FOUND');
+  if (transaction.status !== 'booked') throw new Error('PAYMENT_ALLOCATION_INVALID');
   const invoices = await createPostgresBillingDependencies(database).invoiceRepo.list(scope);
   return {
     transaction,
-    suggestions: invoiceMatchSuggestions(transaction, invoices.filter((invoice) => invoice.status === 'open' || invoice.status === 'overdue')),
+    suggestions: invoiceMatchSuggestions(transaction, invoices.filter((invoice) =>
+      (invoice.status === 'open' || invoice.status === 'overdue')
+      && (invoice.documentKind ?? 'invoice') === 'invoice')),
   };
 };
 
@@ -595,22 +617,36 @@ export const linkServerTransaction = async (
   invoiceId: string,
   reason: string,
   actor: TransactionMutationActor,
+  appliedAmountCents?: number,
 ): Promise<{ success: true; invoice: Invoice }> => inTransaction(database, async (session) => {
   const transaction = await getTransaction(session, scope, transactionId, true);
   if (!transaction) throw new Error('TRANSACTION_NOT_FOUND');
-  if (transaction.linkedInvoiceId) throw new Error('TRANSACTION_ALREADY_LINKED');
+  if (transaction.status !== 'booked') throw new Error('PAYMENT_ALLOCATION_INVALID');
+  if ((await query(session, 'SELECT id FROM lite_cash_entries WHERE tenant_id=$1 AND matched_transaction_id=$2 AND deleted_at IS NULL', [tenant(scope), transactionId])).rows.length) throw new Error('TRANSACTION_ALREADY_LINKED');
+  if (transaction.linkedInvoiceId && transaction.linkedInvoiceId !== invoiceId) throw new Error('TRANSACTION_ALREADY_LINKED');
+  await query(session, 'SELECT id FROM invoices WHERE tenant_id=$1 AND id=$2 FOR UPDATE', [tenant(scope), invoiceId]);
   const dependencies = createPostgresBillingDependencies(session);
   const invoice = await dependencies.invoiceRepo.getById(scope, invoiceId);
   if (!invoice) throw new Error('INVOICE_NOT_FOUND');
-  const payment = { id: transactionPaymentId(transaction.id), date: transaction.date, amount: transaction.amount, method: 'Überweisung' };
+  if (['draft', 'cancelled'].includes(invoice.status) || ['order_confirmation', 'delivery_note', 'credit_note', 'cancellation_invoice'].includes(invoice.documentKind ?? 'invoice')) throw new Error('PAYMENT_ALLOCATION_INVALID');
+  const existingPayment = (invoice.payments ?? []).find((payment) => payment.id === transactionPaymentId(transaction.id));
+  if (transaction.linkedInvoiceId) {
+    if (existingPayment && (appliedAmountCents === undefined || Math.round(existingPayment.amount * 100) === appliedAmountCents)) return { success: true, invoice };
+    throw new Error('TRANSACTION_ALREADY_LINKED');
+  }
+  const cashCents = Math.round(transaction.amount * 100);
+  const outstandingCents = Math.round(invoice.amount * 100) - (invoice.payments ?? []).reduce((sum, payment) => sum + Math.round(payment.amount * 100), 0);
+  const applied = appliedAmountCents ?? Math.min(cashCents, outstandingCents);
+  if (!Number.isSafeInteger(applied) || applied <= 0 || applied > cashCents || applied > outstandingCents) throw new Error('PAYMENT_ALLOCATION_INVALID');
+  const payment = { id: transactionPaymentId(transaction.id), date: transaction.date, amount: applied / 100, method: 'Überweisung' };
   const updatedInvoice: Invoice = {
     ...invoice,
     payments: [...(invoice.payments ?? []), payment],
-    status: (invoice.payments ?? []).reduce((sum, entry) => sum + Number(entry.amount), 0) + transaction.amount >= invoice.amount
+    status: (invoice.payments ?? []).reduce((sum, entry) => sum + Number(entry.amount), 0) + payment.amount >= invoice.amount
       ? 'paid'
       : invoice.status,
   };
-  const savedInvoice = await dependencies.invoiceRepo.save(scope, updatedInvoice);
+  const savedInvoice = await dependencies.invoiceRepo.save(scope, updatedInvoice, { replacePayments: true });
   await query(session,
     `UPDATE transactions SET linked_invoice_id = $1 WHERE tenant_id = $2 AND id = $3`,
     [invoiceId, tenant(scope), transactionId],
@@ -630,6 +666,7 @@ export const unlinkServerTransaction = async (
   const transaction = await getTransaction(session, scope, transactionId, true);
   if (!transaction) throw new Error('TRANSACTION_NOT_FOUND');
   if (!transaction.linkedInvoiceId) throw new Error('TRANSACTION_NOT_LINKED');
+  await query(session, 'SELECT id FROM invoices WHERE tenant_id=$1 AND id=$2 FOR UPDATE', [tenant(scope), transaction.linkedInvoiceId]);
   const dependencies = createPostgresBillingDependencies(session);
   const invoice = await dependencies.invoiceRepo.getById(scope, transaction.linkedInvoiceId);
   if (invoice) {
@@ -643,7 +680,7 @@ export const unlinkServerTransaction = async (
       payments,
       status: totalPaid >= invoice.amount ? 'paid' : 'open',
     };
-    const savedInvoice = await dependencies.invoiceRepo.save(scope, updatedInvoice);
+    const savedInvoice = await dependencies.invoiceRepo.save(scope, updatedInvoice, { replacePayments: true });
     await audit(session, scope, 'invoice', invoice.id, 'payment_unlinked', reason, invoice, savedInvoice, actor);
   }
   await query(session,

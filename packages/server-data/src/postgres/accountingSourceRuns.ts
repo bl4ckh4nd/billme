@@ -628,11 +628,39 @@ export const createPostgresAccountingSourceRunRepository = (db: PostgresQueryabl
     sourceInput.sourceRevision ??= sourceRevision;
     const idempotencyKey = required(input.idempotencyKey, 'IDEMPOTENCY_KEY_REQUIRED');
     return inTx(db, async (tx) => {
+      // The workspace names the settled invoice as "Quellbeleg" (its id or number); without an
+      // original in the facts that invoice is the original, also inside the §17 facts of a write-off.
+      if ((commandName === 'skonto' || commandName === 'bad_debt') && !settlementReference(sourceInput) && settlementDocumentType(sourceInput) === 'outgoing_invoice') {
+        const named = await q<any>(tx, `SELECT id,number,date FROM invoices WHERE tenant_id=$1 AND (id=$2 OR number=$2) LIMIT 2`, [tenant(scope), sourceId]);
+        if (named.length === 1) {
+          sourceInput.originalDocumentId = named[0].id;
+          if (commandName === 'bad_debt' && sourceInput.facts && typeof sourceInput.facts === 'object') {
+            sourceInput.facts = {
+              ...sourceInput.facts,
+              originalDocumentId: named[0].id,
+              originalDocumentNumber: sourceInput.facts.originalDocumentNumber ?? named[0].number,
+              originalTaxEffectiveDate: sourceInput.facts.originalTaxEffectiveDate ?? named[0].date,
+            };
+          }
+        }
+      }
       const existing = (await q<any>(tx, `SELECT * FROM accounting_source_runs WHERE tenant_id=$1 AND source_type=$2 AND source_id=$3 AND source_revision=$4 FOR UPDATE`, [tenant(scope), sourceType, sourceId, sourceRevision]))[0];
       const source = { command: commandName, input: sourceInput };
       if (existing) {
         if (existing.source_hash !== hash(source) || existing.idempotency_key !== idempotencyKey) throw new Error('ACCOUNTING_SOURCE_RUN_CONFLICT');
         return { run: mapRun(existing), result: parse(existing.result_json, {}), replayed: true };
+      }
+      let closingInput = sourceInput;
+      if (commandName === 'fiscal_close' || commandName === 'carry_forward') {
+        const date = String(commandName === 'fiscal_close' ? sourceInput.closingDate : sourceInput.effectiveDate);
+        const ledger = await q<any>(tx, `SELECT jl.account_number,COALESCE(SUM(jl.debit_amount-jl.credit_amount),0) balance FROM journal_lines jl JOIN journal_entries je ON je.tenant_id=jl.tenant_id AND je.id=jl.entry_id WHERE jl.tenant_id=$1 AND je.status IN ('posted','reversed') AND (je.posting_date < $2 OR ($3::boolean AND je.posting_date=$2)) GROUP BY jl.account_number`, [tenant(scope), date, commandName === 'fiscal_close']);
+        const balances = new Map(ledger.map((row) => [String(row.account_number), Number(row.balance)]));
+        const selected = commandName === 'fiscal_close' ? [...(sourceInput.revenueAccounts ?? []), ...(sourceInput.expenseAccounts ?? [])] : sourceInput.balanceSheetAccounts ?? [];
+        for (const account of selected) {
+          const submitted = (sourceInput.balances ?? []).filter((row: any) => row.accountNumber === account).reduce((sum: number, row: any) => sum + Math.round(Number(row.closingBalance ?? (row.openingBalance + row.debitTurnover - row.creditTurnover)) * 100), 0);
+          if (submitted !== Math.round((balances.get(account) ?? 0) * 100)) throw new Error('CLOSING_COMMAND_REJECTED:LEDGER_BALANCE_MISMATCH');
+        }
+        closingInput = { ...sourceInput, balances: ledger.map((row) => ({ accountNumber: String(row.account_number), openingBalance: 0, debitTurnover: Math.max(0, Number(row.balance)), creditTurnover: Math.max(0, -Number(row.balance)), closingBalance: Number(row.balance) })) };
       }
       const isSettlement = commandName === 'skonto' || commandName === 'bad_debt' || commandName === 'advance_settlement';
       if (isSettlement) await assertSettlementReferences(tx, scope, commandName as SettlementCommandKind, sourceInput);
@@ -658,7 +686,7 @@ export const createPostgresAccountingSourceRunRepository = (db: PostgresQueryabl
           });
           return { status: 'ready', value: { command: settlement.command, result: settlement.result } };
         })()
-        : buildClosingResult(commandName, sourceInput, tenant(scope));
+        : buildClosingResult(commandName, closingInput, tenant(scope));
       if (built.status === 'rejected' || built.status === 'invalid') throw new Error(`CLOSING_COMMAND_REJECTED:${built.errors?.[0]?.code ?? 'INVALID'}`);
       const value = built.value ?? built;
       // Source facts and single-command validators return the JournalCommand

@@ -7,11 +7,11 @@ export const readDatabaseUrl = (env: NodeJS.ProcessEnv = process.env): string | 
 };
 
 export const createPostgresPool = (config: string | PoolConfig): Pool => {
-  if (typeof config === 'string') {
-    return new Pool({ connectionString: config });
-  }
-
-  return new Pool(config);
+  const pool = new Pool(typeof config === 'string' ? { connectionString: config } : config);
+  pool.on('error', (error) => {
+    console.error('Postgres pool connection error', { code: (error as Error & { code?: string }).code });
+  });
+  return pool;
 };
 
 /** Query targets accepted by every persistence adapter, including embedded PGlite. */

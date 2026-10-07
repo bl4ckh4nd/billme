@@ -110,7 +110,7 @@ export const createPostgresAuthStore = (pool: Pool): ServerAuthStore => ({
         .where(eq(schema.tenants.product, product))
         .limit(1);
       if (existingTenant[0]) {
-        throw new Error(`Bootstrap already completed for ${product}`);
+        throw Object.assign(new Error(`Bootstrap already completed for ${product}`), { statusCode: 409 });
       }
 
       const email = normalizeEmailAddress(input.email);
@@ -120,7 +120,7 @@ export const createPostgresAuthStore = (pool: Pool): ServerAuthStore => ({
         .where(ilike(schema.userAccounts.email, email))
         .limit(1);
       if (existingUser[0]) {
-        throw new Error("A user with this email already exists");
+        throw Object.assign(new Error("A user with this email already exists"), { statusCode: 409 });
       }
 
       const now = new Date().toISOString();
@@ -178,6 +178,16 @@ export const createPostgresAuthStore = (pool: Pool): ServerAuthStore => ({
 
   async login(product, input) {
     const email = normalizeEmailAddress(input.email);
+    const now = Date.now();
+    const attempts = await pool.query<{ attempt_count: number }>(`
+      INSERT INTO login_attempts (product, email, attempt_count, window_started_at) VALUES ($1,$2,1,$3)
+      ON CONFLICT (product,email) DO UPDATE SET
+        attempt_count = CASE WHEN login_attempts.window_started_at <= $3::bigint - 900000 THEN 1 ELSE login_attempts.attempt_count + 1 END,
+        window_started_at = CASE WHEN login_attempts.window_started_at <= $3::bigint - 900000 THEN $3::bigint ELSE login_attempts.window_started_at END
+      RETURNING attempt_count`, [product, email, now]);
+    if (attempts.rows[0]!.attempt_count > 5) {
+      throw Object.assign(new Error("Zu viele Anmeldeversuche. Bitte in 15 Minuten erneut versuchen."), { statusCode: 429 });
+    }
     const db = createDrizzle(pool);
     const rows = await db
       .select({
@@ -220,14 +230,15 @@ export const createPostgresAuthStore = (pool: Pool): ServerAuthStore => ({
 
     const row = rows[0];
     if (!row) {
-      throw new Error("Invalid email or password");
+      throw Object.assign(new Error("Invalid email or password"), { statusCode: 401 });
     }
 
     const candidateHash = derivePasswordHash(input.password, row.passwordSalt!);
     if (candidateHash !== row.passwordHash) {
-      throw new Error("Invalid email or password");
+      throw Object.assign(new Error("Invalid email or password"), { statusCode: 401 });
     }
 
+    await pool.query("DELETE FROM login_attempts WHERE product=$1 AND email=$2", [product, email]);
     await db
       .update(schema.userAccounts)
       .set({ lastLoginAt: new Date().toISOString() })

@@ -119,6 +119,7 @@ type ServerModeSettings = {
     recentPaymentsLimit: number;
     topClientsLimit: number;
   };
+  businessReportingProfile: { jurisdiction: 'DE'; legalForm: 'sole_proprietor' | 'gmbh'; profitDetermination: 'eur' | 'double_entry'; hgbSizeClass?: 'small'; fiscalYearStart: '01-01'; vatMethod: 'soll'; chart?: 'SKR03' };
   onboardingCompleted: boolean;
 };
 
@@ -200,7 +201,7 @@ const buildSettings = (
     },
     finance: {
       bankName: 'Billme Testbank',
-      iban: 'DE12100500001234567890',
+      iban: 'DE02120300000000202051',
       bic: 'BELADEBEXXX',
       taxId: '12/345/67890',
       vatId: 'DE123456789',
@@ -268,6 +269,7 @@ const buildSettings = (
       recentPaymentsLimit: 5,
       topClientsLimit: 5,
     },
+    businessReportingProfile: product === 'lite' ? { jurisdiction: 'DE', legalForm: 'sole_proprietor', profitDetermination: 'eur', fiscalYearStart: '01-01', vatMethod: 'soll' } : { jurisdiction: 'DE', legalForm: 'gmbh', profitDetermination: 'double_entry', hgbSizeClass: 'small', fiscalYearStart: '01-01', vatMethod: 'soll', chart: 'SKR03' },
     onboardingCompleted: true,
   };
 };
@@ -615,7 +617,7 @@ export const buildServerModeProTenantSeed = (options: ServerModeSeedOptions): Se
         id: bankAccountId,
         tenantId: options.tenantId,
         name: 'Hauptkonto',
-        iban: 'DE12345678901234567890',
+        iban: 'DE02120300000000202051',
         balance: 124500,
         defaultSkrAccountNumber: '1200',
         type: 'bank',

@@ -33,7 +33,10 @@ export const applyServerOfferPortalDecision = async (
     action: 'offer.portal_decision',
     actor: input.actor,
     subject: { entityType: 'offer', entityId: after.id, tenantId: scope.tenantId },
-    change: { before, after },
+    change: {
+      before: { ...before, share: { ...before.share, token: undefined } },
+      after: { ...after, share: { ...after.share, token: undefined } },
+    },
   });
   return { updated: true };
 });

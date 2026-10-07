@@ -12,6 +12,7 @@ import {
   type AuthSessionInfo,
   type ServerProduct,
 } from '@billme/server-core';
+import type { ServerDatabase } from '@billme/server-data';
 import { ApiError } from './http.js';
 import { type AuthStore } from './authStore.js';
 import { SessionTokenService, type AuthSession } from './auth.js';
@@ -21,6 +22,7 @@ type OrpcContext = {
   request: FastifyRequest;
   authStore: AuthStore;
   tokenService: SessionTokenService;
+  database?: ServerDatabase;
 };
 
 const orpc = implement(serverApiContract).$context<OrpcContext>();
@@ -43,6 +45,9 @@ const toAuthResponse = (context: OrpcContext, principal: Awaited<ReturnType<Auth
 
 const mapAuthError = (error: unknown): never => {
   const message = error instanceof Error ? error.message : 'Authentication failed';
+  if (error instanceof Error && 'statusCode' in error && error.statusCode === 429) {
+    throw new ORPCError('TOO_MANY_REQUESTS', { status: 429, message });
+  }
   if (message === 'Invalid email or password') {
     throw new ORPCError('UNAUTHORIZED', { message });
   }
@@ -60,9 +65,10 @@ const runAuth = async <T>(action: () => Promise<T> | T): Promise<T> => {
   }
 };
 
-const requireSession = (context: OrpcContext, product: ServerProduct): AuthSession => {
+const requireSession = async (context: OrpcContext, product: ServerProduct): Promise<AuthSession> => {
   try {
-    return authorizeRequest({
+    return await authorizeRequest({
+      database: context.database,
       runtime: 'server',
       product,
       authHeader: context.request.headers.authorization,
@@ -90,11 +96,11 @@ const createProductRouter = (product: 'lite' | 'pro') => {
         login: orpc.lite.auth.login.handler(async ({ context, input }) =>
           toAuthResponse(context, await runAuth(() => context.authStore.login('lite', input))),
         ),
-        me: orpc.lite.auth.me.handler(({ context }) => toSessionInfo(requireSession(context, 'lite'))),
+        me: orpc.lite.auth.me.handler(async ({ context }) => toSessionInfo(await requireSession(context, 'lite'))),
       },
       tax: {
-        validateVatId: orpc.lite.tax.validateVatId.handler(({ context, input }) => {
-          requireSession(context, 'lite');
+        validateVatId: orpc.lite.tax.validateVatId.handler(async ({ context, input }) => {
+          await requireSession(context, 'lite');
           return validateVatId(input);
         }),
       },
@@ -109,11 +115,11 @@ const createProductRouter = (product: 'lite' | 'pro') => {
       login: orpc.pro.auth.login.handler(async ({ context, input }) =>
         toAuthResponse(context, await runAuth(() => context.authStore.login('pro', input))),
       ),
-      me: orpc.pro.auth.me.handler(({ context }) => toSessionInfo(requireSession(context, 'pro'))),
+      me: orpc.pro.auth.me.handler(async ({ context }) => toSessionInfo(await requireSession(context, 'pro'))),
     },
     tax: {
-      validateVatId: orpc.pro.tax.validateVatId.handler(({ context, input }) => {
-        requireSession(context, 'pro');
+      validateVatId: orpc.pro.tax.validateVatId.handler(async ({ context, input }) => {
+        await requireSession(context, 'pro');
         return validateVatId(input);
       }),
     },
@@ -137,8 +143,8 @@ export const createServerApiOrpcRouter = () => {
       login: orpc.auth.login.handler(async ({ context, input }) =>
         toAuthResponse(context, await runAuth(() => context.authStore.login(input.query.product, input.body))),
       ),
-      me: orpc.auth.me.handler(({ context, input }) =>
-        toSessionInfo(requireSession(context, input.product)),
+      me: orpc.auth.me.handler(async ({ context, input }) =>
+        toSessionInfo(await requireSession(context, input.product)),
       ),
     },
     meta: {
@@ -192,6 +198,7 @@ export const registerServerApiOrpc = async (app: FastifyInstance) => {
   const context = {
     authStore: app.authStore,
     tokenService: app.tokenService,
+    database: app.serverDatabase,
   };
 
   const handle = async (request: FastifyRequest, reply: FastifyReply) => {

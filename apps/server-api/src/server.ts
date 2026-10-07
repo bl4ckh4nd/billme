@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { buildServerApi } from '@billme/server-runtime';
+import { createPdfRenderer } from './pdfRenderer.js';
 
 const envSchema = z.object({
   PORT: z.coerce.number().default(3100),
@@ -8,7 +9,7 @@ const envSchema = z.object({
 
 const env = envSchema.parse(process.env);
 
-const app = await buildServerApi();
+const app = await buildServerApi({ renderDocumentPdf: createPdfRenderer(process.env) });
 
 await app.listen({
   port: env.PORT,

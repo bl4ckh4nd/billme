@@ -1,4 +1,8 @@
 import type { FastifyInstance } from 'fastify';
+import { randomUUID } from 'node:crypto';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { basename, join } from 'node:path';
 import { z } from 'zod';
 import { invoiceSchema } from '@billme/server-core';
 import {
@@ -24,6 +28,7 @@ const transactionSchema = z.object({
   counterparty: z.string(),
   purpose: z.string(),
   linkedInvoiceId: z.string().optional(),
+  matchedManualEntryId: z.string().optional(), appliedAmountCents: z.number().int().optional(), unallocatedAmountCents: z.number().int().optional(),
   status: z.enum(['pending', 'booked']),
   dedupHash: z.string().optional(),
   importBatchId: z.string().optional(),
@@ -34,14 +39,15 @@ const transactionSchema = z.object({
 });
 
 const transactionIdParams = z.object({ transactionId: z.string().min(1) });
+const queryBoolean = z.union([z.boolean(), z.enum(['true', 'false'])]).transform((value) => value === true || value === 'true');
 const listQuery = z.object({
   accountId: z.string().trim().min(1).optional(),
   type: z.enum(['income', 'expense']).optional(),
-  linkedOnly: z.coerce.boolean().optional(),
-  unlinkedOnly: z.coerce.boolean().optional(),
+  linkedOnly: queryBoolean.optional(),
+  unlinkedOnly: queryBoolean.optional(),
 });
 const mutationBody = z.object({ reason: z.string().trim().min(1) });
-const linkBody = mutationBody.extend({ invoiceId: z.string().min(1) });
+const linkBody = mutationBody.extend({ invoiceId: z.string().min(1), appliedAmountCents: z.number().int().positive().optional() });
 const csvMappingSchema = z.object({
   dateColumn: z.string().min(1),
   amountColumn: z.string().min(1),
@@ -54,7 +60,9 @@ const csvMappingSchema = z.object({
 });
 const csvProfileSchema = z.enum(['auto', 'fints', 'paypal', 'stripe', 'generic']);
 const importPreviewBody = z.object({
-  path: z.string().min(1),
+  path: z.string().min(1).optional(),
+  fileName: z.string().trim().min(1).max(255).optional(),
+  contentBase64: z.string().min(1).max(28_000_000).optional(),
   profile: csvProfileSchema.optional(),
   mapping: csvMappingSchema.optional(),
   encoding: z.enum(['utf8', 'win1252']).optional(),
@@ -72,7 +80,7 @@ const importCommitBody = z.object({
 });
 const importPreviewRowSchema = z.object({
   rowIndex: z.number().int(),
-  raw: z.record(z.string(), z.string()),
+  raw: z.record(z.string(), z.union([z.string(), z.array(z.string())])),
   parsed: z.object({
     date: z.string().optional(),
     amount: z.number().optional(),
@@ -159,11 +167,15 @@ const mapMutationError = (error: unknown): never => {
   if (error.message === 'TRANSACTION_ALREADY_LINKED' || error.message === 'TRANSACTION_NOT_LINKED') {
     throw new ApiError(409, error.message);
   }
+  if (error.message === 'PAYMENT_ALLOCATION_INVALID') throw new ApiError(400, error.message);
   throw error;
 };
 
 const mapImportError = (error: unknown): never => {
   if (!(error instanceof Error)) throw error;
+  if (/^Fehler beim (Lesen|Dekodieren|Parsen) der CSV-Datei:/.test(error.message)) {
+    throw new ApiError(400, 'CSV-Datei konnte nicht gelesen oder verarbeitet werden.');
+  }
   if (error.message === 'ACCOUNT_NOT_FOUND' || error.message === 'IMPORT_BATCH_NOT_FOUND') {
     throw new ApiError(404, error.message);
   }
@@ -179,6 +191,24 @@ const mapImportError = (error: unknown): never => {
 
 export const registerTransactionRoutes = (app: FastifyInstance, product: 'lite' | 'pro'): void => {
   const prefix = `/api/v1/${product}`;
+  const uploads = new Map<string, { path: string; directory: string; tenantId: string; userId: string; expiresAt: number; committed?: boolean }>();
+  app.addHook('onClose', async () => {
+    await Promise.all([...uploads.values()].map((upload) => rm(upload.directory, { recursive: true, force: true })));
+    uploads.clear();
+  });
+  const cleanUploads = async () => {
+    for (const [handle, upload] of uploads) {
+      if (upload.expiresAt <= Date.now()) { uploads.delete(handle); await rm(upload.directory, { recursive: true, force: true }); }
+    }
+  };
+  const resolveImportPath = async (path: string | undefined, tenantId: string, userId: string): Promise<string> => {
+    await cleanUploads();
+    const upload = path ? uploads.get(path) : undefined;
+    if (upload && upload.tenantId === tenantId && upload.userId === userId) return upload.path;
+    if (path?.startsWith('import-upload:')) throw new ApiError(404, 'Import ist abgelaufen oder gehört zu einer anderen Sitzung. Datei erneut auswählen.');
+    if (app.runtimeProfile === 'embedded' && path) return path;
+    throw new ApiError(400, 'Bitte die CSV-Datei hochladen. Server-Dateipfade werden nicht angenommen.');
+  };
 
   typedRoute(app, {
     method: 'GET',
@@ -195,10 +225,32 @@ export const registerTransactionRoutes = (app: FastifyInstance, product: 'lite' 
     method: 'POST',
     url: `${prefix}/finance/import/preview`,
     body: importPreviewBody,
+    bodyLimit: 29_000_000,
     response: importPreviewResponse,
     async handler({ request, body }) {
-      await requireSession(app, product, request.headers.authorization);
-      return previewServerTransactionImport(body);
+      const session = await requireMutation(app, product, request.headers.authorization);
+      let handle = body.path;
+      if (body.contentBase64 !== undefined) {
+        if (!body.fileName || !/\.csv$/i.test(body.fileName) || basename(body.fileName) !== body.fileName || /[\\/\x00-\x1f]/.test(body.fileName)) throw new ApiError(400, 'Bitte eine CSV-Datei mit gültigem Dateinamen auswählen.');
+        const bytes = Buffer.from(body.contentBase64, 'base64');
+        if (bytes.length === 0 || bytes.length > 20 * 1024 * 1024 || bytes.toString('base64') !== body.contentBase64) throw new ApiError(400, 'CSV-Datei ist ungültig oder größer als 20 MB.');
+        await cleanUploads();
+        const owned = [...uploads.entries()].filter(([, upload]) => upload.userId === session.user.id && upload.tenantId === session.scope.tenantId);
+        if (owned.filter(([, upload]) => !upload.committed).length >= 5) throw new ApiError(429, 'Zu viele offene Importe. Bitte einen Import abschließen oder 30 Minuten warten.');
+        for (const [oldHandle, upload] of owned.filter(([, upload]) => upload.committed).slice(0, -4)) { uploads.delete(oldHandle); await rm(upload.directory, { recursive: true, force: true }); }
+        const directory = await mkdtemp(join(tmpdir(), 'billme-csv-'));
+        const path = join(directory, body.fileName);
+        await writeFile(path, bytes, { mode: 0o600 });
+        handle = `import-upload:${randomUUID()}`;
+        uploads.set(handle, { path, directory, tenantId: session.scope.tenantId, userId: session.user.id, expiresAt: Date.now() + 30 * 60 * 1000 });
+      }
+      const path = await resolveImportPath(handle, session.scope.tenantId, session.user.id);
+      try {
+        const preview = await previewServerTransactionImport({ ...body, path, mapping: body.mapping ? { ...body.mapping, currencyExpected: 'EUR' } : undefined });
+        return { ...preview, path: handle! };
+      } catch (error) {
+        return mapImportError(error);
+      }
     },
   });
 
@@ -210,7 +262,11 @@ export const registerTransactionRoutes = (app: FastifyInstance, product: 'lite' 
     async handler({ request, body }) {
       const session = await requireMutation(app, product, request.headers.authorization);
       try {
-        return await commitServerTransactionImport(requireDatabase(app), session.scope, body, toMutationActor(session));
+        const path = await resolveImportPath(body.path, session.scope.tenantId, session.user.id);
+        const result = await commitServerTransactionImport(requireDatabase(app), session.scope, { ...body, path, mapping: { ...body.mapping, currencyExpected: 'EUR' } }, toMutationActor(session));
+        const upload = uploads.get(body.path);
+        if (upload) upload.committed = true;
+        return result;
       } catch (error) {
         return mapImportError(error);
       }
@@ -283,7 +339,7 @@ export const registerTransactionRoutes = (app: FastifyInstance, product: 'lite' 
     async handler({ request, params, body }) {
       const session = await requireMutation(app, product, request.headers.authorization);
       try {
-        return await linkServerTransaction(requireDatabase(app), session.scope, params.transactionId, body.invoiceId, body.reason, createMutationContext(session, body.reason).actor);
+        return await linkServerTransaction(requireDatabase(app), session.scope, params.transactionId, body.invoiceId, body.reason, createMutationContext(session, body.reason).actor, body.appliedAmountCents);
       } catch (error) {
         return mapMutationError(error);
       }

@@ -1,4 +1,4 @@
-import { randomBytes } from 'node:crypto';
+import { randomBytes, randomUUID } from 'node:crypto';
 import { mkdir } from 'node:fs/promises';
 import { basename, join } from 'node:path';
 import {
@@ -10,6 +10,8 @@ import {
   createPgliteServerDatabase,
   type ServerDatabase,
 } from '@billme/server-data';
+import { removeCliDiscovery, writeCliDiscovery } from './discovery';
+
 type DumpTarCompression = 'none' | 'gzip' | 'auto';
 
 export interface EmbeddedLocalIdentity {
@@ -145,6 +147,7 @@ export const startEmbeddedServer = async (
 
   const accessToken = createAccessToken();
   const sessionSecret = createSessionSecret();
+  const instanceId = randomUUID();
   const database = await createPgliteServerDatabase(dataDir);
   const lifecycleDatabase = createIdempotentDatabase(database);
   type EmbeddedApp = Awaited<ReturnType<typeof buildServerApi>>;
@@ -152,6 +155,7 @@ export const startEmbeddedServer = async (
 
   const closeResources = async (): Promise<void> => {
     let firstError: unknown;
+    await removeCliDiscovery(options.userDataPath, instanceId).catch(() => undefined);
     if (app) {
       try {
         await app.close();
@@ -175,6 +179,7 @@ export const startEmbeddedServer = async (
       logger: false,
       sessionSecret,
       localAuth: toLocalAuth(options.identity, accessToken),
+      instanceId,
       desktopIntegration: options.desktopIntegration,
     } satisfies BuildServerApiOptions);
 
@@ -196,13 +201,23 @@ export const startEmbeddedServer = async (
       return closePromise;
     };
 
+    const baseUrl = `http://127.0.0.1:${parsedAddress.port}`;
+    // Discovery is a convenience for the CLI; the app must start even where the file cannot be written.
+    await writeCliDiscovery(options.userDataPath, {
+      product: options.product,
+      baseUrl,
+      pid: process.pid,
+      instanceId,
+      startedAt: new Date().toISOString(),
+    }).catch((error) => options.logger?.warn?.('EmbeddedServer', 'Could not write CLI discovery file', error));
+
     report(options.logger, 'info', 'Embedded server listening', {
       product: options.product,
       port: parsedAddress.port,
     });
 
     return Object.freeze({
-      baseUrl: `http://127.0.0.1:${parsedAddress.port}`,
+      baseUrl,
       accessToken,
       dumpDataDir: () => lifecycleDatabase.dumpDataDir('none'),
       close,

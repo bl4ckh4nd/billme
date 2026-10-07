@@ -195,7 +195,7 @@ export const datevExportQuerySchema = z.object({
   encoding: z.enum(['cp1252', 'utf8-bom']).default('cp1252'),
 });
 const datevExportQuery = datevExportQuerySchema;
-const asOfDate = z.object({ asOfDate: z.string().optional(), chart: z.enum(['SKR03', 'SKR04']).optional(), profile: z.string().trim().min(1).optional() });
+const asOfDate = z.object({ asOfDate: z.string().date().optional(), chart: z.enum(['SKR03', 'SKR04']).optional(), profile: z.string().trim().min(1).optional() });
 
 const eurCsvCell = (value: string): string => /[;"\n\r]/.test(value) ? `"${value.replaceAll('"', '""')}"` : value;
 const eurCsvAmount = (value: number): string => (Math.round((value + Number.EPSILON) * 100) / 100).toFixed(2).replace('.', ',');
@@ -358,6 +358,21 @@ export const closingCommandBodySchema = z.object({
   softLockOverride: z.boolean().optional(),
   overrideReason: z.string().optional(),
 }).passthrough().superRefine((body, ctx) => {
+  if (body.commandType && !z.record(z.unknown()).safeParse(body.input).success) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['input'], message: 'Buchungsdaten fehlen.' });
+  if (body.commandType === 'bad_debt') {
+    const facts = z.object({
+      legalBasis: z.literal('§17 UStG'),
+      reason: z.literal('bad_debt'),
+      // Optional here: without them the Quellbeleg (sourceId) names the original and its
+      // invoice date, and the §17 builder still refuses a write-off that ends up without them.
+      originalDocumentId: z.string().trim().min(1).optional(),
+      originalDocumentNumber: z.string().trim().min(1).optional(),
+      originalTaxEffectiveDate: z.string().min(1).optional(),
+      adjustmentDate: z.string().min(1),
+      evidenceReference: z.string().trim().min(1),
+    }).safeParse(body.input?.facts);
+    if (!facts.success) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['input', 'facts'], message: 'Vollständige Forderungsdaten nach §17 UStG mit Grund bad_debt sind erforderlich.' });
+  }
   if ((body.command ?? body.commandType ?? 'source_fact') === 'source_fact') {
     const source = standaloneAccountingSourceFactSchema.safeParse(body.input);
     if (!source.success) {
@@ -512,6 +527,7 @@ export const registerProAccountingRoutes = (app: FastifyInstance, options: ProAc
       try {
         return await repositoryFor(app).createCorrectionSettlement(session.scope, { ...body, mutation: mutationFor(session, body.reason) });
       } catch (error) {
+        if (error instanceof CorrectionSettlementError && error.code === 'OVER_CREDIT') throw new ApiError(409, `${error.code}:${error.message}`);
         if (error instanceof Error && /IDEMPOTENCY|SOURCE_RUN_CONFLICT|OVER_CREDIT|POSTING_DATE_IN_CLOSED_PERIOD|SOFT_LOCK|UNKNOWN_ACCOUNT|OPOS|ORIGINAL_CHANGED|DOCUMENT_NOT_POSTED|OPEN_ITEM_NOT_ELIGIBLE|OPEN_ITEM_NOT_POSTED|SETTLEMENT_EXCEEDS_OPEN_ITEM|SETTLEMENT_PARTY_MISMATCH/.test(error.message)) throw new ApiError(409, error.message);
         if (error instanceof Error && /INVALID|REQUIRED|ORIGINAL_DOCUMENT_NOT_FOUND|ORIGINAL_SNAPSHOT_REQUIRED|OPEN_ITEM_NOT_FOUND|TAX_EFFECTIVE/.test(error.message)) throw new ApiError(400, error.message);
         throw error;

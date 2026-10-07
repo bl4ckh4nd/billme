@@ -11,6 +11,7 @@ import {
   applyServerOfferPortalDecision,
   createPostgresClientRepository,
   createPostgresDunningHistoryRepository,
+  createPostgresDunningDelivery,
   createPostgresEmailOutboxRepository,
   createPostgresInvoiceRepository,
   createPostgresMaintenanceRepository,
@@ -198,15 +199,16 @@ export class ServerWorkerRuntime {
         list: (scope) => createPostgresInvoiceRepository(this.currentQueryable()).list(scope),
         getById: (scope, id) => createPostgresInvoiceRepository(this.currentQueryable()).getById(scope, id),
         save: (scope, invoice) => createPostgresInvoiceRepository(this.currentQueryable()).save(scope, invoice),
+        patchDunning: (scope, id, patch) => createPostgresInvoiceRepository(this.currentQueryable()).patchDunning!(scope, id, patch),
       },
       settingsRepo: {
         get: async (scope) => (await this.readSettings(scope))?.settings ?? null,
         save: async (scope, settings) => {
-          const current = await this.readSettings(scope);
-          await this.saveSettings(scope, settings, current?.createdAt);
+          await this.currentQueryable().query("UPDATE server_settings SET settings_json=jsonb_set(settings_json::jsonb,'{automation,lastDunningRun}',to_jsonb($2::text),true)::text,updated_at=$3 WHERE tenant_id=$1", [scope.tenantId, settings.automation.lastDunningRun, new Date().toISOString()]);
         },
       },
       dunningHistoryRepo: createPostgresDunningHistoryRepository(this.currentQueryable()),
+      delivery: createPostgresDunningDelivery(this.currentQueryable()),
       emailPort: {
         send,
         log: async (scope, entry) => {

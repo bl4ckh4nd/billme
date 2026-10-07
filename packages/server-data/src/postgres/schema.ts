@@ -13,6 +13,14 @@ import { pgSchema } from "drizzle-orm/pg-core";
 
 const bytea = customType<{ data: Uint8Array; driverData: Uint8Array }>({ dataType: () => "bytea" });
 
+export const liteReceipts = pgTable('lite_receipts', { id: text('id'), tenantId: text('tenant_id'), receiptJson: jsonb('receipt_json'), updatedAt: text('updated_at') });
+export const liteCashEntries = pgTable('lite_cash_entries', { id: text('id'), tenantId: text('tenant_id'), cashDate: text('cash_date'), amountCents: bigint('amount_cents', { mode: 'number' }), currency: text('currency'), flowType: text('flow_type'), counterparty: text('counterparty'), purpose: text('purpose'), receiptId: text('receipt_id'), matchedTransactionId: text('matched_transaction_id'), updatedAt: text('updated_at'), deletedAt: text('deleted_at') });
+export const liteReceiptFiles = pgTable('lite_receipt_files', { id: text('id'), tenantId: text('tenant_id'), receiptId: text('receipt_id'), originalFilename: text('original_filename'), mimeType: text('mime_type'), byteLength: integer('byte_length'), sha256: text('sha256'), contentBytes: bytea('content_bytes'), createdAt: text('created_at') });
+
+export const offerInvoiceConversions = pgTable('offer_invoice_conversions', { tenantId: text('tenant_id'), product: text('product'), offerId: text('offer_id'), invoiceId: text('invoice_id') });
+
+export const dunningDeliveries = pgTable('dunning_deliveries', { id: text('id'), tenantId: text('tenant_id'), invoiceId: text('invoice_id'), invoiceNumber: text('invoice_number'), level: integer('level'), state: text('state'), fee: numeric('fee'), updatedAt: text('updated_at'), leaseExpiresAt: text('lease_expires_at'), error: text('error') });
+
 const drizzleSchema = pgSchema("drizzle");
 export const drizzleMigrations = drizzleSchema.table("__drizzle_migrations", {
   id: integer("id"),
@@ -49,6 +57,20 @@ export const tenantMemberships = pgTable("tenant_memberships", {
   invitedByUserId: text("invited_by_user_id"),
   createdAt: text("created_at"),
   updatedAt: text("updated_at"),
+});
+
+export const cliTokens = pgTable("cli_tokens", {
+  id: text("id"),
+  tenantId: text("tenant_id"),
+  userId: text("user_id"),
+  product: text("product"),
+  label: text("label"),
+  tokenHash: text("token_hash"),
+  scope: text("scope"),
+  createdAt: text("created_at"),
+  lastUsedAt: text("last_used_at"),
+  revokedAt: text("revoked_at"),
+  expiresAt: text("expires_at"),
 });
 
 export const userPasswordCredentials = pgTable("user_password_credentials", {
@@ -185,6 +207,13 @@ export const portalPublications = pgTable("portal_publications", {
     .on(table.tenantId, table.tokenHash),
 }));
 
+export const loginAttempts = pgTable("login_attempts", {
+  product: text("product"),
+  email: text("email"),
+  attemptCount: integer("attempt_count"),
+  windowStartedAt: bigint("window_started_at", { mode: "number" }),
+});
+
 export const recurringProfiles = pgTable("recurring_profiles", {
   id: text("id"),
   tenantId: text("tenant_id"),
@@ -193,6 +222,7 @@ export const recurringProfiles = pgTable("recurring_profiles", {
   name: text("name"),
   interval: text("interval"),
   nextRun: text("next_run"),
+  anchorDay: integer("anchor_day"),
   lastRun: text("last_run"),
   endDate: text("end_date"),
   amount: numeric("amount"),

@@ -209,10 +209,17 @@ export const registerDocumentTemplateRoutes = (app: FastifyInstance, product: 'l
       }
 
       if (document.kind === 'invoice' && isDunning) {
+        const level = query.level ?? Math.max(1, document.dunningLevel ?? 0);
+        const claimed = (await database.query<{ fee: string }>(
+          "SELECT fee FROM dunning_deliveries WHERE tenant_id=$1 AND invoice_id=$2 AND level=$3 AND state IN ('preparing','sending','unknown')",
+          [tenantId, document.id, level],
+        )).rows[0];
         const { intro, ...dunning } = buildDunningDocumentContext({
           invoice: document,
-          level: query.level,
-          levels: settings?.dunning.levels ?? [],
+          level,
+          levels: (settings?.dunning.levels ?? []).map((definition) =>
+            claimed && definition.id === level ? { ...definition, fee: Number(claimed.fee) } : definition,
+          ),
           history: await repositories.dunningHistoryRepo.listByInvoice(session.scope, document.id),
           today: new Date(),
         });

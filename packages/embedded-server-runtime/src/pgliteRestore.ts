@@ -1,3 +1,4 @@
+import { gunzipSync } from 'node:zlib';
 import { randomUUID } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { mkdir, readFile, rename, rm } from 'node:fs/promises';
@@ -39,7 +40,22 @@ export const restorePgliteDataDir = async (
   try {
     await mkdir(dirname(activeDataDir), { recursive: true });
     await mkdir(stagingDataDir, { recursive: false });
-    const archive = await readFile(archivePath);
+    const bytes = await readFile(archivePath);
+    const archive = bytes[0] === 0x1f && bytes[1] === 0x8b ? gunzipSync(bytes) : bytes;
+    if (archive.length < 512 || archive.subarray(257, 262).toString() !== 'ustar') {
+      throw new Error('Restore-Archiv ist kein gültiges TAR-Archiv.');
+    }
+    for (let offset = 0; offset + 512 <= archive.length; ) {
+      const header = archive.subarray(offset, offset + 512);
+      if (header.every((byte) => byte === 0)) break;
+      const expected = parseInt(header.subarray(148, 156).toString().replace(/\0/g, '').trim(), 8);
+      const checksum = header.reduce((sum, byte, index) => sum + (index >= 148 && index < 156 ? 32 : byte), 0);
+      const size = parseInt(header.subarray(124, 136).toString().replace(/\0/g, '').trim(), 8);
+      if (checksum !== expected || !Number.isSafeInteger(size) || size < 0 || offset + 512 + size > archive.length) {
+        throw new Error('Restore-Archiv ist beschädigt.');
+      }
+      offset += 512 + Math.ceil(size / 512) * 512;
+    }
     stagedDatabase = await createPgliteServerDatabase(stagingDataDir, {
       loadDataDir: new Blob([new Uint8Array(archive)]),
     });

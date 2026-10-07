@@ -9,6 +9,10 @@ import {
   bootstrapRequestSchema,
   capabilitiesResponseSchema,
   clientSchema,
+  clientProjectSchema,
+  calculateInvoiceTaxSnapshot,
+  resolveInvoiceTaxMode,
+  prepareClientForUpsert,
   createSingleTenantScope,
   createCancellationInvoiceAsync,
   createCreditNoteAsync,
@@ -55,6 +59,7 @@ import {
   createPostgresProjectRepository,
   buildPostgresTaxAuditExportArtifact,
   type ServerDatabase,
+  type ServerDatabaseSession,
 } from '@billme/server-data';
 import {
   accountSchema,
@@ -74,21 +79,26 @@ import {
 import { SessionTokenService, checkSessionSecret, type AuthSession, type AuthSessionInfo } from './auth.js';
 import { createAuthStore } from './authStore.js';
 import { buildAuditEntry, withInvoiceHistory, withOfferHistory } from './auditHistory.js';
-import { chainIssueBodySchema, issueDocumentChain, lockChainSource, postOpenedBillingDocument } from './documentIssuance.js';
+import { assertOfferContentEditable, assertInvoiceContentEditable, cancelUnpaidRevisionSource, chainIssueBodySchema, settleCorrectedSource, settledInvoiceStatus, issueDocumentChain, lockChainSource, postOpenedBillingDocument } from './documentIssuance.js';
 import { ApiError, registerErrorHandler, typedRoute } from './http.js';
 import { registerServerApiOrpc } from './orpc.js';
 import { registerProAccountingRoutes, type ProAccountingRouteOptions } from './proAccountingRoutes.js';
 import { registerTaxFilingRoutes } from './taxFilingRoutes.js';
 import { registerLiteEurRoutes } from './liteEurRoutes.js';
+import { registerLiteCashRoutes } from './liteCashRoutes.js';
+import { registerLiteVatRoutes } from './liteVatRoutes.js';
 import { registerTransactionRoutes } from './transactionRoutes.js';
+import { registerInvoicePaymentRoutes } from './invoicePaymentRoutes.js';
 import { registerAutomationRoutes, type RegisterAutomationRoutesOptions } from './automationRoutes.js';
 import { registerAuditRoutes } from './auditRoutes.js';
 import { registerEurRuleRoutes } from './eurRuleRoutes.js';
 import { registerDocumentTemplateRoutes } from './documentTemplateRoutes.js';
+import { authenticateCliToken, isDeviceLoginPath, registerCliAccessRoutes } from './cliAccessRoutes.js';
 import {
   requireDatabase,
   requireAuditExportSession,
   createMutationContext,
+  toMutationActor,
   requireMutationSession,
   requireMutationSessionFor,
   requireSession,
@@ -113,8 +123,11 @@ export interface BuildServerApiOptions {
   readonly logger?: boolean;
   readonly sessionSecret?: string;
   readonly localAuth?: EmbeddedLocalAuthOptions;
+  /** Embedded runtime: reported by `/health` so the CLI can verify a discovered port. */
+  readonly instanceId?: string;
   readonly openRouterVlmService?: ProAccountingRouteOptions['openRouterVlmService'];
   readonly desktopIntegration?: RegisterAutomationRoutesOptions['desktopIntegration'];
+  readonly renderDocumentPdf?: RegisterAutomationRoutesOptions['renderDocumentPdf'];
 }
 
 const runtimeCapabilitiesResponseSchema = capabilitiesResponseSchema.extend({
@@ -177,9 +190,12 @@ const taxAuditExportPackageArgsSchema = z.object({
 });
 const projectListQuerySchema = z.object({
   clientId: z.string().trim().min(1).optional(),
-  includeArchived: z.coerce.boolean().optional(),
+  includeArchived: z.enum(['true', 'false']).transform((value) => value === 'true').optional(),
 });
-const projectWriteSchema = projectSchema.extend({ clientId: z.string().trim().min(1) });
+const projectWriteSchema = clientProjectSchema.extend({ budget: z.number().nonnegative() }).refine(
+  (project) => !project.endDate || project.endDate >= project.startDate,
+  { message: 'Das Enddatum darf nicht vor dem Startdatum liegen.', path: ['endDate'] },
+);
 const authSessionInfoSchema = z.object({
   user: authUserSchema,
   tenantId: z.string().min(1),
@@ -199,6 +215,18 @@ const offerWriteSchema = offerSchema.omit({
 const recurringWriteSchema = recurringProfileSchema.omit({
   tenantId: true,
 });
+
+const validateDocumentReservation = async (
+  transaction: ServerDatabaseSession, scope: TenantScope, reservationId: string,
+  document: { id: string; number: string }, kind: 'invoice' | 'offer',
+) => {
+  const reservation = await createNumberingPortsForDb(transaction, scope).getReservationById(reservationId);
+  const owner = await transaction.query(`SELECT id FROM ${kind === 'invoice' ? 'invoices' : 'offers'} WHERE tenant_id=$1 AND number=$2 AND id<>$3`, [scope.tenantId, document.number, document.id]);
+  if (owner.rows.length || !reservation || reservation.status === 'released' || reservation.kind !== kind || reservation.number !== document.number
+    || (reservation.documentId !== null && reservation.documentId !== document.id)) {
+    throw new ApiError(409, 'Die Nummernreservierung gehört nicht zu diesem Beleg. Bitte Beleg neu laden.');
+  }
+};
 
 const toSessionInfo = (session: AuthSession): AuthSessionInfo => ({
   user: session.user,
@@ -326,45 +354,40 @@ const registerBillingRoutes = (app: FastifyInstance, product: 'lite' | 'pro', pr
     }),
     response: clientSchema,
     async handler({ request, body }) {
-      const session = await requireSession(app, product, request.headers.authorization);
+      const session = await requireMutationSessionFor(app, product, request.headers.authorization);
       const pool = requireDatabase(app);
-      // New clients without a manual number draw the next one from the customer
-      // number range configured under Einstellungen → Nummernkreise.
-      const needsNumber = !body.client.customerNumber?.trim()
-        && !(await createPostgresBillingDependencies(pool).clientRepo.getById(session.scope, body.client.id));
-      const reservation = needsNumber ? await reserveNumberForScope(pool, session.scope, 'customer') : null;
-      const unitOfWork = createPostgresBillingUnitOfWork(pool);
-      let saved: z.output<typeof clientSchema>;
-      try {
-        saved = await unitOfWork.withTransaction(session.scope, async ({ repositories }) => {
+      return pool.transaction({}, async (transaction) => {
+        const numbering = createNumberingPortsForDb(transaction, session.scope);
+        await numbering.getSettings();
+        await transaction.query('SELECT id FROM clients WHERE tenant_id=$1 AND id=$2 FOR UPDATE', [session.scope.tenantId, body.client.id]);
+        const repositories = createPostgresBillingDependencies(transaction);
+        const before = await repositories.clientRepo.getById(session.scope, body.client.id);
+        const reservation = !body.client.customerNumber?.trim() && !before?.customerNumber?.trim()
+          ? await reserveDocumentNumber(numbering, 'customer') : null;
+        const clients = await repositories.clientRepo.list(session.scope);
+        const customerNumber = body.client.customerNumber?.trim() || before?.customerNumber?.trim() || reservation?.number;
+        if (clients.some((client) => client.id !== body.client.id && client.customerNumber?.trim() === customerNumber)) {
+          throw new ApiError(409, 'Kundennummer bereits vergeben');
+        }
+        const prepared = prepareClientForUpsert(body.client, {
+          existingCustomerNumber: before?.customerNumber,
+          customerNumberExists: (number) => clients.some((client) => client.id !== body.client.id && client.customerNumber?.trim() === number),
+          reserveCustomerNumber: () => reservation!,
+        });
         const nextClient = clientSchema.parse({
-          ...body.client,
-          ...(reservation ? { customerNumber: reservation.number } : {}),
+          ...prepared,
+          ...(!body.client.addresses?.length ? { address: body.client.address, addresses: body.client.addresses ?? [] } : {}),
+          ...(!body.client.emails?.length ? { email: body.client.email, emails: body.client.emails ?? [] } : {}),
+          projects: before?.projects ?? prepared.projects,
           tenantId: session.scope.tenantId,
         });
-        const before = await repositories.clientRepo.getById(session.scope, nextClient.id);
         const saved = await repositories.clientRepo.save(session.scope, nextClient);
-        await repositories.auditLog.append(
-          session.scope,
-          buildAuditEntry(
-            session.scope,
-            session,
-            'client',
-            saved.id,
-            before ? 'client.update' : 'client.create',
-            body.reason,
-            before,
-            saved,
-          ),
-        );
+        if (reservation) await finalizeDocumentNumber(numbering, reservation.reservationId, saved.id);
+        await repositories.auditLog.append(session.scope, buildAuditEntry(
+          session.scope, session, 'client', saved.id, before ? 'client.update' : 'client.create', body.reason, before, saved,
+        ));
         return saved;
-        });
-      } catch (error) {
-        if (reservation) await releaseNumberForScope(pool, session.scope, reservation.reservationId).catch(() => undefined);
-        throw error;
-      }
-      if (reservation) await finalizeNumberForScope(pool, session.scope, reservation.reservationId, saved.id);
-      return saved;
+      });
     },
   });
 
@@ -375,7 +398,7 @@ const registerBillingRoutes = (app: FastifyInstance, product: 'lite' | 'pro', pr
     body: deletePayloadSchema,
     response: okSchema,
     async handler({ request, params, body }) {
-      const session = await requireSession(app, product, request.headers.authorization);
+      const session = await requireMutationSessionFor(app, product, request.headers.authorization);
       const pool = requireDatabase(app);
       const unitOfWork = createPostgresBillingUnitOfWork(pool);
       return unitOfWork.withTransaction(session.scope, async ({ repositories }) => {
@@ -426,19 +449,50 @@ const registerBillingRoutes = (app: FastifyInstance, product: 'lite' | 'pro', pr
     body: z.object({
       reason: z.string().trim().min(1),
       invoice: invoiceWriteSchema,
+      reservationId: z.string().min(1).optional(),
     }),
     response: invoiceSchema,
     async handler({ request, body }) {
-      const session = await requireSession(app, product, request.headers.authorization);
+      const session = await requireMutationSessionFor(app, product, request.headers.authorization);
       const database = requireDatabase(app);
       const saved = await database.transaction({}, async (transaction) => {
+        await transaction.query('SELECT tenant_id FROM server_settings WHERE tenant_id=$1 FOR UPDATE', [session.scope.tenantId]);
         const repositories = createPostgresBillingDependencies(transaction);
+        if (body.invoice.revisionOfId) await lockChainSource(transaction, session.scope, { invoiceId: body.invoice.revisionOfId });
+        await transaction.query('SELECT id FROM invoices WHERE tenant_id=$1 AND id=$2 FOR UPDATE', [session.scope.tenantId, body.invoice.id]);
+        const before = await repositories.invoiceRepo.getById(session.scope, body.invoice.id);
         const nextInvoice = settleInvoiceStatusFromPayments(invoiceSchema.parse({
           ...body.invoice,
           tenantId: session.scope.tenantId,
+          payments: before?.payments ?? [],
+          updatedAt: new Date().toISOString(),
         }));
-        const before = await repositories.invoiceRepo.getById(session.scope, nextInvoice.id);
+        if (body.reservationId) await validateDocumentReservation(transaction, session.scope, body.reservationId, nextInvoice, 'invoice');
+        assertInvoiceContentEditable(before, nextInvoice);
+        if (!before || before.status === 'draft') {
+          const settings = parseStoredSettings(await getServerSettings(transaction, session.scope.tenantId));
+          if (!settings) throw new ApiError(409, 'Die Einstellungen müssen zuerst eingerichtet werden.');
+          nextInvoice.taxSnapshot = calculateInvoiceTaxSnapshot(nextInvoice, settings);
+          nextInvoice.taxMode = resolveInvoiceTaxMode(nextInvoice.taxMode, settings);
+          nextInvoice.amount = nextInvoice.taxSnapshot.grossAmount;
+        }
+        if (before && before.status !== 'draft') nextInvoice.status = await settledInvoiceStatus(transaction, session.scope, before);
+        let issuanceReservationId: string | undefined;
+        if ((!before || before.status === 'draft') && nextInvoice.status !== 'draft') {
+          if (nextInvoice.status !== 'open') throw new ApiError(409, 'Ein Entwurf muss zuerst als Rechnung gestellt werden.');
+          await cancelUnpaidRevisionSource(transaction, session, nextInvoice, body.reason);
+          const reservation = (await transaction.query<{ id: string }>("SELECT id FROM number_reservations WHERE tenant_id=$1 AND kind='invoice' AND document_id=$2 AND number=$3 AND status IN ('reserved','finalized') ORDER BY created_at LIMIT 1", [session.scope.tenantId, nextInvoice.id, nextInvoice.number])).rows[0];
+          const numbering = createNumberingPortsForDb(transaction, session.scope);
+          if (body.reservationId) issuanceReservationId = body.reservationId;
+          else if (reservation) issuanceReservationId = reservation.id;
+          else {
+            const reserved = await reserveDocumentNumber(numbering, 'invoice', new Date());
+            nextInvoice.number = reserved.number; issuanceReservationId = reserved.reservationId;
+          }
+          await finalizeDocumentNumber(numbering, issuanceReservationId, nextInvoice.id);
+        }
         const after = await repositories.invoiceRepo.save(session.scope, nextInvoice);
+        if (body.reservationId) await finalizeDocumentNumber(createNumberingPortsForDb(transaction, session.scope), body.reservationId, after.id);
         await repositories.auditLog.append(
           session.scope,
           buildAuditEntry(
@@ -459,19 +513,18 @@ const registerBillingRoutes = (app: FastifyInstance, product: 'lite' | 'pro', pr
         // documents intentionally remain outside journal/OPOS and correction
         // posting is handled by the accounting repository's source relation.
         const billingKind = !['order_confirmation', 'delivery_note'].includes(nextInvoice.documentKind ?? 'invoice');
-        if (product === 'pro' && before?.status === 'draft' && after.status === 'open' && billingKind) {
-          const reservation = (await transaction.query<{ id: string }>(
-            `SELECT id FROM number_reservations WHERE tenant_id=$1 AND kind='invoice' AND status='finalized' AND document_id=$2 AND number=$3 LIMIT 1`,
-            [session.scope.tenantId, after.id, after.number],
-          )).rows[0];
-          if (!reservation) throw new Error('FINALIZED_RESERVATION_REQUIRED');
-          await postOpenedBillingDocument(transaction, session.scope, after, reservation.id, createMutationContext(session, body.reason));
+        if (product === 'pro' && (!before || before.status === 'draft') && after.status === 'open' && billingKind) {
+          if (!issuanceReservationId) throw new Error('FINALIZED_RESERVATION_REQUIRED');
+          await postOpenedBillingDocument(transaction, session.scope, after, issuanceReservationId, createMutationContext(session, body.reason));
         }
+        if ((!before || before.status === 'draft') && after.status === 'open') await settleCorrectedSource(transaction, session, after, body.reason);
         return after;
       });
       return withInvoiceHistory(database, session.scope, saved);
     },
   });
+
+  registerInvoicePaymentRoutes(app, product, prefix);
 
   typedRoute(app, {
     method: 'POST',
@@ -618,14 +671,16 @@ const registerBillingRoutes = (app: FastifyInstance, product: 'lite' | 'pro', pr
     body: deletePayloadSchema,
     response: okSchema,
     async handler({ request, params, body }) {
-      const session = await requireSession(app, product, request.headers.authorization);
+      const session = await requireMutationSessionFor(app, product, request.headers.authorization);
       const pool = requireDatabase(app);
-      const unitOfWork = createPostgresBillingUnitOfWork(pool);
-      return unitOfWork.withTransaction(session.scope, async ({ repositories }) => {
+      return pool.transaction({}, async (transaction) => {
+        await transaction.query('SELECT id FROM invoices WHERE tenant_id=$1 AND id=$2 FOR UPDATE', [session.scope.tenantId, params.id]);
+        const repositories = createPostgresBillingDependencies(transaction);
         const existing = await repositories.invoiceRepo.getById(session.scope, params.id);
         if (!existing) {
           throw new ApiError(404, 'Invoice not found');
         }
+        if (existing.status !== 'draft') throw new ApiError(409, 'Gestellte Rechnungen können nicht gelöscht werden. Bitte eine Gutschrift oder Stornorechnung erstellen.');
         await repositories.invoiceRepo.remove(session.scope, params.id);
         await repositories.auditLog.append(
           session.scope,
@@ -669,19 +724,36 @@ const registerBillingRoutes = (app: FastifyInstance, product: 'lite' | 'pro', pr
     body: z.object({
       reason: z.string().trim().min(1),
       offer: offerWriteSchema,
+      reservationId: z.string().min(1).optional(),
     }),
     response: offerSchema,
     async handler({ request, body }) {
-      const session = await requireSession(app, product, request.headers.authorization);
+      const session = await requireMutationSessionFor(app, product, request.headers.authorization);
       const pool = requireDatabase(app);
-      const unitOfWork = createPostgresBillingUnitOfWork(pool);
-      const saved = await unitOfWork.withTransaction(session.scope, async ({ repositories }) => {
+      const saved = await pool.transaction({}, async (transaction) => {
+        await transaction.query('SELECT tenant_id FROM server_settings WHERE tenant_id=$1 FOR UPDATE', [session.scope.tenantId]);
+        await transaction.query('SELECT id FROM offers WHERE tenant_id=$1 AND id=$2 FOR UPDATE', [session.scope.tenantId, body.offer.id]);
+        const repositories = createPostgresBillingDependencies(transaction);
         const nextOffer = offerSchema.parse({
           ...body.offer,
           tenantId: session.scope.tenantId,
         });
         const before = await repositories.offerRepo.getById(session.scope, nextOffer.id);
+        if (before?.share) {
+          nextOffer.share = { ...before.share, ...nextOffer.share };
+          if (before.share.token) nextOffer.share.token = before.share.token;
+          if (before.share.publishedAt) nextOffer.share.publishedAt = before.share.publishedAt;
+          if (before.share.decision || before.share.acceptedAt) {
+            nextOffer.share = { ...nextOffer.share, decision: before.share.decision, acceptedAt: before.share.acceptedAt, acceptedBy: before.share.acceptedBy, acceptedEmail: before.share.acceptedEmail, acceptedUserAgent: before.share.acceptedUserAgent, decisionTextVersion: before.share.decisionTextVersion };
+          }
+        }
+        assertOfferContentEditable(before, nextOffer);
+        if (before?.share?.decision) nextOffer.status = before.status;
+        const duplicate = await transaction.query('SELECT id FROM offers WHERE tenant_id=$1 AND number=$2 AND id<>$3', [session.scope.tenantId, nextOffer.number, nextOffer.id]);
+        if (duplicate.rows.length) throw new ApiError(409, 'Angebotsnummer bereits vergeben.');
+        if (body.reservationId) await validateDocumentReservation(transaction, session.scope, body.reservationId, nextOffer, 'offer');
         const after = await repositories.offerRepo.save(session.scope, nextOffer);
+        if (body.reservationId) await finalizeDocumentNumber(createNumberingPortsForDb(transaction, session.scope), body.reservationId, after.id);
         await repositories.auditLog.append(
           session.scope,
           buildAuditEntry(
@@ -708,14 +780,17 @@ const registerBillingRoutes = (app: FastifyInstance, product: 'lite' | 'pro', pr
     body: deletePayloadSchema,
     response: okSchema,
     async handler({ request, params, body }) {
-      const session = await requireSession(app, product, request.headers.authorization);
+      const session = await requireMutationSessionFor(app, product, request.headers.authorization);
       const pool = requireDatabase(app);
-      const unitOfWork = createPostgresBillingUnitOfWork(pool);
-      return unitOfWork.withTransaction(session.scope, async ({ repositories }) => {
+      return pool.transaction({}, async (transaction) => {
+        await transaction.query('SELECT id FROM offers WHERE tenant_id=$1 AND id=$2 FOR UPDATE', [session.scope.tenantId, params.id]);
+        const repositories = createPostgresBillingDependencies(transaction);
         const existing = await repositories.offerRepo.getById(session.scope, params.id);
         if (!existing) {
           throw new ApiError(404, 'Offer not found');
         }
+        const references = await transaction.query('SELECT id FROM invoices WHERE tenant_id=$1 AND source_document_id=$2 UNION ALL SELECT invoice_id AS id FROM offer_invoice_conversions WHERE tenant_id=$1 AND offer_id=$2', [session.scope.tenantId, params.id]);
+        if (references.rows.length) throw new ApiError(409, 'Das Angebot wird von einer Belegkette oder Rechnung verwendet und kann nicht gelöscht werden.');
         await repositories.offerRepo.remove(session.scope, params.id);
         await repositories.auditLog.append(
           session.scope,
@@ -754,19 +829,24 @@ const registerBillingRoutes = (app: FastifyInstance, product: 'lite' | 'pro', pr
     url: `${prefix}/recurring`,
     body: z.object({
       reason: z.string().trim().min(1),
-      profile: recurringWriteSchema,
+      profile: recurringWriteSchema.extend({ taxMode: recurringProfileSchema.shape.taxMode.optional() }),
     }),
     response: recurringProfileSchema,
     async handler({ request, body }) {
-      const session = await requireSession(app, product, request.headers.authorization);
+      const session = await requireMutationSessionFor(app, product, request.headers.authorization);
       const pool = requireDatabase(app);
-      const unitOfWork = createPostgresBillingUnitOfWork(pool);
-      return unitOfWork.withTransaction(session.scope, async ({ repositories }) => {
+      return pool.transaction({}, async (transaction) => {
+        await transaction.query('SELECT id FROM recurring_profiles WHERE tenant_id=$1 AND id=$2 FOR UPDATE', [session.scope.tenantId, body.profile.id]);
+        const repositories = createPostgresBillingDependencies(transaction);
+        const before = await repositories.recurringProfileRepo.getById(session.scope, body.profile.id);
+        const settings = parseStoredSettings(await getServerSettings(transaction, session.scope.tenantId));
+        if (!settings) throw new ApiError(409, 'Die Einstellungen müssen zuerst eingerichtet werden.');
         const nextProfile = recurringProfileSchema.parse({
           ...body.profile,
+          taxMode: body.profile.taxMode ?? before?.taxMode ?? resolveInvoiceTaxMode(undefined, settings),
           tenantId: session.scope.tenantId,
         });
-        const before = await repositories.recurringProfileRepo.getById(session.scope, nextProfile.id);
+        if (!await repositories.clientRepo.getById(session.scope, nextProfile.clientId)) throw new ApiError(404, 'Kunde nicht gefunden.');
         const saved = await upsertRecurringProfile(session.scope, {
           recurringProfileStore: repositories.recurringProfileRepo,
         }, nextProfile);
@@ -795,7 +875,7 @@ const registerBillingRoutes = (app: FastifyInstance, product: 'lite' | 'pro', pr
     body: deletePayloadSchema,
     response: okSchema,
     async handler({ request, params, body }) {
-      const session = await requireSession(app, product, request.headers.authorization);
+      const session = await requireMutationSessionFor(app, product, request.headers.authorization);
       const pool = requireDatabase(app);
       const unitOfWork = createPostgresBillingUnitOfWork(pool);
       return unitOfWork.withTransaction(session.scope, async ({ repositories }) => {
@@ -835,15 +915,23 @@ const registerBillingRoutes = (app: FastifyInstance, product: 'lite' | 'pro', pr
   typedRoute(app, {
     method: 'PUT',
     url: `${prefix}/settings`,
-    body: setSettingsPayloadSchema,
+    body: setSettingsPayloadSchema.extend({ reason: z.string().trim().min(1).default('Einstellungen aktualisiert') }),
     response: okSchema,
     async handler({ request, body }) {
-      const session = await requireSession(app, product, request.headers.authorization);
-      await saveServerSettings(requireDatabase(app), {
-        tenantId: session.scope.tenantId,
-        settingsJson: JSON.stringify(appSettingsSchema.parse(body.settings)),
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
+      const session = await requireMutationSessionFor(app, product, request.headers.authorization);
+      await requireDatabase(app).transaction({}, async (transaction) => {
+        await transaction.query('SELECT tenant_id FROM server_settings WHERE tenant_id=$1 FOR UPDATE', [session.scope.tenantId]);
+        const before = parseStoredSettings(await getServerSettings(transaction, session.scope.tenantId));
+        const after = appSettingsSchema.parse(body.settings);
+        await saveServerSettings(transaction, {
+          tenantId: session.scope.tenantId,
+          settingsJson: JSON.stringify(after),
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        });
+        await createPostgresBillingDependencies(transaction).auditLog.append(session.scope, buildAuditEntry(
+          session.scope, session, 'settings', session.scope.tenantId, 'settings.update', body.reason, before, after,
+        ));
       });
       return { ok: true as const };
     },
@@ -858,7 +946,7 @@ const registerBillingRoutes = (app: FastifyInstance, product: 'lite' | 'pro', pr
       number: z.string().min(1),
     }),
     async handler({ request, body }) {
-      const session = await requireSession(app, product, request.headers.authorization);
+      const session = await requireMutationSessionFor(app, product, request.headers.authorization);
       return reserveNumberForScope(requireDatabase(app), session.scope, body.kind);
     },
   });
@@ -869,7 +957,7 @@ const registerBillingRoutes = (app: FastifyInstance, product: 'lite' | 'pro', pr
     body: numberReleaseBodySchema,
     response: okSchema,
     async handler({ request, body }) {
-      const session = await requireSession(app, product, request.headers.authorization);
+      const session = await requireMutationSessionFor(app, product, request.headers.authorization);
       return releaseNumberForScope(requireDatabase(app), session.scope, body.reservationId);
     },
   });
@@ -880,7 +968,7 @@ const registerBillingRoutes = (app: FastifyInstance, product: 'lite' | 'pro', pr
     body: numberFinalizeBodySchema,
     response: okSchema,
     async handler({ request, body }) {
-      const session = await requireSession(app, product, request.headers.authorization);
+      const session = await requireMutationSessionFor(app, product, request.headers.authorization);
       return finalizeNumberForScope(requireDatabase(app), session.scope, body.reservationId, body.documentId);
     },
   });
@@ -991,8 +1079,8 @@ const registerCatalogRoutes = (app: FastifyInstance, product: 'lite' | 'pro', pr
     body: z.object({ reason: z.string().trim().min(1), project: projectWriteSchema }),
     response: projectSchema,
     async handler({ request, body }) {
-      const session = await requireSession(app, product, request.headers.authorization);
-      return createPostgresProjectRepository(requireDatabase(app)).upsert(session.scope, body.project, body.reason);
+      const session = await requireMutationSessionFor(app, product, request.headers.authorization);
+      return createPostgresProjectRepository(requireDatabase(app), toMutationActor(session)).upsert(session.scope, body.project, body.reason);
     },
   });
 
@@ -1003,8 +1091,8 @@ const registerCatalogRoutes = (app: FastifyInstance, product: 'lite' | 'pro', pr
     body: deletePayloadSchema,
     response: projectSchema,
     async handler({ request, params, body }) {
-      const session = await requireSession(app, product, request.headers.authorization);
-      return createPostgresProjectRepository(requireDatabase(app)).archive(session.scope, params.id, body.reason);
+      const session = await requireMutationSessionFor(app, product, request.headers.authorization);
+      return createPostgresProjectRepository(requireDatabase(app), toMutationActor(session)).archive(session.scope, params.id, body.reason);
     },
   });
 
@@ -1024,7 +1112,7 @@ const registerCatalogRoutes = (app: FastifyInstance, product: 'lite' | 'pro', pr
     body: upsertArticlePayloadSchema,
     response: articleSchema,
     async handler({ request, body }) {
-      const session = await requireSession(app, product, request.headers.authorization);
+      const session = await requireMutationSessionFor(app, product, request.headers.authorization);
       const saved = await saveServerArticle(requireDatabase(app), {
         id: body.article.id,
         tenantId: session.scope.tenantId,
@@ -1046,7 +1134,7 @@ const registerCatalogRoutes = (app: FastifyInstance, product: 'lite' | 'pro', pr
     params: entityIdParamsSchema,
     response: okSchema,
     async handler({ request, params }) {
-      const session = await requireSession(app, product, request.headers.authorization);
+      const session = await requireMutationSessionFor(app, product, request.headers.authorization);
       await deleteServerArticle(requireDatabase(app), session.scope.tenantId, params.id);
       return { ok: true as const };
     },
@@ -1068,7 +1156,7 @@ const registerCatalogRoutes = (app: FastifyInstance, product: 'lite' | 'pro', pr
     body: serverUpsertAccountPayloadSchema,
     response: serverAccountSchema,
     async handler({ request, body }) {
-      const session = await requireSession(app, product, request.headers.authorization);
+      const session = await requireMutationSessionFor(app, product, request.headers.authorization);
       const saved = await saveServerBankAccount(requireDatabase(app), {
         id: body.account.id,
         tenantId: session.scope.tenantId,
@@ -1089,7 +1177,7 @@ const registerCatalogRoutes = (app: FastifyInstance, product: 'lite' | 'pro', pr
     params: entityIdParamsSchema,
     response: okSchema,
     async handler({ request, params }) {
-      const session = await requireSession(app, product, request.headers.authorization);
+      const session = await requireMutationSessionFor(app, product, request.headers.authorization);
       await deleteServerBankAccount(requireDatabase(app), session.scope.tenantId, params.id);
       return { ok: true as const };
     },
@@ -1113,6 +1201,11 @@ const registerTaxAuditExportRoute = (app: FastifyInstance) => {
     },
   });
 };
+
+/** Workflow entries are stored as text and parsed by every reader, so only JSON is accepted. */
+const jsonTextSchema = z.string().min(2).refine((text) => {
+  try { JSON.parse(text); return true; } catch { return false; }
+}, 'Kein gültiges JSON.');
 
 const registerProRoutes = (app: FastifyInstance) => {
   const prefix = '/api/v1/pro';
@@ -1139,12 +1232,12 @@ const registerProRoutes = (app: FastifyInstance) => {
     url: `${prefix}/workflow`,
     body: z.object({
       transactionId: z.string().min(1),
-      transactionJson: z.string().min(2),
-      draftJson: z.string().min(2),
+      transactionJson: jsonTextSchema,
+      draftJson: jsonTextSchema,
     }),
     response: okSchema,
     async handler({ request, body }) {
-      const session = await requireSession(app, 'pro', request.headers.authorization);
+      const session = await requireMutationSessionFor(app, 'pro', request.headers.authorization);
       return createPostgresProWorkflowRepository(requireDatabase(app)).upsert(session.scope, body);
     },
   });
@@ -1374,13 +1467,6 @@ export const buildServerApi = async (options: BuildServerApiOptions = {}): Promi
       scope: createSingleTenantScope(options.localAuth.tenantId, product),
       role: options.localAuth.role ?? 'owner',
     });
-    app.addHook('onRequest', async (request) => {
-      if (!request.url.startsWith('/api/')) return;
-      const localTokenHeader = request.headers['x-billme-local-token'];
-      const localToken = typeof localTokenHeader === 'string' ? localTokenHeader : undefined;
-      authorizeEmbeddedRequest(app, product, localToken);
-      request.headers.authorization = `Bearer ${localToken}`;
-    });
     app.addHook('onClose', async () => {
       await options.database?.close();
     });
@@ -1397,6 +1483,16 @@ export const buildServerApi = async (options: BuildServerApiOptions = {}): Promi
       });
     }
   }
+
+  app.addHook('onRequest', async (request) => {
+    if (!request.url.startsWith('/api/')) return;
+    if (isDeviceLoginPath(request.url) || await authenticateCliToken(app, request)) return;
+    if (runtime !== 'embedded') return;
+    const localTokenHeader = request.headers['x-billme-local-token'];
+    const localToken = typeof localTokenHeader === 'string' ? localTokenHeader : undefined;
+    authorizeEmbeddedRequest(app, product, localToken);
+    request.headers.authorization = `Bearer ${localToken}`;
+  });
 
   if (app.serverDatabase) {
     // Retried on every boot until it succeeds; a failure must not block the API.
@@ -1420,6 +1516,7 @@ export const buildServerApi = async (options: BuildServerApiOptions = {}): Promi
         backend: 'fastify' as const,
         mode: 'api' as const,
         ts: new Date().toISOString(),
+        ...(options.instanceId ? { instanceId: options.instanceId } : {}),
       };
     },
   });
@@ -1446,6 +1543,8 @@ export const buildServerApi = async (options: BuildServerApiOptions = {}): Promi
       };
     },
   });
+
+  registerCliAccessRoutes(app, runtime === 'embedded' ? [product] : supportedServerProducts);
 
   if (runtime === 'server') {
     typedRoute(app, {
@@ -1528,6 +1627,8 @@ export const buildServerApi = async (options: BuildServerApiOptions = {}): Promi
     registerTaxAuditExportRoute(app);
     registerProAccountingRoutes(app, { openRouterVlmService: options.openRouterVlmService });
     registerLiteEurRoutes(app);
+    registerLiteCashRoutes(app);
+    registerLiteVatRoutes(app);
     registerAuditRoutes(app, 'lite');
     registerAuditRoutes(app, 'pro');
     registerEurRuleRoutes(app, 'lite');
@@ -1538,11 +1639,13 @@ export const buildServerApi = async (options: BuildServerApiOptions = {}): Promi
       requireSession,
       requireDatabase,
       desktopIntegration: options.desktopIntegration,
+      renderDocumentPdf: options.renderDocumentPdf,
     });
     registerAutomationRoutes(app, 'pro', '/api/v1/pro', {
       requireSession,
       requireDatabase,
       desktopIntegration: options.desktopIntegration,
+      renderDocumentPdf: options.renderDocumentPdf,
     });
   } else {
     registerBillingRoutes(app, product, `/api/v1/${product}`);
@@ -1557,6 +1660,8 @@ export const buildServerApi = async (options: BuildServerApiOptions = {}): Promi
       registerEurRuleRoutes(app, 'pro');
     } else {
       registerLiteEurRoutes(app);
+      registerLiteCashRoutes(app);
+      registerLiteVatRoutes(app);
       registerAuditRoutes(app, 'lite');
       registerEurRuleRoutes(app, 'lite');
     }
@@ -1565,6 +1670,7 @@ export const buildServerApi = async (options: BuildServerApiOptions = {}): Promi
       requireSession,
       requireDatabase,
       desktopIntegration: options.desktopIntegration,
+      renderDocumentPdf: options.renderDocumentPdf,
     });
   }
 

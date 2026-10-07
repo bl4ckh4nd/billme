@@ -1,4 +1,5 @@
 import type { FastifyInstance } from 'fastify';
+import { filterEurListItems } from '@billme/server-core';
 import { createPostgresProAccountingRepository, getServerEurReport, listServerEurAnnexFacts, listServerEurCashFacts, listServerEurCashItems, saveServerEurAnnexFact, saveServerEurCashFact, saveServerEurClassificationFact } from '@billme/server-data';
 import { z } from 'zod';
 import { ApiError, typedRoute } from './http.js';
@@ -14,7 +15,7 @@ export const liteEurReportQuerySchema = z.object({
 }).transform((value) => ({ ...(value.taxYear === undefined ? {} : { taxYear: value.taxYear }), from: value.from ?? `${value.taxYear ?? 2025}-01-01`, to: value.to ?? `${value.taxYear ?? 2025}-12-31` }));
 
 export const liteEurClassificationBodySchema = z.object({
-  sourceType: z.enum(['transaction', 'invoice']),
+  sourceType: z.enum(['transaction', 'invoice', 'manual']),
   sourceId: z.string().trim().min(1),
   taxYear: z.union([z.literal(2025), z.literal(2026)]),
   eurLineId: z.string().trim().min(1).optional(),
@@ -25,7 +26,7 @@ export const liteEurClassificationBodySchema = z.object({
   reason: z.string().trim().min(1),
 });
 export const liteEurCashFactBodySchema = z.object({
-  sourceType: z.enum(['transaction', 'invoice']), sourceId: z.string().trim().min(1), taxYear: z.union([z.literal(2025), z.literal(2026)]), kind: z.enum(['income', 'expense', 'private-withdrawal', 'private-contribution', 'pass-through']), amountNet: z.number().finite().nonnegative(), flowType: z.enum(['income', 'expense']).optional(), eurLineId: z.string().trim().min(1).optional(), splits: z.array(z.object({ amountNet: z.number().finite().nonnegative(), deductibility: z.enum(['deductible', 'non-deductible']).optional(), classification: z.enum(['deductible', 'non-deductible']).optional(), deductible: z.boolean().optional(), lineId: z.string().trim().min(1).optional(), reason: z.string().trim().min(1), auditId: z.string().trim().min(1).optional() })).optional(), idempotencyKey: z.string().trim().min(1).optional(), reason: z.string().trim().min(1),
+  sourceType: z.enum(['transaction', 'invoice', 'manual']), sourceId: z.string().trim().min(1), taxYear: z.union([z.literal(2025), z.literal(2026)]), kind: z.enum(['income', 'expense', 'private-withdrawal', 'private-contribution', 'pass-through']), amountNet: z.number().finite().nonnegative(), flowType: z.enum(['income', 'expense']).optional(), eurLineId: z.string().trim().min(1).optional(), splits: z.array(z.object({ amountNet: z.number().finite().nonnegative(), deductibility: z.enum(['deductible', 'non-deductible']).optional(), classification: z.enum(['deductible', 'non-deductible']).optional(), deductible: z.boolean().optional(), lineId: z.string().trim().min(1).optional(), reason: z.string().trim().min(1), auditId: z.string().trim().min(1).optional() })).optional(), idempotencyKey: z.string().trim().min(1).optional(), reason: z.string().trim().min(1),
 });
 export const liteEurAnnexFactBodySchema = z.object({ taxYear: z.union([z.literal(2025), z.literal(2026)]), annex: z.string().trim().min(1), lineId: z.string().trim().min(1), amount: z.number().finite(), sourceId: z.string().trim().min(1).optional(), date: z.string().optional(), idempotencyKey: z.string().trim().min(1).optional(), reason: z.string().trim().min(1) });
 
@@ -60,11 +61,16 @@ export const registerLiteEurRoutes = (app: FastifyInstance): void => {
   typedRoute(app, {
     method: 'GET',
     url: `${prefix}/items`,
-    query: liteEurReportQuerySchema,
+    query: liteEurReportQuerySchema.and(z.object({
+      sourceType: z.enum(['transaction', 'invoice', 'manual']).optional(), flowType: z.enum(['income', 'expense']).optional(),
+      status: z.enum(['all', 'unclassified', 'classified', 'excluded']).optional(), search: z.string().optional(), accountId: z.string().optional(),
+      onlyUnclassified: z.enum(['true', 'false']).optional(), limit: z.coerce.number().int().positive().max(1000).optional(), offset: z.coerce.number().int().nonnegative().optional(),
+    })),
     async handler({ request, query }) {
       const session = await requireSession(app, 'lite', request.headers.authorization);
       try {
-        return await listServerEurCashItems(requireDatabase(app), session.scope, { ...query, product: 'lite' });
+        const items = await listServerEurCashItems(requireDatabase(app), session.scope, { ...query, product: 'lite' });
+        return filterEurListItems(items, { ...query, onlyUnclassified: query.onlyUnclassified === 'true' });
       } catch (error) {
         return mapEurError(error);
       }
@@ -90,9 +96,7 @@ export const registerLiteEurRoutes = (app: FastifyInstance): void => {
           product: 'lite' as const,
           mutation: createMutationContext(session, body.reason),
         };
-        return body.taxYear === 2026
-          ? await saveServerEurClassificationFact(requireDatabase(app), session.scope, input)
-          : await createPostgresProAccountingRepository(requireDatabase(app)).upsertEurClassification(session.scope, input);
+        return await saveServerEurClassificationFact(requireDatabase(app), session.scope, input);
       } catch (error) {
         return mapEurError(error);
       }

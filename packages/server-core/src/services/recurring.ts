@@ -6,7 +6,8 @@ import type {
   RecurringProfile,
   TenantScope,
 } from '../domain/foundations.js';
-import { getBillingLineAmount, isBillableLine } from '../domain/foundations.js';
+import { localIsoDate } from '../domain/dunning.js';
+import { getBillingLineAmount, isBillableLine, isoDateSchema } from '../domain/foundations.js';
 import {
   systemClock,
   type Clock,
@@ -70,6 +71,9 @@ const toExpectedRecurringProfileError = (error: unknown): InvalidRecurringProfil
 
 /** Validate data at the shared write seam, independently of the UI. */
 export const validateRecurringProfile = (profile: RecurringProfile): void => {
+  for (const date of [profile.nextRun, profile.endDate, profile.lastRun].filter((value) => value !== undefined)) {
+    if (!isoDateSchema.safeParse(date).success) throw new InvalidRecurringProfileError('Das Abo-Profil enthält ein ungültiges Kalenderdatum.');
+  }
   if (typeof profile.name !== 'string' || !profile.name.trim()) {
     throw new InvalidRecurringProfileError('Die Bezeichnung des Abo-Profils ist erforderlich.');
   }
@@ -190,7 +194,7 @@ export const shouldRunScheduledRecurring = <
   return !isSameDay(new Date(settings.automation.lastRecurringRun), now);
 };
 
-export const calculateNextRun = (currentDate: string, interval: RecurringInterval): string => {
+export const calculateNextRun = (currentDate: string, interval: RecurringInterval, anchorDay = Number(currentDate.slice(8, 10))): string => {
   const [yearStr, monthStr, dayStr] = currentDate.split('-');
   let year = parseInt(yearStr, 10);
   let month = parseInt(monthStr, 10);
@@ -213,8 +217,8 @@ export const calculateNextRun = (currentDate: string, interval: RecurringInterva
         month = 1;
         year += 1;
       }
-      const maxDay = new Date(year, month, 0).getDate();
-      day = Math.min(day, maxDay);
+      const maxDay = new Date(Date.UTC(year, month, 0)).getUTCDate();
+      day = Math.min(anchorDay, maxDay);
       return `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
     }
     case 'quarterly': {
@@ -223,14 +227,14 @@ export const calculateNextRun = (currentDate: string, interval: RecurringInterva
         month -= 12;
         year += 1;
       }
-      const maxDay = new Date(year, month, 0).getDate();
-      day = Math.min(day, maxDay);
+      const maxDay = new Date(Date.UTC(year, month, 0)).getUTCDate();
+      day = Math.min(anchorDay, maxDay);
       return `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
     }
     case 'yearly': {
       year += 1;
-      const maxDay = new Date(year, month, 0).getDate();
-      day = Math.min(day, maxDay);
+      const maxDay = new Date(Date.UTC(year, month, 0)).getUTCDate();
+      day = Math.min(anchorDay, maxDay);
       return `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
     }
     default:
@@ -241,7 +245,7 @@ export const calculateNextRun = (currentDate: string, interval: RecurringInterva
 const calculateDueDate = (source: Date, paymentTermsDays: number): string => {
   const date = new Date(source);
   date.setDate(date.getDate() + paymentTermsDays);
-  return date.toISOString().slice(0, 10);
+  return localIsoDate(date);
 };
 
 const calculateServicePeriod = (
@@ -274,8 +278,8 @@ const calculateServicePeriod = (
   }
 
   return {
-    start: start.toISOString().slice(0, 10),
-    end: end.toISOString().slice(0, 10),
+    start: localIsoDate(start),
+    end: localIsoDate(end),
   };
 };
 
@@ -327,9 +331,9 @@ const buildInvoiceFromProfile = (
       null;
     const billingEmail = chooseDefaultBillingEmail(client.emails ?? []);
     const items = buildInvoiceItems(profile);
-    const today = now.toISOString().slice(0, 10);
-    const taxMode = resolveInvoiceTaxMode(undefined, settings);
-    const taxSnapshot = calculateInvoiceTaxSnapshot({ items, taxMode }, settings);
+    const today = localIsoDate(now);
+    const taxMode = resolveInvoiceTaxMode(profile.taxMode, settings);
+    const taxSnapshot = calculateInvoiceTaxSnapshot({ items, taxMode, taxMeta: profile.taxMeta }, settings);
 
     return chainMaybePromise(dependencies.projectPort.ensureDefaultProject(profile.clientId), (project) => ({
       kind: 'invoice',
@@ -347,6 +351,7 @@ const buildInvoiceFromProfile = (
       billingAddress: billingAddress ?? undefined,
       shippingAddress: shippingAddress ?? undefined,
       taxMode,
+      taxMeta: profile.taxMeta,
       taxSnapshot,
       date: today,
       dueDate: calculateDueDate(now, settings.legal.paymentTermsDays),
@@ -516,7 +521,7 @@ export const processRecurringRun = async (
 ): Promise<RecurringResult> => {
   const result: RecurringResult = { generated: 0, deactivated: 0, errors: [] };
   const runNow = getClock(dependencies).now();
-  const today = runNow.toISOString().slice(0, 10);
+  const today = localIsoDate(runNow);
   const profiles = (await dependencies.recurringProfileStore.list(scope)).filter((profile) => isProfileDue(profile, today));
 
   for (const profile of profiles) {
@@ -543,12 +548,13 @@ export const processRecurringRun = async (
             return chainMaybePromise(
               generateInvoiceFromProfileWithoutTransaction(scope, dependencies, freshProfile, runNow),
               () => {
-                const nextRun = calculateNextRun(freshProfile.nextRun, freshProfile.interval);
+                const nextRun = calculateNextRun(freshProfile.nextRun, freshProfile.interval, freshProfile.anchorDay);
                 const shouldDeactivate = Boolean(freshProfile.endDate && nextRun > freshProfile.endDate);
 
                 return mapMaybePromise(
                   dependencies.recurringProfileStore.save(scope, {
                     ...freshProfile,
+                    anchorDay: freshProfile.anchorDay ?? Number(freshProfile.nextRun.slice(8, 10)),
                     lastRun: today,
                     nextRun: shouldDeactivate ? (freshProfile.endDate ?? nextRun) : nextRun,
                     active: shouldDeactivate ? false : freshProfile.active,

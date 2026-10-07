@@ -9,8 +9,12 @@ import {
   createSettlementInvoiceAsync,
   finalizeDocumentNumber,
   invoiceSchema,
+  offerSchema,
   reserveDocumentNumber,
+  settleInvoiceStatusFromPayments,
   type TenantScope,
+  type Invoice,
+  type Offer,
 } from '@billme/server-core';
 import {
   createPostgresBillingDependencies,
@@ -46,6 +50,92 @@ export const chainIssueBodySchema = z.discriminatedUnion('operation', [
 export type ChainIssueInput = z.infer<typeof chainIssueBodySchema>;
 
 export const ISSUANCE_INTENT_VERSION = 1;
+
+const documentContentSchema = invoiceSchema.omit({ status: true, payments: true, history: true, dunningLevel: true, createdAt: true, updatedAt: true });
+const documentContent = (invoice: Invoice) => {
+  const content = documentContentSchema.parse(invoice);
+  const { snapshot: _snapshot, ...layout } = content.layout ?? {};
+  return { ...content, layout: Object.keys(layout).length ? layout : undefined };
+};
+export const assertInvoiceContentEditable = (before: Invoice | null, next: Invoice): void => {
+  if (!before || before.status === 'draft') return;
+  if (next.status === 'draft' || stableStringify(documentContent(before)) !== stableStringify(documentContent(next))) {
+    throw new ApiError(409, 'Gestellte Rechnungen bleiben unverändert. Bitte eine Revision oder Gutschrift/Stornorechnung erstellen.');
+  }
+};
+
+const offerContentSchema = offerSchema.omit({ status: true, share: true, history: true, createdAt: true, updatedAt: true });
+const offerContent = (offer: Offer) => {
+  const content = offerContentSchema.parse(offer);
+  const { snapshot: _snapshot, ...layout } = content.layout ?? {};
+  return { ...content, layout: Object.keys(layout).length ? layout : undefined };
+};
+export const assertOfferContentEditable = (before: Offer | null, next: Offer): void => {
+  if (!before || (before.status === 'draft' && !before.share?.publishedAt && !before.share?.decision)) return;
+  if ((next.status === 'draft' && before.status !== 'draft') || stableStringify(offerContent(before)) !== stableStringify(offerContent(next))) {
+    throw new ApiError(409, 'Gesendete oder angenommene Angebote bleiben unverändert. Bitte ein neues Angebot erstellen.');
+  }
+};
+
+export const cancelUnpaidRevisionSource = async (transaction: ServerDatabaseSession, auth: AuthSession, revision: Invoice, reason: string): Promise<void> => {
+  if (!revision.revisionOfId) return;
+  await lockChainSource(transaction, auth.scope, { invoiceId: revision.revisionOfId });
+  const repositories = createPostgresBillingDependencies(transaction);
+  const source = await repositories.invoiceRepo.getById(auth.scope, revision.revisionOfId);
+  if (!source || ['draft', 'cancelled'].includes(source.status) || source.payments.length) {
+    throw new ApiError(409, 'Die ursprüngliche Rechnung muss gestellt, unbezahlt und noch gültig sein. Bei Zahlungen bitte Gutschrift/Storno und Rückzahlung verwenden.');
+  }
+  const corrections = await transaction.query('SELECT id FROM invoices WHERE tenant_id=$1 AND source_document_id=$2 AND document_kind IN (\'credit_note\',\'cancellation_invoice\') AND status<>\'draft\'', [auth.scope.tenantId, source.id]);
+  if (corrections.rows.length) throw new ApiError(409, 'Die ursprüngliche Rechnung wurde bereits korrigiert. Bitte die bestehende Belegkette prüfen.');
+  const mutation = createMutationContext(auth, reason);
+  const numbering = createNumberingPortsForDb(transaction, auth.scope);
+  const reserved = await reserveDocumentNumber(numbering, 'invoice', new Date());
+  const created = await createCancellationInvoiceAsync(auth.scope, repositories, {
+    id: `${revision.id}:replacement-cancellation`, invoiceId: source.id, number: reserved.number,
+    date: revision.date, dueDate: revision.date, servicePeriod: source.servicePeriod, items: source.items,
+    reason: `${reason} (Storno vor Ersatz ${revision.number})`, actor: mutation.actor,
+  });
+  await finalizeDocumentNumber(numbering, reserved.reservationId, created.id);
+  const cancellation = await repositories.invoiceRepo.save(auth.scope, { ...created, taxSnapshot: source.taxSnapshot, status: 'open' });
+  if (auth.scope.product === 'pro') await postOpenedBillingDocument(transaction, auth.scope, cancellation, reserved.reservationId, mutation);
+  const cancelled = await repositories.invoiceRepo.save(auth.scope, { ...source, status: 'cancelled', updatedAt: new Date().toISOString() });
+  await repositories.auditLog.append(auth.scope, buildAuditEntry(auth.scope, auth, 'invoice', source.id, 'invoice.cancelled_for_revision', reason, source, cancelled));
+};
+
+/**
+ * The status an issued invoice derives from what settled it: its payments and its
+ * issued credit notes. Payments alone would reopen an invoice a credit note covered.
+ */
+export const settledInvoiceStatus = async (session: ServerDatabaseSession, scope: TenantScope, invoice: Invoice): Promise<Invoice['status']> => {
+  const credits = await session.query<{ amount: string | number }>("SELECT amount FROM invoices WHERE tenant_id=$1 AND source_document_id=$2 AND document_kind='credit_note' AND status<>'draft'", [scope.tenantId, invoice.id]);
+  const credited = credits.rows.reduce((sum, row) => sum + Math.abs(Number(row.amount)), 0);
+  const settledBy = credited ? [...invoice.payments, { id: 'credit-notes', date: invoice.date, amount: credited, method: 'Gutschrift' }] : invoice.payments;
+  return settleInvoiceStatusFromPayments({ ...invoice, payments: settledBy }).status;
+};
+
+/**
+ * An issued Stornorechnung cancels its source, and credit notes that cover what
+ * is still owed settle it; otherwise dunning and bank matching keep chasing a
+ * debt that no longer exists. Runs after the correction is open (and, in Pro,
+ * posted), in the issuing transaction.
+ */
+export const settleCorrectedSource = async (transaction: ServerDatabaseSession, auth: AuthSession, correction: Invoice, reason: string): Promise<void> => {
+  const kind = correction.documentKind ?? 'invoice';
+  if (!correction.sourceDocumentId || (kind !== 'cancellation_invoice' && kind !== 'credit_note')) return;
+  const repositories = createPostgresBillingDependencies(transaction);
+  const source = await repositories.invoiceRepo.getById(auth.scope, correction.sourceDocumentId);
+  if (!source || !['open', 'overdue'].includes(source.status)) return;
+  let status: 'cancelled' | 'paid' | undefined = kind === 'cancellation_invoice' ? 'cancelled' : undefined;
+  if (kind === 'credit_note') {
+    const credits = await transaction.query<{ amount: string | number }>("SELECT amount FROM invoices WHERE tenant_id=$1 AND source_document_id=$2 AND document_kind='credit_note' AND status<>'draft'", [auth.scope.tenantId, source.id]);
+    const cents = (value: number | string) => Math.round(Math.abs(Number(value)) * 100);
+    const settledCents = credits.rows.reduce((sum, row) => sum + cents(row.amount), 0) + source.payments.reduce((sum, payment) => sum + cents(payment.amount), 0);
+    if (settledCents >= cents(source.amount)) status = 'paid';
+  }
+  if (!status) return;
+  const settled = await repositories.invoiceRepo.save(auth.scope, { ...source, status, updatedAt: new Date().toISOString() });
+  await repositories.auditLog.append(auth.scope, buildAuditEntry(auth.scope, auth, 'invoice', source.id, status === 'cancelled' ? 'invoice.cancelled_by_correction' : 'invoice.settled_by_credit_note', reason, source, settled));
+};
 
 /**
  * Serialize against concurrent issuers and chain calculations for one source
@@ -127,7 +217,12 @@ export const issueDocumentChain = async (
       if (recorded.intent_version !== ISSUANCE_INTENT_VERSION || recorded.intent_hash !== intentHash) {
         throw new ApiError(409, 'Issuance intent differs from the recorded operation');
       }
-      return JSON.parse(recorded.response_json);
+      const response = JSON.parse(recorded.response_json);
+      if (input.operation === 'revision') {
+        const current = await createPostgresBillingDependencies(session).invoiceRepo.getById(scope, response.id);
+        if (current) return { ...current, history: await historyFromAudit(session, scope, 'invoice', current.id), numberReservationId: response.numberReservationId };
+      }
+      return response;
     }
 
     await lockChainSource(session, scope, {
@@ -165,17 +260,21 @@ export const issueDocumentChain = async (
         break;
     }
 
-    await finalizeDocumentNumber(numbering, reservation.reservationId, created.id);
-    const open = await repositories.invoiceRepo.save(scope, { ...created, status: 'open' });
+    if (input.operation === 'revision') {
+      await session.query("UPDATE number_reservations SET document_id=$3 WHERE tenant_id=$1 AND id=$2 AND status='reserved'", [scope.tenantId, reservation.reservationId, created.id]);
+    } else await finalizeDocumentNumber(numbering, reservation.reservationId, created.id);
+    const open = input.operation === 'revision' ? created : await repositories.invoiceRepo.save(scope, { ...created, status: 'open' });
     await repositories.auditLog.append(
       scope,
       buildAuditEntry(scope, auth, 'invoice', open.id, 'invoice.update', `${input.reason} (finalisiert)`, created, open),
     );
 
     const billingKind = !['order_confirmation', 'delivery_note'].includes(open.documentKind ?? 'invoice');
-    if (scope.product === 'pro' && billingKind) {
+    if (scope.product === 'pro' && billingKind && input.operation !== 'revision') {
       await postOpenedBillingDocument(session, scope, open, reservation.reservationId, mutation);
     }
+
+    if (input.operation === 'correction') await settleCorrectedSource(session, auth, open, input.reason);
 
     const final = (await repositories.invoiceRepo.getById(scope, open.id)) ?? open;
     const response = {

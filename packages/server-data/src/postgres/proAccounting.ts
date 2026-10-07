@@ -32,7 +32,10 @@ const executeSql = (db: PostgresQueryable, statement: ReturnType<typeof sql>) =>
 const inTaxMappingTransaction = <T>(db: PostgresQueryable, work: (client: PostgresTransactionClient) => Promise<T>): Promise<T> =>
   runInTransaction(db, work, { serializable: true });
 const upsert = async (db: PostgresQueryable, table: any, values: any, target: any, set: any): Promise<void> => {
-  await drizzleDb(db).insert(table).values(values).onConflictDoUpdate({ target, set });
+  const saved = await drizzleDb(db).insert(table).values(values).onConflictDoUpdate({
+    target, set, setWhere: values.tenantId ? eq(table.tenantId, values.tenantId) : undefined,
+  }).returning();
+  if (!(Array.isArray(saved) ? saved : saved.rows).length) throw Object.assign(new Error("Eintrag nicht gefunden."), { statusCode: 404 });
 };
 
 export interface ServerArticleRecord {
@@ -432,10 +435,24 @@ export const deleteServerBankAccount = async (
   tenantId: string,
   id: string,
 ): Promise<void> => {
-  await drizzleDb(db).delete(schema.accounts).where(and(
-    eq(schema.accounts.tenantId, tenantId),
-    eq(schema.accounts.id, id),
-  ));
+  const refused = await runInTransaction(db, async (tx) => {
+    const account = await tx.query<{ id: string; product: 'lite' | 'pro'; deployment_mode: TenantScope['deploymentMode'] }>('SELECT a.id, t.product, t.deployment_mode FROM accounts a JOIN tenants t ON t.id=a.tenant_id WHERE a.tenant_id=$1 AND a.id=$2 FOR UPDATE OF a', [tenantId, id]);
+    if (!account.rows.length) return false;
+    const used = await tx.query(`SELECT 1 FROM transactions WHERE tenant_id=$1 AND account_id=$2
+      UNION ALL SELECT 1 FROM bank_transactions WHERE tenant_id=$1 AND account_id=$2
+      UNION ALL SELECT 1 FROM import_batches WHERE tenant_id=$1 AND account_id=$2 LIMIT 1`, [tenantId, id]);
+    await appendWithClient(tx, { tenantId, product: account.rows[0]!.product, deploymentMode: account.rows[0]!.deployment_mode }, {
+      occurredAt: nowIso(), action: used.rows.length ? 'account.delete.refused' : 'account.delete',
+      reason: used.rows.length ? 'Konto enthält Buchungen oder Importhistorie.' : 'Bankkonto gelöscht.',
+      actor: { type: 'service', displayName: 'server-banking' },
+      subject: { entityType: 'account', entityId: id, tenantId },
+      change: { before: { id, tenantId } },
+    });
+    if (used.rows.length) return true;
+    await tx.query('DELETE FROM accounts WHERE tenant_id=$1 AND id=$2', [tenantId, id]);
+    return false;
+  });
+  if (refused) throw Object.assign(new Error('Konto mit Buchungen oder Importhistorie kann nicht gelöscht werden.'), { statusCode: 409 });
 };
 
 export const listServerTemplates = async (
@@ -1005,6 +1022,8 @@ export const createPostgresProAccountingCatalogRepository = (
 
   async upsertAccountSuggestionRule(scope, input) {
     return inTaxMappingTransaction(db, async (tx) => {
+      const account = await executeSql(tx, sql`SELECT 1 FROM ledger_accounts WHERE chart=${input.chart} AND account_number=${input.targetAccountNumber.trim()} LIMIT 1`);
+      if (!account.rows.length) throw new Error(`UNKNOWN_ACCOUNT:${input.targetAccountNumber.trim()}`);
       const tenantId = getTenantId(scope);
       const now = nowIso();
       const existing = input.id ? await executeSql(tx, sql`SELECT id,tenant_id,created_at FROM account_suggestion_rules WHERE id=${input.id} LIMIT 1`) : { rows: [] };

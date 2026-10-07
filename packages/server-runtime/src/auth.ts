@@ -10,6 +10,8 @@ const authSessionSchema = z.object({
     deploymentMode: z.literal('single-tenant'),
   }),
   role: serverRoleSchema,
+  /** Set when the session was opened with a CLI token instead of by a person at the app. */
+  via: z.object({ tokenId: z.string().min(1), label: z.string().min(1) }).optional(),
 });
 
 const tokenPayloadSchema = authSessionSchema.extend({

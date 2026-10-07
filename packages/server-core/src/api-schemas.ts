@@ -7,6 +7,8 @@ export const healthResponseSchema = z.object({
   backend: z.literal('fastify'),
   mode: z.enum(['api', 'worker']),
   ts: z.string().min(1),
+  /** Embedded runtime only: identifies this start of the desktop app. */
+  instanceId: z.string().min(1).optional(),
 });
 export type HealthResponse = z.infer<typeof healthResponseSchema>;
 
@@ -79,6 +81,53 @@ export const serverApiSessionSchema = authResponseSchema.extend({
   via: z.enum(['bootstrap', 'login']),
 });
 export type ServerApiSession = z.infer<typeof serverApiSessionSchema>;
+
+/** `full` acts with the approving user's own role; `read` is limited to GET requests. */
+export const cliTokenScopeSchema = z.enum(['full', 'read']);
+export type CliTokenScope = z.infer<typeof cliTokenScopeSchema>;
+
+export const CLI_TOKEN_PREFIX = 'billme_cli_';
+
+export const cliTokenSummarySchema = z.object({
+  id: z.string().min(1),
+  label: z.string().min(1),
+  product: serverProductSchema,
+  scope: cliTokenScopeSchema,
+  createdAt: z.string().min(1),
+  lastUsedAt: z.string().min(1).optional(),
+});
+export type CliTokenSummary = z.infer<typeof cliTokenSummarySchema>;
+
+export const deviceLoginStartRequestSchema = z.object({
+  product: serverProductSchema,
+  label: z.string().trim().min(1).max(80),
+  scope: cliTokenScopeSchema.default('full'),
+});
+
+export const deviceLoginStartResponseSchema = z.object({
+  deviceCode: z.string().min(1),
+  userCode: z.string().min(1),
+  /** Absent where no browser page can take the code, e.g. the desktop app. */
+  verificationUri: z.string().url().optional(),
+  expiresIn: z.number().int().positive(),
+  interval: z.number().int().positive(),
+});
+export type DeviceLoginStartResponse = z.infer<typeof deviceLoginStartResponseSchema>;
+
+export const deviceLoginTokenResponseSchema = z.discriminatedUnion('status', [
+  z.object({ status: z.enum(['pending', 'denied', 'expired']) }),
+  z.object({ status: z.literal('approved'), token: z.string().min(1), user: authUserSchema }),
+]);
+export type DeviceLoginTokenResponse = z.infer<typeof deviceLoginTokenResponseSchema>;
+
+/** What the approving user sees before deciding on a CLI login request. */
+export const cliAccessRequestSchema = z.object({
+  userCode: z.string().min(1),
+  label: z.string().min(1),
+  scope: cliTokenScopeSchema,
+  createdAt: z.string().min(1),
+});
+export type CliAccessRequest = z.infer<typeof cliAccessRequestSchema>;
 
 export const vatValidationRequestSchema = z.object({
   countryCode: z.string().length(2).transform((value) => value.toUpperCase()),

@@ -4,10 +4,16 @@ import { createPostgresBillingDependencies, type ServerDatabase } from '@billme/
 import type { AuthSession } from './auth.js';
 import { createMutationContext } from './runtimeContext.js';
 
+const redactShareToken = (value: unknown): unknown => {
+  if (!value || typeof value !== 'object' || !('share' in value) || !value.share || typeof value.share !== 'object') return value;
+  const { token: _token, ...share } = value.share as Record<string, unknown>;
+  return { ...value, share };
+};
+
 export const buildAuditEntry = (
   scope: TenantScope,
   session: AuthSession,
-  subject: 'client' | 'invoice' | 'offer' | 'recurring-profile',
+  subject: 'client' | 'invoice' | 'offer' | 'recurring-profile' | 'settings',
   entityId: string,
   action: string,
   reason: string,
@@ -26,8 +32,8 @@ export const buildAuditEntry = (
       tenantId: scope.tenantId,
     },
     change: {
-      before,
-      after,
+      before: redactShareToken(before),
+      after: redactShareToken(after),
     },
   };
 };

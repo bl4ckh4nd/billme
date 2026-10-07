@@ -6,6 +6,11 @@ ENV NODE_ENV=production
 
 RUN corepack enable
 
+# PDFs are printed by a headless Chromium that opens the web app's print view (src/pdfRenderer.ts).
+RUN apk add --no-cache chromium font-noto
+ENV BILLME_CHROMIUM_PATH=/usr/bin/chromium-browser
+ENV BILLME_CHROMIUM_NO_SANDBOX=1
+
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 COPY apps ./apps
 COPY packages ./packages

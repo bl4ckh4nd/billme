@@ -34,6 +34,7 @@ export class AuthorizationError extends Error {
 
 export interface AuthorizationInput {
   readonly runtime: RuntimeProfile;
+  readonly database?: ServerDatabase;
   readonly product: Product;
   readonly authHeader?: string;
   readonly tokenService: SessionTokenService;
@@ -47,6 +48,13 @@ export const safeSecretEqual = (provided: string, expected: string): boolean => 
   return providedBuffer.length === expectedBuffer.length && timingSafeEqual(providedBuffer, expectedBuffer);
 };
 
+/** Writes made through a CLI token stay attributable to it; the label comes from the token row, not the client. */
+export const toMutationActor = (session: AuthSession): MutationActor => ({
+  type: 'user',
+  id: session.user.id,
+  displayName: session.via ? `${session.user.fullName} (CLI: ${session.via.label})` : session.user.fullName,
+});
+
 /** Canonical audit actor and reason policy for every mutating adapter. */
 export const createMutationContext = (session: AuthSession, reason: string): MutationContext => {
   const normalizedReason = reason.trim();
@@ -55,29 +63,35 @@ export const createMutationContext = (session: AuthSession, reason: string): Mut
   }
   return {
     reason: normalizedReason,
-    actor: {
-      type: 'user',
-      id: session.user.id,
-      displayName: session.user.fullName,
-    },
+    actor: toMutationActor(session),
   };
 };
 
-export const toMutationActor = (session: AuthSession): MutationActor => ({
-  type: 'user',
-  id: session.user.id,
-  displayName: session.user.fullName,
-});
-
 /** Shared hosted/embedded session, product and stable feedback policy. */
-export const authorizeRequest = (input: AuthorizationInput): AuthSession => {
+export function authorizeRequest(input: AuthorizationInput & { runtime: 'embedded' }): AuthSession;
+export function authorizeRequest(input: AuthorizationInput): AuthSession | Promise<AuthSession>;
+export function authorizeRequest(input: AuthorizationInput): AuthSession | Promise<AuthSession> {
   const token = input.tokenService.readBearerToken(input.authHeader);
   if (input.runtime === 'embedded') {
     if (!token) {
       throw new AuthorizationError('missing_token', 'Missing or invalid local access token', 401);
     }
     if (!input.localAccessTokenSecret || !safeSecretEqual(token, input.localAccessTokenSecret)) {
-      throw new AuthorizationError('invalid_token', 'Missing or invalid local access token', 401);
+      // The only other credential the embedded runtime knows is a CLI token, which the request
+      // hook has already exchanged for a session signed with this process's secret.
+      let cliSession: AuthSession | null;
+      try {
+        cliSession = input.tokenService.verify(token);
+      } catch {
+        cliSession = null;
+      }
+      if (!cliSession?.via) {
+        throw new AuthorizationError('invalid_token', 'Missing or invalid local access token', 401);
+      }
+      if (cliSession.scope.product !== input.product) {
+        throw new AuthorizationError('product_scope', `Token is not authorized for ${input.product}`, 403);
+      }
+      return cliSession;
     }
     if (!input.localSession) {
       throw new AuthorizationError('invalid_token', 'Embedded local session is not configured', 503);
@@ -103,8 +117,19 @@ export const authorizeRequest = (input: AuthorizationInput): AuthSession => {
   if (session.scope.product !== input.product) {
     throw new AuthorizationError('product_scope', `Token is not authorized for ${input.product}`, 403);
   }
-  return session;
-};
+  if (!input.database) return session;
+  const verified = session;
+  return input.database.query<{ role: ServerRole; email: string; full_name: string }>(
+    "SELECT m.role, u.email, u.full_name FROM tenant_memberships m JOIN user_accounts u ON u.id=m.user_id JOIN tenants t ON t.id=m.tenant_id WHERE m.tenant_id=$1 AND m.user_id=$2 AND t.product=$3 AND u.status='active' AND t.status='active'",
+    [session.scope.tenantId, session.user.id, input.product],
+  ).then(({ rows }) => {
+    const member = rows[0];
+    if (!member) throw new AuthorizationError('invalid_token', 'Die Mitgliedschaft ist nicht mehr aktiv.', 401);
+    // A read-only CLI credential must never gain the membership's write role.
+    const role = verified.via && verified.role === 'viewer' ? 'viewer' : member.role;
+    return { ...verified, role, user: { ...verified.user, role, email: member.email, fullName: member.full_name } };
+  });
+}
 
 /** Guard API-wide embedded requests before a route-specific handler runs. */
 export const authorizeEmbeddedRequest = (
@@ -161,8 +186,9 @@ export const requireSession = async (
   authHeader: string | undefined,
 ): Promise<AuthSession> => {
   try {
-    return authorizeRequest({
+    return await authorizeRequest({
       runtime: app.runtimeProfile,
+      database: app.serverDatabase,
       product,
       authHeader,
       tokenService: app.tokenService,

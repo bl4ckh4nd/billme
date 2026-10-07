@@ -18,7 +18,7 @@ const nonEmptyStringSchema = z.string().trim().min(1);
 export const entityIdSchema = nonEmptyStringSchema;
 export type EntityId = z.infer<typeof entityIdSchema>;
 
-export const isoDateSchema = nonEmptyStringSchema;
+export const isoDateSchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/).refine((value) => Number.isFinite(Date.parse(`${value}T00:00:00Z`)) && new Date(`${value}T00:00:00Z`).toISOString().slice(0, 10) === value, 'Ungültiges Kalenderdatum.');
 export type IsoDate = z.infer<typeof isoDateSchema>;
 
 export const isoDateTimeSchema = nonEmptyStringSchema;
@@ -392,6 +392,7 @@ export const recurringProfileSchema = z.object({
   name: nonEmptyStringSchema,
   interval: recurringIntervalSchema,
   nextRun: isoDateSchema,
+  anchorDay: z.number().int().min(1).max(31).optional(),
   lastRun: isoDateSchema.optional(),
   endDate: isoDateSchema.optional(),
   amount: z.number(),

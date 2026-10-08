@@ -3,6 +3,7 @@ import {
   buildEmailOutboxDedupeKey,
   clientSchema,
   createSingleTenantScope,
+  localIsoDate,
   defaultEmailOutboxMaxAttempts,
   dunningHistoryEntrySchema,
   emailOutboxEntrySchema,
@@ -405,7 +406,8 @@ const rowToOffer = (row: OfferRow): Offer =>
     date: row.date,
     validUntil: row.valid_until,
     amount: toNumber(row.amount),
-    status: row.status,
+    // An open offer past its validity is expired; derived on read, so no job has to flip it.
+    status: row.status === 'open' && row.valid_until && row.valid_until < localIsoDate(new Date()) ? 'expired' : row.status,
     share: parseJson(row.share_json, undefined),
     items: parseJson(row.items_json, []),
     taxMode: row.tax_mode ?? "standard_vat",
@@ -1224,7 +1226,7 @@ export const createPostgresOfferRepository = (
           },
         }).returning({ id: schema.offers.id });
       if (!saved.length) throw Object.assign(new Error("Eintrag nicht gefunden."), { statusCode: 404 });
-      return nextOffer;
+      return (await createPostgresOfferRepository(db).getById(scope, nextOffer.id))!;
       },
   async remove(scope, id) {
     const drizzleDb = requireDrizzle(db);

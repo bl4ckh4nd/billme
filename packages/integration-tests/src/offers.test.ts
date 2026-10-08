@@ -15,6 +15,8 @@ import { documentIdFromUrl, newToken, startPortal, type PortalHandle } from './o
  * - offer numbers: shared sequence with invoices, duplicates under concurrency,
  *   gaps after a released draft, a reservation reused for another offer or
  *   kind, a duplicate number answered with a 500 that leaks the SQL
+ * - validity: an open offer past its validUntil still shown as open, expired on
+ *   its last day, or no longer acceptable by hand
  * - offer edits: draft edits lost, status set outside the allowed values,
  *   malformed dates saved, a stale copy erasing the portal publication or the
  *   recorded customer decision, an accepted offer's content changing after the
@@ -304,6 +306,19 @@ for (const product of PRODUCTS) describe(`offers and the document chain (${produ
       assert.equal(verify.ok, true, JSON.stringify(verify));
       const csv = await h.api.audit.exportCsv();
       for (const needle of ['offer.create', 'offer.update', 'offer.delete', 'Audit-Änderung', 'Audit-Löschung']) assert.ok(csv.includes(needle), `${needle} missing`);
+    });
+  });
+
+  describe('validity', () => {
+    test('an open offer past its validity is expired; a manual acceptance afterwards still works', async () => {
+      const draft = await draftOffer(h.api, { client: 'Abgelaufen GmbH', date: addDays(today(), -30), dueDate: addDays(today(), -1) });
+      const open = await h.api.offers.upsert({ reason: 'versendet', offer: { ...draft, status: 'open' } } as never);
+      assert.equal(open.status, 'expired');
+      assert.equal((await h.api.offers.list()).find((offer) => offer.id === draft.id)?.status, 'expired');
+      const current = await draftOffer(h.api, { client: 'Noch gültig GmbH', dueDate: today() });
+      assert.equal((await h.api.offers.upsert({ reason: 'versendet', offer: { ...current, status: 'open' } } as never)).status, 'open', 'valid through its last day');
+      const accepted = await h.api.offers.upsert({ reason: 'Kunde hat trotzdem telefonisch zugesagt', offer: { ...open, status: 'accepted' } } as never);
+      assert.equal(accepted.status, 'accepted', 'an expired offer accepted later is a fresh confirmation');
     });
   });
 

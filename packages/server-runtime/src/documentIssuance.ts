@@ -14,6 +14,7 @@ import {
   prepareInvoiceForIssue,
   InvoiceIssueError,
   type IssuerSettings,
+  type SmallBusinessTurnover,
   type TenantScope,
   type Invoice,
   type Offer,
@@ -105,6 +106,7 @@ export const cancelUnpaidRevisionSource = async (transaction: ServerDatabaseSess
 };
 
 export { settledInvoiceStatus } from '@billme/server-data';
+import { smallBusinessTurnover } from '@billme/server-data';
 
 /**
  * An issued Stornorechnung cancels its source, and credit notes that cover what
@@ -190,14 +192,18 @@ export const postOpenedBillingDocument = async (
  * intent for the same id is a 409, and any failure rolls back every effect.
  */
 /** §14 check at issue time, reported as 422 with everything that is missing. */
-export const issuable = <T extends Invoice>(invoice: T, settings: IssuerSettings): T => {
+export const issuable = <T extends Invoice>(invoice: T, settings: IssuerSettings, turnover?: SmallBusinessTurnover): T => {
   try {
-    return prepareInvoiceForIssue(invoice, settings);
+    return prepareInvoiceForIssue(invoice, settings, turnover);
   } catch (error) {
     if (error instanceof InvoiceIssueError) throw new ApiError(422, error.message);
     throw error;
   }
 };
+
+/** Same check with the Kleinunternehmer turnover read from the books (payments received, refunds net). */
+export const issuableIn = async <T extends Invoice>(session: ServerDatabaseSession, scope: TenantScope, invoice: T, settings: IssuerSettings): Promise<T> =>
+  issuable(invoice, settings, settings.legal.smallBusinessRule ? await smallBusinessTurnover(session, scope, Number(invoice.date.slice(0, 4))) : undefined);
 
 export const issueDocumentChain = async (
   database: ServerDatabase,
@@ -282,7 +288,7 @@ export const issueDocumentChain = async (
     // A final or partial invoice is the first invoice of an order; corrections copy an issued invoice and stay possible.
     if (input.operation === 'settlement_invoice') {
       if (!settings) throw new ApiError(409, 'Die Einstellungen müssen zuerst eingerichtet werden.');
-      created = issuable(created, settings);
+      created = await issuableIn(session, scope, created, settings);
     }
     const open = input.operation === 'revision' ? created : await repositories.invoiceRepo.save(scope, { ...created, status: 'open' });
     await repositories.auditLog.append(

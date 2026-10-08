@@ -15,8 +15,8 @@ const taxCodes: Record<string, string> = { '46': '47', '84': '85' };
 const maxDate = (a: string, b: string) => a > b ? a : b;
 type Part = { rate: number; net: number; vat: number };
 type Cash = { id: string; date: string; amount: number };
-const labels: Record<string, string> = { '81': 'Umsätze 19 %', '86': 'Umsätze 7 %', '87': 'Umsätze 0 %', '41': 'Innergemeinschaftliche Lieferungen', '43': 'Ausfuhr und weitere steuerfreie Umsätze mit Vorsteuerabzug', '48': 'Steuerfreie Umsätze ohne Vorsteuerabzug, einschließlich Kleinunternehmer', '60': 'Umsätze mit Steuerschuld des Leistungsempfängers', '21': 'Nicht steuerbare EU-Dienstleistungen', '45': 'Übrige nicht steuerbare Umsätze', '89': 'Innergemeinschaftlicher Erwerb 19 %', '93': 'Innergemeinschaftlicher Erwerb 7 %', '90': 'Innergemeinschaftlicher Erwerb 0 %', '46': 'EU-Dienstleistung: eigene Steuerschuld (§ 13b)', '84': 'Andere Leistungen: eigene Steuerschuld (§ 13b)', '66': 'Vorsteuer aus inländischen Rechnungen', '61': 'Vorsteuer aus innergemeinschaftlichem Erwerb', '62': 'Einfuhrumsatzsteuer', '67': 'Vorsteuer aus § 13b' };
-const outgoingCodes = { small_business_19_ustg: '48', reverse_charge_13b: '60', intra_eu_supply_6a: '41', intra_eu_service_reverse_charge: '21', export_third_country: '43', vat_exempt_4_ustg: '48', non_taxable_outside_scope: '45' } as const;
+const labels: Record<string, string> = { '81': 'Umsätze 19 %', '86': 'Umsätze 7 %', '87': 'Umsätze 0 %', '41': 'Innergemeinschaftliche Lieferungen', '43': 'Ausfuhr und weitere steuerfreie Umsätze mit Vorsteuerabzug', '48': 'Steuerfreie Umsätze ohne Vorsteuerabzug', '60': 'Umsätze mit Steuerschuld des Leistungsempfängers', '21': 'Nicht steuerbare EU-Dienstleistungen', '45': 'Übrige nicht steuerbare Umsätze', '89': 'Innergemeinschaftlicher Erwerb 19 %', '93': 'Innergemeinschaftlicher Erwerb 7 %', '90': 'Innergemeinschaftlicher Erwerb 0 %', '46': 'EU-Dienstleistung: eigene Steuerschuld (§ 13b)', '84': 'Andere Leistungen: eigene Steuerschuld (§ 13b)', '66': 'Vorsteuer aus inländischen Rechnungen', '61': 'Vorsteuer aus innergemeinschaftlichem Erwerb', '62': 'Einfuhrumsatzsteuer', '67': 'Vorsteuer aus § 13b' };
+const outgoingCodes = { reverse_charge_13b: '60', intra_eu_supply_6a: '41', intra_eu_service_reverse_charge: '21', export_third_country: '43', vat_exempt_4_ustg: '48', non_taxable_outside_scope: '45' } as const;
 
 export const getServerLiteVatReport = (database: PostgresQueryable, scope: TenantScope, period: { from: string; to: string }): Promise<LiteVatReport> => runInTransaction(database, async (db) => {
   const { from, to } = liteVatPeriodSchema.parse(period);
@@ -86,6 +86,8 @@ export const getServerLiteVatReport = (database: PostgresQueryable, scope: Tenan
     if (mode !== 'standard_vat' && !snapshot.taxRuleConfirmed && relevant) issue('TAX_TREATMENT_REVIEW', 'Besondere Steuerbehandlung bitte anhand des Belegs und der erforderlichen Nachweise prüfen.', invoice.id);
     const sign = correction ? -1 : 1;
     const emit = (date: string, amounts: Part[]) => {
+      // A Kleinunternehmer files no Voranmeldung; its §19 turnover belongs in no Kennziffer.
+      if (mode === 'small_business_19_ustg') return;
       for (const part of amounts) {
         const code = mode === 'standard_vat' ? (part.rate === 19 ? '81' : part.rate === 7 ? '86' : '87') : outgoingCodes[mode];
         add(type, invoice.id, invoice.number, date, code, mode === 'standard_vat' ? 'output' : 'information', { ...part, net: sign * part.net, vat: mode === 'standard_vat' ? sign * part.vat : 0 });

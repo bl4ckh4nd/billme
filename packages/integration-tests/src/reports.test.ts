@@ -712,11 +712,11 @@ describe('EÜR', () => {
       assert.equal(totalOf(report, '185', 2025) ?? 0, 0);
     });
 
-    test('the VAT preparation reports the sales as VAT-free (KZ 48) and never deducts input VAT', async () => {
+    test('the VAT preparation puts the §19 sales in no Kennziffer (no Voranmeldung) and never deducts input VAT', async () => {
       await saveReceiptFor('ku-eingang', 'KU-1');
       const q1 = await h.api.vat.getReport({ from: '2025-01-01', to: '2025-03-31' });
       assert.equal(q1.smallBusiness, true);
-      assert.deepEqual([q1.positions.find((p) => p.code === '48')?.basisCents, q1.positions.find((p) => p.code === '48')?.taxCents], [30000, 0]);
+      assert.ok(!q1.positions.some((p) => p.direction !== 'input' && p.basisCents !== 0), `no output position for §19 sales: ${JSON.stringify(q1.positions)}`);
       assert.equal(q1.outputVatCents, 0);
       assert.equal(q1.inputVatCents, 0, 'no Vorsteuerabzug for a Kleinunternehmer, whatever the receipt shows');
       assert.ok(q1.positions.filter((p) => p.direction === 'input').every((p) => p.taxCents === 0), 'input positions carry no tax');

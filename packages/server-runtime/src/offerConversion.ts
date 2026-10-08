@@ -1,5 +1,5 @@
 import {
-  buildInvoiceFromOffer, finalizeDocumentNumber, reserveDocumentNumber,
+  buildInvoiceFromOffer, finalizeDocumentNumber, localIsoDate, reserveDocumentNumber,
   type AuditActor, type TenantScope,
 } from '@billme/server-core';
 import { createPostgresBillingDependencies, type ServerDatabase } from '@billme/server-data';
@@ -48,7 +48,8 @@ export const convertServerOfferToInvoice = (
     throw new ApiError(409, `Zu diesem Angebot gibt es bereits die Auftragsbestätigung ${(order.rows[0] as { number: string }).number}; abgerechnet wird über Abschlags- und Schlussrechnung.`);
   }
   const now = new Date();
-  const date = new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Berlin', year: 'numeric', month: '2-digit', day: '2-digit' }).format(now);
+  // Business dates are local calendar days, like every other document date (see localIsoDate).
+  const date = localIsoDate(now);
   const due = new Date(`${date}T00:00:00Z`);
   due.setUTCDate(due.getUTCDate() + settings.legal.paymentTermsDays);
   const reservation = await reserveDocumentNumber(numbering, 'invoice', now);

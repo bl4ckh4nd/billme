@@ -83,7 +83,7 @@ import {
 import { SessionTokenService, checkSessionSecret, type AuthSession, type AuthSessionInfo } from './auth.js';
 import { createAuthStore, resolveSetupToken } from './authStore.js';
 import { buildAuditEntry, withInvoiceHistory, withOfferHistory } from './auditHistory.js';
-import { assertOfferContentEditable, assertInvoiceContentEditable, cancelUnpaidRevisionSource, chainIssueBodySchema, settleCorrectedSource, settledInvoiceStatus, issueDocumentChain, issuable, lockChainSource, postOpenedBillingDocument } from './documentIssuance.js';
+import { assertOfferContentEditable, assertInvoiceContentEditable, cancelUnpaidRevisionSource, chainIssueBodySchema, settleCorrectedSource, settledInvoiceStatus, issueDocumentChain, issuableIn, lockChainSource, postOpenedBillingDocument } from './documentIssuance.js';
 import { ApiError, registerErrorHandler, typedRoute } from './http.js';
 import { registerServerApiOrpc } from './orpc.js';
 import { registerProAccountingRoutes, type ProAccountingRouteOptions } from './proAccountingRoutes.js';
@@ -484,7 +484,7 @@ const registerBillingRoutes = (app: FastifyInstance, product: 'lite' | 'pro', pr
           if (!settings) throw new ApiError(409, 'Die Einstellungen müssen zuerst eingerichtet werden.');
           // The mode decides the VAT, so it is resolved before the snapshot (§19 UStG: a Kleinunternehmer shows none).
           nextInvoice.taxMode = resolveIssueTaxMode(nextInvoice.taxMode, settings);
-          if (nextInvoice.status !== 'draft') Object.assign(nextInvoice, issuable(nextInvoice, settings));
+          if (nextInvoice.status !== 'draft') Object.assign(nextInvoice, await issuableIn(transaction, session.scope, nextInvoice, settings));
           const taxSnapshot = keepChainTax(nextInvoice.taxSnapshot, calculateInvoiceTaxSnapshot(nextInvoice, settings));
           nextInvoice.taxSnapshot = taxSnapshot;
           nextInvoice.amount = taxSnapshot.grossAmount;

@@ -2025,3 +2025,17 @@ export const settledInvoiceStatus = async (session: PostgresQueryable, scope: Te
   // Removing the last payment reopens the invoice too.
   return invoice.status === 'paid' ? 'open' : invoice.status;
 };
+
+/**
+ * Kleinunternehmer turnover (§19 Abs. 2 UStG: vereinnahmte Entgelte) of `year` and the year before: payments on
+ * issued receivables by payment date, refunds included. A Kleinunternehmer shows no VAT, so gross is net.
+ */
+export const smallBusinessTurnover = async (session: PostgresQueryable, scope: TenantScope, year: number): Promise<{ priorYear: number; currentYear: number }> => {
+  const totals = new Map<string, number>();
+  for (const invoice of await createPostgresInvoiceRepository(session).list(scope)) {
+    if (invoice.status === 'draft' || !['invoice', 'advance_invoice', 'partial_invoice', 'final_invoice'].includes(invoice.documentKind ?? 'invoice')) continue;
+    for (const payment of invoice.payments) totals.set(payment.date.slice(0, 4), (totals.get(payment.date.slice(0, 4)) ?? 0) + Number(payment.amount));
+  }
+  const of = (y: number) => Math.round((totals.get(String(y)) ?? 0) * 100) / 100;
+  return { priorYear: of(year - 1), currentYear: of(year) };
+};

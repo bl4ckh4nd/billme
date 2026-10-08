@@ -19,6 +19,20 @@ export class InvoiceIssueError extends Error {
 
 const filled = (value: string | undefined | null): boolean => Boolean(value?.trim());
 
+/** §19 Abs. 1 UStG since 2025: net turnover (vereinnahmte Entgelte) of the previous and the current calendar year. */
+export interface SmallBusinessTurnover { priorYear: number; currentYear: number }
+export const SMALL_BUSINESS_PRIOR_YEAR_LIMIT = 25_000;
+export const SMALL_BUSINESS_CURRENT_YEAR_LIMIT = 100_000;
+
+/**
+ * Modes a Kleinunternehmer may invoice with: its domestic turnover is tax-free under §19, §13b does not
+ * apply to it (§13b Abs. 5 UStG), and §19 excludes the exemptions for exports and intra-EU supplies.
+ * Services whose place of supply is abroad are not taxable in Germany at all.
+ */
+const SMALL_BUSINESS_MODES: ReadonlySet<InvoiceTaxMode> = new Set(['small_business_19_ustg', 'non_taxable_outside_scope', 'intra_eu_service_reverse_charge']);
+
+const euro = (value: number) => new Intl.NumberFormat('de-DE', { style: 'currency', currency: 'EUR' }).format(value);
+
 /**
  * The tax mode a document is issued with. The schema defaults a missing mode to
  * standard VAT, so for a Kleinunternehmer a standard mode means "not chosen":
@@ -37,7 +51,7 @@ export const resolveIssueTaxMode = (taxMode: InvoiceTaxMode | undefined, setting
  * invoice date, so the stored document says what the PDF prints. Drafts are not
  * checked.
  */
-export const prepareInvoiceForIssue = <T extends Invoice>(invoice: T, settings: IssuerSettings): T => {
+export const prepareInvoiceForIssue = <T extends Invoice>(invoice: T, settings: IssuerSettings, turnover?: SmallBusinessTurnover): T => {
   const missing: string[] = [];
   const kind = invoice.documentKind ?? 'invoice';
   // Order confirmations and delivery notes are no invoices; corrections copy an issued one and must stay possible.
@@ -60,6 +74,16 @@ export const prepareInvoiceForIssue = <T extends Invoice>(invoice: T, settings: 
   const definition = getInvoiceTaxModeDefinition(mode);
   if (mode === 'small_business_19_ustg' && !settings.legal.smallBusinessRule) {
     missing.push('die Kleinunternehmerregelung ist in den Einstellungen nicht aktiv');
+  }
+  if (settings.legal.smallBusinessRule && !SMALL_BUSINESS_MODES.has(mode)) {
+    missing.push(`„${definition.label}“ ist für Kleinunternehmer nicht möglich (§19 UStG, §13b Abs. 5 UStG)`);
+  }
+  if (mode === 'small_business_19_ustg' && settings.legal.smallBusinessRule && turnover) {
+    if (turnover.priorYear > SMALL_BUSINESS_PRIOR_YEAR_LIMIT) {
+      missing.push(`der Vorjahresumsatz von ${euro(turnover.priorYear)} übersteigt ${euro(SMALL_BUSINESS_PRIOR_YEAR_LIMIT)}; die Kleinunternehmerregelung gilt in diesem Jahr nicht (§19 Abs. 1 UStG). Bitte in den Einstellungen abschalten`);
+    } else if (turnover.currentYear + Math.max(0, invoice.amount) > SMALL_BUSINESS_CURRENT_YEAR_LIMIT) {
+      missing.push(`mit dieser Rechnung übersteigt der Umsatz des Jahres (bisher ${euro(turnover.currentYear)} vereinnahmt) ${euro(SMALL_BUSINESS_CURRENT_YEAR_LIMIT)}; ab diesem Umsatz gilt die Regelbesteuerung (§19 Abs. 1 UStG). Bitte die Kleinunternehmerregelung abschalten und mit Umsatzsteuer abrechnen`);
+    }
   }
   if (definition.requiresBuyerVatId && !filled(invoice.taxMeta?.buyerVatId)) missing.push(`USt-IdNr. des Kunden fehlt (Pflicht bei „${definition.label}“)`);
   // §14a Abs. 1: an intra-EU supply or service names both VAT IDs; a domestic §13b invoice needs only the tax number.

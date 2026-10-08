@@ -18,7 +18,9 @@ import { addDays, asSmallBusiness, datevEvidence, draftInvoice, draftOffer, issu
  *   dated, as reverse charge without both VAT IDs, or as Kleinunternehmer by a
  *   tenant that is not one; a Kleinunternehmer's invoice showing VAT because the
  *   editor sent the default mode; no service date on the stored invoice; a
- *   refused issue still consuming an invoice number
+ *   refused issue still consuming an invoice number; a Kleinunternehmer issuing
+ *   under §13b, as export or intra-EU supply, or past the turnover limits of
+ *   §19 Abs. 1 UStG (25.000 € prior year, 100.000 € current year, received)
  * - immutability: an issued invoice's content, number or tax changed in place,
  *   an issued invoice set back to draft
  * - tax: the snapshot (net/VAT/gross per rate) lost or altered on save; mixed
@@ -208,6 +210,48 @@ for (const product of PRODUCTS) describe(`invoices (${product})`, () => {
         assert.equal(open.taxSnapshot!.vatAmount, 0);
         assert.equal(open.amount, 500);
         assert.match(open.taxSnapshot!.taxNotice ?? '', /19/);
+      });
+    });
+
+    test('a Kleinunternehmer cannot issue under §13b or as a tax-free export (§13b Abs. 5, §19 UStG)', async () => {
+      await asSmallBusiness(h.api, async () => {
+        for (const taxMode of ['reverse_charge_13b', 'export_third_country', 'intra_eu_supply_6a'] as const) {
+          const draft = await draftInvoice(h.api, { client: `KU ${taxMode}`, taxMode, taxMeta: { ...datevEvidence(product), buyerVatId: 'ATU12345678' } as never });
+          const refused = await issue(draft);
+          assert.equal(refused.status, 422, `${taxMode}: ${refused.text}`);
+          assert.match(refused.text, /für Kleinunternehmer nicht möglich/);
+        }
+        const abroad = await draftInvoice(h.api, { client: 'KU Ausland', taxMode: 'non_taxable_outside_scope', taxMeta: { ...datevEvidence(product), taxRuleConfirmed: true, buyerCountryCode: 'AT' } as never });
+        const abroadIssued = await issue(abroad);
+        assert.equal(abroadIssued.status, 200, `a service taxable abroad stays possible: ${abroadIssued.text}`);
+      });
+    });
+
+    const kuSale = async (api: typeof h.api, date: string, price: number, paidOn?: string) => {
+      const draft = await draftInvoice(api, { client: `Umsatz ${date} ${price}`, date, taxMode: 'small_business_19_ustg', taxMeta: datevEvidence(product) as never, items: [{ kind: 'item', description: 'Leistung', quantity: 1, price, total: price }] });
+      const response = await api.invoices.upsert({ reason: 'stellen', invoice: { ...draft, status: 'open' } }).then((invoice) => ({ invoice, error: undefined }), (error: Error) => ({ invoice: undefined, error }));
+      if (response.invoice && paidOn) await api.invoices.savePayment({ invoiceId: response.invoice.id, payment: { id: randomUUID(), date: paidOn, amount: price, method: 'bank' }, reason: 'Zahlung' });
+      return response;
+    };
+
+    test('a Kleinunternehmer stops at 100.000 € received in the year: the invoice that would cross it is refused', async (t) => {
+      const ku = await startProduct(product, t, 'invoices-ku-current');
+      await asSmallBusiness(ku.api, async () => {
+        const year = today().slice(0, 4);
+        assert.ok((await kuSale(ku.api, today(), 99_000, today())).invoice);
+        const crossing = await kuSale(ku.api, today(), 1_500);
+        assert.match(String(crossing.error?.message), /übersteigt der Umsatz des Jahres .*100\.000,00\s€/);
+        assert.ok((await kuSale(ku.api, today(), 1_000)).invoice, `exactly up to the limit is fine (${year})`);
+      });
+    });
+
+    test('a Kleinunternehmer with more than 25.000 € received last year cannot issue under §19 this year', async (t) => {
+      const ku = await startProduct(product, t, 'invoices-ku-prior');
+      await asSmallBusiness(ku.api, async () => {
+        const lastYear = `${Number(today().slice(0, 4)) - 1}-06-15`;
+        assert.ok((await kuSale(ku.api, lastYear, 25_500, lastYear)).invoice);
+        const refused = await kuSale(ku.api, today(), 100);
+        assert.match(String(refused.error?.message), /Vorjahresumsatz von 25\.500,00\s€/);
       });
     });
 

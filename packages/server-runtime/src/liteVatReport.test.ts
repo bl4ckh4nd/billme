@@ -24,7 +24,7 @@ test('Lite VAT preparation uses signed lifetime payments, all outgoing modes and
     const response = await app.inject({ method: 'GET', url: `/api/v1/lite/reports/vat?from=${from}&to=${to}`, headers });
     assert.equal(response.statusCode, 200, response.body); return response.json();
   };
-  const modes: Array<[InvoiceTaxMode, string]> = [['small_business_19_ustg', '48'], ['reverse_charge_13b', '60'], ['intra_eu_supply_6a', '41'], ['intra_eu_service_reverse_charge', '21'], ['export_third_country', '43'], ['vat_exempt_4_ustg', '48'], ['non_taxable_outside_scope', '45']];
+  const modes: Array<[InvoiceTaxMode, string]> = [['reverse_charge_13b', '60'], ['intra_eu_supply_6a', '41'], ['intra_eu_service_reverse_charge', '21'], ['export_third_country', '43'], ['vat_exempt_4_ustg', '48'], ['non_taxable_outside_scope', '45']];
   for (const [mode] of modes) await repositories.invoiceRepo.save(scope, {
     kind: 'invoice', tenantId, id: mode, number: mode, client: 'Buyer', clientEmail: 'buyer@example.test', date: '2026-10-03', dueDate: '2026-10-17', servicePeriod: '2026-10-01', amount: 100, status: 'open', history: [], payments: [], items: [], taxMode: mode,
     taxMeta: { buyerVatId: 'DE123456789', exemptionReasonOverride: 'Reviewed tax treatment' },
@@ -39,7 +39,7 @@ test('Lite VAT preparation uses signed lifetime payments, all outgoing modes and
   const november = await get('2026-11-01', '2026-11-30');
   assert.equal(september.outputVatCents, 1300); assert.equal(october.outputVatCents, 1300); assert.equal(november.outputVatCents, -650);
   for (const [, code] of modes) assert.ok(october.positions.some((position: { code: string; basisCents: number }) => position.code === code && position.basisCents >= 10000), `missing ${code}`);
-  assert.equal(october.positions.find((position: { code: string }) => position.code === '48').basisCents, 20000);
+  assert.equal(october.positions.find((position: { code: string }) => position.code === '48').basisCents, 10000, 'Kz 48 holds §4 exemptions only; §19 sales are in no Kennziffer');
   assert.equal(october.submissionReady, false);
   assert.ok(october.issues.some((issue: { code: string }) => issue.code === 'PAYMENT_RESIDUAL'));
   const csv = await app.inject({ method: 'GET', url: '/api/v1/lite/reports/vat/export/csv?from=2026-10-01&to=2026-10-31', headers });

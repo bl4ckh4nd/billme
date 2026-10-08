@@ -15,6 +15,7 @@ import {
   previewServerTransactionImport,
   rollbackServerImportBatch,
   unlinkServerTransaction,
+  periodClosedMessage,
 } from '@billme/server-data';
 import { ApiError, typedRoute } from './http.js';
 import { createMutationContext, requireDatabase, requireMutationSessionFor, requireSession, toMutationActor } from './runtimeContext.js';
@@ -168,6 +169,7 @@ const mapMutationError = (error: unknown): never => {
     throw new ApiError(409, error.message);
   }
   if (error.message === 'PAYMENT_ALLOCATION_INVALID') throw new ApiError(400, error.message);
+  if (error.message === 'LITE_PERIOD_CLOSED') throw new ApiError(409, periodClosedMessage((error as Error & { period?: string }).period ?? ''));
   throw error;
 };
 

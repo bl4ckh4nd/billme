@@ -11,6 +11,38 @@ const audit = (db: PostgresTransactionClient, scope: TenantScope, mutation: Acco
   return appendWithClient(db, scope, { occurredAt: changedAt(), reason: mutation.reason, actor: mutation.actor, action, subject: { entityType: type, entityId: id, tenantId: scope.tenantId }, change: { before, after } });
 };
 
+/**
+ * GoBD Festschreibung: a closed month (accounting_periods, status closed) takes no new, changed, deleted or
+ * re-matched cash entries, payments or bank links. Closing is final; corrections go into an open month.
+ */
+export const listLiteClosedPeriods = async (db: PostgresQueryable, scope: TenantScope) =>
+  (await rows<{ period: string; updated_at: string }>(db, "SELECT period, updated_at FROM accounting_periods WHERE tenant_id=$1 AND status='closed' ORDER BY period", [scope.tenantId]))
+    .map((row) => ({ period: row.period, closedAt: row.updated_at }));
+
+export const assertLitePeriodsOpen = async (db: PostgresQueryable, scope: TenantScope, dates: Array<string | undefined | null>) => {
+  const periods = [...new Set(dates.filter((date): date is string => Boolean(date)).map((date) => date.slice(0, 7)))];
+  if (!periods.length) return;
+  const closed = await rows<{ period: string }>(db, "SELECT period FROM accounting_periods WHERE tenant_id=$1 AND status='closed' AND period = ANY($2::text[])", [scope.tenantId, periods]);
+  if (closed.length) throw Object.assign(new Error('LITE_PERIOD_CLOSED'), { period: closed[0]!.period });
+};
+
+export const periodClosedMessage = (period: string) => `Der Monat ${period} ist festgeschrieben; Korrekturen bitte in einem offenen Monat buchen.`;
+
+export const closeLitePeriod = (db: PostgresQueryable, scope: TenantScope, period: string, today: string, mutation: AccountingMutationContext) => runInTransaction(db, async (client) => {
+  if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(period)) throw new Error('LITE_PERIOD_INVALID');
+  // A month is closed once it is over; the running month still takes entries.
+  if (period >= today.slice(0, 7)) throw new Error('LITE_PERIOD_INVALID');
+  const before = (await rows<{ status: string }>(client, 'SELECT status FROM accounting_periods WHERE tenant_id=$1 AND period=$2 FOR UPDATE', [scope.tenantId, period]))[0];
+  if (before?.status === 'closed') return { period, closed: true as const };
+  const [year, month] = period.split('-').map(Number);
+  const end = new Date(Date.UTC(year!, month!, 0)).toISOString().slice(0, 10);
+  const stamp = changedAt();
+  await client.query(`INSERT INTO accounting_periods (id,tenant_id,period,fiscal_year,status,starts_at,ends_at,created_at,updated_at) VALUES ($1,$2,$3,$4,'closed',$5,$6,$7,$7)
+    ON CONFLICT (tenant_id,period) DO UPDATE SET status='closed', updated_at=EXCLUDED.updated_at`, [randomUUID(), scope.tenantId, period, year, `${period}-01`, end, stamp]);
+  await audit(client, scope, mutation, 'accounting_period', period, 'lite.period.close', before ?? null, { period, status: 'closed' });
+  return { period, closed: true as const };
+});
+
 export const listLiteCashEntries = async (db: PostgresQueryable, scope: TenantScope) => {
   const result = await rows(db, `SELECT m.*,t.date AS bank_date,t.account_id FROM lite_cash_entries m LEFT JOIN transactions t ON t.tenant_id=m.tenant_id AND t.id=m.matched_transaction_id WHERE m.tenant_id=$1 AND m.deleted_at IS NULL ORDER BY COALESCE(t.date,m.cash_date) DESC,m.id`, [scope.tenantId]);
   return result.map((row) => liteCashEntrySchema.parse({ id: row.id, cashDate: row.bank_date ?? row.cash_date, originalCashDate: row.cash_date, amountCents: Number(row.amount_cents), currency: row.currency, flowType: row.flow_type, counterparty: row.counterparty, purpose: row.purpose, receiptId: row.receipt_id ?? undefined, matchedTransactionId: row.matched_transaction_id ?? undefined, accountId: row.account_id ?? undefined, updatedAt: row.updated_at }));
@@ -55,6 +87,7 @@ export const saveLiteCashEntry = (db: PostgresQueryable, scope: TenantScope, inp
   }
   if (before && before.matched_transaction_id) throw new Error('LITE_CASH_MATCHED');
   if (before && expectedUpdatedAt !== before.updated_at) throw new Error('LITE_CASH_STALE');
+  await assertLitePeriodsOpen(client, scope, [entry.cashDate, before?.cash_date as string | undefined]);
   if (entry.receiptId && !(await rows(client, 'SELECT id FROM lite_receipts WHERE tenant_id=$1 AND id=$2', [scope.tenantId, entry.receiptId])).length) throw new Error('LITE_CASH_REFERENCE_INVALID');
   const stamp = changedAt(before?.updated_at as string | undefined);
   const saved = await rows(client, `INSERT INTO lite_cash_entries (id,tenant_id,cash_date,amount_cents,currency,flow_type,counterparty,purpose,receipt_id,updated_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) ON CONFLICT (id) DO UPDATE SET cash_date=EXCLUDED.cash_date,amount_cents=EXCLUDED.amount_cents,currency=EXCLUDED.currency,flow_type=EXCLUDED.flow_type,counterparty=EXCLUDED.counterparty,purpose=EXCLUDED.purpose,receipt_id=EXCLUDED.receipt_id,updated_at=EXCLUDED.updated_at WHERE lite_cash_entries.tenant_id=EXCLUDED.tenant_id AND lite_cash_entries.deleted_at IS NULL RETURNING id`, [entry.id, scope.tenantId, entry.cashDate, entry.amountCents, entry.currency, entry.flowType, entry.counterparty, entry.purpose, entry.receiptId ?? null, stamp]);
@@ -69,6 +102,7 @@ export const matchLiteCashEntry = (db: PostgresQueryable, scope: TenantScope, en
   const bankId = transactionId ?? current.matched_transaction_id;
   const bank = bankId ? (await rows(client, "SELECT * FROM transactions WHERE tenant_id=$1 AND id=$2 AND (deleted_at IS NULL OR deleted_at='') FOR UPDATE", [scope.tenantId, bankId]))[0] : undefined;
   const before = (await rows(client, 'SELECT * FROM lite_cash_entries WHERE tenant_id=$1 AND id=$2 AND deleted_at IS NULL FOR UPDATE', [scope.tenantId, entryId]))[0]!;
+  await assertLitePeriodsOpen(client, scope, [before.cash_date as string, bank?.date as string | undefined]);
   if (transactionId) {
     if (!bank || bank.status !== 'booked' || bank.linked_invoice_id || Math.round(Number(bank.amount) * 100) !== Number(before.amount_cents) || before.currency !== 'EUR') throw new Error('LITE_CASH_MATCH_INVALID');
     if (before.matched_transaction_id === transactionId) return (await listLiteCashEntries(client, scope)).find((row) => row.id === entryId)!;
@@ -85,6 +119,7 @@ export const deleteLiteCashEntry = (db: PostgresQueryable, scope: TenantScope, i
   if (!before) throw new Error('LITE_CASH_NOT_FOUND');
   if (before.matched_transaction_id) throw new Error('LITE_CASH_MATCHED');
   if (before.updated_at !== expectedUpdatedAt) throw new Error('LITE_CASH_STALE');
+  await assertLitePeriodsOpen(client, scope, [before.cash_date as string]);
   await client.query('UPDATE lite_cash_entries SET deleted_at=$1 WHERE tenant_id=$2 AND id=$3', [changedAt(), scope.tenantId, id]);
   await audit(client, scope, mutation, 'lite_cash_entry', id, 'lite.cash.reverse', before, null);
   return { ok: true as const };

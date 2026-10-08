@@ -41,7 +41,9 @@ import { datevEvidence, draftInvoice, issueInvoice, today } from './fixtures.js'
  *   five, partial payments ignored
  * - cash entries: lost updates (expectedUpdatedAt), edits of matched entries,
  *   bad amounts/dates/currencies/references, a sign that contradicts the flow,
- *   deleted ids reused, double counting in the EÜR once matched to the bank
+ *   deleted ids reused, double counting in the EÜR once matched to the bank;
+ *   a festgeschriebener month still taking new, changed or deleted entries,
+ *   payments or bank links, the running month closable, closing not audited
  * - receipts and files: lost updates, unreviewed tax data marked reviewed, file
  *   bytes changed, wrong mime/content, XML entities, size and count limits
  * - persistence: imports, batches, links, cash, receipts and file bytes lost on
@@ -1222,6 +1224,40 @@ for (const product of PRODUCTS) describe(`transactions, banking and cash (${prod
   });
 
   // Pro hides the cash book (EurView); its routes are Lite-only.
+  if (product === 'lite') describe('festgeschriebene Monate (GoBD)', () => {
+    // A month no other test books into, so closing it changes nothing elsewhere.
+    const month = `${YEAR - 3}-02`;
+    test('a closed month takes no cash entries, payments or bank links; the running month cannot be closed', async () => {
+      const before = await saveEntry({ cashDate: `${month}-10`, purpose: 'vor dem Festschreiben' });
+      const invoice = await newInvoice('Festschreibung');
+      const line = await bankLine(invoice.amount, { date: `${month}-12` });
+      const running = new Date().toLocaleDateString('sv-SE').slice(0, 7);
+      assert.equal((await h.raw('POST', '/cash/periods/close', { period: running, reason: 'zu früh' })).status, 400, 'the running month stays open');
+      assert.equal((await h.raw('POST', '/cash/periods/close', { period: '2026-13', reason: 'x' })).status, 400);
+
+      assert.deepEqual(await h.api.cash.closePeriod({ period: month, reason: 'Kasse abgeschlossen' }), { period: month, closed: true });
+      assert.deepEqual(await h.api.cash.closePeriod({ period: month, reason: 'nochmal' }), { period: month, closed: true }, 'idempotent');
+      assert.ok((await h.api.cash.listClosedPeriods()).some((entry) => entry.period === month));
+
+      const elsewhere = await saveEntry({ cashDate: `${YEAR}-08-07` });
+      const refused = [
+        ['new entry', await h.raw('POST', '/cash/entries', { entry: entryInput({ cashDate: `${month}-20` }), reason: 'nachgetragen' })],
+        ['moved into it', await h.raw('POST', '/cash/entries', { entry: entryInput({ cashDate: `${month}-20`, id: elsewhere.id }), expectedUpdatedAt: elsewhere.updatedAt, reason: 'verschoben' })],
+        ['edit', await h.raw('POST', '/cash/entries', { entry: { ...entryInput({ id: before.id, cashDate: before.cashDate }), purpose: 'geändert' }, expectedUpdatedAt: before.updatedAt, reason: 'geändert' })],
+        ['delete', await h.raw('DELETE', `/cash/entries/${before.id}`, { expectedUpdatedAt: before.updatedAt, reason: 'gelöscht' })],
+        ['payment', await h.raw('POST', `/invoices/${invoice.id}/payments`, { payment: { id: randomUUID(), date: `${month}-15`, amount: 10, method: 'bar' }, reason: 'Zahlung' })],
+        ['bank link', await h.raw('POST', `/transactions/${line.id}/link`, { invoiceId: invoice.id, reason: 'Zuordnung' })],
+      ] as const;
+      for (const [label, response] of refused) {
+        assert.equal(response.status, 409, `${label}: ${response.text}`);
+        assert.match(response.text, new RegExp(`Monat ${month} ist festgeschrieben`), label);
+      }
+      assert.ok((await h.api.cash.listEntries()).some((entry) => entry.id === before.id && entry.purpose === 'vor dem Festschreiben'), 'the entry is unchanged');
+      assert.ok(await saveEntry({ cashDate: `${YEAR}-08-08` }), 'open months still take entries');
+      assert.ok((await auditCsv()).includes('lite.period.close'));
+    });
+  });
+
   if (product === 'lite') describe('matching cash entries to bank lines', () => {
     const matchedPair = async (amount = -59.5) => {
       const accountId = (await newAccount()).id;

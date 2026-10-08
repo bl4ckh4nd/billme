@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { previewCsv, type CsvMapping, type CsvPreviewResult, commitCsv } from '@billme/desktop-services/csvImport';
 import { isReceivableDocumentKind, type Invoice, type TenantScope } from '@billme/server-core';
 import { createPostgresBillingDependencies, creditedAmount, settledInvoiceStatus } from './billing.js';
+import { assertLitePeriodsOpen } from './liteCash.js';
 import { appendWithClient } from './audit.js';
 import { runInTransaction, type PostgresQueryable } from './connection.js';
 import type { ServerDatabase, ServerDatabaseSession } from '../database.js';
@@ -629,6 +630,7 @@ export const linkServerTransaction = async (
   const invoice = await dependencies.invoiceRepo.getById(scope, invoiceId);
   if (!invoice) throw new Error('INVOICE_NOT_FOUND');
   if (['draft', 'cancelled'].includes(invoice.status) || ['order_confirmation', 'delivery_note', 'credit_note', 'cancellation_invoice'].includes(invoice.documentKind ?? 'invoice')) throw new Error('PAYMENT_ALLOCATION_INVALID');
+  await assertLitePeriodsOpen(session, scope, [transaction.date]);
   const existingPayment = (invoice.payments ?? []).find((payment) => payment.id === transactionPaymentId(transaction.id));
   if (transaction.linkedInvoiceId) {
     if (existingPayment && (appliedAmountCents === undefined || Math.round(existingPayment.amount * 100) === appliedAmountCents)) return { success: true, invoice };
@@ -666,6 +668,7 @@ export const unlinkServerTransaction = async (
   await query(session, 'SELECT id FROM invoices WHERE tenant_id=$1 AND id=$2 FOR UPDATE', [tenant(scope), transaction.linkedInvoiceId]);
   const dependencies = createPostgresBillingDependencies(session);
   const invoice = await dependencies.invoiceRepo.getById(scope, transaction.linkedInvoiceId);
+  await assertLitePeriodsOpen(session, scope, [transaction.date]);
   if (invoice) {
     // Payment identity is transaction-derived.  Filtering by date and amount
     // would remove a legitimate second payment with the same values.

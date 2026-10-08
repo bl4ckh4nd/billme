@@ -485,6 +485,8 @@ export const ipcRoutes = {
   'cash:deleteEntry': { channel: 'cash:deleteEntry', args: z.object({ id: z.string().min(1), expectedUpdatedAt: z.string(), reason: z.string().trim().min(1) }), result: okSchema },
   'cash:matchEntry': { channel: 'cash:matchEntry', args: z.object({ id: z.string().min(1), transactionId: z.string().min(1), expectedCashDate: z.string(), reason: z.string().trim().min(1) }), result: liteCashEntrySchema },
   'cash:unmatchEntry': { channel: 'cash:unmatchEntry', args: z.object({ id: z.string().min(1), reason: z.string().trim().min(1) }), result: liteCashEntrySchema },
+  'cash:listClosedPeriods': { channel: 'cash:listClosedPeriods', args: z.undefined(), result: z.array(z.object({ period: z.string(), closedAt: z.string() })) },
+  'cash:closePeriod': { channel: 'cash:closePeriod', args: z.object({ period: z.string().regex(/^\d{4}-(0[1-9]|1[0-2])$/), reason: z.string().trim().min(1) }), result: z.object({ period: z.string(), closed: z.literal(true) }) },
   'cash:listFiles': { channel: 'cash:listFiles', args: z.object({ receiptId: z.string().min(1) }), result: z.array(liteReceiptFileSchema) },
   'cash:uploadFile': { channel: 'cash:uploadFile', args: liteReceiptUploadSchema.extend({ receiptId: z.string().min(1) }), result: liteReceiptFileSchema },
   'cash:downloadFile': { channel: 'cash:downloadFile', args: z.object({ id: z.string().min(1) }), result: liteReceiptFileSchema.extend({ contentBase64: z.string() }) },

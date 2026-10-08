@@ -54,7 +54,7 @@ const TRANSACTION_UNLINK_REASON = 'Zahlungsverknüpfung aufgehoben';
 
 const SHARED_HTTP_ROUTE_KEYS = new Set<string>([
   'vat:getReport', 'vat:exportCsv', 'vat:exportPdf',
-  'cash:listEntries', 'cash:listReceipts', 'cash:saveEntry', 'cash:saveReceipt', 'cash:deleteEntry', 'cash:matchEntry', 'cash:unmatchEntry', 'cash:listFiles', 'cash:uploadFile', 'cash:downloadFile',
+  'cash:listEntries', 'cash:listReceipts', 'cash:saveEntry', 'cash:saveReceipt', 'cash:deleteEntry', 'cash:matchEntry', 'cash:unmatchEntry', 'cash:listClosedPeriods', 'cash:closePeriod', 'cash:listFiles', 'cash:uploadFile', 'cash:downloadFile',
   'invoices:list', 'invoices:upsert', 'invoices:delete', 'invoices:savePayment', 'invoices:removePayment',
   'offers:list', 'offers:upsert', 'offers:delete',
   'clients:list', 'clients:upsert', 'clients:delete',
@@ -178,6 +178,8 @@ export const createSharedHttpInvoke = ({ product, routes, reasons, transport }: 
       }
       case 'cash:listEntries': return requestJson('GET', `${prefix}/cash/entries`, resultOf(key));
       case 'cash:listReceipts': return requestJson('GET', `${prefix}/cash/receipts`, resultOf(key));
+      case 'cash:listClosedPeriods': return requestJson('GET', `${prefix}/cash/periods`, resultOf(key));
+      case 'cash:closePeriod': return requestJson('POST', `${prefix}/cash/periods/close`, resultOf(key), args);
       case 'cash:saveEntry': return requestJson('POST', `${prefix}/cash/entries`, resultOf(key), args);
       case 'cash:saveReceipt': return requestJson('POST', `${prefix}/cash/receipts`, resultOf(key), args);
       case 'cash:deleteEntry': {

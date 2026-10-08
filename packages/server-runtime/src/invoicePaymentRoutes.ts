@@ -1,7 +1,7 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { invoiceSchema, paymentSchema, type Payment } from '@billme/server-core';
-import { createPostgresBillingDependencies } from '@billme/server-data';
+import { assertLitePeriodsOpen, createPostgresBillingDependencies, periodClosedMessage } from '@billme/server-data';
 import { buildAuditEntry, withInvoiceHistory } from './auditHistory.js';
 import { settledInvoiceStatus } from './documentIssuance.js';
 import { isReceivableDocumentKind } from '@billme/server-core';
@@ -52,6 +52,9 @@ export const registerInvoicePaymentRoutes = (app: FastifyInstance, product: 'lit
             throw new ApiError(409, 'Zahlung wurde inzwischen geändert. Bitte Rechnung neu laden.');
           }
           if (!current && body.expectedPayment) throw new ApiError(409, 'Zahlung wurde inzwischen entfernt. Bitte Rechnung neu laden.');
+          // A festgeschriebener month takes no new, changed or removed payments.
+          await assertLitePeriodsOpen(transaction, session.scope, [current?.date, operation === 'save' ? body.payment?.date : undefined])
+            .catch((error: Error & { period?: string }) => { throw error.message === 'LITE_PERIOD_CLOSED' ? new ApiError(409, periodClosedMessage(error.period ?? '')) : error; });
           const payments = before.payments.filter((payment) => payment.id !== paymentId);
           if (operation === 'save') payments.push(body.payment!);
           const next = { ...before, status: before.status === 'paid' ? 'open' as const : before.status, payments, updatedAt: new Date().toISOString() };

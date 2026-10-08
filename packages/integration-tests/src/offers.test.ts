@@ -935,7 +935,7 @@ for (const product of PRODUCTS) describe(`offers and the document chain (${produ
       const invoice = await settle(order, 'final_invoice', 119);
       const credit = await issue({ operation: 'correction', kind: 'credit_note', invoiceId: invoice.id, amount: 11.9 });
       assert.equal(credit.taxSnapshot?.grossAmount, 11.9);
-      assert.match(credit.items[0].description, /^Gutschrift zur Rechnung .* über /);
+      assert.match(credit.items[0].description, /^Rechnungskorrektur zur Rechnung .* über /, 'not "Gutschrift", which §14 Abs. 2 UStG reserves for self-billing');
       assert.equal(billable(credit)[0].price, 200);
       assert.equal(billable(credit)[0].discountPercent, 50);
       assert.equal(billable(credit)[0].quantity, 0.1);

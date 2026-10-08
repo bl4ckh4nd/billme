@@ -390,7 +390,8 @@ const buildSettlement = (order: Invoice, documents: Invoice[], params: CreateSet
   return { ...document, documentKind: params.kind, sourceDocumentId: order.id, rootDocumentId: order.rootDocumentId ?? order.id };
 };
 
-const CORRECTION_TITLES: Record<CorrectionDocumentKind, string> = { credit_note: 'Gutschrift', cancellation_invoice: 'Stornorechnung' };
+// Printed on the document: a seller's partial correction is a "Rechnungskorrektur", not a "Gutschrift" (§14 Abs. 2 UStG means self-billing).
+const CORRECTION_TITLES: Record<CorrectionDocumentKind, string> = { credit_note: 'Rechnungskorrektur', cancellation_invoice: 'Stornorechnung' };
 
 /**
  * Lines for correcting a document whose own lines cannot be prorated (a final

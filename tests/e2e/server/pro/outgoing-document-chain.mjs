@@ -220,6 +220,9 @@ export const runProOutgoingDocumentChainScenario = async (page) => {
   const { stdout: text } = await promisify(execFile)('pdftotext', ['-layout', creditPdf, '-']);
   // One cent-exact line per tax rate of the credited invoice, not a quantity factor.
   expect(text).toContain('20,00');
+  // A seller's correction prints as Rechnungskorrektur; "Gutschrift" means self-billing (§14 Abs. 2 UStG).
+  expect(text).toMatch(/Rechnungskorrektur(-Nr)? .*RE-/);
+  expect(text).not.toMatch(/^\s*Gutschrift /m);
   expect(text).toMatch(/Anteilig 19 % USt\s+1\s+14,24 €/);
   expect(text).toMatch(/Anteilig 7 % USt\s+1\s+2,85 €/);
   await fs.writeFile(path.join(directory, 'credit-note.txt'), text);

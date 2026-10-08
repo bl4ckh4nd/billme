@@ -254,13 +254,14 @@ export const replacePlaceholders = (
 ): string => {
   if (!text) return '';
   const taxSnapshot = resolveInvoiceTaxSnapshot(invoice, settings);
-  const documentLabel = getInvoiceDocumentLabel(invoice.documentKind);
+  // On paper a seller's correction is a "Rechnungskorrektur": a "Gutschrift" in §14 Abs. 2 UStG is self-billing by the customer.
+  const documentLabel = invoice.documentKind === 'credit_note' ? 'Rechnungskorrektur' : getInvoiceDocumentLabel(invoice.documentKind);
   // German compounds need a linking "s": Rechnungs-Nr, Auftragsbestätigungs-Nr, but Lieferschein-Nr.
   const numberLabel = /(rechnung|bestätigung)$/i.test(documentLabel) ? `${documentLabel}s-Nr` : `${documentLabel}-Nr`;
 
   const dataMap: Record<string, string> = {
     'invoice.number': invoice.number,
-    'invoice.documentLabel': getInvoiceDocumentLabel(invoice.documentKind),
+    'invoice.documentLabel': documentLabel,
     'invoice.date': formatDate(invoice.date),
     'invoice.dueDate': formatDate(invoice.dueDate),
     'invoice.servicePeriod': formatServicePeriod(invoice.servicePeriod) || formatDate(invoice.date),

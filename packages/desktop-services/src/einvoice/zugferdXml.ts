@@ -103,7 +103,8 @@ export const buildZugferdXml = (doc: NormalizedEinvoice): string => {
   </rsm:ExchangedDocument>
   <rsm:SupplyChainTradeTransaction>
 ${linesXml}
-    <ram:ApplicableHeaderTradeAgreement>
+    <ram:ApplicableHeaderTradeAgreement>${doc.buyerReference ? `
+      <ram:BuyerReference>${xmlEscape(doc.buyerReference)}</ram:BuyerReference>` : ''}
       <ram:SellerTradeParty>
         <ram:Name>${xmlEscape(doc.seller.name)}</ram:Name>
         <ram:PostalTradeAddress>
@@ -126,14 +127,24 @@ ${linesXml}
         ${doc.buyerVatId ? `<ram:SpecifiedTaxRegistration><ram:ID schemeID="VA">${xmlEscape(doc.buyerVatId)}</ram:ID></ram:SpecifiedTaxRegistration>` : ''}
       </ram:BuyerTradeParty>
     </ram:ApplicableHeaderTradeAgreement>
-    <ram:ApplicableHeaderTradeDelivery/>
+    ${doc.delivery && 'date' in doc.delivery ? `<ram:ApplicableHeaderTradeDelivery>
+      <ram:ActualDeliverySupplyChainEvent>
+        <ram:OccurrenceDateTime>
+          <udt:DateTimeString format="102">${doc.delivery.date.replaceAll('-', '')}</udt:DateTimeString>
+        </ram:OccurrenceDateTime>
+      </ram:ActualDeliverySupplyChainEvent>
+    </ram:ApplicableHeaderTradeDelivery>` : '<ram:ApplicableHeaderTradeDelivery/>'}
     <ram:ApplicableHeaderTradeSettlement>
       <ram:InvoiceCurrencyCode>${doc.currency}</ram:InvoiceCurrencyCode>
       <ram:SpecifiedTradeSettlementPaymentMeans>
         <ram:TypeCode>${doc.seller.iban ? '58' : '1'}</ram:TypeCode>
         ${doc.seller.iban ? `<ram:PayeePartyCreditorFinancialAccount><ram:IBANID>${xmlEscape(doc.seller.iban)}</ram:IBANID></ram:PayeePartyCreditorFinancialAccount>` : ''}
       </ram:SpecifiedTradeSettlementPaymentMeans>
-${taxGroupsXml}
+${taxGroupsXml}${doc.delivery && 'start' in doc.delivery ? `
+      <ram:BillingSpecifiedPeriod>
+        <ram:StartDateTime><udt:DateTimeString format="102">${doc.delivery.start.replaceAll('-', '')}</udt:DateTimeString></ram:StartDateTime>
+        <ram:EndDateTime><udt:DateTimeString format="102">${doc.delivery.end.replaceAll('-', '')}</udt:DateTimeString></ram:EndDateTime>
+      </ram:BillingSpecifiedPeriod>` : ''}
 ${allowancesXml}
       <ram:SpecifiedTradePaymentTerms>
         <ram:DueDateDateTime>
@@ -147,7 +158,11 @@ ${allowancesXml}
         <ram:TaxTotalAmount currencyID="${doc.currency}">${formatAmount(doc.totals.taxTotal)}</ram:TaxTotalAmount>
         <ram:GrandTotalAmount>${formatAmount(doc.totals.grandTotal)}</ram:GrandTotalAmount>
         <ram:DuePayableAmount>${formatAmount(doc.totals.grandTotal)}</ram:DuePayableAmount>
-      </ram:SpecifiedTradeSettlementHeaderMonetarySummation>
+      </ram:SpecifiedTradeSettlementHeaderMonetarySummation>${doc.precedingInvoice ? `
+      <ram:InvoiceReferencedDocument>
+        <ram:IssuerAssignedID>${xmlEscape(doc.precedingInvoice.number)}</ram:IssuerAssignedID>
+        <ram:FormattedIssueDateTime><qdt:DateTimeString format="102">${doc.precedingInvoice.date.replaceAll('-', '')}</qdt:DateTimeString></ram:FormattedIssueDateTime>
+      </ram:InvoiceReferencedDocument>` : ''}
     </ram:ApplicableHeaderTradeSettlement>
   </rsm:SupplyChainTradeTransaction>
 </rsm:CrossIndustryInvoice>

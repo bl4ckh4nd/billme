@@ -30,7 +30,7 @@ export const createDocumentExportPreparer = (options: {
     `${connection.baseUrl.replace(/\/+$/, '')}/api/v1/${options.product}/documents/${kind}/${encodeURIComponent(id)}/render-context${level ? `?level=${level}` : ''}`,
     { headers: options.auth === 'bearer' ? { authorization: `Bearer ${connection.token}` } : { 'x-billme-local-token': connection.token } },
   );
-  const payload = await response.json() as { message?: string; document?: unknown; settings?: AppSettings | null; dunning?: { levelName: string } };
+  const payload = await response.json() as { message?: string; document?: unknown; settings?: AppSettings | null; dunning?: { levelName: string }; source?: { number: string; date: string } };
   if (!response.ok) throw new Error(payload.message ?? `Beleg konnte nicht geladen werden (HTTP ${response.status}).`);
 
   const { document } = toDesktopRenderContext({ document: serverRenderDocumentSchema.parse(payload.document) });
@@ -42,7 +42,7 @@ export const createDocumentExportPreparer = (options: {
   if (kind !== 'invoice' || !settings?.eInvoice?.enabled || !isBillingDocumentKind(invoice.documentKind)) {
     return { suggestedName };
   }
-  const xml = buildZugferdXml(normalizeInvoiceForEinvoice(invoice, settings));
+  const xml = buildZugferdXml(normalizeInvoiceForEinvoice(invoice, settings, payload.source));
   return {
     suggestedName,
     finalize: (pdf) => embedZugferdInPdf({ pdfBytes: pdf, xml, invoiceNumber: invoice.number }),

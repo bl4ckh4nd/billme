@@ -63,6 +63,8 @@ export const invoiceTaxModeSchema = z.enum([
 export const invoiceTaxMetaSchema = z.object({
   legalReference: z.string().optional(),
   exemptionReasonOverride: z.string().optional(),
+  /** BT-10 Käuferreferenz, e.g. the Leitweg-ID public buyers require on e-invoices. */
+  buyerReference: z.string().trim().max(200).optional(),
   buyerVatId: z.string().optional(),
   sellerVatId: z.string().optional(),
   defaultVatRate: z.number().min(0).max(100).optional(),

@@ -30,6 +30,12 @@ export type NormalizedEinvoice = {
   };
   buyer: NormalizedAddress;
   buyerVatId?: string;
+  /** BT-10 Käuferreferenz (Leitweg-ID). */
+  buyerReference?: string;
+  /** BT-25/26: the invoice a credit note or cancellation corrects. */
+  precedingInvoice?: { number: string; date: string };
+  /** BT-72 delivery date, or BG-14 service period when the invoice states a range. */
+  delivery?: { date: string } | { start: string; end: string };
   lines: Array<{
     lineId: string;
     name: string;
@@ -142,9 +148,18 @@ const assertRequired = (label: string, value: string) => {
   }
 };
 
+/** Service date or "YYYY-MM-DD bis YYYY-MM-DD" period of the invoice, as the e-invoice states it. */
+const deliveryOf = (servicePeriod: string | undefined): NormalizedEinvoice['delivery'] => {
+  const range = servicePeriod?.match(/^(\d{4}-\d{2}-\d{2}) bis (\d{4}-\d{2}-\d{2})$/);
+  if (range) return { start: range[1]!, end: range[2]! };
+  const date = servicePeriod?.match(/^\d{4}-\d{2}-\d{2}$/)?.[0];
+  return date ? { date } : undefined;
+};
+
 export const normalizeInvoiceForEinvoice = (
   invoice: Invoice,
   settings: AppSettings,
+  source?: { number: string; date: string },
 ): NormalizedEinvoice => {
   const seller = normalizeSellerAddress(settings);
   const buyer = normalizeBuyerAddress(invoice);
@@ -208,15 +223,19 @@ export const normalizeInvoiceForEinvoice = (
   const taxTotal = taxSnapshot.vatAmount;
   const grandTotal = taxSnapshot.grossAmount;
 
+  const typeCode = invoice.documentKind === 'credit_note' || invoice.documentKind === 'cancellation_invoice' ? '381' as const : '380' as const;
   return {
     invoiceNumber: invoice.number.trim(),
-    typeCode: invoice.documentKind === 'credit_note' || invoice.documentKind === 'cancellation_invoice' ? '381' : '380',
+    typeCode,
     issueDate: toIsoDate(invoice.date, 'date'),
     dueDate: toIsoDate(invoice.dueDate, 'dueDate'),
     currency: 'EUR',
     seller,
     buyer,
     buyerVatId: invoice.taxMeta?.buyerVatId?.trim() || undefined,
+    buyerReference: (invoice.taxMeta as { buyerReference?: string } | undefined)?.buyerReference?.trim() || undefined,
+    precedingInvoice: typeCode === '381' && source ? { number: source.number, date: toIsoDate(source.date, 'source.date') } : undefined,
+    delivery: deliveryOf(invoice.servicePeriod),
     lines,
     allowances,
     totals: {

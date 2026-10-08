@@ -21,6 +21,9 @@ import { configureLite, issueDated, line } from './reports-fixtures.js';
  *   sum is not the tax total, discounts, optional lines billed, dates, number
  * - parties: seller VAT ID / tax number missing, buyer address cut, a special
  *   character (& < > ") breaking the XML, a non-German country ignored
+ * - references: no delivery date (BT-72) or service period (BG-14) although the
+ *   invoice states one, a correction without the invoice it corrects (BT-25),
+ *   the Leitweg-ID (BT-10) lost, any of them out of CII schema order
  * - tax category per mode: standard S, Kleinunternehmer E, reverse charge AE,
  *   intra-EU supply K, export G, exempt E, outside scope O; rates not forced
  *   to 0, exemption reason missing, buyer VAT ID lost
@@ -295,6 +298,31 @@ describe('e-invoice export (Lite)', () => {
       assert.equal(Number(first(monetary, 'ram:GrandTotalAmount')), 238);
       assert.equal(Number(first(monetary, 'ram:TaxTotalAmount')), 38);
       assert.equal(blocks(xml, 'ram:IssueDateTime')[0]!.includes(date102('2026-06-12')), true);
+      const settlement = blocks(xml, 'ram:ApplicableHeaderTradeSettlement')[0]!;
+      const referenced = blocks(settlement, 'ram:InvoiceReferencedDocument')[0];
+      assert.ok(referenced, 'BT-25: the corrected invoice is referenced');
+      assert.equal(first(referenced!, 'ram:IssuerAssignedID'), source.number);
+      assert.ok(referenced!.includes(`format="102">${date102('2026-06-10')}<`), 'BT-26: its date');
+      assert.ok(settlement.indexOf('</ram:SpecifiedTradeSettlementHeaderMonetarySummation>') < settlement.indexOf('<ram:InvoiceReferencedDocument>'), 'CII order: after the totals');
+    });
+
+    test('delivery date (BT-72), service period (BG-14) and Leitweg-ID (BT-10) in schema order', async () => {
+      const single = await issueDated(h.api, { client: 'Lieferdatum GmbH', date: '2026-06-20', servicePeriod: '2026-06-18', items: [line('Leistung', 100, 19)] });
+      const delivery = blocks((await exportInvoice(single.id)).xml, 'ram:ApplicableHeaderTradeDelivery')[0]!;
+      assert.ok(delivery.includes(`<ram:OccurrenceDateTime>`) && delivery.includes(date102('2026-06-18')), 'BT-72 from the service date');
+
+      const draft = await draftInvoice(h.api, { client: 'Stadtverwaltung', date: '2026-06-30', items: [line('Wartung', 100, 19)], taxMeta: { buyerReference: '04011000-12345-67' } as never });
+      const periodic = await h.api.invoices.upsert({ reason: 'Rechnung gestellt', invoice: { ...draft, servicePeriod: '2026-06-01 bis 2026-06-30', status: 'open' } });
+      const { xml } = await exportInvoice(periodic.id);
+      const agreement = blocks(xml, 'ram:ApplicableHeaderTradeAgreement')[0]!;
+      assert.equal(first(agreement, 'ram:BuyerReference'), '04011000-12345-67');
+      assert.ok(agreement.indexOf('<ram:BuyerReference>') < agreement.indexOf('<ram:SellerTradeParty>'), 'BT-10 is the first child of the agreement');
+      const settlement = blocks(xml, 'ram:ApplicableHeaderTradeSettlement')[0]!;
+      const period = blocks(settlement, 'ram:BillingSpecifiedPeriod')[0]!;
+      assert.ok(blocks(period, 'ram:StartDateTime')[0]!.includes(date102('2026-06-01')) && blocks(period, 'ram:EndDateTime')[0]!.includes(date102('2026-06-30')));
+      assert.ok(settlement.lastIndexOf('</ram:ApplicableTradeTax>') < settlement.indexOf('<ram:BillingSpecifiedPeriod>'), 'CII order: after the VAT breakdown');
+      assert.ok(settlement.indexOf('</ram:BillingSpecifiedPeriod>') < settlement.indexOf('<ram:SpecifiedTradePaymentTerms>'), 'CII order: before the payment terms');
+      assert.ok(!blocks(xml, 'ram:ApplicableHeaderTradeDelivery')[0], 'a period is not also a single delivery date');
     });
 
     test('a partial credit note is 381 with the credited share of the lines', async () => {

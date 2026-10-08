@@ -864,9 +864,20 @@ describe('VAT preparation', () => {
   });
   after(async () => { await h.close(); });
 
+  test('choosing Ist during onboarding is no switch: it applies to every month', async (t) => {
+    const own = await startLite(t, 'reports-vat-onboarding');
+    const fresh = (await own.api.settings.get())!;
+    await own.api.settings.set({ settings: { ...fresh, onboardingCompleted: true, businessReportingProfile: { ...fresh.businessReportingProfile!, vatMethod: 'ist' } } } as never);
+    const stored = (await own.api.settings.get())!;
+    assert.equal(stored.legal.taxAccountingMethod, 'ist');
+    assert.equal(stored.legal.taxAccountingMethodSince, undefined);
+    assert.equal((await own.api.vat.getReport({ from: '2026-01-01', to: '2026-01-31' })).method, 'ist');
+  });
+
   test('switching Ist to Soll applies from the current month; earlier months keep Ist', async (t) => {
     const own = await startLite(t, 'reports-vat-switch');
     await configureLite(own.api, { vatMethod: 'ist' });
+    await own.api.settings.set({ settings: { ...(await own.api.settings.get())!, onboardingCompleted: true } } as never);
     const thisMonth = new Date().toLocaleDateString('sv-SE').slice(0, 7);
     const earlier = await issueDated(own.api, { client: 'Vor dem Wechsel', date: '2026-02-10', servicePeriod: '2026-02-10', items: [line('Beratung', 100, 19)] });
     const settings = (await own.api.settings.get())!;

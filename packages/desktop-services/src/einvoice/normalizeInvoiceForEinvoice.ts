@@ -34,6 +34,8 @@ export type NormalizedEinvoice = {
   buyerReference?: string;
   /** BT-25/26: the invoice a credit note or cancellation corrects. */
   precedingInvoice?: { number: string; date: string };
+  /** BT-20: agreed Skonto, an Entgeltminderung §14 Abs. 4 Nr. 7 UStG requires on the invoice. */
+  skonto?: { percent: number; days: number };
   /** BT-72 delivery date, or BG-14 service period when the invoice states a range. */
   delivery?: { date: string } | { start: string; end: string };
   lines: Array<{
@@ -236,6 +238,7 @@ export const normalizeInvoiceForEinvoice = (
     buyerReference: (invoice.taxMeta as { buyerReference?: string } | undefined)?.buyerReference?.trim() || undefined,
     precedingInvoice: typeCode === '381' && source ? { number: source.number, date: toIsoDate(source.date, 'source.date') } : undefined,
     delivery: deliveryOf(invoice.servicePeriod),
+    skonto: typeCode === '380' ? (invoice as { skonto?: { percent: number; days: number } }).skonto : undefined,
     lines,
     allowances,
     totals: {

@@ -939,7 +939,8 @@ const registerBillingRoutes = (app: FastifyInstance, product: 'lite' | 'pro', pr
         const after = appSettingsSchema.parse(body.settings);
         // Soll/Ist changes take effect from a period start, never retroactively for filed months:
         // without an explicit start the change applies from the first day of the current month.
-        if (before && before.legal.taxAccountingMethod !== after.legal.taxAccountingMethod) {
+        // Choosing the method during onboarding is no switch: it applies to the whole history.
+        if (before?.onboardingCompleted && before.legal.taxAccountingMethod !== after.legal.taxAccountingMethod) {
           const explicit = after.legal.taxAccountingMethodSince && after.legal.taxAccountingMethodSince !== before.legal.taxAccountingMethodSince;
           after.legal.previousTaxAccountingMethod = before.legal.taxAccountingMethod;
           if (!explicit) after.legal.taxAccountingMethodSince = `${localIsoDate(new Date()).slice(0, 8)}01`;

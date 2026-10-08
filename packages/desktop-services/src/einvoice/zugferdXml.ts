@@ -146,7 +146,9 @@ ${taxGroupsXml}${doc.delivery && 'start' in doc.delivery ? `
         <ram:EndDateTime><udt:DateTimeString format="102">${doc.delivery.end.replaceAll('-', '')}</udt:DateTimeString></ram:EndDateTime>
       </ram:BillingSpecifiedPeriod>` : ''}
 ${allowancesXml}
-      <ram:SpecifiedTradePaymentTerms>
+      <ram:SpecifiedTradePaymentTerms>${doc.skonto ? `
+        <ram:Description>#SKONTO#TAGE=${doc.skonto.days}#PROZENT=${doc.skonto.percent.toFixed(2)}#
+</ram:Description>` : ''}
         <ram:DueDateDateTime>
           <udt:DateTimeString format="102">${doc.dueDate.replaceAll('-', '')}</udt:DateTimeString>
         </ram:DueDateDateTime>

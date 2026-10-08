@@ -308,7 +308,8 @@ export const DocumentEditor: React.FC<DocumentEditorProps> = ({
       taxMeta: {
         ...previous.taxMeta,
         buyerCountryCode: normalizeCountry(billingAddress?.country) || undefined,
-        buyerType: client.taxProfile?.type ?? previous.taxMeta?.buyerType ?? 'business',
+        // Only what the client record says: assuming a business would charge consumers the §288 BGB business terms.
+        buyerType: client.taxProfile?.type ?? previous.taxMeta?.buyerType,
         buyerVatId: client.taxProfile?.vatId ?? previous.taxMeta?.buyerVatId,
         vatIdValidation: client.taxProfile?.vatIdValidation,
         vatIdValidationAt: client.taxProfile?.vatIdValidationAt,

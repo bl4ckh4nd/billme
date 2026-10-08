@@ -23,7 +23,8 @@ import { configureLite, issueDated, line } from './reports-fixtures.js';
  *   character (& < > ") breaking the XML, a non-German country ignored
  * - references: no delivery date (BT-72) or service period (BG-14) although the
  *   invoice states one, a correction without the invoice it corrects (BT-25),
- *   the Leitweg-ID (BT-10) lost, any of them out of CII schema order
+ *   the Leitweg-ID (BT-10) or agreed Skonto (BT-20) lost, any of them out of
+ *   CII schema order
  * - tax category per mode: standard S, Kleinunternehmer E, reverse charge AE,
  *   intra-EU supply K, export G, exempt E, outside scope O; rates not forced
  *   to 0, exemption reason missing, buyer VAT ID lost
@@ -323,6 +324,14 @@ describe('e-invoice export (Lite)', () => {
       assert.ok(settlement.lastIndexOf('</ram:ApplicableTradeTax>') < settlement.indexOf('<ram:BillingSpecifiedPeriod>'), 'CII order: after the VAT breakdown');
       assert.ok(settlement.indexOf('</ram:BillingSpecifiedPeriod>') < settlement.indexOf('<ram:SpecifiedTradePaymentTerms>'), 'CII order: before the payment terms');
       assert.ok(!blocks(xml, 'ram:ApplicableHeaderTradeDelivery')[0], 'a period is not also a single delivery date');
+    });
+
+    test('agreed Skonto is in the payment terms in the XRechnung syntax (BT-20, BR-DE-18)', async () => {
+      const draft = await draftInvoice(h.api, { client: 'Skonto Empfänger', date: '2026-07-01', dueDate: '2026-07-31', items: [line('Leistung', 100, 19)] });
+      const issued = await h.api.invoices.upsert({ reason: 'Rechnung gestellt', invoice: { ...draft, servicePeriod: '2026-07-01', skonto: { percent: 2, days: 10 }, status: 'open' } });
+      const terms = blocks((await exportInvoice(issued.id)).xml, 'ram:SpecifiedTradePaymentTerms')[0]!;
+      assert.match(first(terms, 'ram:Description') ?? '', /^#SKONTO#TAGE=10#PROZENT=2\.00#\n$/);
+      assert.ok(terms.indexOf('<ram:Description>') < terms.indexOf('<ram:DueDateDateTime>'), 'CII order: the description comes first');
     });
 
     test('a partial credit note is 381 with the credited share of the lines', async () => {

@@ -17,7 +17,12 @@ export const configureLite = async (api: BillmeApi, over: ReportSettings = {}) =
     ...current,
     company: { ...current.company, name: 'Muster Consulting', owner: 'Max Muster', street: over.street ?? 'Werkstraße 1', zip: '10115', city: 'Berlin', email: 'info@muster.example' },
     finance: { ...current.finance, vatId: over.vatId ?? 'DE123456789', taxId: over.taxId ?? '12/345/67890', iban: 'DE02120300000000202051', bic: 'BYLADEM1001', bankName: 'DKB' },
-    legal: { ...current.legal, smallBusinessRule: over.smallBusiness ?? current.legal.smallBusinessRule, ...(over.countryCode ? { countryCode: over.countryCode } : {}) },
+    legal: {
+      ...current.legal, smallBusinessRule: over.smallBusiness ?? current.legal.smallBusinessRule, ...(over.countryCode ? { countryCode: over.countryCode } : {}),
+      // A Soll/Ist change applies from the current month unless a start is given; these suites look back at
+      // past months, so they move the start before all of them (it must differ from the stored one to count).
+      ...(over.vatMethod ? { taxAccountingMethodSince: current.legal.taxAccountingMethodSince === '2000-01-01' ? '2000-02-01' : '2000-01-01' } : {}),
+    },
     eInvoice: { ...current.eInvoice, enabled: over.eInvoice ?? current.eInvoice.enabled },
     businessReportingProfile: { ...current.businessReportingProfile, vatMethod: over.vatMethod ?? current.businessReportingProfile.vatMethod },
   };

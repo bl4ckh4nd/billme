@@ -375,6 +375,11 @@ const InlineDocumentFields: React.FC<InlineDocumentFieldsProps> = ({ fields, def
       input.removeAttribute('aria-required');
     }
   };
+  // A service period is one date or "YYYY-MM-DD bis YYYY-MM-DD" (§14 Abs. 4 Nr. 6 UStG allows a period).
+  const periodMatch = document.servicePeriod?.match(/^(\d{4}-\d{2}-\d{2}) bis (\d{4}-\d{2}-\d{2})$/);
+  const servicePeriod = { start: periodMatch?.[1] ?? document.servicePeriod ?? '', end: periodMatch?.[2] ?? '' };
+  const setServicePeriod = (start: string, end: string) =>
+    set((previous) => ({ ...previous, servicePeriod: start && end && end > start ? `${start} bis ${end}` : start || end }));
   const dateInput = (value: string | undefined, onChange: (next: string) => void, ariaLabel: string) => (
     <input
       type="date"
@@ -423,7 +428,9 @@ const InlineDocumentFields: React.FC<InlineDocumentFieldsProps> = ({ fields, def
           </div>
           <div className="flex items-center justify-end gap-2">
             <label className={documentLabelClass}>{templateType === 'offer' ? 'Leistungszeitraum' : 'Leistungsdatum'}</label>
-            {dateInput(document.servicePeriod, (servicePeriod) => set((previous) => ({ ...previous, servicePeriod })), templateType === 'offer' ? 'Leistungszeitraum' : 'Leistungsdatum')}
+            {dateInput(servicePeriod.start, (start) => setServicePeriod(start, servicePeriod.end), templateType === 'offer' ? 'Leistungszeitraum ab' : 'Leistungsdatum')}
+            <span className={documentLabelClass} aria-hidden="true">bis</span>
+            {dateInput(servicePeriod.end, (end) => setServicePeriod(servicePeriod.start, end), templateType === 'offer' ? 'Leistungszeitraum bis' : 'Leistungszeitraum bis')}
           </div>
         </div>
       </div>

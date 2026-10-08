@@ -90,6 +90,8 @@ export interface AppSettings {
     defaultVatRate: number;
     countryCode?: 'DE' | 'AT' | 'CH';
     taxAccountingMethod: 'soll' | 'ist'; // Soll-/Ist-Versteuerung (default: soll)
+    taxAccountingMethodSince?: string; // first day the method applies; set by the server on a change
+    previousTaxAccountingMethod?: 'soll' | 'ist';
     paymentTermsDays: number;
     defaultIntroText: string;
     defaultFooterText: string;

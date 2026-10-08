@@ -1420,6 +1420,12 @@ const SettingsForm: React.FC<{ initialSettings: AppSettings }> = ({ initialSetti
                   { value: 'ist', label: 'Ist' },
                 ]}
               />
+              <p className="text-caption text-muted">
+                Ein Wechsel gilt ab dem laufenden Monat; frühere Zeiträume bleiben bei der bisherigen Methode.
+                {settings.legal.taxAccountingMethodSince && settings.legal.previousTaxAccountingMethod
+                  ? ` Aktuell: ${settings.legal.taxAccountingMethod === 'ist' ? 'Ist' : 'Soll'} seit ${new Date(`${settings.legal.taxAccountingMethodSince}T00:00:00`).toLocaleDateString('de-DE')}, davor ${settings.legal.previousTaxAccountingMethod === 'ist' ? 'Ist' : 'Soll'}.`
+                  : ''}
+              </p>
             </SettingsCard>
 
             <SettingsCard title="Standardtexte">

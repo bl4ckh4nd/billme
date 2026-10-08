@@ -34,7 +34,8 @@ import { bankAccount, configureLite, importBankRows, issueDated, line, pay } fro
  *   from the report
  * - boundaries: unsupported tax year, partial-year ranges, no EÜR profile,
  *   no token
- * - VAT preparation: Soll vs. Ist recognised in the wrong month, partial
+ * - VAT preparation: a Soll/Ist switch rewriting months before it took effect;
+ *   Soll vs. Ist recognised in the wrong month, partial
  *   payments / refunds / overpayments, cancellations and credit notes not
  *   netting out, drafts reported, reverse charge / Kleinunternehmer / export
  *   taxed, input VAT from unreviewed or file-less receipts, double input VAT
@@ -822,6 +823,25 @@ describe('VAT preparation', () => {
     await entry('inst-2', '2026-02-10', -5950, 'r-jan-inst');
   });
   after(async () => { await h.close(); });
+
+  test('switching Ist to Soll applies from the current month; earlier months keep Ist', async (t) => {
+    const own = await startLite(t, 'reports-vat-switch');
+    await configureLite(own.api, { vatMethod: 'ist' });
+    const thisMonth = new Date().toLocaleDateString('sv-SE').slice(0, 7);
+    const earlier = await issueDated(own.api, { client: 'Vor dem Wechsel', date: '2026-02-10', servicePeriod: '2026-02-10', items: [line('Beratung', 100, 19)] });
+    const settings = (await own.api.settings.get())!;
+    await own.api.settings.set({ settings: { ...settings, businessReportingProfile: { ...settings.businessReportingProfile!, vatMethod: 'soll' } } } as never);
+    const stored = (await own.api.settings.get())!;
+    assert.equal(stored.legal.taxAccountingMethod, 'soll');
+    assert.equal(stored.legal.taxAccountingMethodSince, `${thisMonth}-01`);
+    assert.equal(stored.legal.previousTaxAccountingMethod, 'ist');
+    const february = await own.api.vat.getReport({ from: '2026-02-01', to: '2026-02-28' });
+    assert.equal(february.method, 'ist', 'a filed month is not recomputed with the new method');
+    assert.ok(!february.sources.some((src) => src.sourceId === earlier.id), 'unpaid under Ist: nothing in February');
+    const [y, m] = thisMonth.split('-').map(Number);
+    const now = await own.api.vat.getReport({ from: `${thisMonth}-01`, to: `${thisMonth}-${new Date(Date.UTC(y!, m!, 0)).getUTCDate()}` });
+    assert.equal(now.method, 'soll');
+  });
 
   describe('Ist-Versteuerung (cash basis)', () => {
     test('output VAT follows the payments of the month; the rate split is kept (81 = 19 %, 86 = 7 %)', async () => {

@@ -538,6 +538,9 @@ const appSettingsBaseSchema = z.object({
     defaultVatRate: z.number().min(0).max(100),
     countryCode: z.enum(['DE', 'AT', 'CH']).optional(),
     taxAccountingMethod: z.enum(['soll', 'ist']).default('soll'),
+    /** First day the current method applies (YYYY-MM-01); earlier periods keep `previousTaxAccountingMethod`. */
+    taxAccountingMethodSince: z.string().regex(/^\d{4}-\d{2}-01$/).optional(),
+    previousTaxAccountingMethod: z.enum(['soll', 'ist']).optional(),
     paymentTermsDays: z.number().nonnegative(),
     defaultIntroText: z.string(),
     defaultFooterText: z.string(),

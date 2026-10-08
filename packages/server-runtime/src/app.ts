@@ -14,6 +14,7 @@ import {
   clientSchema,
   clientProjectSchema,
   calculateInvoiceTaxSnapshot,
+  localIsoDate,
   resolveInvoiceTaxMode,
   resolveIssueTaxMode,
   prepareClientForUpsert,
@@ -936,6 +937,13 @@ const registerBillingRoutes = (app: FastifyInstance, product: 'lite' | 'pro', pr
         await transaction.query('SELECT tenant_id FROM server_settings WHERE tenant_id=$1 FOR UPDATE', [session.scope.tenantId]);
         const before = parseStoredSettings(await getServerSettings(transaction, session.scope.tenantId));
         const after = appSettingsSchema.parse(body.settings);
+        // Soll/Ist changes take effect from a period start, never retroactively for filed months:
+        // without an explicit start the change applies from the first day of the current month.
+        if (before && before.legal.taxAccountingMethod !== after.legal.taxAccountingMethod) {
+          const explicit = after.legal.taxAccountingMethodSince && after.legal.taxAccountingMethodSince !== before.legal.taxAccountingMethodSince;
+          after.legal.previousTaxAccountingMethod = before.legal.taxAccountingMethod;
+          if (!explicit) after.legal.taxAccountingMethodSince = `${localIsoDate(new Date()).slice(0, 8)}01`;
+        }
         await saveServerSettings(transaction, {
           tenantId: session.scope.tenantId,
           settingsJson: JSON.stringify(after),

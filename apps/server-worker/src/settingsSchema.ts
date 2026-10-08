@@ -69,6 +69,8 @@ const LegalSettingsSchema = z.object({
   defaultVatRate: z.number(),
   countryCode: z.enum(['DE', 'AT', 'CH']).optional(),
   taxAccountingMethod: z.enum(['soll', 'ist']).optional().default('soll'),
+  taxAccountingMethodSince: z.string().optional(),
+  previousTaxAccountingMethod: z.enum(['soll', 'ist']).optional(),
   paymentTermsDays: z.number(),
   defaultIntroText: z.string(),
   defaultFooterText: z.string(),

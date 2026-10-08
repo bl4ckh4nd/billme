@@ -23,7 +23,10 @@ export const getServerLiteVatReport = (database: PostgresQueryable, scope: Tenan
   const settingsRow = (await db.query<{ settings_json: string }>('SELECT settings_json FROM server_settings WHERE tenant_id=$1', [scope.tenantId])).rows[0];
   if (!settingsRow) throw new Error('LITE_VAT_SETTINGS_REQUIRED');
   const settings = JSON.parse(settingsRow.settings_json);
-  const method = settings.legal?.taxAccountingMethod ?? settings.businessReportingProfile?.vatMethod ?? 'soll';
+  const current = settings.legal?.taxAccountingMethod ?? settings.businessReportingProfile?.vatMethod ?? 'soll';
+  // ponytail: only the last change is remembered; a period before an earlier change uses the method in between.
+  const since: string | undefined = settings.legal?.taxAccountingMethodSince;
+  const method = since && from < since ? settings.legal?.previousTaxAccountingMethod ?? current : current;
   const smallBusiness = settings.legal?.smallBusinessRule === true;
   const invoices = await createPostgresInvoiceRepository(db).list(scope);
   const entries = await listLiteCashEntries(db, scope);

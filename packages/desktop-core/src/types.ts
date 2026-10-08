@@ -16,6 +16,8 @@ export interface DunningLevel {
   fee: number;
   subject: string;
   text: string;
+  chargeInterest?: boolean; // Verzugszinsen §288 BGB in this level's letter
+  chargeFlatFee?: boolean; // 40 € Pauschale §288 Abs. 5 BGB (business customers)
 }
 
 export type BusinessReportingJurisdiction = 'DE';
@@ -84,6 +86,7 @@ export interface AppSettings {
   };
   dunning: {
     levels: DunningLevel[];
+    baseInterestRatePercent?: number; // Basiszinssatz §247 BGB, maintained by the user
   };
   legal: {
     smallBusinessRule: boolean; // Kleinunternehmer §19

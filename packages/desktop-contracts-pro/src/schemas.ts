@@ -669,6 +669,7 @@ const appSettingsBaseSchema = z.object({
   }),
   dunning: z.object({
     levels: z.array(dunningLevelSchema),
+    baseInterestRatePercent: z.number().min(-10).max(20).optional(),
   }),
   legal: z.object({
     smallBusinessRule: z.boolean(),

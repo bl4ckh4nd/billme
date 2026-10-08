@@ -58,10 +58,13 @@ const DunningLevelSchema = z.object({
   fee: z.number(),
   subject: z.string(),
   text: z.string(),
+  chargeInterest: z.boolean().optional(),
+  chargeFlatFee: z.boolean().optional(),
 });
 
 const DunningSettingsSchema = z.object({
   levels: z.array(DunningLevelSchema),
+  baseInterestRatePercent: z.number().optional(),
 });
 
 const LegalSettingsSchema = z.object({

@@ -894,6 +894,29 @@ for (const product of PRODUCTS) describe(`masterdata (${product})`, () => {
       assert.equal(second.layout!.snapshot!.templateVersion, 1, 'the unchanged preset body keeps its version');
     });
 
+    test('the dunning letter claims Verzugszinsen and, from a business, the 40 € Pauschale (§288 BGB)', async () => {
+      const levels = [
+        { id: 1, name: 'Zahlungserinnerung', enabled: true, daysAfterDueDate: 7, fee: 0, subject: 'Erinnerung %N', text: '' },
+        { id: 2, name: '1. Mahnung', enabled: true, daysAfterDueDate: 14, fee: 5, subject: '1. Mahnung %N', text: '', chargeInterest: true, chargeFlatFee: true },
+      ];
+      await withSettings((s) => ({ ...s, dunning: { levels, baseInterestRatePercent: 1.27 } }), async () => {
+        const business = await issueInvoice(h.api, { client: `Zins GmbH ${uid()}`, date: addDays(today(), -40), dueDate: addDays(today(), -20), taxMeta: { buyerType: 'business' } as never });
+        await h.api.invoices.savePayment({ invoiceId: business.id, payment: { id: randomUUID(), date: today(), amount: 50, method: 'bank' }, reason: 'Teilzahlung' });
+        const letter = (await h.api.documents.renderContext({ kind: 'dunning', id: business.id, level: 2 })).dunning!;
+        const open = business.amount - 50;
+        assert.deepEqual(
+          { fee: letter.fee, flatFee: letter.flatFee, rate: letter.interestRatePercent, days: letter.interestDays, interest: letter.interest },
+          { fee: 40, flatFee: true, rate: 10.27, days: 20, interest: Math.round(open * 0.1027 * 20 / 365 * 100) / 100 },
+          'business: base + 9 points from the day after the due date, Pauschale instead of the 5 € fee',
+        );
+
+        const consumer = await issueInvoice(h.api, { client: `Zins Privat ${uid()}`, date: addDays(today(), -40), dueDate: addDays(today(), -20) });
+        const private_ = (await h.api.documents.renderContext({ kind: 'dunning', id: consumer.id, level: 2 })).dunning!;
+        assert.deepEqual({ fee: private_.fee, flatFee: private_.flatFee, rate: private_.interestRatePercent, days: private_.interestDays }, { fee: 5, flatFee: undefined, rate: 6.27, days: 0 },
+          'a consumer: base + 5 points, and only from a first reminder — without one there is no default yet');
+      });
+    });
+
     test('the dunning letter is built from the level, its fee, the payments so far and the dunning template', async () => {
       await resetDefaults();
       const levels = [

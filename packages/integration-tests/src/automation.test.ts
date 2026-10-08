@@ -31,7 +31,8 @@ import { addDays, asSmallBusiness, draftInvoice, issueInvoice, newClient, today 
  * - dunning: invoices dunned that are not overdue, paid, still a draft, not
  *   receivables or already settled by a Stornorechnung/full credit note; the wrong level; a fee charged twice or for a mail that was
  *   never sent, or added to the issued invoice's amount (it is the customer's own debt, not taxable
- *   revenue); a reminder whose %A demands what was already paid or credited; one level mailed twice; the same invoice escalated twice in
+ *   revenue); a reminder whose %A demands what was already paid or credited; the
+ *   40 € Pauschale charged to a consumer or on top of fees it replaces; one level mailed twice; the same invoice escalated twice in
  *   one day; a rejected mail recorded as sent; a run that silently does
  *   nothing when automation, levels or the mail provider are missing
  * - e-mail: a mail reported as queued when no provider can deliver it, the
@@ -732,6 +733,24 @@ for (const product of PRODUCTS) describe(`automation (${product})`, () => {
         assert.equal(status.totalFeesApplied, charged(5));
         assert.deepEqual(status.history.map((entry) => [entry.dunningLevel, entry.feeApplied]).sort(), [[1, 0], [2, charged(5)]]);
         assert.equal((await invoiceOf(invoice.id)).amount, invoice.amount, 'the invoice amount never carries the fee');
+      });
+    });
+
+    test('the §288 Abs. 5 Pauschale replaces the fee for a business customer, credited against fees charged before', async () => {
+      const business = await issueInvoice(h.api, {
+        client: 'Pauschale GmbH', clientEmail: 'pauschalegmbh@example.com', date: addDays(today(), -22), dueDate: addDays(today(), -8),
+        taxMeta: { buyerType: 'business' } as never,
+      });
+      const consumer = await overdueInvoice(8, 'Privatkunde');
+      const levels = (second: number) => [level(1, 7, 5), { ...level(2, second, 5), chargeFlatFee: true }];
+      await withSettings(dunningSetup(levels(14)), async () => {
+        await h.api.dunning.manualRun();
+        await setSettings({ ...(await getSettings()), dunning: { levels: levels(8) } });
+        await h.api.dunning.manualRun();
+        const fees = async (id: string) => (await statusOf(id)).history.map((entry) => [entry.dunningLevel, entry.feeApplied]).sort();
+        assert.deepEqual(await fees(business.id), [[1, 5], [2, 35]], 'business: 40 € in total, the earlier 5 € credited');
+        assert.deepEqual(await fees(consumer.id), [[1, 5], [2, 5]], 'a consumer owes no Pauschale');
+        assert.equal((await invoiceOf(business.id)).amount, business.amount);
       });
     });
 

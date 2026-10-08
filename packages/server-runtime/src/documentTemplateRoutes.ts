@@ -67,6 +67,10 @@ export const renderContextSchema = z.object({
     paidAmount: z.number(),
     creditedAmount: z.number(),
     daysOverdue: z.number().int(),
+    interest: z.number().optional(),
+    interestRatePercent: z.number().optional(),
+    interestDays: z.number().int().optional(),
+    flatFee: z.boolean().optional(),
   }).optional(),
 });
 
@@ -222,6 +226,7 @@ export const registerDocumentTemplateRoutes = (app: FastifyInstance, product: 'l
             claimed && definition.id === level ? { ...definition, fee: Number(claimed.fee) } : definition,
           ),
           history: await repositories.dunningHistoryRepo.listByInvoice(session.scope, document.id),
+          baseInterestRatePercent: settings?.dunning.baseInterestRatePercent,
           credited: (await database.query<{ amount: string | number }>(
             "SELECT amount FROM invoices WHERE tenant_id=$1 AND source_document_id=$2 AND document_kind='credit_note' AND status<>'draft'",
             [tenantId, document.id],

@@ -159,7 +159,8 @@ export const VARIABLE_GROUPS = [
       { key: 'dunning.payUntil', label: 'Zahlungsziel', description: 'Neue Zahlungsfrist' },
       { key: 'dunning.fee', label: 'Mahngebühr', description: 'Gebühr dieser Stufe' },
       { key: 'dunning.daysOverdue', label: 'Tage überfällig', description: 'Tage seit Fälligkeit' },
-      { key: 'dunning.openAmount', label: 'Offener Betrag', description: 'Rechnungsbetrag abzüglich Zahlungen und Gutschriften zuzüglich Gebühr' },
+      { key: 'dunning.openAmount', label: 'Offener Betrag', description: 'Rechnungsbetrag abzüglich Zahlungen und Gutschriften zuzüglich Gebühr und Verzugszinsen' },
+      { key: 'dunning.interest', label: 'Verzugszinsen', description: 'Zinsen nach § 288 BGB bis zum Briefdatum' },
     ]
   },
   {

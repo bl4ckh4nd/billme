@@ -34,6 +34,10 @@ export type DocumentRenderInput = {
     originalAmount: number;
     paidAmount?: number;
     creditedAmount?: number;
+    interest?: number;
+    interestRatePercent?: number;
+    interestDays?: number;
+    flatFee?: boolean;
     daysOverdue: number;
   };
 };
@@ -144,13 +148,14 @@ const buildItemRows = (input: DocumentRenderInput, unitColumnVisible: boolean): 
 
 const buildTotals = (input: DocumentRenderInput): DocumentTotalLine[] => {
   if (input.dunning) {
-    const { originalAmount, fee, paidAmount = 0, creditedAmount = 0 } = input.dunning;
+    const { originalAmount, fee, paidAmount = 0, creditedAmount = 0, interest = 0, interestRatePercent, interestDays, flatFee } = input.dunning;
     return [
       { label: 'Rechnungsbetrag', value: formatCurrency(originalAmount) },
       ...(paidAmount > 0 ? [{ label: 'Bereits gezahlt', value: formatCurrency(-paidAmount) }] : []),
       ...(creditedAmount > 0 ? [{ label: 'Gutgeschrieben', value: formatCurrency(-creditedAmount) }] : []),
-      ...(fee > 0 ? [{ label: 'Mahngebühr', value: formatCurrency(fee) }] : []),
-      { label: 'Offener Betrag', value: formatCurrency(originalAmount - paidAmount - creditedAmount + fee), emphasis: true },
+      ...(fee > 0 ? [{ label: flatFee ? 'Pauschale nach § 288 Abs. 5 BGB' : 'Mahngebühr', value: formatCurrency(fee) }] : []),
+      ...(interest > 0 ? [{ label: `Verzugszinsen ${formatNumber(interestRatePercent ?? 0)} % p. a. für ${interestDays} Tage`, value: formatCurrency(interest) }] : []),
+      { label: 'Offener Betrag', value: formatCurrency(originalAmount - paidAmount - creditedAmount + fee + interest), emphasis: true },
     ];
   }
   const snapshot = resolveInvoiceTaxSnapshot(input.document, input.settings);
@@ -187,7 +192,8 @@ export const buildDocumentViewModel = (input: DocumentRenderInput): DocumentView
           'dunning.payUntil': formatDate(input.dunning.payUntil),
           'dunning.fee': formatCurrency(input.dunning.fee),
           'dunning.daysOverdue': String(input.dunning.daysOverdue),
-          'dunning.openAmount': formatCurrency(input.dunning.originalAmount - (input.dunning.paidAmount ?? 0) - (input.dunning.creditedAmount ?? 0) + input.dunning.fee),
+          'dunning.openAmount': formatCurrency(input.dunning.originalAmount - (input.dunning.paidAmount ?? 0) - (input.dunning.creditedAmount ?? 0) + input.dunning.fee + (input.dunning.interest ?? 0)),
+          'dunning.interest': formatCurrency(input.dunning.interest ?? 0),
         }
       : {}),
   };

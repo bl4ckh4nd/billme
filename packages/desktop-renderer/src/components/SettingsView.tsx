@@ -1154,6 +1154,18 @@ const SettingsForm: React.FC<{ initialSettings: AppSettings }> = ({ initialSetti
 
             <DunningDeliveryReview />
             {dunningEnabled && (
+              <SettingsCard title="Verzugszinsen" subtitle="Basiszinssatz nach § 247 BGB. Er ändert sich zum 1. Januar und 1. Juli; bitte aktuell halten. Zinsen: Basiszins + 9 Punkte bei Unternehmern ab Fälligkeit, + 5 Punkte bei Verbrauchern ab der ersten Mahnung.">
+                <Input
+                  type="number"
+                  step="0.01"
+                  className="w-28"
+                  label="Basiszinssatz in %"
+                  value={settings.dunning.baseInterestRatePercent ?? ''}
+                  onChange={(e) => setSettings((prev) => ({ ...prev, dunning: { ...prev.dunning, baseInterestRatePercent: e.target.value === '' ? undefined : Number(e.target.value) } }))}
+                />
+              </SettingsCard>
+            )}
+            {dunningEnabled && (
               <SettingsCard title="Mahnstufen" count={<span className="tabular-nums">{activeLevelCount} von {totalLevels} aktiv</span>} flush>
                 {settings.dunning.levels.map((level, index) => (
                   <div key={level.id} className="flex flex-col gap-3 border-b border-border p-3.5 last:border-b-0">
@@ -1199,6 +1211,16 @@ const SettingsForm: React.FC<{ initialSettings: AppSettings }> = ({ initialSetti
 
                     {level.enabled && (
                       <>
+                        <div className="flex flex-wrap gap-x-5 gap-y-2 text-caption text-muted">
+                          <label className="flex items-center gap-2">
+                            <Checkbox checked={Boolean(level.chargeInterest)} aria-label={`${level.name}: Verzugszinsen berechnen`} onChange={(e) => updateDunningLevel(index, 'chargeInterest', e.target.checked)} />
+                            Verzugszinsen (§ 288 BGB)
+                          </label>
+                          <label className="flex items-center gap-2">
+                            <Checkbox checked={Boolean(level.chargeFlatFee)} aria-label={`${level.name}: Pauschale 40 € bei Unternehmern`} onChange={(e) => updateDunningLevel(index, 'chargeFlatFee', e.target.checked)} />
+                            40 € Pauschale bei Unternehmern statt Gebühr (§ 288 Abs. 5 BGB)
+                          </label>
+                        </div>
                         <Input
                           label="Betreff"
                           type="text"

@@ -436,6 +436,8 @@ export const dunningLevelSchema = z.object({
   fee: z.number().nonnegative(),
   subject: z.string(),
   text: z.string(),
+  chargeInterest: z.boolean().optional(),
+  chargeFlatFee: z.boolean().optional(),
 });
 
 const isValidMonthDay = (value: string): boolean => {
@@ -534,6 +536,8 @@ const appSettingsBaseSchema = z.object({
   }),
   dunning: z.object({
     levels: z.array(dunningLevelSchema),
+    /** Basiszinssatz in percent (§247 BGB); the user keeps it current. */
+    baseInterestRatePercent: z.number().min(-10).max(20).optional(),
   }),
   legal: z.object({
     smallBusinessRule: z.boolean(),
@@ -760,5 +764,9 @@ export const documentRenderContextSchema = z.object({
     paidAmount: z.number(),
     creditedAmount: z.number().optional(),
     daysOverdue: z.number().int(),
+    interest: z.number().optional(),
+    interestRatePercent: z.number().optional(),
+    interestDays: z.number().int().optional(),
+    flatFee: z.boolean().optional(),
   }).optional(),
 });

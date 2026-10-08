@@ -6,6 +6,7 @@ import type {
   InvoiceDunningStatus,
 } from '../domain/dunning.js';
 import { isInvoiceOverdue, localIsoDate } from '../domain/dunning.js';
+import { dunningLevelFee } from '../domain/dunningDocument.js';
 import type { DunningDeliveryPort } from '../dunningDelivery.js';
 import type { Invoice, TenantScope } from '../domain/foundations.js';
 import { systemClock, type AuditActor, type AuditLogPort, type Clock, type DunningEmailPort, type DunningHistoryRepository, type DunningSecretPort, type DunningSettingsRepository, type InvoiceRepository } from '../ports/index.js';
@@ -269,7 +270,8 @@ export const processDunningRun = async <TSettings extends DunningSettings>(
       }
 
       if (dependencies.delivery) {
-        const claimed = await dependencies.delivery.claim(scope, invoice.id, applicableLevel);
+        const feesBefore = (await dependencies.dunningHistoryRepo.listByInvoice(scope, invoice.id)).reduce((sum, entry) => sum + entry.feeApplied, 0);
+        const claimed = await dependencies.delivery.claim(scope, invoice.id, { ...applicableLevel, fee: dunningLevelFee(applicableLevel, invoice, feesBefore) });
         if (!claimed) continue;
         deliveryId = claimed.delivery.id;
         const projectedLevel = { ...applicableLevel, fee: claimed.delivery.fee };
@@ -327,26 +329,28 @@ export const processDunningRun = async <TSettings extends DunningSettings>(
       );
 
       let feeApplied = 0;
+      // The Mahngebühr is the customer's own debt (§288 BGB damages, not taxable): it lives in the
+      // dunning history and never changes the issued invoice's amount.
+      const levelFee = dunningLevelFee(applicableLevel, invoice, history.reduce((sum, entry) => sum + entry.feeApplied, 0));
+      const chargedLevel = { ...applicableLevel, fee: levelFee };
       let attachment: { filename: string; path: string } | undefined;
       if (dependencies.renderAttachment) {
         try {
-          attachment = await dependencies.renderAttachment(invoice, applicableLevel);
+          attachment = await dependencies.renderAttachment(invoice, chargedLevel);
         } catch (error) {
           // The reminder text still goes out; a missing PDF must not stop the dunning run.
           dependencies.logger?.warn?.(`Mahnschreiben für ${invoice.number} konnte nicht als PDF erstellt werden`, error);
         }
       }
-      // The Mahngebühr is the customer's own debt (§288 BGB damages, not taxable): it lives in the
-      // dunning history and never changes the issued invoice's amount.
-      if (applicableLevel.fee > 0 && !feeAlreadyApplied) {
-        feeApplied = applicableLevel.fee;
+      if (levelFee > 0 && !feeAlreadyApplied) {
+        feeApplied = levelFee;
         result.feesApplied += feeApplied;
       }
 
       const current = await dependencies.invoiceRepo.getById(scope, invoice.id);
       if (!current || !isInvoiceOverdue(current, clock.now())) continue;
-      const subject = replaceDunningPlaceholders(applicableLevel.subject, current, daysOverdue, applicableLevel, credited(invoice.id));
-      const bodyText = replaceDunningPlaceholders(applicableLevel.text, current, daysOverdue, applicableLevel, credited(invoice.id));
+      const subject = replaceDunningPlaceholders(applicableLevel.subject, current, daysOverdue, chargedLevel, credited(invoice.id));
+      const bodyText = replaceDunningPlaceholders(applicableLevel.text, current, daysOverdue, chargedLevel, credited(invoice.id));
       const emailResult = await dependencies.emailPort.send(providerConfig.provider, providerConfig.config, {
         from: {
           name: settings.email.fromName || settings.company.name,

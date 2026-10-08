@@ -12,6 +12,10 @@ export const dunningLevelSchema = z.object({
   fee: z.number(),
   subject: z.string(),
   text: z.string(),
+  /** Claim Verzugszinsen (§288 Abs. 1/2 BGB) in this level's letter. */
+  chargeInterest: z.boolean().optional(),
+  /** Claim the 40 € Pauschale of §288 Abs. 5 BGB from a business customer instead of the fee. */
+  chargeFlatFee: z.boolean().optional(),
 });
 export type DunningLevel = z.infer<typeof dunningLevelSchema>;
 
@@ -31,6 +35,7 @@ export const dunningSettingsSchema = z.object({
   }),
   dunning: z.object({
     levels: z.array(dunningLevelSchema),
+    baseInterestRatePercent: z.number().optional(),
   }),
   automation: z.object({
     dunningEnabled: z.boolean(),

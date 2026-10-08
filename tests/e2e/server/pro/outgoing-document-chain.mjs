@@ -28,7 +28,8 @@ const isoNow = () => new Date().toISOString();
 
 export const createAcceptedOffer = async (state, session) => {
   const offers = await requestJson(state, session, '/api/v1/pro/offers');
-  const source = offers.find((offer) => offer.status === 'open');
+  // The seeded offer's validity may be over; it then reads as expired, which is still a usable template here.
+  const source = offers.find((offer) => offer.status === 'open' || offer.status === 'expired');
   if (!source) throw new Error('Seeded Pro offer was not persisted.');
   const accepted = {
     ...source,

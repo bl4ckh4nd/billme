@@ -25,6 +25,9 @@ import { addDays, asSmallBusiness, datevEvidence, draftInvoice, draftOffer, issu
  *   an issued invoice set back to draft
  * - tax: the snapshot (net/VAT/gross per rate) lost or altered on save; mixed
  *   rates, Kleinunternehmer and reverse charge carried through unchanged
+ * - Skonto (Lite): terms lost on save, a payment within the days that covers
+ *   the discounted amount not settling the invoice, a late or short payment
+ *   settling it, a Skonto entry typed by hand, a removed payment keeping it
  * - payments: draft invoices taking payments, partial vs. full vs. over
  *   payment status, stale `expectedPayment`, removal reopening the invoice,
  *   bank payments edited outside the bank matching
@@ -330,6 +333,39 @@ for (const product of PRODUCTS) describe(`invoices (${product})`, () => {
       const draft = await draftInvoice(h.api, { client: 'Wrong total' });
       const saved = await h.api.invoices.upsert({ reason: 'tamper total', invoice: { ...draft, amount: 1 } });
       assert.equal(saved.amount, draft.taxSnapshot!.grossAmount);
+    });
+  });
+
+  if (product === 'lite') describe('Skonto', () => {
+    const withSkonto = async (date = today()) => {
+      const draft = await draftInvoice(h.api, { client: `Skonto ${date}`, date, dueDate: addDays(date, 30) });
+      return h.api.invoices.upsert({ reason: 'stellen', invoice: { ...draft, skonto: { percent: 2, days: 10 }, status: 'open' } });
+    };
+    const pay = (invoiceId: string, amount: number, date = today()) => h.api.invoices.savePayment({ invoiceId, payment: { id: randomUUID(), date, amount, method: 'bank' }, reason: 'Zahlung' });
+
+    test('paid within the days with the Skonto deducted, the invoice is settled and the Skonto is recorded', async () => {
+      const invoice = await withSkonto();
+      assert.deepEqual((await h.api.invoices.list()).find((i) => i.id === invoice.id)?.skonto, { percent: 2, days: 10 }, 'the terms survive a refetch');
+      const discounted = Math.round(invoice.amount * 98) / 100;
+      const paid = await pay(invoice.id, discounted);
+      assert.equal(paid.status, 'paid');
+      const skonto = paid.payments.find((payment) => payment.method === 'Skonto')!;
+      assert.equal(skonto.amount, Math.round((invoice.amount - discounted) * 100) / 100);
+      assert.equal((await h.raw('POST', `/invoices/${invoice.id}/payments`, { payment: { ...skonto, amount: 1 }, reason: 'von Hand' })).status, 409, 'Skonto is derived, never typed');
+      const cash = paid.payments.find((payment) => payment.method === 'bank')!;
+      const reversed = await h.api.invoices.removePayment({ invoiceId: invoice.id, expectedPayment: cash, reason: 'Rücklastschrift' } as never);
+      assert.equal(reversed.status, 'open');
+      assert.ok(!reversed.payments.some((payment) => payment.method === 'Skonto'), 'no money, no Skonto');
+    });
+
+    test('a late or short payment does not earn the Skonto', async () => {
+      const late = await withSkonto(addDays(today(), -20));
+      const afterDeadline = await pay(late.id, Math.round(late.amount * 98) / 100);
+      assert.equal(afterDeadline.status, 'open');
+      assert.ok(!afterDeadline.payments.some((payment) => payment.method === 'Skonto'));
+      const short = await withSkonto();
+      const tooLittle = await pay(short.id, Math.round(short.amount * 97) / 100);
+      assert.equal(tooLittle.status, 'open', '3 % less than billed is more than the 2 % Skonto');
     });
   });
 

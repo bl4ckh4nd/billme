@@ -164,6 +164,7 @@ export const invoices = pgTable("invoices", {
   date: text("date"),
   dueDate: text("due_date"),
   servicePeriod: text("service_period"),
+  skontoJson: text("skonto_json"),
   amount: numeric("amount"),
   status: text("status"),
   dunningLevel: integer("dunning_level"),

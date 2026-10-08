@@ -22,6 +22,7 @@ export type InvoiceLike = {
   date?: string;
   dueDate?: string;
   servicePeriod?: string;
+  skonto?: { percent: number; days: number };
   client: string;
   clientNumber?: string;
   clientAddress?: string;

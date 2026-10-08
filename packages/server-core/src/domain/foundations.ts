@@ -357,6 +357,8 @@ export const invoiceRelationFieldsSchema = z.object({
 });
 export type InvoiceRelationFields = z.infer<typeof invoiceRelationFieldsSchema>;
 
+export const invoiceSkontoSchema = z.object({ percent: z.number().gt(0).max(10), days: z.number().int().min(1).max(90) });
+
 export const invoiceSchema = billingDocumentBaseSchema.extend({
   kind: z.literal('invoice'),
   documentKind: invoiceDocumentKindSchema.optional(),
@@ -366,6 +368,8 @@ export const invoiceSchema = billingDocumentBaseSchema.extend({
   revisionNumber: z.number().int().nonnegative().optional(),
   dueDate: isoDateSchema,
   servicePeriod: z.string().optional(),
+  /** Skonto for payment within `days` after the invoice date (Entgeltminderung, §17 UStG). */
+  skonto: invoiceSkontoSchema.optional(),
   status: invoiceStatusSchema,
   dunningLevel: z.number().int().nonnegative().optional(),
   payments: z.array(paymentSchema).default([]),

@@ -1,7 +1,7 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { invoiceSchema, paymentSchema, type Payment } from '@billme/server-core';
-import { assertLitePeriodsOpen, createPostgresBillingDependencies, periodClosedMessage } from '@billme/server-data';
+import { assertLitePeriodsOpen, createPostgresBillingDependencies, isSkontoPayment, periodClosedMessage, withSkontoSettlement } from '@billme/server-data';
 import { buildAuditEntry, withInvoiceHistory } from './auditHistory.js';
 import { settledInvoiceStatus } from './documentIssuance.js';
 import { isReceivableDocumentKind } from '@billme/server-core';
@@ -45,6 +45,7 @@ export const registerInvoicePaymentRoutes = (app: FastifyInstance, product: 'lit
           if (paymentId.startsWith('transaction-payment:') || paymentId.startsWith('tx:')) {
             throw new ApiError(409, 'Bankzahlungen bitte im Bankabgleich ändern.');
           }
+          if (isSkontoPayment({ id: paymentId })) throw new ApiError(409, 'Skonto ergibt sich aus den Zahlungen und wird nicht von Hand erfasst.');
           const current = before.payments.find((payment) => payment.id === paymentId);
           if (operation === 'save' && current && body.payment && samePayment(current, body.payment)) return before;
           if (operation === 'reverse' && !current) return before;
@@ -57,7 +58,7 @@ export const registerInvoicePaymentRoutes = (app: FastifyInstance, product: 'lit
             .catch((error: Error & { period?: string }) => { throw error.message === 'LITE_PERIOD_CLOSED' ? new ApiError(409, periodClosedMessage(error.period ?? '')) : error; });
           const payments = before.payments.filter((payment) => payment.id !== paymentId);
           if (operation === 'save') payments.push(body.payment!);
-          const next = { ...before, status: before.status === 'paid' ? 'open' as const : before.status, payments, updatedAt: new Date().toISOString() };
+          const next = await withSkontoSettlement(transaction, session.scope, { ...before, status: before.status === 'paid' ? 'open' as const : before.status, payments, updatedAt: new Date().toISOString() });
           const after = await repositories.invoiceRepo.save(session.scope, { ...next, status: await settledInvoiceStatus(transaction, session.scope, next) }, { replacePayments: true });
           await repositories.auditLog.append(session.scope, buildAuditEntry(session.scope, session, 'invoice', before.id,
             operation === 'reverse' ? 'invoice.payment.reverse' : current ? 'invoice.payment.update' : 'invoice.payment.create', body.reason, before, after));

@@ -80,6 +80,7 @@ export interface LegacyInvoiceDocument {
   date: string;
   dueDate: string;
   servicePeriod?: string;
+  skonto?: { percent: number; days: number };
   amount: number;
   status: string;
   dunningLevel?: number;
@@ -210,6 +211,7 @@ export const toDomainInvoice = (
     date: invoice.date,
     dueDate: invoice.dueDate,
     servicePeriod: invoice.servicePeriod,
+    skonto: invoice.skonto,
     amount: invoice.amount,
     status: invoice.status as Invoice["status"],
     dunningLevel: invoice.dunningLevel,
@@ -338,6 +340,7 @@ export const toLegacyInvoice = (invoice: Invoice): LegacyInvoiceDocument => {
     date: invoice.date,
     dueDate: invoice.dueDate,
     servicePeriod: invoice.servicePeriod,
+    skonto: invoice.skonto,
     amount: invoice.amount,
     status: invoice.status,
     dunningLevel: invoice.dunningLevel,

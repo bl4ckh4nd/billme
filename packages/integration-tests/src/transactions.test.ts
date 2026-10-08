@@ -748,6 +748,20 @@ for (const product of PRODUCTS) describe(`transactions, banking and cash (${prod
       assert.ok(!restored.some((item) => item.sourceId.startsWith(`${invoice.id}:payment`)));
     });
 
+    if (product === 'lite') test('a bank payment within the Skonto days settles the invoice with the Skonto; unlinking takes both back', async () => {
+      const draft = await draftInvoice(h.api, { client: unique('Skonto Bank') });
+      const invoice = await h.api.invoices.upsert({ reason: 'stellen', invoice: { ...draft, skonto: { percent: 3, days: 14 }, status: 'open' } });
+      const discounted = Math.round(invoice.amount * 97) / 100;
+      const line = await bankLine(discounted, { date: today() });
+      const linked = await h.api.transactions.link({ transactionId: line.id, invoiceId: invoice.id });
+      assert.equal(linked.invoice!.status, 'paid');
+      assert.ok(linked.invoice!.payments.some((payment) => payment.method === 'Skonto'));
+      await h.api.transactions.unlink({ transactionId: line.id });
+      const after = await invoiceOf(invoice.id);
+      assert.equal(after.status, 'open');
+      assert.deepEqual(after.payments, []);
+    });
+
     test('a partial credit note counts: the rest settles the invoice, more is not allocated, unlink reopens it', async () => {
       const invoice = await newInvoice();
       await h.api.documents.chainIssue({ operation: 'correction', id: randomUUID(), invoiceId: invoice.id, kind: 'credit_note', amount: 38, date: today(), dueDate: today(), reason: 'Teilgutschrift' } as never);

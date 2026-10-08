@@ -686,6 +686,21 @@ describe('EÜR', () => {
     });
   });
 
+  test('Skonto: the EÜR counts only the money; under Soll the VAT drops by the Skonto in the month it is taken', async (t) => {
+    const own = await startLite(t, 'reports-skonto');
+    await configureLite(own.api, { vatMethod: 'soll' });
+    const draft = await draftInvoice(own.api, { client: 'Skonto GmbH', date: '2026-03-25', dueDate: '2026-04-24', items: [line('Beratung', 100, 19)] });
+    const invoice = await own.api.invoices.upsert({ reason: 'stellen', invoice: { ...draft, servicePeriod: '2026-03-25', skonto: { percent: 2, days: 10 }, status: 'open' } });
+    const paid = await own.api.invoices.savePayment({ invoiceId: invoice.id, payment: { id: randomUUID(), date: '2026-04-02', amount: 116.62, method: 'bank' }, reason: 'Zahlung mit Skonto' });
+    assert.equal(paid.status, 'paid');
+    const march = await own.api.vat.getReport({ from: '2026-03-01', to: '2026-03-31' });
+    const april = await own.api.vat.getReport({ from: '2026-04-01', to: '2026-04-30' });
+    assert.equal(march.outputVatCents, 1900, 'Soll: the full VAT in the month of the service');
+    assert.equal(april.outputVatCents, -38, 'the 2,38 € Skonto carries 0,38 € VAT, corrected in April (§17 UStG)');
+    const income = (await own.api.eur.listItems({ taxYear: 2026 } as never)).filter((item: { sourceId: string }) => item.sourceId.startsWith(invoice.id));
+    assert.deepEqual(income.map((item: { amountGross: number }) => item.amountGross), [116.62], 'only the money received is income');
+  });
+
   test('the 10-day rule: recurring income and rent paid around the year end count in the year they are for', async (t) => {
     const own = await startLite(t, 'reports-ten-day');
     await configureLite(own.api);

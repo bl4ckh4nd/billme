@@ -170,9 +170,18 @@ const buildTotals = (input: DocumentRenderInput): DocumentTotalLine[] => {
         : `USt. ${formatNumber(entry.rate)} %`,
       value: formatCurrency(entry.vatAmount),
     }));
+  // Skonto is printed with its deadline and the amount payable, so the customer can pay it exactly.
+  const skonto = input.document.skonto;
+  const skontoUntil = skonto && input.document.date
+    ? new Date(Date.parse(`${input.document.date.slice(0, 10)}T00:00:00Z`) + skonto.days * 86_400_000).toISOString().slice(0, 10)
+    : undefined;
   return [
     ...(vatLines.length ? [{ label: 'Nettobetrag', value: formatCurrency(snapshot.netAmount) }, ...vatLines] : []),
     { label: 'Gesamtbetrag', value: formatCurrency(snapshot.grossAmount), emphasis: true },
+    ...(skonto && skontoUntil ? [{
+      label: `Bei Zahlung bis ${formatDate(skontoUntil)} abzüglich ${formatNumber(skonto.percent)} % Skonto`,
+      value: formatCurrency(Math.round(snapshot.grossAmount * (100 - skonto.percent)) / 100),
+    }] : []),
   ];
 };
 

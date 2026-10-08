@@ -162,7 +162,8 @@ const listCashSources = async (db: PostgresQueryable, scope: TenantScope, from: 
       // single-date invoices never move. Replace once invoices carry an explicit recurring marker.
       const period = String(invoice.service_period ?? '').match(/^(\d{4}-\d{2}-\d{2}) bis \d{4}-\d{2}-\d{2}$/)?.[1];
       const attributed = (date: string) => tenDayYear(date, period, invoice.due_date ? String(invoice.due_date) : undefined) ?? yearOf(date);
-      const inYear = payments.filter((payment) => attributed(payment.date) === taxYear && payment.amount !== 0);
+      // A Skonto entry settles the invoice but is no money received (Zufluss, §11 EStG).
+      const inYear = payments.filter((payment) => attributed(payment.date) === taxYear && payment.amount !== 0 && !payment.id.startsWith('skonto:'));
       if (!inYear.length) continue;
       for (const payment of inYear) result.push({
         sourceType: 'invoice',

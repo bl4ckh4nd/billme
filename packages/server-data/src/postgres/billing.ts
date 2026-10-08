@@ -163,6 +163,7 @@ type InvoiceRow = {
   date: string;
   due_date: string;
   service_period: string | null;
+  skonto_json?: string | null;
   amount: string | number;
   status: Invoice["status"];
   dunning_level: number;
@@ -375,6 +376,7 @@ const rowToInvoice = (row: InvoiceRow): Invoice =>
     date: row.date,
     dueDate: row.due_date,
     servicePeriod: row.service_period ?? undefined,
+    skonto: parseJson(row.skonto_json ?? null, undefined),
     amount: toNumber(row.amount),
     status: row.status,
     dunningLevel: row.dunning_level,
@@ -591,6 +593,7 @@ const toInvoiceRow = (r: any): InvoiceRow => ({
   date: r.date!,
   due_date: r.dueDate!,
   service_period: r.servicePeriod ?? null,
+  skonto_json: r.skontoJson ?? null,
   amount: r.amount as any,
   status: r.status,
   dunning_level: r.dunningLevel ?? 0,
@@ -1019,6 +1022,7 @@ export const createPostgresInvoiceRepository = (
           date: nextInvoice.date,
           dueDate: nextInvoice.dueDate,
           servicePeriod: nextInvoice.servicePeriod ?? null,
+          skontoJson: nextInvoice.skonto ? toJson(nextInvoice.skonto) : null,
           amount: String(nextInvoice.amount),
           status: nextInvoice.status,
           dunningLevel: nextInvoice.dunningLevel ?? 0,
@@ -1060,6 +1064,7 @@ export const createPostgresInvoiceRepository = (
             date: nextInvoice.date,
             dueDate: nextInvoice.dueDate,
             servicePeriod: nextInvoice.servicePeriod ?? null,
+            skontoJson: nextInvoice.skonto ? toJson(nextInvoice.skonto) : null,
             amount: String(nextInvoice.amount),
             status: nextInvoice.status,
             dunningLevel: nextInvoice.dunningLevel ?? 0,
@@ -2040,4 +2045,26 @@ export const smallBusinessTurnover = async (session: PostgresQueryable, scope: T
   }
   const of = (y: number) => Math.round((totals.get(String(y)) ?? 0) * 100) / 100;
   return { priorYear: of(year - 1), currentYear: of(year) };
+};
+
+export const SKONTO_PAYMENT_PREFIX = 'skonto:';
+export const isSkontoPayment = (payment: { id: string }): boolean => payment.id.startsWith(SKONTO_PAYMENT_PREFIX);
+
+/**
+ * Skonto (Lite): when the money received within the Skonto days covers the open amount less the Skonto,
+ * the rest is settled as a "Skonto" entry dated with the last payment. It is no money: the EÜR skips it,
+ * and the VAT preparation reduces output VAT by it under Soll (§17 UStG). Recomputed on every payment
+ * change, so removing a payment also removes the Skonto. Pro settles Skonto through its OPOS command.
+ */
+export const withSkontoSettlement = async <T extends Invoice>(session: PostgresQueryable, scope: TenantScope, invoice: T): Promise<T> => {
+  const cash = invoice.payments.filter((payment) => !isSkontoPayment(payment));
+  if (scope.product !== 'lite' || !invoice.skonto || invoice.status === 'draft' || invoice.status === 'cancelled') return { ...invoice, payments: cash };
+  const toCents = (value: number) => Math.round(Number(value) * 100);
+  const openCents = toCents(invoice.amount) - toCents(await creditedAmount(session, scope, invoice.id));
+  const paidCents = cash.reduce((sum, payment) => sum + toCents(payment.amount), 0);
+  const deadline = new Date(Date.parse(`${invoice.date.slice(0, 10)}T00:00:00Z`) + invoice.skonto.days * 86_400_000).toISOString().slice(0, 10);
+  const last = cash.map((payment) => payment.date).sort().at(-1);
+  const targetCents = Math.round(openCents * (1 - invoice.skonto.percent / 100));
+  if (!last || last > deadline || paidCents < targetCents || paidCents >= openCents) return { ...invoice, payments: cash };
+  return { ...invoice, payments: [...cash, { id: `${SKONTO_PAYMENT_PREFIX}${invoice.id}`, date: last, amount: (openCents - paidCents) / 100, method: 'Skonto' }] };
 };

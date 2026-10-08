@@ -34,6 +34,8 @@ export interface DocumentDraft {
   date: string;
   dueDate?: string;
   servicePeriod?: string;
+  /** Skonto for payment within `days` of the invoice date. */
+  skonto?: { percent: number; days: number };
   client: string;
   clientId?: string;
   clientNumber?: string;

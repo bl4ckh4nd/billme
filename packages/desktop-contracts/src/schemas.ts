@@ -127,6 +127,7 @@ export const invoiceSchema = z.object({
   date: z.string(),
   dueDate: z.string(),
   servicePeriod: z.string().optional(),
+  skonto: z.object({ percent: z.number().gt(0).max(10), days: z.number().int().min(1).max(90) }).optional(),
   amount: z.number(),
   status: z.enum(['paid', 'open', 'overdue', 'draft', 'cancelled']),
   dunningLevel: z.number().optional(),

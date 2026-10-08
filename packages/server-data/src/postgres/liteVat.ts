@@ -102,7 +102,10 @@ export const getServerLiteVatReport = (database: PostgresQueryable, scope: Tenan
       if (method === 'soll') emit(performance, parts);
       return;
     }
-    const payments: Cash[] = [...invoice.payments].sort((a, b) => a.date.localeCompare(b.date) || a.id.localeCompare(b.id)).map((payment) => ({ id: payment.id, date: payment.date, amount: cents(payment.amount) }));
+    // Skonto is an Entgeltminderung, not money: under Soll it lowers the VAT in the month it is taken (§17 UStG),
+    // under Ist the smaller payment already carries the smaller VAT.
+    const skonto = invoice.payments.filter((payment) => payment.id.startsWith('skonto:'));
+    const payments: Cash[] = invoice.payments.filter((payment) => !payment.id.startsWith('skonto:')).sort((a, b) => a.date.localeCompare(b.date) || a.id.localeCompare(b.id)).map((payment) => ({ id: payment.id, date: payment.date, amount: cents(payment.amount) }));
     let raw = 0; let recognized = 0;
     for (const payment of payments) {
       const previous = clamp(raw, gross); raw += payment.amount; const next = clamp(raw, gross);
@@ -116,6 +119,7 @@ export const getServerLiteVatReport = (database: PostgresQueryable, scope: Tenan
     }
     if (mode !== 'standard_vat') emit(performance, parts);
     else if (method === 'soll') emit(performance, delta(parts, gross, recognized, gross));
+    if (method === 'soll') for (const reduction of skonto) emit(reduction.date, scaled(parts, gross, cents(reduction.amount)).map((part) => ({ rate: part.rate, net: -part.net, vat: -part.vat })));
   };
   for (const invoice of invoices) recognizeOutgoing(invoiceSchema.parse(invoice));
   for (const rawReceipt of receipts) {

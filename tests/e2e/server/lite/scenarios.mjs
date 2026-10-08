@@ -560,7 +560,9 @@ export const runLiteDocumentKindsScenario = async (page, scenarioKey = 'document
  * - §19 UStG: a Kleinunternehmer's invoice issued with the editor's default tax mode prints no VAT
  *   line, gross = net, and the §19 notice.
  * - Dunning: the letter for a partly paid and partly credited invoice demands only the open
- *   balance plus the fee, and the invoice amount itself is never raised by the fee.
+ *   balance plus the fee, and the invoice amount itself is never raised by the fee; a business
+ *   customer's letter claims Verzugszinsen and the §288 Abs. 5 Pauschale.
+ * - Skonto prints with its deadline; a service period stays a period in the editor.
  */
 export const runLiteLegalScenario = async (page, scenarioKey = 'legal') => {
   const { execFileSync } = await import('node:child_process');
@@ -644,4 +646,35 @@ export const runLiteLegalScenario = async (page, scenarioKey = 'legal') => {
   expect(letter).toMatch(/Offener Betrag 283,20 €/);
   const stored = await page.evaluate(async (id) => (await globalThis.billmeApi.invoices.list()).find((doc) => doc.id === id), overdue.id);
   expect(stored.amount).toBe(357);
+
+  // §288 BGB: a business customer's letter claims Verzugszinsen and the 40 € Pauschale instead of the fee.
+  const current = await page.evaluate(() => globalThis.billmeApi.settings.get());
+  const levels = current.dunning.levels.length ? current.dunning.levels : [{ id: 1, name: 'Zahlungserinnerung', enabled: true, daysAfterDueDate: 7, fee: 5, subject: 'Erinnerung %N', text: '' }];
+  await page.evaluate((s) => globalThis.billmeApi.settings.set({ settings: s }), { ...current, dunning: { ...current.dunning, baseInterestRatePercent: 1.27, levels: levels.map((level) => (level.id === levels[0].id ? { ...level, chargeInterest: true, chargeFlatFee: true } : level)) } });
+  try {
+    const business = await draftFor({ date: day(-40), dueDate: day(-20), servicePeriod: day(-40), taxMeta: { buyerType: 'business' } });
+    await page.evaluate(async (invoice) => globalThis.billmeApi.invoices.upsert({ invoice: { ...invoice, status: 'open' }, reason: 'Rechnung gestellt' }), business);
+    const claim = await pdfTextOf(`/documents/dunning/${business.id}/pdf?level=${levels[0].id}`, 'legal-04-dunning-interest');
+    expect(claim).toMatch(/Pauschale nach § 288 Abs\. 5 BGB 40,00 €/);
+    // pdftotext may put the label's last word after the amount when the label wraps.
+    expect(claim).toMatch(/Verzugszinsen 10,27 % p\. a\. für 20 (Tage )?2,01 €/);
+    expect(claim).toMatch(/Offener Betrag 399,01 €/);
+  } finally {
+    await page.evaluate((s) => globalThis.billmeApi.settings.set({ settings: s }), current);
+  }
+
+  // Skonto is printed with its deadline and the amount to pay.
+  const skontoDraft = await draftFor({ date: day(0), dueDate: day(30), servicePeriod: day(0) });
+  const withSkonto = await page.evaluate(async (invoice) => globalThis.billmeApi.invoices.upsert({ invoice: { ...invoice, skonto: { percent: 2, days: 10 }, status: 'open' }, reason: 'Rechnung gestellt' }), skontoDraft);
+  const skontoText = await pdfTextOf(`/documents/invoice/${withSkonto.id}/pdf`, 'legal-05-skonto');
+  expect(skontoText).toMatch(/Bei Zahlung bis \d{2}\.\d{2}\.\d{4} abzüglich (2 % Skonto )?349,86 €/);
+  expect(skontoText).not.toContain('ohne Abzug');
+
+  // A subscription period stays a period in the editor: both dates are shown.
+  const periodic = await draftFor({ servicePeriod: '2026-10-01 bis 2026-10-31' });
+  await openFromList(periodic.number);
+  await page.getByRole('button', { name: 'Bearbeiten' }).first().click();
+  await expect(page.getByLabel('Leistungsdatum', { exact: true })).toHaveValue('2026-10-01');
+  await expect(page.getByLabel('Leistungszeitraum bis', { exact: true })).toHaveValue('2026-10-31');
+  await shot(page, 'legal-06-editor-period');
 };

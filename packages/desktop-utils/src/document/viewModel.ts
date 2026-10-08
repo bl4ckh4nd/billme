@@ -185,6 +185,8 @@ const buildTotals = (input: DocumentRenderInput): DocumentTotalLine[] => {
   ];
 };
 
+const withoutNoDeductionClause = (value: string, skonto: boolean) => (skonto ? value.replace(/ ohne Abzug/g, '') : value);
+
 export const buildDocumentViewModel = (input: DocumentRenderInput): DocumentViewModel => {
   const { template, document, settings, kind } = input;
   const visible = (section: keyof DocumentTemplateBody['sections']) => template.sections[section]?.visible !== false;
@@ -260,7 +262,8 @@ export const buildDocumentViewModel = (input: DocumentRenderInput): DocumentView
     rows: visible('items') ? rows : [],
     totals: visible('totals') && !priceHidden ? buildTotals(input) : [],
     notice: notice.trim(),
-    closing: visible('closing') ? text(input.texts?.closing ?? template.texts.closing) : '',
+    // "ohne Abzug" in a standard closing would contradict agreed Skonto terms printed in the totals.
+    closing: visible('closing') ? withoutNoDeductionClause(text(input.texts?.closing ?? template.texts.closing), Boolean(document.skonto)) : '',
     footerColumns: visible('footer')
       ? template.texts.footerColumns.map((column) => trimBlankEdges(resolveLines(column, resolve))).filter((lines) => lines.length > 0)
       : [],

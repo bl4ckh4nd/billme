@@ -426,22 +426,24 @@ const InlineDocumentFields: React.FC<InlineDocumentFieldsProps> = ({ fields, def
             <label className={documentLabelClass}>{templateType === 'offer' ? 'Gültig bis' : 'Fälligkeit'}</label>
             {dateInput(document.dueDate, (dueDate) => set((previous) => ({ ...previous, dueDate })), templateType === 'offer' ? 'Gültig bis' : 'Fälligkeit')}
           </div>
-          {templateType !== 'offer' ? <div className="flex items-center justify-end gap-2">
+          {templateType !== 'offer' ? <div className="flex items-center justify-end gap-1">
             <label htmlFor="document-input-skonto-percent" className={documentLabelClass}>Skonto</label>
-            <input id="document-input-skonto-percent" type="number" min="0" max="10" step="0.5" value={document.skonto?.percent ?? ''} placeholder="%" aria-label="Skonto in Prozent"
+            <input id="document-input-skonto-percent" type="number" min="0" max="10" step="0.5" value={document.skonto?.percent ?? ''} placeholder="–" aria-label="Skonto in Prozent"
               onChange={(event) => set((previous) => ({ ...previous, skonto: event.target.value === '' || Number(event.target.value) <= 0 ? undefined : { percent: Number(event.target.value), days: previous.skonto?.days ?? 10 } }))}
-              className={`${documentInputClass} w-12 text-right text-[11px]`} />
-            <span className={documentLabelClass} aria-hidden="true">% bei Zahlung in</span>
-            <input type="number" min="1" max="90" value={document.skonto?.days ?? ''} placeholder="Tage" aria-label="Skonto-Frist in Tagen" disabled={!document.skonto}
-              onChange={(event) => set((previous) => (previous.skonto ? { ...previous, skonto: { ...previous.skonto, days: Math.max(1, Math.round(Number(event.target.value) || 1)) } } : previous))}
               className={`${documentInputClass} w-10 text-right text-[11px]`} />
-            <span className={documentLabelClass} aria-hidden="true">Tagen</span>
+            <span className={documentLabelClass} aria-hidden="true">%</span>
+            <input type="number" min="1" max="90" value={document.skonto?.days ?? ''} placeholder="–" aria-label="Skonto-Frist in Tagen" disabled={!document.skonto}
+              onChange={(event) => set((previous) => (previous.skonto ? { ...previous, skonto: { ...previous.skonto, days: Math.max(1, Math.round(Number(event.target.value) || 1)) } } : previous))}
+              className={`${documentInputClass} w-9 text-right text-[11px]`} />
+            <span className={documentLabelClass} aria-hidden="true">Tage</span>
           </div> : null}
           <div className="flex items-center justify-end gap-2">
             <label className={documentLabelClass}>{templateType === 'offer' ? 'Leistungszeitraum' : 'Leistungsdatum'}</label>
             {dateInput(servicePeriod.start, (start) => setServicePeriod(start, servicePeriod.end), templateType === 'offer' ? 'Leistungszeitraum ab' : 'Leistungsdatum')}
-            <span className={documentLabelClass} aria-hidden="true">bis</span>
-            {dateInput(servicePeriod.end, (end) => setServicePeriod(servicePeriod.start, end), templateType === 'offer' ? 'Leistungszeitraum bis' : 'Leistungszeitraum bis')}
+          </div>
+          <div className="flex items-center justify-end gap-2">
+            <label className={documentLabelClass}>bis</label>
+            {dateInput(servicePeriod.end, (end) => setServicePeriod(servicePeriod.start, end), 'Leistungszeitraum bis')}
           </div>
         </div>
       </div>

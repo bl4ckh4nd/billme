@@ -123,13 +123,33 @@ const invoiceBasis = async (db: PostgresQueryable, scope: TenantScope, source: C
   };
 };
 
+/**
+ * §11 Abs. 1 S. 2 / Abs. 2 S. 2 EStG: a regelmäßig wiederkehrende payment that flows within 10 days around
+ * the year end, and falls due in that window, belongs to the year it is economically for. Returns that
+ * year when the rule moves the payment, else undefined. `economic` is the service date the payment is for.
+ */
+const DAY = 86_400_000;
+const tenDayYear = (paid: string, economic: string | undefined, due: string | undefined): number | undefined => {
+  if (!economic || !due) return undefined;
+  const paidYear = Number(paid.slice(0, 4));
+  const economicYear = Number(economic.slice(0, 4));
+  if (Math.abs(paidYear - economicYear) !== 1) return undefined;
+  const boundary = Date.parse(`${Math.max(paidYear, economicYear)}-01-01T00:00:00Z`);
+  // 22.12.–31.12. and 01.01.–10.01. are "kurze Zeit" around the turn of the year.
+  const near = (date: string) => { const at = Date.parse(`${date.slice(0, 10)}T00:00:00Z`); return at >= boundary - 10 * DAY && at < boundary + 10 * DAY; };
+  return near(paid) && near(due) ? economicYear : undefined;
+};
+const yearOf = (date: string) => Number(date.slice(0, 4));
+const TEN_DAY_NOTE = ' (10-Tage-Regel, § 11 EStG)';
+
 const listCashSources = async (db: PostgresQueryable, scope: TenantScope, from: string, to: string, product: EurProduct = 'pro'): Promise<CashSource[]> => {
   const t = tenant(scope);
   const result: CashSource[] = [];
+  const taxYear = yearOf(from);
 
   if (product === 'lite') {
     const invoices = await q<Record<string, unknown>>(db, `
-      SELECT id,date,client,number,amount,tax_snapshot_json,payments_json
+      SELECT id,date,due_date,service_period,client,number,amount,tax_snapshot_json,payments_json
       FROM invoices
       WHERE tenant_id=$1
       ORDER BY date,id`, [t]);
@@ -138,7 +158,11 @@ const listCashSources = async (db: PostgresQueryable, scope: TenantScope, from: 
         const parsed = paymentSchema.safeParse(payment);
         return parsed.success ? [parsed.data] : [];
       });
-      const inYear = payments.filter((payment) => payment.date >= from && payment.date <= to && payment.amount !== 0);
+      // ponytail: "regelmäßig wiederkehrend" is read as an invoice for a service period (subscriptions, rent);
+      // single-date invoices never move. Replace once invoices carry an explicit recurring marker.
+      const period = String(invoice.service_period ?? '').match(/^(\d{4}-\d{2}-\d{2}) bis \d{4}-\d{2}-\d{2}$/)?.[1];
+      const attributed = (date: string) => tenDayYear(date, period, invoice.due_date ? String(invoice.due_date) : undefined) ?? yearOf(date);
+      const inYear = payments.filter((payment) => attributed(payment.date) === taxYear && payment.amount !== 0);
       if (!inYear.length) continue;
       for (const payment of inYear) result.push({
         sourceType: 'invoice',
@@ -148,7 +172,7 @@ const listCashSources = async (db: PostgresQueryable, scope: TenantScope, from: 
         flowType: 'income',
         linkedViaInvoice: payment.id.startsWith('transaction-payment:'),
         counterparty: String(invoice.client ?? ''),
-        purpose: `Rechnung ${String(invoice.number ?? invoice.id)}`,
+        purpose: `Rechnung ${String(invoice.number ?? invoice.id)}${yearOf(payment.date) !== taxYear ? TEN_DAY_NOTE : ''}`,
         invoiceType: 'outgoing_invoice',
         invoiceId: String(invoice.id),
       });
@@ -164,13 +188,16 @@ const listCashSources = async (db: PostgresQueryable, scope: TenantScope, from: 
     const representedManual = new Set(manual.map((row) => row.matched_transaction_id).filter(Boolean));
     for (const row of manual) {
       const date = String(row.bank_date ?? row.cash_date);
-      if (date < from || date > to) continue;
-      const gross = (row.flow_type === 'expense' ? -1 : 1) * Number(row.amount_cents) / 100;
       const receipt = parseJson(row.receipt_json);
+      // A recurring receipt's service date is the period it pays for and, for rent and the like, also when it is due.
+      const serviceDate = receipt?.recurring === true && typeof receipt.serviceDate === 'string' ? receipt.serviceDate : undefined;
+      const year = tenDayYear(date, serviceDate, serviceDate) ?? yearOf(date);
+      if (year !== taxYear) continue;
+      const gross = (row.flow_type === 'expense' ? -1 : 1) * Number(row.amount_cents) / 100;
       const rates = Array.isArray(receipt?.taxBreakdown) ? receipt.taxBreakdown as Array<{ netAmountCents: number; vatAmountCents: number }> : [];
       const receiptNet = rates.reduce((sum, rate) => sum + Number(rate.netAmountCents) + (row.flow_type === 'expense' ? Number(rate.vatAmountCents) * (1 - Number(receipt?.deductiblePercent ?? 0) / 100) : 0), 0);
       const receiptGross = Number(receipt?.grossAmountCents);
-      result.push({ sourceType: 'manual', sourceId: String(row.id), date, amountGross: gross, flowType: row.flow_type === 'expense' ? 'expense' : 'income', accountId: row.account_id ? String(row.account_id) : undefined, counterparty: String(row.counterparty), purpose: String(row.purpose), sourceNet: receipt?.reviewed && receiptGross !== 0 && Number.isFinite(receiptGross) ? round(gross * receiptNet / receiptGross) : undefined });
+      result.push({ sourceType: 'manual', sourceId: String(row.id), date, amountGross: gross, flowType: row.flow_type === 'expense' ? 'expense' : 'income', accountId: row.account_id ? String(row.account_id) : undefined, counterparty: String(row.counterparty), purpose: `${String(row.purpose)}${yearOf(date) !== taxYear ? TEN_DAY_NOTE : ''}`, sourceNet: receipt?.reviewed && receiptGross !== 0 && Number.isFinite(receiptGross) ? round(gross * receiptNet / receiptGross) : undefined });
     }
     for (const bank of transactions) {
       if (representedManual.has(bank.id)) continue;
@@ -303,7 +330,7 @@ export const listServerEurCashItems = async (db: PostgresQueryable, scope: Tenan
       ?? (source.invoiceId ? facts.get(`invoice:${source.invoiceId}`) : undefined);
     const persistedClassification = classification ?? (fact ? { id: String(fact.id), source_type: source.sourceType, source_id: source.sourceId, eur_line_id: fact.eur_line_id ? String(fact.eur_line_id) : null, excluded: false, vat_mode: 'none', vat_rate: null, note: null, updated_at: '' } : undefined);
     const legacyInvoiceFact = product === 'lite' && fact && fact.source_type === 'invoice' && fact.source_id !== source.sourceId;
-    items.push({ sourceType: source.sourceType, sourceId: source.sourceId, date: source.date, amountGross: source.amountGross, amountNet: fact && !legacyInvoiceFact ? Number(fact.amount_net) : net.amountNet, flowType: source.flowType, accountId: source.accountId, linkedViaInvoice: source.linkedViaInvoice, counterparty: basis.counterparty ?? source.counterparty, purpose: basis.purpose ?? source.purpose, vatWarning: source.warning ?? (legacyInvoiceFact ? `LEGACY_CASH_FACT_REVIEW_REQUIRED:${source.invoiceId}` : net.warning), kind: fact?.kind as ServerEurCashItem['kind'] | undefined, splits: fact?.splits_json && !legacyInvoiceFact ? parseJsonArray(fact.splits_json) as EurExpenseSplit[] : undefined, classification: persistedClassification ? { id: persistedClassification.id, sourceType: source.sourceType, sourceId: source.sourceId, taxYear, eurLineId: persistedClassification.eur_line_id ?? undefined, excluded: Boolean(persistedClassification.excluded), vatMode: persistedClassification.vat_mode === 'default' ? 'default' : 'none', vatRate: persistedClassification.vat_rate == null ? undefined : Number(persistedClassification.vat_rate), note: persistedClassification.note ?? undefined, updatedAt: persistedClassification.updated_at ?? '' } : undefined });
+    items.push({ sourceType: source.sourceType, sourceId: source.sourceId, date: source.date, amountGross: source.amountGross, amountNet: fact && !legacyInvoiceFact ? Number(fact.amount_net) : net.amountNet, flowType: source.flowType, accountId: source.accountId, linkedViaInvoice: source.linkedViaInvoice, counterparty: basis.counterparty ?? source.counterparty, purpose: source.purpose?.endsWith(TEN_DAY_NOTE) && basis.purpose && !basis.purpose.endsWith(TEN_DAY_NOTE) ? `${basis.purpose}${TEN_DAY_NOTE}` : basis.purpose ?? source.purpose, vatWarning: source.warning ?? (legacyInvoiceFact ? `LEGACY_CASH_FACT_REVIEW_REQUIRED:${source.invoiceId}` : net.warning), kind: fact?.kind as ServerEurCashItem['kind'] | undefined, splits: fact?.splits_json && !legacyInvoiceFact ? parseJsonArray(fact.splits_json) as EurExpenseSplit[] : undefined, classification: persistedClassification ? { id: persistedClassification.id, sourceType: source.sourceType, sourceId: source.sourceId, taxYear, eurLineId: persistedClassification.eur_line_id ?? undefined, excluded: Boolean(persistedClassification.excluded), vatMode: persistedClassification.vat_mode === 'default' ? 'default' : 'none', vatRate: persistedClassification.vat_rate == null ? undefined : Number(persistedClassification.vat_rate), note: persistedClassification.note ?? undefined, updatedAt: persistedClassification.updated_at ?? '' } : undefined });
     items[items.length - 1].vatAmountCash = round(source.amountGross - net.amountNet);
   }
   // Both products show the rules button and the suggestion in the EÜR view.

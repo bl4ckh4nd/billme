@@ -15,7 +15,9 @@ import { bankAccount, configureLite, importBankRows, issueDated, line, pay } fro
  * - Zufluss/Abfluss: the invoice date decides the year instead of the payment
  *   date; a payment on 31 Dec / 1 Jan lands in the wrong year; a partial
  *   payment is counted whole; refunds do not reduce income; unpaid invoices,
- *   drafts, pending bank rows or rows of another year leak in
+ *   drafts, pending bank rows or rows of another year leak in; a regularly
+ *   recurring payment flowing within 10 days of the year end (and due then) not
+ *   moved to the year it is for (§11 EStG), or a one-off payment moved
  * - net/VAT split: gross booked as income, a mixed 19/7 % invoice split with
  *   the wrong ratio, vereinnahmte USt (KZ 140) / gezahlte Vorsteuer (KZ 185)
  *   missing or doubled, Kleinunternehmer showing VAT
@@ -682,6 +684,29 @@ describe('EÜR', () => {
       }
       assert.equal((await h.raw('GET', '/reports/eur?taxYear=2026')).status, 200);
     });
+  });
+
+  test('the 10-day rule: recurring income and rent paid around the year end count in the year they are for', async (t) => {
+    const own = await startLite(t, 'reports-ten-day');
+    await configureLite(own.api);
+    const subscription = await issueDated(own.api, { client: 'Abo Dezember', date: '2025-12-01', dueDate: '2026-01-05', servicePeriod: '2025-12-01 bis 2025-12-31', items: [line('Wartung Dezember', 100)] });
+    await pay(own.api, subscription.id, 100, '2026-01-04');
+    const oneOff = await issueDated(own.api, { client: 'Einmalig', date: '2025-12-20', dueDate: '2026-01-05', servicePeriod: '2025-12-20', items: [line('Einzelauftrag', 100)] });
+    await pay(own.api, oneOff.id, 100, '2026-01-04');
+    const late = await issueDated(own.api, { client: 'Abo spät', date: '2025-12-01', dueDate: '2025-12-15', servicePeriod: '2025-12-01 bis 2025-12-31', items: [line('Wartung, Fälligkeit außerhalb', 100)] });
+    await pay(own.api, late.id, 100, '2026-01-04');
+    const rentReceipt = { id: randomUUID(), number: 'MIETE-01', counterparty: 'Vermieter', documentDate: '2025-12-20', receivedDate: '2025-12-20', serviceDate: '2026-01-01', grossAmountCents: 50000, taxMode: 'exempt', deductiblePercent: 100, reviewed: true, recurring: true, taxBreakdown: [{ rate: 0, netAmountCents: 50000, vatAmountCents: 0 }] };
+    await own.api.cash.saveReceipt({ receipt: rentReceipt, reason: 'Mietvertrag' } as never);
+    await own.api.cash.saveEntry({ entry: { id: 'rent-jan', cashDate: '2025-12-29', amountCents: -50000, currency: 'EUR', flowType: 'expense', counterparty: 'Vermieter', purpose: 'Miete Januar', receiptId: rentReceipt.id }, reason: 'Miete' } as never);
+
+    const ids = async (year: number) => (await own.api.eur.listItems({ taxYear: year } as never)).map((item: { sourceId: string; purpose?: string }) => [item.sourceId.split(':')[0], item.purpose]);
+    const y2025 = await ids(2025);
+    const y2026 = await ids(2026);
+    assert.ok(y2025.some(([id, purpose]) => id === subscription.id && /10-Tage-Regel/.test(String(purpose))), 'the December subscription paid 4 January counts in 2025');
+    assert.ok(!y2026.some(([id]) => id === subscription.id));
+    assert.ok(y2026.some(([id]) => id === oneOff.id) && !y2025.some(([id]) => id === oneOff.id), 'a one-off payment stays in the year it flowed');
+    assert.ok(y2026.some(([id]) => id === late.id), 'due outside the 10 days: the rule does not apply');
+    assert.ok(y2026.some(([id]) => id === 'rent-jan') && !y2025.some(([id]) => id === 'rent-jan'), 'January rent paid 29 December counts in 2026');
   });
 
   describe('Kleinunternehmer (§ 19 UStG)', () => {

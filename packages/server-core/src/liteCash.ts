@@ -21,6 +21,8 @@ export const liteReceiptInputSchema = z.object({
   receivedDate: cashDate.optional(), serviceDate: cashDate.optional(), grossAmountCents: cents.refine((value) => value !== 0),
   taxMode: z.enum(['domestic', 'exempt', 'reverse_charge', 'eu_service', 'intra_eu_acquisition', 'import', 'small_business']),
   deductiblePercent: z.number().min(0).max(100), reviewed: z.boolean(), advancePayment: z.boolean().optional(),
+  /** Regelmäßig wiederkehrend (rent, subscriptions): the 10-day rule of §11 EStG applies around the year end. */
+  recurring: z.boolean().optional(),
   importTaxDate: cashDate.optional(), correctionOfReceiptId: z.string().min(1).optional(), adjustmentDate: cashDate.optional(), correctionReason: z.string().trim().min(1).optional(),
   taxBreakdown: z.array(z.object({ rate: z.union([z.literal(0), z.literal(7), z.literal(19)]), netAmountCents: cents, vatAmountCents: cents })).max(20),
 });

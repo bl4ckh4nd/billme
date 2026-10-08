@@ -111,6 +111,17 @@ test('billme finds the desktop app, logs in by device code and works with its ow
     };
     await ok(['clients', 'upsert', '--input', '-'], { stdin: JSON.stringify({ client }) });
     const document = { items: [{ kind: 'item', description: 'Beratung', quantity: 2, price: 100, total: 200 }], amount: 200, status: 'open' };
+    // §14 UStG: before onboarding stored the company's address and tax number, issuing is refused with what is missing.
+    const refused = await billme(['invoices', 'create', '--client-id', clientId, '--document', JSON.stringify(document)]);
+    assert.notEqual(refused.code, 0);
+    assert.match(refused.stderr, /Anschrift deines Unternehmens/);
+    const settings = (await appRequest('GET', '/settings')).body;
+    const onboarded = await appRequest('PUT', '/settings', { reason: 'Einrichtung', settings: {
+      ...settings,
+      company: { ...settings.company, name: 'CLI Desktop Werkstatt', street: 'Werkstraße 2', zip: '10115', city: 'Berlin' },
+      finance: { ...settings.finance, taxId: '12/345/67890' },
+    } });
+    assert.equal(onboarded.status, 200, JSON.stringify(onboarded.body));
     const invoice = await ok(['invoices', 'create', '--client-id', clientId, '--document', JSON.stringify(document)]);
     assert.ok(invoice.number);
     const seenByApp = await appRequest('GET', '/invoices');

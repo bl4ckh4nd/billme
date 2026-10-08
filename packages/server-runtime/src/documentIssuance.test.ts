@@ -48,7 +48,13 @@ const setup = async (product: Product) => {
   );
   await database.query(
     'INSERT INTO server_settings (tenant_id,settings_json,created_at,updated_at) VALUES ($1,$2,$3,$3)',
-    [tenantId, JSON.stringify({ ...DEFAULT_SETTINGS, portal: { baseUrl: 'https://portal.example.test' } }), now],
+    [tenantId, JSON.stringify({
+      ...DEFAULT_SETTINGS,
+      // What onboarding stores; §14 UStG refuses invoices from a seller without address and tax number.
+      company: { ...DEFAULT_SETTINGS.company, name: 'Issuer GmbH', street: 'Werkstraße 1', zip: '10115', city: 'Berlin' },
+      finance: { ...DEFAULT_SETTINGS.finance, taxId: '12/345/67890' },
+      portal: { baseUrl: 'https://portal.example.test' },
+    }), now],
   );
   const repositories = createPostgresBillingDependencies(database);
   const headers = { 'x-billme-local-token': 'architecture-local-token' };
@@ -65,7 +71,7 @@ const setup = async (product: Product) => {
       clientAddress: 'Teststraße 1\n10115 Berlin',
       date: '2026-09-01',
       validUntil: '2026-09-30',
-      amount: 100,
+      amount: 119, // gross of the 100 € line at 19 %
       status: 'accepted',
       history: [],
       items: [{ kind: 'item', description: 'Issuance work', quantity: 1, price: 100, total: 100, taxRate: 19, unit: 'Stk' }],
@@ -122,7 +128,7 @@ test('Lite revisions remain editable and atomically replace only an unpaid issue
   t.after(() => h.app.close());
   const sourceId = randomUUID();
   const source = await h.repositories.invoiceRepo.save(h.scope, {
-    kind: 'invoice', tenantId: h.tenantId, id: sourceId, number: 'RE-ORIGINAL', client: 'Buyer', clientEmail: 'buyer@example.test',
+    kind: 'invoice', tenantId: h.tenantId, id: sourceId, number: 'RE-ORIGINAL', client: 'Buyer', clientEmail: 'buyer@example.test', clientAddress: 'Teststraße 1\n10115 Berlin',
     date: '2026-09-01', dueDate: '2026-09-15', servicePeriod: '2026-09-01', amount: 119, status: 'open', history: [], payments: [],
     items: [{ kind: 'item', description: 'Original', quantity: 1, price: 100, total: 100, taxRate: 19 }],
     taxMode: 'standard_vat', taxMeta: { defaultVatRate: 19 }, taxSnapshot: { vatRateApplied: 19, vatAmount: 19, netAmount: 100, grossAmount: 119, einvoiceCategoryCode: 'S' },
@@ -480,7 +486,7 @@ test('pro document-chain issuance posts billing documents, skips non-billing kin
     'SELECT allocated_amount FROM open_items WHERE tenant_id=$1 AND source_id=$2',
     [harness.tenantId, settlementId],
   );
-  assert.equal(Number(sourceItem.rows[0]?.allocated_amount), 23.8);
+  assert.equal(Number(sourceItem.rows[0]?.allocated_amount), 20, 'the credit note amount is gross');
 
   // Case 5: a failure inside posting rolls back every effect; the same id retries.
   const targetId = `rollback-${suffix}`;
@@ -505,7 +511,7 @@ test('pro document-chain issuance posts billing documents, skips non-billing kin
       id: targetId,
       orderId: orderPayload.id,
       kind: 'partial_invoice',
-      amount: 15,
+      amount: 11.9, // 10 € net at 19 %: 15 € gross has no cent-exact net
       date: '2026-09-04',
       reason: 'Issuance: scheitert',
     };
@@ -548,7 +554,7 @@ test('pro document-chain issuance posts billing documents, skips non-billing kin
     id: targetId,
     orderId: orderPayload.id,
     kind: 'partial_invoice',
-    amount: 15,
+    amount: 11.9,
     date: '2026-09-04',
     reason: 'Issuance: scheitert',
   });

@@ -111,7 +111,7 @@ test('the embedded dunning run mails the rendered dunning letter as PDF attachme
     await app.ready();
     const due = localIsoDate(new Date(now.getTime() - 20 * 86_400_000));
     const saved = await app.inject({ method: 'POST', url: '/api/v1/lite/invoices', headers, payload: { reason: 'test', invoice: {
-      kind: 'invoice', id: 'overdue-1', number: 'RE-0042', client: 'Kanzlei Weber', clientEmail: 'weber@example.com',
+      kind: 'invoice', id: 'overdue-1', number: 'RE-0042', client: 'Kanzlei Weber', clientEmail: 'weber@example.com', clientAddress: 'Kanzleiweg 3\n14467 Potsdam',
       date: due, dueDate: due, amount: 100, status: 'open', items: [{ kind: 'item', description: 'Beratung', quantity: 1, price: 100, total: 100, taxRate: 0 }], payments: [],
     } } });
     assert.equal(saved.statusCode, 200, saved.body);
@@ -131,10 +131,10 @@ test('the embedded dunning run mails the rendered dunning letter as PDF attachme
     assert.ok(mail.includes(`${saved.json().number}.pdf`));
     assert.match(mail, /Content-Type: application\/pdf/);
 
-    // The letter's figures after the run: the fee is on the invoice and in the history, but counted once.
+    // The letter's figures after the run: the fee is in the history only; the issued invoice keeps its amount.
     const context = (await app.inject({ method: 'GET', url: '/api/v1/lite/documents/dunning/overdue-1/render-context', headers })).json();
     assert.equal(context.templateKind, 'dunning');
-    assert.equal(context.document.amount, 102.5);
+    assert.equal(context.document.amount, 100);
     assert.deepEqual(
       { level: context.dunning.level, levelName: context.dunning.levelName, fee: context.dunning.fee, originalAmount: context.dunning.originalAmount, daysOverdue: context.dunning.daysOverdue },
       { level: 2, levelName: '1. Mahnung', fee: 2.5, originalAmount: 100, daysOverdue: 20 },
@@ -174,7 +174,8 @@ test('dunning claims fence expired owners and require audited review after uncer
   assert.notEqual(second.delivery.id, first.delivery.id);
   assert.equal(await delivery.begin(scope, first.delivery.id), false, 'Expired owner cannot invoke provider');
   await delivery.fail(scope, second.delivery.id, 'Render failed');
-  assert.equal((await repository.getById(scope, 'claim-invoice'))!.amount, 100, 'Preparation failure cannot apply fee');
+  const fees = async () => Number((await database.query<{ fee: string }>('SELECT COALESCE(SUM(fee_applied),0) AS fee FROM dunning_history WHERE tenant_id=$1 AND invoice_id=$2', [tenantId, 'claim-invoice'])).rows[0]!.fee);
+  assert.equal(await fees(), 0, 'Preparation failure cannot apply fee');
   const third = (await delivery.claim(scope, 'claim-invoice', level))!;
   assert.equal(await delivery.begin(scope, third.delivery.id), true);
   await delivery.fail(scope, third.delivery.id, 'Connection lost after possible acceptance');
@@ -183,9 +184,10 @@ test('dunning claims fence expired owners and require audited review after uncer
   assert.equal(listed.statusCode, 200, listed.body); assert.equal(listed.json()[0].state, 'unknown');
   const resolved = await app.inject({ method: 'POST', url: '/api/v1/lite/dunning/deliveries/resolve', headers, payload: { id: third.delivery.id, accepted: true, reason: 'Provider log confirms acceptance' } });
   assert.equal(resolved.statusCode, 200, resolved.body);
-  assert.equal((await repository.getById(scope, 'claim-invoice'))!.amount, 102.5);
+  assert.equal(await fees(), 2.5);
+  assert.equal((await repository.getById(scope, 'claim-invoice'))!.amount, 100, 'the fee never changes the issued invoice');
   assert.equal(await delivery.claim(scope, 'claim-invoice', level), null);
   const replay = await app.inject({ method: 'POST', url: '/api/v1/lite/dunning/deliveries/resolve', headers, payload: { id: third.delivery.id, accepted: true, reason: 'Do not apply fee twice' } });
   assert.equal(replay.statusCode, 409);
-  assert.equal((await repository.getById(scope, 'claim-invoice'))!.amount, 102.5);
+  assert.equal(await fees(), 2.5, 'the fee is applied once');
 });

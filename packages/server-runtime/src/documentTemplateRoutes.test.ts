@@ -14,7 +14,7 @@ const headers = { 'x-billme-local-token': token };
 const settings = {
   company: { name: 'Holzwerk Brandt', owner: 'Jana Brandt', street: 'Sägewerkstraße 12', zip: '14482', city: 'Potsdam', email: '', phone: '', website: '' },
   catalog: { categories: [] },
-  finance: { bankName: '', iban: '', bic: '', taxId: '', vatId: '', registerCourt: '' },
+  finance: { bankName: '', iban: '', bic: '', taxId: '046/123/45678', vatId: '', registerCourt: '' },
   numbers: {
     invoicePrefix: 'RE-', nextInvoiceNumber: 1, numberLength: 4,
     offerPrefix: 'AN-', nextOfferNumber: 1, customerPrefix: 'KD-', nextCustomerNumber: 1, customerNumberLength: 4,
@@ -43,7 +43,7 @@ const boot = (database: PgliteServerDatabase) => buildServerApi({
 /** The server prices a draft from its lines, so the amount follows them. */
 const line = (total: number) => [{ kind: 'item', description: 'Beratung', quantity: 1, price: total, total, taxRate: 0 }];
 const invoice = (id: string, extra: Record<string, unknown> = {}) => ({
-  kind: 'invoice', id, number: `RE-${id}`, client: 'Kanzlei Weber', clientEmail: 'weber@example.com',
+  kind: 'invoice', id, number: `RE-${id}`, client: 'Kanzlei Weber', clientEmail: 'weber@example.com', clientAddress: 'Kanzleiweg 3\n14467 Potsdam',
   date: '2026-09-24', dueDate: '2026-10-08', amount: 100, status: 'draft', items: line(100), payments: [], ...extra,
 });
 

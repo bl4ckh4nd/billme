@@ -2,6 +2,7 @@ import type {
   ClientProjectShape,
   DefaultProjectPorts,
   DocumentNumberKind,
+  DocumentNumberReservation,
   DocumentNumberingPorts,
   MaybePromise,
   NumberingSettingsShape,
@@ -144,9 +145,10 @@ const createDocumentNumberReservation = <TSettings extends NumberingSettingsShap
   kind: DocumentNumberKind,
   counterValue: number,
   number: string,
+  advanceCounter = true,
 ): MaybePromise<{ reservationId: string; number: string }> => {
-  setCurrentCounter(settings, kind, counterValue + 1);
-  return chainMaybePromise(ports.saveSettings(settings), () =>
+  if (advanceCounter) setCurrentCounter(settings, kind, counterValue + 1);
+  return chainMaybePromise(advanceCounter ? ports.saveSettings(settings) : undefined, () =>
     chainMaybePromise(ports.generateReservationId(), (reservationId) =>
       chainMaybePromise(
         ports.createReservation({
@@ -199,7 +201,24 @@ export function reserveDocumentNumber<TSettings extends NumberingSettingsShape>(
         });
       };
 
-      return reserveNextNumber();
+      // A released number below the counter is handed out first, so an abandoned
+      // or deleted draft leaves no gap (§14 UStG). Numbers of another year stay unused.
+      const reuseReleasedNumber = (
+        candidates: DocumentNumberReservation[],
+      ): MaybePromise<{ reservationId: string; number: string }> => {
+        const [candidate, ...rest] = candidates;
+        if (!candidate) return reserveNextNumber();
+        if (candidate.counterValue >= counterValue
+          || formatDocumentNumber(settings, kind, candidate.counterValue, now) !== candidate.number) {
+          return reuseReleasedNumber(rest);
+        }
+        return chainMaybePromise(ports.isNumberTaken(kind, candidate.number), (taken) =>
+          taken
+            ? reuseReleasedNumber(rest)
+            : createDocumentNumberReservation(ports, settings, kind, candidate.counterValue, candidate.number, false));
+      };
+
+      return chainMaybePromise(ports.listReleasedReservations(kind), reuseReleasedNumber);
     });
   });
 }
@@ -275,6 +294,10 @@ export function finalizeDocumentNumber<TSettings extends NumberingSettingsShape>
       }
       if (reservation.status !== 'reserved') {
         throw new Error(`Cannot finalize reservation in status "${reservation.status}"`);
+      }
+      // A saved draft holds its reservation; no other document may take it.
+      if (reservation.documentId !== null && reservation.documentId !== documentId) {
+        throw new Error('FINALIZED_RESERVATION_DOCUMENT_MISMATCH');
       }
 
       return chainMaybePromise(

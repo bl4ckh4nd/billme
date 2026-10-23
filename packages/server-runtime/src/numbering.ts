@@ -97,6 +97,12 @@ export const createNumberingPortsForDb = (
     );
     return Boolean(reservationMatch.rows[0]?.exists);
   },
+  async listReleasedReservations(kind: DocumentNumberKind) {
+    return (await listServerNumberReservations(db, scope.tenantId))
+      .filter((entry) => entry.kind === kind && entry.status === 'released')
+      .sort((a, b) => a.counterValue - b.counterValue)
+      .map(({ id, number, counterValue, status, documentId }) => ({ id, kind, number, counterValue, status, documentId }));
+  },
   async generateReservationId() {
     return randomUUID();
   },

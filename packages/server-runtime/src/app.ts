@@ -506,7 +506,10 @@ const registerBillingRoutes = (app: FastifyInstance, product: 'lite' | 'pro', pr
           await finalizeDocumentNumber(numbering, issuanceReservationId, nextInvoice.id);
         }
         const after = await repositories.invoiceRepo.save(session.scope, nextInvoice);
-        if (body.reservationId) await finalizeDocumentNumber(createNumberingPortsForDb(transaction, session.scope), body.reservationId, after.id);
+        // A draft only holds its number; it is finalized when the invoice is issued, so a deleted draft gives it back.
+        if (body.reservationId && after.status === 'draft') {
+          await transaction.query("UPDATE number_reservations SET document_id=$3 WHERE tenant_id=$1 AND id=$2 AND status='reserved'", [session.scope.tenantId, body.reservationId, after.id]);
+        } else if (body.reservationId) await finalizeDocumentNumber(createNumberingPortsForDb(transaction, session.scope), body.reservationId, after.id);
         await repositories.auditLog.append(
           session.scope,
           buildAuditEntry(
@@ -696,6 +699,11 @@ const registerBillingRoutes = (app: FastifyInstance, product: 'lite' | 'pro', pr
         }
         if (existing.status !== 'draft') throw new ApiError(409, 'Gestellte Rechnungen können nicht gelöscht werden. Bitte eine Gutschrift oder Stornorechnung erstellen.');
         await repositories.invoiceRepo.remove(session.scope, params.id);
+        // The draft's number goes back to the pool (older drafts carry a finalized reservation).
+        await transaction.query(
+          "UPDATE number_reservations SET status='released', updated_at=$3 WHERE tenant_id=$1 AND document_id=$2 AND kind IN ('invoice','order_confirmation','delivery_note') AND status<>'released'",
+          [session.scope.tenantId, params.id, new Date().toISOString()],
+        );
         await repositories.auditLog.append(
           session.scope,
           buildAuditEntry(session.scope, session, 'invoice', params.id, 'invoice.delete', body.reason, existing, null),

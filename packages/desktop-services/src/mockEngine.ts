@@ -176,6 +176,9 @@ const documentNumberingPorts: SyncDocumentNumberingPorts<AppSettings> = {
         reservation.status !== 'released',
     );
   },
+  listReleasedReservations: (kind) => [...numberReservations.values()]
+    .filter((reservation) => reservation.kind === kind && reservation.status === 'released')
+    .sort((a, b) => a.counterValue - b.counterValue),
   generateReservationId: () => Math.random().toString(36).slice(2),
 };
 

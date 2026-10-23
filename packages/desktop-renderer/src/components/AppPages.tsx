@@ -201,6 +201,24 @@ export const DocumentEditorPage: React.FC<{ reasonSuggestions?: readonly string[
   const [pendingDoc, setPendingDoc] = React.useState<Invoice | Offer | null>(null);
   const [reason, setReason] = React.useState('');
 
+  // Leaving a new document without saving or cancelling (back navigation, hash change)
+  // gives its reserved number back. The deferred check skips StrictMode's remount.
+  const mountedRef = React.useRef(false);
+  React.useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      const left = useUiStore.getState();
+      const reservationId = left.editingDocumentMode === 'create' ? left.editingInvoice?.numberReservationId : undefined;
+      if (!reservationId) return;
+      setTimeout(() => {
+        if (mountedRef.current || useUiStore.getState().editingInvoice !== left.editingInvoice) return;
+        useUiStore.getState().clearEditingInvoice();
+        void ipc.numbers.release({ reservationId }).catch(() => undefined);
+      });
+    };
+  }, []);
+
   if (!invoice) {
     return (
       <div className="flex min-h-full items-center justify-center p-5">

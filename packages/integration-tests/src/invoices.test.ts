@@ -10,8 +10,9 @@ import { addDays, asSmallBusiness, datevEvidence, draftInvoice, draftOffer, issu
  *
  * How this can fail (each one has a test below):
  * - numbers: duplicates, gaps on issue, a released number not handed out
- *   again, concurrent reservations colliding, a reservation reused for another
- *   document, the year placeholder not expanded
+ *   again (also when a later number was reserved meanwhile), a deleted draft
+ *   keeping its number, concurrent reservations colliding, a reservation
+ *   reused for another document, the year placeholder not expanded
  * - issuing: a draft issued without a number, a direct jump draft → paid
  * - §14 UStG at issue: an invoice issued without the buyer's address, without
  *   the seller's address or tax number, without a priced line, due before it is
@@ -60,6 +61,22 @@ for (const product of PRODUCTS) describe(`invoices (${product})`, () => {
       const second = await h.api.numbers.reserve({ kind: 'invoice' });
       assert.equal(second.number, first.number);
       await h.api.numbers.release({ reservationId: second.reservationId });
+    });
+
+    test('a released number comes back even when a later one was reserved meanwhile', async () => {
+      const abandoned = await h.api.numbers.reserve({ kind: 'invoice' });
+      const later = await h.api.numbers.reserve({ kind: 'invoice' });
+      await h.api.numbers.release({ reservationId: abandoned.reservationId });
+      const issued = await issueInvoice(h.api, { client: 'Lücke' });
+      assert.equal(issued.number, abandoned.number);
+      await h.api.numbers.release({ reservationId: later.reservationId });
+    });
+
+    test('a deleted draft gives its number to the next invoice', async () => {
+      const draft = await draftInvoice(h.api, { client: 'Verworfen' });
+      await h.api.invoices.delete({ id: draft.id, reason: 'verworfen' });
+      const issued = await issueInvoice(h.api, { client: 'Nachfolger' });
+      assert.equal(issued.number, draft.number);
     });
 
     test('issued invoices get consecutive numbers and offers count separately', async () => {

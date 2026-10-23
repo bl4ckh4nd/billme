@@ -848,6 +848,8 @@ export interface DocumentNumberingPorts<TSettings extends NumberingSettingsShape
   getReservationById(reservationId: string): MaybePromise<DocumentNumberReservation | null>;
   updateReservation(reservation: DocumentNumberReservation): MaybePromise<void>;
   isNumberTaken(kind: DocumentNumberKind, number: string): MaybePromise<boolean>;
+  /** Released reservations of `kind`, lowest counter first: the numbers a new reservation hands out again. */
+  listReleasedReservations(kind: DocumentNumberKind): MaybePromise<DocumentNumberReservation[]>;
   generateReservationId(): MaybePromise<string>;
 }
 
@@ -860,6 +862,7 @@ export interface SyncDocumentNumberingPorts<TSettings extends NumberingSettingsS
   getReservationById(reservationId: string): DocumentNumberReservation | null;
   updateReservation(reservation: DocumentNumberReservation): void;
   isNumberTaken(kind: DocumentNumberKind, number: string): boolean;
+  listReleasedReservations(kind: DocumentNumberKind): DocumentNumberReservation[];
   generateReservationId(): string;
 }
 

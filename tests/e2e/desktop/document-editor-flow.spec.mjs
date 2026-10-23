@@ -69,3 +69,27 @@ test('a document picks its own template and intro text, and prints with them', a
   expect(text).toContain('ENTWURF');
   fs.copyFileSync(exported.path, path.join(artifactDir, 'invoice-own-template.pdf'));
 });
+
+test('leaving a new invoice by navigating back gives its number back', async () => {
+  const { page, baseUrl } = desktop;
+  const artifactDir = test.info().outputPath('number-release');
+  fs.mkdirSync(artifactDir, { recursive: true });
+
+  await page.goto(appUrl(baseUrl, '/documents'));
+  await page.getByRole('button', { name: 'Neue Rechnung' }).first().click();
+  const numberField = page.getByRole('textbox', { name: 'Rechnungs-Nr.' });
+  await expect(numberField).not.toHaveValue('');
+  const abandoned = await numberField.inputValue();
+  await page.screenshot({ path: path.join(artifactDir, '01-new-invoice.png') });
+
+  // Mouse back button / Alt+Left: the editor unmounts without its own "Zurück".
+  await page.goBack();
+  await expect(page).toHaveURL(/#\/documents(?:\?|$)/);
+  // The release runs after the editor unmounts; the next reservation must get the same number.
+  await expect.poll(async () => {
+    const next = await invokeDesktopIpc(page, 'numbers:reserve', { kind: 'invoice' });
+    await invokeDesktopIpc(page, 'numbers:release', { reservationId: next.reservationId });
+    return next.number;
+  }).toBe(abandoned);
+  fs.writeFileSync(path.join(artifactDir, 'released-number.txt'), `${abandoned}\n`);
+});

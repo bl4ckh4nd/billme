@@ -119,6 +119,10 @@ export const createServerRecurringDependencies = (
       return reservations.some((reservation) => reservation.kind === kind
         && reservation.number === number && reservation.status !== 'released');
     },
+    listReleasedReservations: async (kind) => (await listServerNumberReservations(database, scope.tenantId))
+      .filter((entry) => entry.kind === kind && entry.status === 'released')
+      .sort((a, b) => a.counterValue - b.counterValue)
+      .map(({ id, number, counterValue, status, documentId }) => ({ id, kind, number, counterValue, status, documentId })),
     generateReservationId: async () => randomUUID(),
   };
 

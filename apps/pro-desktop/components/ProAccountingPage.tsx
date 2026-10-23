@@ -37,7 +37,6 @@ import type {
   ReportResult,
 } from '@billme/accounting-shared';
 import type { OposBankTransaction } from '@billme/accounting-ui-pro';
-import { ProAccountRulesModal } from './ProAccountRulesModal';
 import {
   mapBwa01Report,
   mapEurReport,
@@ -136,6 +135,7 @@ const mapTransactions = (
   rows: Awaited<ReturnType<typeof ipc.pro.listBankTransactions>>,
   virtualPostedTransactionIds: ReadonlySet<string> = new Set(),
   draftsByTransactionId: ReadonlyMap<string, NonNullable<IpcResult<'pro:getDraftByTransactionId'>>> = new Map(),
+  accountNamesById: ReadonlyMap<string, string> = new Map(),
 ): ProUiTransaction[] => {
   return rows.map((row) => {
     // The persisted booking draft owns the workflow state and its validation
@@ -143,7 +143,8 @@ const mapTransactions = (
     const draft = draftsByTransactionId.get(row.id);
     const workflowStatus: ProUiTransaction['workflowStatus'] =
       row.status === 'booked' || row.linkedInvoiceId ? 'posted' : draft?.workflowStatus ?? 'imported';
-    const missingReceipt = !row.linkedInvoiceId;
+    // A transfer between own accounts has no receipt: the other bank statement is the evidence.
+    const missingReceipt = !row.linkedInvoiceId && !row.transfer;
     const draftIssues = draft?.validationIssues ?? [];
     const draftErrors = draftIssues.filter((issue) => issue.severity === 'error').length;
     const draftWarnings = draftIssues.filter((issue) => issue.severity === 'warning').length;
@@ -159,6 +160,10 @@ const mapTransactions = (
       workflowStatus,
       suggestion: row.suggestedAccountNumber,
       suggestionConfidence: row.suggestionConfidence,
+      suggestionLayer: row.suggestionLayer,
+      suggestionReason: row.suggestionReason,
+      accountName: accountNamesById.get(row.accountId),
+      transfer: row.transfer,
       hasReceipt: !missingReceipt,
       issueCounts: {
         errors: draftErrors,
@@ -224,6 +229,7 @@ const mapEntityDraftToUiDraft = (
     })),
     activity: [],
     isVirtualProjection: draft.isVirtualProjection,
+    ruleTrace: draft.ruleTrace,
     assignedTo: undefined,
     approval: {
       required: false,
@@ -334,7 +340,6 @@ export const ProAccountingPage: React.FC<{ view?: unknown; onViewChange?: (view:
     },
   });
   const importSkr = useImportSkrMutation();
-  const [showRulesModal, setShowRulesModal] = React.useState(false);
   const [importMessage, setImportMessage] = React.useState<string | null>(null);
   const [importFailed, setImportFailed] = React.useState(false);
   const [adapterBusy, setAdapterBusy] = React.useState(false);
@@ -368,6 +373,7 @@ export const ProAccountingPage: React.FC<{ view?: unknown; onViewChange?: (view:
       transactionRows,
       virtualPostedTransactionIds,
       new Map(draftRows.map((draft) => [draft.transactionId, draft])),
+      new Map(bankAccounts.map((account) => [account.id, account.name])),
     );
     const mergedTransactions = baseTransactions;
     const bankAccountNumberByTransactionId = Object.fromEntries(
@@ -765,6 +771,15 @@ export const ProAccountingPage: React.FC<{ view?: unknown; onViewChange?: (view:
       listAccountSuggestionRules() {
         return ipc.pro.listAccountSuggestionRules({ chart: activeChart });
       },
+      confirmTransfer(args) {
+        return runMutation(() => ipc.pro.confirmTransfer(args));
+      },
+      rejectTransfer(transactionId) {
+        return runMutation(() => ipc.pro.rejectTransfer({ transactionId }));
+      },
+      getTransitOverview() {
+        return ipc.pro.getTransitOverview();
+      },
     };
   }, [accountNames, activeChart, bankAccounts, invalidateProQueries, runMutation]);
 
@@ -812,7 +827,7 @@ export const ProAccountingPage: React.FC<{ view?: unknown; onViewChange?: (view:
         title={areaTitle}
         description={areaSubtitle}
         actions={(view === 'inbox' || view === 'reconciliation' || view === undefined) ? (
-          <Button variant="secondary" onClick={() => setShowRulesModal(true)}>
+          <Button variant="secondary" onClick={() => { window.location.hash = '#/settings?section=rules'; }}>
             <Settings2 size={16} aria-hidden="true" />
             Regeln
           </Button>
@@ -830,7 +845,7 @@ export const ProAccountingPage: React.FC<{ view?: unknown; onViewChange?: (view:
         <ProAccountingWorkspace
           view={view}
           onViewChange={onViewChange}
-          onManageRules={() => setShowRulesModal(true)}
+          onManageRules={(transactionId) => { window.location.hash = `#/settings?section=rules${transactionId ? `&ruleFrom=${encodeURIComponent(transactionId)}` : ''}`; }}
           seed={seed}
           dataAdapter={dataAdapter}
           busy={adapterBusy}
@@ -846,15 +861,6 @@ export const ProAccountingPage: React.FC<{ view?: unknown; onViewChange?: (view:
           }}
         />
       </div>
-      {showRulesModal && (
-        <ProAccountRulesModal
-          chartFramework={(seed.chartFramework ?? 'SKR03') as 'SKR03' | 'SKR04'}
-          onClose={() => setShowRulesModal(false)}
-          onRulesChanged={() => {
-            void queryClient.invalidateQueries({ queryKey: ['pro-accounting', 'transactions'] });
-          }}
-        />
-      )}
     </div>
   );
 };

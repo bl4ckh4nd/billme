@@ -67,6 +67,13 @@ import {
   openRouterVlmConfigSchema,
   openRouterVlmAnalyzeInputSchema,
   openRouterVlmAnalyzeResultSchema,
+  bankTransferInfoSchema,
+  proBookingSettingsSchema,
+  proSaveBookingSettingsArgsSchema,
+  proTransferArgsSchema,
+  transitOverviewSchema,
+  ruleApplicationPreviewSchema,
+  proApplyRulesArgsSchema,
 } from './schemas';
 
 const okSchema = z.object({ ok: z.literal(true) });
@@ -86,8 +93,10 @@ const transactionSchema = z.object({
   importBatchId: z.string().optional(),
   suggestedAccountNumber: z.string().optional(),
   suggestionReason: z.string().optional(),
-  suggestionLayer: z.enum(['rule', 'counterparty', 'bayes', 'keyword', 'fallback']).optional(),
+  suggestionLayer: z.enum(['transfer', 'rule', 'counterparty', 'bayes', 'keyword', 'fallback']).optional(),
   suggestionConfidence: z.number().optional(),
+  counterpartyIban: z.string().optional(),
+  transfer: bankTransferInfoSchema.optional(),
 });
 
 const invoiceMatchSuggestionSchema = z.object({
@@ -484,6 +493,41 @@ export const ipcRoutes = {
     channel: 'pro:deleteAccountSuggestionRule',
     args: proDeleteAccountSuggestionRuleArgsSchema,
     result: okSchema,
+  },
+  'pro:getBookingSettings': {
+    channel: 'pro:getBookingSettings',
+    args: z.undefined(),
+    result: proBookingSettingsSchema,
+  },
+  'pro:saveBookingSettings': {
+    channel: 'pro:saveBookingSettings',
+    args: proSaveBookingSettingsArgsSchema,
+    result: proBookingSettingsSchema,
+  },
+  'pro:confirmTransfer': {
+    channel: 'pro:confirmTransfer',
+    args: proTransferArgsSchema,
+    result: z.array(bookingDraftEntitySchema),
+  },
+  'pro:rejectTransfer': {
+    channel: 'pro:rejectTransfer',
+    args: z.object({ transactionId: z.string().min(1) }),
+    result: okSchema,
+  },
+  'pro:getTransitOverview': {
+    channel: 'pro:getTransitOverview',
+    args: z.undefined(),
+    result: transitOverviewSchema,
+  },
+  'pro:previewRuleApplication': {
+    channel: 'pro:previewRuleApplication',
+    args: z.undefined(),
+    result: ruleApplicationPreviewSchema,
+  },
+  'pro:applyRules': {
+    channel: 'pro:applyRules',
+    args: proApplyRulesArgsSchema,
+    result: z.object({ updated: z.number().int() }),
   },
   'pro:getDraftByTransactionId': {
     channel: 'pro:getDraftByTransactionId',

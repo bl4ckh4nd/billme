@@ -154,6 +154,34 @@ export interface ProAccountingDataAdapter {
   postIncomingInvoiceAccounting?: (invoiceId: string, options: { reason: string; softLockOverride?: boolean; overrideReason?: string }) => Promise<AccountingPostingPreview>;
   findInvoiceMatches?: (transactionId: string) => Promise<InvoiceMatchCandidate[]>;
   listAccountSuggestionRules?: () => Promise<AccountSuggestionRuleSummary[]>;
+  /** Books a transfer over Geldtransit; with `post` both approved sides are posted right away. */
+  confirmTransfer?: (args: { transactionId: string; partnerTransactionId?: string; post?: boolean }) => Promise<unknown>;
+  /** „Keine Umbuchung“: the line is booked normally again; a posted side needs a Storno first. */
+  rejectTransfer?: (transactionId: string) => Promise<unknown>;
+  getTransitOverview?: () => Promise<TransitOverview>;
+}
+
+/** Geldtransit balance per month and the posted sides still waiting for their partner. */
+export interface TransitOverview {
+  transitAccountNumber: string;
+  months: Array<{ period: string; debit: number; credit: number; balance: number; cumulative: number }>;
+  openBalance: number;
+  openSides: Array<{
+    transactionId: string;
+    accountId: string;
+    accountName: string;
+    ledgerAccountNumber: string;
+    date: string;
+    amount: number;
+    counterparty: string;
+    purpose: string;
+    entryNumber: number;
+    postingDate: string;
+    partnerAccountId?: string;
+    partnerAccountName?: string;
+    partnerTransactionId?: string;
+    candidates: Array<{ transactionId: string; accountId: string; accountName: string; date: string; amount: number; counterparty: string; purpose: string; days: number; outsideWindow: boolean }>;
+  }>;
 }
 
 /** An open invoice the bank payment could settle, as the existing invoice matcher reports it. */
@@ -179,6 +207,9 @@ export interface AccountSuggestionRuleSummary {
   createdAt: string;
   hitCount?: number;
   lastHitAt?: string;
+  name?: string;
+  stage?: 'base' | 'override';
+  actions?: { accountNumber?: string; taxCaseKey?: string };
 }
 
 export interface ReportSnapshotRecord {

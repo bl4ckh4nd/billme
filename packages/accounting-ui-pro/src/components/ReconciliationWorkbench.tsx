@@ -8,7 +8,7 @@ import { normalizeTaxCaseKey, toLegacyTaxCode } from '../domain/taxCases';
 import { getAllowedActions } from '../domain/workflow';
 import { permissionContextForRole } from '../domain/permissions';
 import { useAccountingWorkspace, useWorkspaceLifetime } from '../AccountingWorkspaceContext';
-import { Account, BookingAction, BookingDraft, BookingWorkflowStatus, JournalLine, Transaction, UserRole } from '../types';
+import { Account, BookingAction, BookingDraft, BookingWorkflowStatus, JournalLine, Transaction, TransferInfo, UserRole } from '../types';
 import type { AccountSuggestionRuleSummary, InvoiceMatchCandidate, ProAccountingDataAdapter } from '../services/accountingDataAdapter';
 import { Badge, Button, Card, CardHeader, ConfirmDialog, EmptyState, HatchedProgress, IconButton, Input, Select, cn } from '@billme/ui';
 import AccountCombobox from './AccountCombobox';
@@ -81,7 +81,7 @@ interface ReconciliationWorkbenchProps {
   /** Invoice matching and rule statistics; without them the workbench shows neither. */
   dataAdapter?: ProAccountingDataAdapter;
   /** Opens the host's rule editor. */
-  onManageRules?: () => void;
+  onManageRules?: (transactionId?: string) => void;
   /** Opens Offene Posten with the invoice preselected, where the payment is settled with a ledger entry. */
   onOpenInvoice?: (invoiceId: string) => void;
 }
@@ -181,6 +181,8 @@ export default function ReconciliationWorkbench({
   const confident = useMemo(
     () =>
       queue.flatMap((tx) => {
+        // Transfers confirm as a pair below; one side alone would leave Geldtransit open.
+        if (tx.transfer) return [];
         if ((tx.suggestionConfidence ?? 0) < CONFIDENT_THRESHOLD) return [];
         const txDraft = getBookingDraftByTransactionId(tx.id);
         if (!txDraft || txDraft.validationIssues.some((issue) => issue.blocking)) return [];
@@ -203,6 +205,19 @@ export default function ReconciliationWorkbench({
       }),
     [queue, permissionCtx, accounts, bankAccountNumberByTransactionId, configuredBankAccountNumber, candidatesById, canMatchInvoices],
   );
+  // Sichere Umbuchungen: own IBAN named and the partner line imported. One entry per pair.
+  const confidentTransfers = useMemo(() => {
+    const seen = new Set<string>();
+    return queue.filter((tx) => {
+      const transfer = tx.transfer;
+      if (!transfer || transfer.status !== 'suggested' || transfer.level !== 'sicher' || !transfer.partnerTransactionId) return false;
+      if (seen.has(tx.id)) return false;
+      seen.add(tx.id).add(transfer.partnerTransactionId);
+      return true;
+    });
+  }, [queue]);
+  const transferCount = queue.filter((tx) => tx.transfer).length;
+  const confirmCount = confident.length + confidentTransfers.length;
   const [batchOpen, setBatchOpen] = useState(false);
   const [batchResult, setBatchResult] = useState<string | null>(null);
   const done = transactions.length - queue.length;
@@ -224,12 +239,20 @@ export default function ReconciliationWorkbench({
         failures.push(`${tx.payee}: ${error instanceof Error ? error.message : 'unbekannter Fehler'}`);
       }
     }
+    for (const tx of confidentTransfers) {
+      if (!isCurrent()) return;
+      try {
+        await dataAdapter?.confirmTransfer?.({ transactionId: tx.id, partnerTransactionId: tx.transfer?.partnerTransactionId, post: true });
+      } catch (error) {
+        failures.push(`${tx.payee}: ${error instanceof Error ? error.message : 'unbekannter Fehler'}`);
+      }
+    }
     setMutationBusy(false);
     if (!isCurrent()) return;
     setBatchResult(
       failures.length === 0
-        ? `${confident.length} sichere Treffer weitergeführt.`
-        : `${confident.length - failures.length} weitergeführt, ${failures.length} fehlgeschlagen: ${failures.join('; ')}`,
+        ? `${confirmCount} sichere Treffer weitergeführt.`
+        : `${confirmCount - failures.length} weitergeführt, ${failures.length} fehlgeschlagen: ${failures.join('; ')}`,
     );
     onRefresh();
   };
@@ -343,6 +366,19 @@ export default function ReconciliationWorkbench({
       onRefresh();
     } catch (error) {
       setMutationError(error instanceof Error ? error.message : 'Aktion konnte nicht gespeichert werden.');
+    } finally {
+      setMutationBusy(false);
+    }
+  };
+
+  const runTransferAction = async (action: () => Promise<unknown>) => {
+    setMutationBusy(true);
+    setMutationError(null);
+    try {
+      await action();
+      onRefresh();
+    } catch (error) {
+      setMutationError(error instanceof Error ? error.message : 'Umbuchung konnte nicht gespeichert werden.');
     } finally {
       setMutationBusy(false);
     }
@@ -472,9 +508,12 @@ export default function ReconciliationWorkbench({
                 <p className="text-section text-foreground">
                   {done} von {transactions.length} Umsätzen erledigt
                 </p>
-                <span className="text-caption text-muted">{queue.length} offen</span>
+                <span className="text-caption text-muted">
+                  {queue.length} offen
+                  {transferCount > 0 && <> · davon {transferCount} {transferCount === 1 ? 'Seite einer Umbuchung' : 'Seiten von Umbuchungen'}, {confidentTransfers.length * 2} sicher erkannt</>}
+                </span>
               </div>
-              {confident.length > 0 && (
+              {confirmCount > 0 && (
                 <Button
                   variant="secondary"
                   size="sm"
@@ -482,7 +521,7 @@ export default function ReconciliationWorkbench({
                   disabled={mutationBusy || !permissionCtx.canMutate}
                 >
                   <CheckCircle2 size={14} aria-hidden="true" />
-                  Sichere Treffer bestätigen ({confident.length})
+                  Sichere Treffer bestätigen ({confirmCount})
                 </Button>
               )}
             </div>
@@ -494,8 +533,8 @@ export default function ReconciliationWorkbench({
         </section>
         <ConfirmDialog
           open={batchOpen}
-          title={`${confident.length} sichere Treffer bestätigen?`}
-          description="Jeder Umsatz geht mit seinem Vorschlag den nächsten Workflow-Schritt, genau wie beim Einzelabgleich. Prüfungen und Freigaben bleiben erhalten."
+          title={`${confirmCount} sichere Treffer bestätigen?`}
+          description="Jeder Umsatz geht mit seinem Vorschlag den nächsten Workflow-Schritt, genau wie beim Einzelabgleich. Prüfungen und Freigaben bleiben erhalten. Sichere Umbuchungen werden mit beiden Seiten über Geldtransit gebucht."
           confirmLabel="Bestätigen"
           cancelLabel="Abbrechen"
           busy={mutationBusy}
@@ -505,6 +544,12 @@ export default function ReconciliationWorkbench({
                 <li key={tx.id} className="flex justify-between gap-3">
                   <span className="min-w-0 truncate">{tx.payee}</span>
                   <span className="shrink-0 text-muted">{actionLabel(action)} · <span className="tabular-nums">{formatCurrency(tx.amount, tx.currency)}</span></span>
+                </li>
+              ))}
+              {confidentTransfers.map((tx) => (
+                <li key={tx.id} className="flex justify-between gap-3">
+                  <span className="min-w-0 truncate">{tx.payee}</span>
+                  <span className="shrink-0 text-muted">Umbuchung mit {tx.transfer?.partnerAccountName ?? 'eigenem Konto'} buchen · <span className="tabular-nums">{formatCurrency(tx.amount, tx.currency)}</span></span>
                 </li>
               ))}
             </ul>
@@ -546,6 +591,7 @@ export default function ReconciliationWorkbench({
                         <span className="mt-0.75 flex flex-wrap items-center gap-1.5">
                           <span className="font-mono text-caption text-muted tabular-nums">{new Date(tx.date).toLocaleDateString('de-DE')}</span>
                           <StatusBadge status={tx.workflowStatus} />
+                          {tx.transfer && <TransferBadges transfer={tx.transfer} />}
                           {candidatesById[tx.id] && isZweifelsfall(candidatesById[tx.id]) && <Badge tone="warning">Zweifelsfall</Badge>}
                           {hasIssues && <IssueBadges transaction={tx} />}
                         </span>
@@ -661,6 +707,19 @@ export default function ReconciliationWorkbench({
                         </section>
                       )}
 
+                      {selectedTx.transfer ? (
+                        <TransferProposal
+                          tx={selectedTx}
+                          partner={transactions.find((tx) => tx.id === selectedTx.transfer?.partnerTransactionId)}
+                          draft={draft}
+                          bankAccountNumber={bankAccountNumber}
+                          busy={mutationBusy}
+                          canMutate={permissionCtx.canMutate && Boolean(dataAdapter?.confirmTransfer)}
+                          onOpenPartner={(id) => setSelectedId(id)}
+                          onConfirm={() => runTransferAction(() => dataAdapter!.confirmTransfer!({ transactionId: selectedTx.id, post: true }))}
+                          onReject={() => runTransferAction(() => dataAdapter!.rejectTransfer!(selectedTx.id))}
+                        />
+                      ) : (
                       <Card padding="sm">
                         <div className="flex items-start justify-between gap-3">
                           <div className="min-w-0">
@@ -674,6 +733,16 @@ export default function ReconciliationWorkbench({
                         <p className="mt-1.5 text-caption text-muted">
                           Entwurf enthält {draft.lines.length} Buchungszeilen und {draft.validationIssues.length} Validierungshinweise.
                         </p>
+                        {draft.ruleTrace?.some((entry) => entry.matched) && (
+                          <ol aria-label="Regel-Trace" className="mt-1.5 flex flex-col gap-0.5 text-caption">
+                            {draft.ruleTrace.filter((entry) => entry.matched || entry.skipped === 'stopped').map((entry) => (
+                              <li key={`${entry.stage}-${entry.name}`} className={entry.matched ? 'text-foreground' : 'text-muted line-through'}>
+                                {entry.stage === 'base' ? 'Basis' : 'Override'} „{entry.name}“
+                                {entry.matched ? ` setzt ${entry.applied.map((field) => TRACE_FIELD_LABELS[field] ?? field).join(', ')}` : ' (nach Stopp übersprungen)'}
+                              </li>
+                            ))}
+                          </ol>
+                        )}
                         <div className="mt-2.25 flex flex-wrap gap-2">
                           <Button size="sm" onClick={runPrimaryAction} disabled={!primary || !splitIsValid || mutationBusy}>
                             <CheckCircle2 size={14} aria-hidden="true" />
@@ -681,6 +750,7 @@ export default function ReconciliationWorkbench({
                           </Button>
                         </div>
                       </Card>
+                      )}
 
                       {!splitIsValid && (
                         <div className="rounded-control border border-error-border bg-error-bg px-3 py-2.5 text-control text-error-text">
@@ -881,8 +951,13 @@ export default function ReconciliationWorkbench({
                   ? <Badge tone="warning">{staleRules.length} greifen nicht mehr</Badge>
                   : <Badge tone="success">alle greifen</Badge>)}
                 <span className="flex-1" />
+                {onManageRules && selectedTx && !selectedTx.transfer && (
+                  <Button variant="secondary" size="sm" onClick={() => onManageRules(selectedTx.id)}>
+                    Regel aus diesem Umsatz
+                  </Button>
+                )}
                 {onManageRules && (
-                  <Button variant="secondary" size="sm" onClick={onManageRules}>
+                  <Button variant="secondary" size="sm" onClick={() => onManageRules()}>
                     Regeln bearbeiten
                   </Button>
                 )}
@@ -899,12 +974,14 @@ export default function ReconciliationWorkbench({
                     const stale = staleRules.includes(rule);
                     const months = Math.max(1, Math.floor(daysSince(rule.lastHitAt ?? rule.createdAt) / 30.44));
                     return (
-                      <li key={rule.id} aria-label={`Regel ${rule.value}`} className="flex flex-wrap items-start gap-2.5 border-b border-border px-3 py-2.75 last:border-b-0">
+                      <li key={rule.id} aria-label={`Regel ${rule.name ?? rule.value}`} className="flex flex-wrap items-start gap-2.5 border-b border-border px-3 py-2.75 last:border-b-0">
                         <span className="min-w-0 flex-1">
                           <span className="text-label text-foreground">
-                            Wenn {RULE_FIELD_LABELS[rule.field]} {RULE_OPERATOR_LABELS[rule.operator]} „{rule.value}“
+                            {rule.name ?? <>Wenn {RULE_FIELD_LABELS[rule.field]} {RULE_OPERATOR_LABELS[rule.operator]} „{rule.value}“</>}
                           </span>
-                          <span className="block text-caption text-muted">dann Konto {rule.targetAccountNumber}</span>
+                          <span className="block text-caption text-muted">
+                            {rule.stage === 'override' ? 'Override:' : 'dann'} {ruleResultText(rule)}
+                          </span>
                           <span className="block text-caption text-muted tabular-nums">
                             {rule.hitCount
                               ? `${rule.hitCount} Treffer, zuletzt ${rule.lastHitAt ? new Date(rule.lastHitAt).toLocaleDateString('de-DE') : 'unbekannt'}`
@@ -923,5 +1000,109 @@ export default function ReconciliationWorkbench({
         )}
       </div>
     </div>
+  );
+}
+
+const TRACE_FIELD_LABELS: Record<string, string> = { accountNumber: 'Konto', taxCaseKey: 'Steuerfall', deductiblePercent: 'Abzug', flowType: 'Flusstyp', memo: 'Buchungstext' };
+
+const ruleResultText = (rule: AccountSuggestionRuleSummary) => {
+  const account = rule.actions ? rule.actions.accountNumber : rule.targetAccountNumber;
+  return [account && `Konto ${account}`, rule.actions?.taxCaseKey].filter(Boolean).join(' · ') || 'ändert einzelne Felder';
+};
+
+/** Accent badge naming the other own account; a warning when that side is not imported yet. */
+export function TransferBadges({ transfer }: { transfer: TransferInfo }) {
+  return (
+    <>
+      <Badge tone="accent">
+        <ArrowRightLeft size={12} aria-hidden="true" />
+        Umbuchung · {transfer.partnerAccountName ?? 'eigenes Konto'}
+      </Badge>
+      {!transfer.partnerTransactionId && <Badge tone="warning">Gegenseite fehlt</Badge>}
+    </>
+  );
+}
+
+const transferAmount = (amount: number, currency = 'EUR') =>
+  new Intl.NumberFormat('de-DE', { style: 'currency', currency }).format(Math.abs(amount));
+
+/** Both booking records of a transfer, the side at hand from its draft, the other derived from the partner account. */
+function TransferProposal({ tx, partner, draft, bankAccountNumber, busy, canMutate, onOpenPartner, onConfirm, onReject }: {
+  tx: Transaction;
+  partner?: Transaction;
+  draft: BookingDraft;
+  bankAccountNumber?: string;
+  busy: boolean;
+  canMutate: boolean;
+  onOpenPartner: (transactionId: string) => void;
+  onConfirm: () => void;
+  onReject: () => void;
+}) {
+  const transfer = tx.transfer!;
+  const transit = tx.suggestion ?? draft.lines.find((line) => line.accountId !== bankAccountNumber)?.accountId ?? '';
+  const amount = transferAmount(tx.amount, tx.currency);
+  const side = (outgoing: boolean, bank: string, bankName: string) => outgoing
+    ? [[transit, 'Geldtransit', 'Soll'], [bank, bankName, 'Haben']]
+    : [[bank, bankName, 'Soll'], [transit, 'Geldtransit', 'Haben']];
+  const lines = (rows: string[][]) => (
+    <div className="rounded-control border border-border">
+      {rows.map(([account, name, type], index) => (
+        <div key={`${account}-${type}`} className={cn('flex items-center gap-2 px-2.75 py-2 text-caption', index > 0 && 'border-t border-border')}>
+          <span className="min-w-0 flex-1 truncate text-foreground"><span className="font-mono tabular-nums">{account || '–'}</span> · {name}</span>
+          <span className="shrink-0 font-mono font-semibold tabular-nums text-foreground">{type} {amount}</span>
+        </div>
+      ))}
+    </div>
+  );
+  const confirmed = transfer.status === 'confirmed';
+  return (
+    <section aria-label="Umbuchung zwischen eigenen Konten" className="flex flex-col gap-2.5">
+      <div className="flex items-center gap-2 text-label text-foreground">
+        <ArrowRightLeft size={14} aria-hidden="true" />
+        Umbuchung zwischen eigenen Konten
+      </div>
+      <Card padding="sm">
+        <div className="flex items-start justify-between gap-3">
+          <div className="min-w-0">
+            <div className="text-label text-foreground">{partner?.payee ?? 'Gegenseite noch nicht importiert'}</div>
+            <div className="text-caption text-muted">
+              {transfer.partnerAccountName ?? 'eigenes Konto'}
+              {transfer.partnerLedgerAccountNumber && <> · <span className="font-mono tabular-nums">{transfer.partnerLedgerAccountNumber}</span></>}
+              {partner && <> · {new Date(partner.date).toLocaleDateString('de-DE')}</>}
+            </div>
+          </div>
+          <div className="flex shrink-0 flex-col items-end gap-1">
+            {partner && <span className={cn('font-mono text-label font-semibold tabular-nums', partner.amount < 0 ? 'text-foreground' : 'text-success-text')}>{new Intl.NumberFormat('de-DE', { style: 'currency', currency: partner.currency }).format(partner.amount)}</span>}
+            <Badge tone={transfer.level === 'sicher' ? 'success' : 'neutral'}>{confirmed ? 'bestätigt' : transfer.level}</Badge>
+          </div>
+        </div>
+        {transfer.reasons.length > 0 && <p className="mt-1.5 text-caption text-muted">{transfer.reasons.join(' · ')}</p>}
+        <div className="mt-2.5 grid gap-2.5 sm:grid-cols-2">
+          <div>
+            <div className="mb-1 text-eyebrow uppercase text-muted">Diese Seite · {tx.accountName ?? 'Konto'}</div>
+            {lines(side(tx.amount < 0, bankAccountNumber ?? '', 'Bank'))}
+          </div>
+          <div>
+            <div className="mb-1 text-eyebrow uppercase text-muted">Gegenseite · {transfer.partnerAccountName ?? 'eigenes Konto'}</div>
+            {lines(side(tx.amount > 0, transfer.partnerLedgerAccountNumber ?? '', transfer.partnerAccountName ?? 'Bank'))}
+          </div>
+        </div>
+        <p className="mt-2 text-caption text-muted">Kein Steuerfall, kein Beleg nötig. Zählt nicht in GuV, UStVA und Auswertungen.</p>
+        <div className="mt-2.25 flex flex-wrap gap-2">
+          <Button size="sm" onClick={onConfirm} disabled={busy || !canMutate}>
+            <CheckCircle2 size={14} aria-hidden="true" />
+            {partner ? 'Als Umbuchung buchen' : 'Diese Seite als Umbuchung buchen'}
+          </Button>
+          {partner && (
+            <Button variant="secondary" size="sm" onClick={() => onOpenPartner(partner.id)} disabled={busy}>
+              Gegenseite öffnen
+            </Button>
+          )}
+          <Button variant="ghost" size="sm" onClick={onReject} disabled={busy || !canMutate}>
+            Keine Umbuchung
+          </Button>
+        </div>
+      </Card>
+    </section>
   );
 }

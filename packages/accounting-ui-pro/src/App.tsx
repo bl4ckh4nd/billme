@@ -50,7 +50,8 @@ export interface ProAccountingWorkspaceProps {
   /** Routed hosts move the URL (`?view=`) when one area hands off to another. */
   onViewChange?: (view: AppView) => void;
   /** Opens the host's account rule editor from the Bankabgleich rules card. */
-  onManageRules?: () => void;
+  /** Opens the rule settings; with a transaction id, prefilled from that bank line. */
+  onManageRules?: (transactionId?: string) => void;
 }
 
 export default function App(props: ProAccountingWorkspaceProps) {
@@ -243,6 +244,7 @@ function Workspace({ seed, dataAdapter, role = 'admin', assetsAvailable = true, 
               role={role}
               canMutateExceptions={!dataAdapter && role !== 'viewer' && role !== 'sales' && role !== 'auditor'}
               transactions={transactions}
+              dataAdapter={dataAdapter}
               onOpenTransaction={handleOpenTransaction}
               onRefresh={refresh}
             />

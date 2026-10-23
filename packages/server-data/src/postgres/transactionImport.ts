@@ -318,8 +318,8 @@ export const commitServerTransactionImport = async (
       await query(session,
         `INSERT INTO bank_transactions
           (id, tenant_id, account_id, date, amount, type, counterparty, purpose,
-           linked_invoice_id, status, source_transaction_id, created_at, updated_at)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NULL, $9, $10, $11, $11)`,
+           linked_invoice_id, status, source_transaction_id, created_at, updated_at, counterparty_iban)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NULL, $9, $10, $11, $11, $12)`,
         [
           randomUUID(),
           tenant(scope),
@@ -334,6 +334,7 @@ export const commitServerTransactionImport = async (
           'pending',
           transactionId,
           bankTransactionTimestamp,
+          row.parsed.counterpartyIban ?? null,
         ],
       );
       imported += 1;

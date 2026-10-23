@@ -133,6 +133,23 @@ export interface Transaction {
   owner?: string;
   exceptionCase?: ExceptionCase;
   isVirtualPosted?: boolean;
+  /** Which layer proposed `suggestion`: an own-account transfer, a rule, the remembered counterparty, … */
+  suggestionLayer?: 'transfer' | 'rule' | 'counterparty' | 'bayes' | 'keyword' | 'fallback';
+  suggestionReason?: string;
+  /** Name of the own financial account the line was imported into. */
+  accountName?: string;
+  transfer?: TransferInfo;
+}
+
+/** A transfer to or from another own financial account (Geldtransit). */
+export interface TransferInfo {
+  status: 'suggested' | 'confirmed';
+  level: 'sicher' | 'wahrscheinlich';
+  reasons: string[];
+  partnerAccountId?: string;
+  partnerAccountName?: string;
+  partnerLedgerAccountNumber?: string;
+  partnerTransactionId?: string;
 }
 
 export interface JournalLine {
@@ -203,6 +220,8 @@ export interface BookingDraft {
   lines: JournalLine[];
   validationIssues: ValidationIssue[];
   isVirtualProjection?: boolean;
+  /** Booking rules evaluated for this draft: which matched and which fields each set. */
+  ruleTrace?: Array<{ name: string; stage: 'base' | 'override'; matched: boolean; applied: string[]; skipped?: 'stopped' | 'base_already_set' }>;
   activity: ActivityEvent[];
   assignedTo?: string;
   approval: {

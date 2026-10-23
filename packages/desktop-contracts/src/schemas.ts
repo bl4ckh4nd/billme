@@ -674,6 +674,7 @@ export const csvMappingSchema = z.object({
   dateColumn: z.string().min(1),
   amountColumn: z.string().min(1),
   counterpartyColumn: z.string().optional(),
+  counterpartyIbanColumn: z.string().optional(),
   purposeColumn: z.string().optional(),
   statusColumn: z.string().optional(),
   externalIdColumn: z.string().optional(),

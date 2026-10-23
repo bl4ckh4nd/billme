@@ -1,5 +1,6 @@
 import { normalizeGermanText, normalizeLooseText } from './text';
 import { predictNaiveBayes, trainNaiveBayes, type NaiveBayesModel } from './naiveBayes';
+import { bookingRuleMatches, evaluateBookingRules, fillRuleMemo, ruleName, type BookingRule, type BookingRuleActions, type RuleTraceEntry } from './bookingRules';
 
 /**
  * Account suggestion for a bank transaction, in fixed precedence:
@@ -10,25 +11,24 @@ import { predictNaiveBayes, trainNaiveBayes, type NaiveBayesModel } from './naiv
 
 type FlowType = 'income' | 'expense';
 
-export type AccountSuggestionLayer = 'rule' | 'counterparty' | 'bayes' | 'keyword' | 'fallback';
+export type AccountSuggestionLayer = 'transfer' | 'rule' | 'counterparty' | 'bayes' | 'keyword' | 'fallback';
 
 export interface AccountSuggestion {
   accountNumber?: string;
   reason?: string;
   layer?: AccountSuggestionLayer;
   confidence?: number;
+  /** Fields booking rules set beyond the account; absent without a matching rule. */
+  taxCaseKey?: string;
+  deductiblePercent?: number;
+  flowType?: FlowType;
+  memo?: string;
+  /** The rule that set the account asks for automatic posting. */
+  autoPost?: boolean;
+  trace?: RuleTraceEntry[];
 }
 
-export interface AccountSuggestionRuleInput {
-  chart: 'SKR03' | 'SKR04';
-  priority: number;
-  field: 'counterparty' | 'purpose' | 'any';
-  operator: 'contains' | 'equals' | 'startsWith';
-  value: string;
-  targetAccountNumber: string;
-  flowType: 'income' | 'expense' | 'any';
-  active: boolean;
-}
+export type AccountSuggestionRuleInput = BookingRule & { chart: 'SKR03' | 'SKR04' };
 
 export interface AccountSuggestionContext {
   chart: 'SKR03' | 'SKR04';
@@ -86,32 +86,10 @@ export const buildAccountSuggestionContextFrom = (sources: AccountSuggestionSour
   };
 };
 
-type Item = { flowType: FlowType; counterparty: string; purpose: string };
+type Item = { flowType: FlowType; counterparty: string; purpose: string; amount?: number; accountId?: string; counterpartyIban?: string | null };
 
-/** Whether a rule's condition fits a bank item; shared by suggestion and hit statistics. */
-export const accountSuggestionRuleMatches = (
-  rule: Pick<AccountSuggestionRuleInput, 'field' | 'operator' | 'value' | 'flowType'>,
-  item: Item,
-): boolean => {
-  if (rule.flowType !== 'any' && rule.flowType !== item.flowType) return false;
-  const fields: string[] = [];
-  if (rule.field === 'counterparty' || rule.field === 'any') fields.push(item.counterparty);
-  if (rule.field === 'purpose' || rule.field === 'any') fields.push(item.purpose);
-  const needle = normalizeSuggestionText(rule.value);
-  return fields.some((fieldValue) => {
-    const hay = normalizeSuggestionText(fieldValue);
-    if (rule.operator === 'contains') return hay.includes(needle);
-    if (rule.operator === 'equals') return hay === needle;
-    return hay.startsWith(needle);
-  });
-};
-
-const byRule = (ctx: AccountSuggestionContext, item: Item): AccountSuggestion => {
-  for (const rule of ctx.rules) {
-    if (accountSuggestionRuleMatches(rule, item)) return { accountNumber: rule.targetAccountNumber, reason: `Regel: "${rule.value}"`, layer: 'rule', confidence: 0.99 };
-  }
-  return {};
-};
+/** Whether a rule's conditions fit a bank item; shared by suggestion and hit statistics. */
+export const accountSuggestionRuleMatches = (rule: BookingRule, item: Item): boolean => bookingRuleMatches(rule, item);
 
 const byCounterpartyMemory = (ctx: AccountSuggestionContext, counterparty: string): AccountSuggestion => {
   const accountNumber = ctx.counterpartyMemory.get(normalizeSuggestionText(counterparty));
@@ -147,9 +125,7 @@ const byFallback = (ctx: AccountSuggestionContext, flowType: FlowType): AccountS
   return accountNumber ? { accountNumber, reason: 'Fallback nach Buchungstyp', layer: 'fallback', confidence: 0.3 } : {};
 };
 
-export const suggestAccountForTransaction = (ctx: AccountSuggestionContext, item: Item): AccountSuggestion => {
-  const fromRule = byRule(ctx, item);
-  if (fromRule.accountNumber) return fromRule;
+const byLowerLayers = (ctx: AccountSuggestionContext, item: Item): AccountSuggestion => {
   const fromMemory = byCounterpartyMemory(ctx, item.counterparty);
   if (fromMemory.accountNumber) return fromMemory;
   const fromBayes = byBayes(ctx, item);
@@ -157,4 +133,25 @@ export const suggestAccountForTransaction = (ctx: AccountSuggestionContext, item
   const fromKeyword = byKeyword(ctx, item);
   if (fromKeyword.accountNumber) return fromKeyword;
   return byFallback(ctx, item.flowType);
+};
+
+/** Rules first (base stage), then memory, Bayes, keyword, fallback; overrides change the result last. */
+export const suggestAccountForTransaction = (ctx: AccountSuggestionContext, item: Item): AccountSuggestion => {
+  const outcome = evaluateBookingRules(ctx.rules, item);
+  const base = outcome.matchedRules.find((rule) => (rule.stage ?? 'base') === 'base' && (rule.actions?.accountNumber || (!rule.actions && rule.targetAccountNumber)));
+  const lower = base ? {} : byLowerLayers(ctx, item);
+  if (outcome.matchedRules.length === 0) return lower;
+  const actions: BookingRuleActions = outcome.actions;
+  const fromRule = Boolean(outcome.accountRule);
+  return {
+    ...lower,
+    ...(fromRule ? { accountNumber: actions.accountNumber, layer: 'rule' as const, confidence: 0.99 } : {}),
+    reason: fromRule ? `Regel: "${outcome.matchedRules.map(ruleName).join('" + "')}"` : [lower.reason, `Regel: "${outcome.matchedRules.map(ruleName).join('" + "')}"`].filter(Boolean).join(' · '),
+    taxCaseKey: actions.taxCaseKey,
+    deductiblePercent: actions.deductiblePercent,
+    flowType: actions.flowType,
+    memo: actions.memo ? fillRuleMemo(actions.memo, item) : undefined,
+    autoPost: Boolean(outcome.accountRule?.autoPost),
+    trace: outcome.trace,
+  };
 };

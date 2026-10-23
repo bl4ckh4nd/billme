@@ -169,7 +169,7 @@ test('Bankabgleich opens Offene Posten with the matched invoice preselected', as
 test('imports a bank file, accepts the rule suggestion in the workbench and books it into the journal', async () => {
   const { page } = desktop;
   const journalBefore = await journal(page);
-  // The accountant's rule (also managed in the Regeln dialog, see pro-rules.spec.mjs): rent goes to 4210.
+  // The accountant's rule (also managed under Einstellungen › Buchungsregeln, see pro-transfers-rules.spec.mjs): rent goes to 4210.
   await invokeDesktopIpc(page, 'pro:upsertAccountSuggestionRule', { chart: 'SKR03', priority: 1, field: 'counterparty', operator: 'contains', value: 'Hausverwaltung', targetAccountNumber: '4210', flowType: 'expense', active: true });
 
   await importBankExportThroughUi(desktop, [

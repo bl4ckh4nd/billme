@@ -11,6 +11,7 @@ export type CsvMapping = {
   dateColumn: string;
   amountColumn: string;
   counterpartyColumn?: string;
+  counterpartyIbanColumn?: string;
   purposeColumn?: string;
   statusColumn?: string;
   externalIdColumn?: string;
@@ -26,6 +27,7 @@ export type CsvPreviewRow = {
     amount?: number;
     type?: 'income' | 'expense';
     counterparty?: string;
+    counterpartyIban?: string;
     purpose?: string;
     status?: 'pending' | 'booked';
     externalId?: string;
@@ -154,6 +156,7 @@ export const suggestedMappingFor = (profile: CsvProfile, headers: string[]): Csv
         'Auftraggeber',
         'Name',
       ]),
+      counterpartyIbanColumn: pickHeader(headers, ['IBAN', 'Kontonummer/IBAN', 'IBAN Auftraggeber/Empfänger', 'Konto/IBAN']),
       purposeColumn: pickHeader(headers, ['Verwendungszweck', 'Buchungstext', 'Text', 'Beschreibung']),
       currencyColumn: pickHeader(headers, ['Währung', 'Currency']),
       currencyExpected: 'EUR',
@@ -319,6 +322,8 @@ const buildRows = (params: {
 
     const counterparty = params.mapping.counterpartyColumn ? String(raw[params.mapping.counterpartyColumn] ?? '').trim() : '';
     const purpose = params.mapping.purposeColumn ? String(raw[params.mapping.purposeColumn] ?? '').trim() : '';
+    // Not part of the dedup hash: rows imported before this column existed must stay duplicates.
+    const counterpartyIban = params.mapping.counterpartyIbanColumn ? String(raw[params.mapping.counterpartyIbanColumn] ?? '').replace(/\s/g, '').toUpperCase() : '';
     const statusRaw = params.mapping.statusColumn ? String(raw[params.mapping.statusColumn] ?? '').trim() : '';
     const externalId = params.mapping.externalIdColumn ? String(raw[params.mapping.externalIdColumn] ?? '').trim() : '';
 
@@ -336,6 +341,7 @@ const buildRows = (params: {
       amount: amount ?? undefined,
       type,
       counterparty: counterparty || undefined,
+      counterpartyIban: counterpartyIban || undefined,
       purpose: purpose || undefined,
       status,
       externalId: externalId || undefined,

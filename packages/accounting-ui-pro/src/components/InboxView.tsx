@@ -18,7 +18,7 @@ import { permissionContextForRole } from '../domain/permissions';
 import { useAccountingWorkspace, useWorkspaceLifetime } from '../AccountingWorkspaceContext';
 import type { ProAccountingDataAdapter } from '../services/accountingDataAdapter';
 import AccountCombobox from './AccountCombobox';
-import { getConfiguredBankAccountNumber } from './ReconciliationWorkbench';
+import { getConfiguredBankAccountNumber, TransferBadges } from './ReconciliationWorkbench';
 import { Account, BookingAction, BookingDraft, LinkedInvoiceSummary, OpenRouterVlmConfig, Transaction, TransactionDocumentAnalysis, UserRole } from '../types';
 import InboxQueueTabs from './InboxQueueTabs';
 import IssueBadges, { StatusBadge } from './IssueBadges';
@@ -37,6 +37,11 @@ interface InboxViewProps {
   activeQueue?: InboxQueueKey;
   onQueueChange?: (queue: InboxQueueKey) => void;
 }
+
+// Which layer produced the suggestion; Bayes and keyword guesses stay unlabelled.
+const LAYER_LABEL: Partial<Record<NonNullable<Transaction['suggestionLayer']>, string>> = { rule: 'Regel', counterparty: 'Gemerkt' };
+
+const INBOX_QUEUES: InboxQueueKey[] = ['all', 'incomplete', 'review', 'approval', 'posted', 'errors'];
 
 function formatCurrency(amount: number, currency: string) {
   return new Intl.NumberFormat('de-DE', { style: 'currency', currency }).format(amount);
@@ -91,7 +96,17 @@ export default function InboxView({
     [transactions, activeQueue],
   );
 
-  const previewTx = previewId ? filtered.find((tx) => tx.id === previewId) ?? null : null;
+  const previewTx = previewId ? (filtered.find((tx) => tx.id === previewId) ?? transactions.find((tx) => tx.id === previewId)) ?? null : null;
+  const previewPartner = previewTx?.transfer?.partnerTransactionId ? transactions.find((tx) => tx.id === previewTx.transfer?.partnerTransactionId) : undefined;
+  const runTransfer = async (work: () => Promise<unknown>, done: string) => {
+    try {
+      await work();
+      setBatchMessage(done);
+      onRefresh();
+    } catch (error) {
+      setBatchMessage(error instanceof Error ? error.message : 'Umbuchung konnte nicht gespeichert werden.');
+    }
+  };
   const previewDraft = previewTx ? getBookingDraftByTransactionId(previewTx.id) : undefined;
   const previewReference = userFacingReference(previewDraft?.externalReference);
   const previewBankAccountNumber = previewDraft
@@ -464,7 +479,12 @@ export default function InboxView({
         </div>
 
         <div className="flex shrink-0 flex-wrap items-center gap-2">
-          <InboxQueueTabs activeQueue={activeQueue} counts={queueCounts} onChange={setActiveQueue} />
+          <InboxQueueTabs
+            activeQueue={activeQueue}
+            counts={queueCounts}
+            onChange={setActiveQueue}
+            queues={queueCounts.transfers > 0 || activeQueue === 'transfers' ? [...INBOX_QUEUES, 'transfers'] : INBOX_QUEUES}
+          />
           <div className="ml-auto flex shrink-0 items-center gap-2">
             <span className="text-caption text-muted tabular-nums">{filtered.length} Vorgänge</span>
             <Button variant="secondary" size="sm" onClick={toggleSelectAllVisible}>
@@ -586,7 +606,10 @@ export default function InboxView({
                     </button>
                   </TableCell>
                   <TableCell className="text-right">
-                    <IssueBadges transaction={tx} />
+                    <span className="inline-flex flex-wrap justify-end gap-1">
+                      {tx.transfer ? <TransferBadges transfer={tx.transfer} /> : tx.suggestionLayer && LAYER_LABEL[tx.suggestionLayer] && <Badge tone="neutral">{LAYER_LABEL[tx.suggestionLayer]}</Badge>}
+                      <IssueBadges transaction={tx} />
+                    </span>
                   </TableCell>
                   <TableCell numeric className={`whitespace-nowrap font-medium ${amountTone(tx.amount)}`}>
                     {formatCurrency(tx.amount, tx.currency)}
@@ -653,6 +676,37 @@ export default function InboxView({
                   )}
                 </div>
               </div>
+
+              {previewTx.transfer && (
+                <div>
+                  <h3 className={eyebrow}>Umbuchung</h3>
+                  <div className="flex flex-col gap-2 rounded-control border border-border bg-surface-muted px-2.5 py-2 text-caption">
+                    {previewPartner ? (
+                      <button
+                        type="button"
+                        onClick={() => setPreviewId(previewPartner.id)}
+                        className="flex items-center justify-between gap-2 rounded-xs text-left focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                      >
+                        <span className="min-w-0 truncate font-medium text-foreground">{previewTx.transfer.partnerAccountName} · {previewPartner.payee}</span>
+                        <span className="shrink-0 font-mono tabular-nums text-foreground">{formatCurrency(previewPartner.amount, previewPartner.currency)}</span>
+                      </button>
+                    ) : (
+                      <span className="text-muted">Gegenseite auf {previewTx.transfer.partnerAccountName ?? 'eigenem Konto'} ist noch nicht importiert.</span>
+                    )}
+                    {previewTx.transfer.reasons.length > 0 && <span className="text-muted">{previewTx.transfer.reasons.join(' · ')}</span>}
+                    {previewTx.transfer.status === 'suggested' && dataAdapter?.confirmTransfer && (
+                      <div className="flex flex-wrap gap-1.5">
+                        <Button size="sm" onClick={() => void runTransfer(() => dataAdapter.confirmTransfer!({ transactionId: previewTx.id }), previewPartner ? 'Paar freigegeben. Jede Seite ist einzeln buchbar.' : 'Seite als Umbuchung freigegeben.')} disabled={!canMutate}>
+                          {previewPartner ? 'Paar freigeben' : 'Als Umbuchung freigeben'}
+                        </Button>
+                        <Button variant="ghost" size="sm" onClick={() => void runTransfer(() => dataAdapter.rejectTransfer!(previewTx.id), 'Als normale Buchung zurückgesetzt.')} disabled={!canMutate}>
+                          Keine Umbuchung
+                        </Button>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
 
               <div>
                 <h3 className={eyebrow}>Verknüpfte Rechnung</h3>

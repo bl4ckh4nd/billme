@@ -1418,7 +1418,7 @@ export const CANONICAL_LEDGER_ACCOUNTS = [
   { chart: 'SKR04', accountNumber: "1450", name: "Körperschaftsteuerrückforderung" },
   { chart: 'SKR04', accountNumber: "1456", name: "Forderungen an das Finanzamt aus abgeführtem Bauabzugsbetrag" },
   { chart: 'SKR04', accountNumber: "1457", name: "Forderung gegenüber Bundesagentur für Arbeit" },
-  { chart: 'SKR04', accountNumber: "1460", name: "Geldtransit Gegenkonto Vorsteuer § 4 Abs. 3 EStG Auflösung Vorsteuer aus Vorjahr § 4 Abs. 3 EStG" },
+  { chart: 'SKR04', accountNumber: "1460", name: "Geldtransit" },
   { chart: 'SKR04', accountNumber: "1482", name: "Vorsteuer aus Investitionen § 4 Abs. 3 EStG" },
   { chart: 'SKR04', accountNumber: "1487", name: "Wirtschaftsgüter des Umlaufvermögens nach § 4 Abs. 3 Satz 4 EStG" },
   { chart: 'SKR04', accountNumber: "1490", name: "Verrechnungskonto Ist-Versteuerung Neutralisierung ertragswirksamer Sachverhalte für § 4 Abs. 3 EStG" },

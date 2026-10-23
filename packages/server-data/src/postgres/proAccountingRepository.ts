@@ -17,7 +17,7 @@ import type {
   IncomingInvoiceDocumentDownload, IncomingInvoiceDocumentEntity, IncomingInvoiceDocumentReviewInput,
   IncomingInvoiceDocumentUploadInput,
   IncomingInvoiceLineEntity, OpenItemEntity, OpenItemPaymentEntity, OpenItemPaymentInput, VendorEntity,
-  BookingDraftEntity, JournalEntryEntity, JournalLineEntity, LedgerBalance, ValidationIssue, AccountingMutationContext, DatevExportContent, DatevExportSourceSnapshot, DatevTaxEvidence, TaxCaseDefinition, TaxCaseKey,
+  BookingDraftEntity, BookingDraftLineEntity, JournalEntryEntity, JournalLineEntity, LedgerBalance, ValidationIssue, AccountingMutationContext, DatevExportContent, DatevExportSourceSnapshot, DatevTaxEvidence, TaxCaseDefinition, TaxCaseKey,
   ReportKind, ReportingCalculationProfile, ReportingMapping, ReportResult, Bwa01Report, ManagementGuvReport, HgbGuvReport, HgbBilanzReport,
 } from '@billme/accounting-shared';
 import { datevDestinationCases, datevSachverhaltCases, normalizeDatevTaxEvidence, validateDatevTaxEvidence, INCOMING_INVOICE_DOCUMENT_MAX_BYTES, assertIncomingInvoiceDocumentContent } from '@billme/accounting-shared';
@@ -29,8 +29,10 @@ import type {
 import { businessReportingProfileSchema } from '@billme/server-core';
 import { AccountingPolicyError } from '@billme/accounting-shared';
 import { runInTransaction, type PostgresQueryable, type PostgresTransactionClient } from './connection.js';
-import { suggestAccountForTransaction } from '@billme/finance-intelligence';
+import { suggestAccountForTransaction, type AccountSuggestion, type AccountSuggestionContext } from '@billme/finance-intelligence';
 import { loadAccountSuggestionContext } from './accountSuggestions.js';
+import { createPostgresTransferRepository, loadTransferState, transferInfo, type TransferRepository } from './proTransfers.js';
+import { createPostgresBookingRuleRepository, draftFingerprint, type BookingRuleRepository } from './proBookingRules.js';
 import { appendWithClient } from './audit.js';
 import {
   createReportSnapshot,
@@ -264,6 +266,7 @@ const draftFromRows = (row: any, lines: any[], issues: any[], scope: TenantScope
     period: value.period ?? period(value.postingDate ?? now().slice(0, 10)), fiscalYear: Number(value.fiscalYear ?? new Date().getUTCFullYear()),
     lines: value.lines && issues.some((item) => item.code === 'DUPLICATE_LINE_ID') ? value.lines : lines.map((line) => ({ id: line.id, accountNumber: line.account_number, debitAmount: Number(line.debit_amount || 0), creditAmount: Number(line.credit_amount || 0), taxCode: line.tax_code ?? undefined, taxCaseKey: line.tax_case_key ?? undefined, taxRate: line.tax_rate == null ? undefined : Number(line.tax_rate), netAmount: line.net_amount == null ? undefined : Number(line.net_amount), taxAmount: line.tax_amount == null ? undefined : Number(line.tax_amount), grossAmount: line.gross_amount == null ? undefined : Number(line.gross_amount), countryCode: line.country_code ?? undefined, counterpartyVatId: line.counterparty_vat_id ?? undefined, evidenceType: line.evidence_type ?? undefined, evidenceReference: line.evidence_reference ?? undefined, datevSachverhaltLl: line.datev_sachverhalt_ll ?? undefined, costCenter: line.cost_center ?? undefined, memo: line.memo ?? undefined })),
     validationIssues: issues.map((item) => parse<ValidationIssue>(item.issue_json, { id: item.id, code: item.code, severity: item.severity, message: item.message, fieldPath: item.field_path ?? undefined, blocking: Boolean(item.blocking), source: item.source })), updatedAt: row.updated_at,
+    ...(value.ruleTrace ? { ruleTrace: value.ruleTrace } : {}), ...(value.ruleFingerprint ? { ruleFingerprint: value.ruleFingerprint } : {}),
   };
 };
 const getDraft = async (db: PostgresQueryable, scope: TenantScope, transactionId: string): Promise<BookingDraftEntity | null> => {
@@ -290,8 +293,8 @@ const policy = async (db: PostgresQueryable, t: string): Promise<{ activeChart: 
   return { tenantId: t, activeChart: row?.active_chart === 'SKR04' ? 'SKR04' : 'SKR03', vatMethod: row?.vat_method === 'ist' ? 'ist' : 'soll', periodPolicy: 'calendar_month', updatedAt: row?.updated_at ?? '' };
 };
 const defaults: Record<'SKR03'|'SKR04', Record<string, string>> = {
-  SKR03: { accounts_receivable: '1400', accounts_payable: '1600', bank: '1200', revenue: '8400', expense: '4900', asset: '0480', output_vat: '1776', output_vat_deferred: '1780', input_vat: '1576' },
-  SKR04: { accounts_receivable: '1200', accounts_payable: '3300', bank: '1800', revenue: '4400', expense: '6300', asset: '0670', output_vat: '3806', output_vat_deferred: '3810', input_vat: '1406' },
+  SKR03: { accounts_receivable: '1400', accounts_payable: '1600', bank: '1200', revenue: '8400', expense: '4900', asset: '0480', output_vat: '1776', output_vat_deferred: '1780', input_vat: '1576', transit: '1360' },
+  SKR04: { accounts_receivable: '1200', accounts_payable: '3300', bank: '1800', revenue: '4400', expense: '6300', asset: '0670', output_vat: '3806', output_vat_deferred: '3810', input_vat: '1406', transit: '1460' },
 };
 const mappings = async (db: PostgresQueryable, t: string, chart: 'SKR03'|'SKR04'): Promise<Record<string, string>> => {
   const rows = await q<any>(db, `SELECT role,account_number FROM accounting_account_mappings WHERE tenant_id=$1 AND chart=$2`, [t, chart]);
@@ -638,7 +641,7 @@ const recognizeIstVat = async (
   if (payableLines.length) await insertEntry(db, scope, 'payment_vat', `payment-vat:${paymentId}:${allocationId}`, paymentDate, 'USt Vereinnahmung', payableLines, {});
 };
 
-export type ProAccountingReportRepository = Omit<ProAccountingRepository, 'getGuvReport' | 'getBilanzReport'> & ProAccountingAssetRepository & AccountingSourceRunRepository & {
+export type ProAccountingReportRepository = Omit<ProAccountingRepository, 'getGuvReport' | 'getBilanzReport'> & ProAccountingAssetRepository & AccountingSourceRunRepository & TransferRepository & BookingRuleRepository & {
   getBwa01Report(scope: TenantScope, args?: { from?: string; to?: string; chart?: 'SKR03' | 'SKR04'; profile?: string }): Promise<ReportResult<Bwa01Report>>;
   getGuvReport(scope: TenantScope, args?: { from?: string; to?: string; chart?: 'SKR03' | 'SKR04'; profile?: 'guv' | 'management-guv' | 'hgb-guv' }): Promise<ReportResult<ManagementGuvReport | HgbGuvReport>>;
   getBilanzReport(scope: TenantScope, args?: { asOfDate?: string; chart?: 'SKR03' | 'SKR04' }): Promise<ReportResult<HgbBilanzReport>>;
@@ -659,25 +662,103 @@ export type ProAccountingReportRepository = Omit<ProAccountingRepository, 'getGu
   upsertAccountMappingOverride(scope: TenantScope, input: { chart: 'SKR03' | 'SKR04'; asOfDate: string; accountNumber: string; statementType: ReportMappingType; positionKey: string; positionLabel: string; balanceSide?: 'asset' | 'liability'; mutation?: AccountingMutationContext }): Promise<unknown>;
 };
 
+// Draft for a bank line: the stored one, else a suggestion with the account's own ledger account as bank side.
+const draftForTransaction = async (tx: PostgresQueryable, scope: TenantScope, transactionId: string): Promise<BookingDraftEntity | null> => { const existing = await getDraft(tx, scope, transactionId); if (existing) return existing; return createDraftForTransaction(tx, scope, transactionId); };
+// Roles whose accounts are never the "other side" of a bank line; memory and Bayes must not learn them.
+const NON_COUNTER_ROLES = ['accounts_receivable', 'accounts_payable', 'bank', 'output_vat', 'output_vat_deferred', 'input_vat', 'transit'];
+const suggestionExclusions = (m: Record<string, string>) => NON_COUNTER_ROLES.map((role) => m[role]).filter((account): account is string => Boolean(account));
+const loadSuggestionContext = async (db: PostgresQueryable, scope: TenantScope) => loadAccountSuggestionContext(db, scope, suggestionExclusions(await mappings(db, tenant(scope), (await policy(db, tenant(scope))).activeChart)));
+const bankItem = (row: any) => ({ flowType: (row.type === 'income' ? 'income' : 'expense') as 'income' | 'expense', counterparty: row.counterparty ?? '', purpose: row.purpose ?? '', amount: Number(row.amount), accountId: row.account_id, counterpartyIban: row.counterparty_iban ?? null });
+
+/**
+ * Lines for a bank line booked on `account`. With a tax case the gross splits into
+ * net and tax: input tax for expenses (only the deductible share; the rest stays on
+ * the expense), output tax for income. The account and tax lines sit opposite the
+ * bank, so a refund on an expense account reduces the Vorsteuer.
+ */
+const proposalLines = async (db: PostgresQueryable, t: string, chart: 'SKR03' | 'SKR04', m: Record<string, string>, input: { id: string; date: string; amount: number; moneyIn: boolean; bank: string; account: string; flow: 'income' | 'expense'; taxCaseKey?: string; deductiblePercent?: number }): Promise<BookingDraftLineEntity[]> => {
+  const { id, amount, moneyIn, bank, account } = input;
+  const bankLine: BookingDraftLineEntity = { id: `draft-${id}-${moneyIn ? 1 : 2}`, accountNumber: bank, debitAmount: moneyIn ? amount : 0, creditAmount: moneyIn ? 0 : amount };
+  const counter = (n: number, accountNumber: string, value: number, extra: Partial<BookingDraftLineEntity> = {}): BookingDraftLineEntity => ({ id: `draft-${id}-${n}`, accountNumber, debitAmount: moneyIn ? 0 : value, creditAmount: moneyIn ? value : 0, ...extra });
+  const order = (rest: BookingDraftLineEntity[]) => (moneyIn ? [bankLine, ...rest] : [...rest, bankLine]);
+  if (!input.taxCaseKey) return order([counter(moneyIn ? 2 : 1, account, amount)]);
+  const definition = (await q<any>(db, `SELECT default_rate, mechanism FROM tax_cases WHERE key=$1 LIMIT 1`, [input.taxCaseKey]))[0];
+  const rate = definition?.mechanism === 'standard_vat' ? Number(definition.default_rate) : 0;
+  if (!(rate > 0)) return order([counter(moneyIn ? 2 : 1, account, amount, { taxCaseKey: input.taxCaseKey as TaxCaseKey, taxRate: 0, netAmount: amount, taxAmount: 0, grossAmount: amount })]);
+  const net = round(amount / (1 + rate / 100));
+  const tax = round(amount - net);
+  const role = input.flow === 'expense' ? 'input_tax' : 'output_tax';
+  const deductible = role === 'input_tax' ? round(tax * Math.min(100, Math.max(0, input.deductiblePercent ?? 100)) / 100) : tax;
+  const onAccount = round(amount - deductible);
+  const taxAccount = await taxCaseAccount(db, t, chart, input.taxCaseKey, role, role === 'input_tax' ? m.input_vat : m.output_vat, input.date);
+  const rest = [counter(moneyIn ? 2 : 1, account, onAccount, { taxCaseKey: input.taxCaseKey as TaxCaseKey, taxRate: rate, netAmount: onAccount, taxAmount: deductible, grossAmount: amount })];
+  if (deductible > 0) rest.push(counter(3, taxAccount, deductible, { memo: `${role === 'input_tax' ? 'Vorsteuer' : 'Umsatzsteuer'} ${input.taxCaseKey}` }));
+  return order(rest);
+};
+
+/** The draft the suggestion layers would write for a bank line now, unsaved; transfers are handled by the caller. */
+const proposeDraft = async (tx: PostgresQueryable, scope: TenantScope, row: any, context?: AccountSuggestionContext, options: { transit?: string } = {}): Promise<BookingDraftEntity & { autoPost?: boolean }> => {
+  const t = tenant(scope); const p = await policy(tx, t); const m = await mappings(tx, t, p.activeChart);
+  const bank = row.default_skr_account_number ?? (await q<any>(tx, `SELECT default_skr_account_number FROM accounts WHERE tenant_id=$1 AND id=$2`, [t, row.account_id]))[0]?.default_skr_account_number;
+  const booked = row.status === 'booked';
+  const suggestion: AccountSuggestion = booked ? {} : options.transit ? { accountNumber: options.transit, layer: 'transfer' } : suggestAccountForTransaction(context ?? await loadSuggestionContext(tx, scope), bankItem(row));
+  const suggested = suggestion.layer && suggestion.layer !== 'fallback' ? suggestion.accountNumber : undefined;
+  const moneyIn = row.type === 'income';
+  const flow = suggestion.flowType ?? (moneyIn ? 'income' : 'expense');
+  const lines = await proposalLines(tx, t, p.activeChart, m, { id: row.id, date: row.date, amount: round(Math.abs(row.amount)), moneyIn, bank: bank || m.bank, account: suggested ?? (flow === 'income' ? m.revenue : m.expense), flow, taxCaseKey: suggestion.taxCaseKey, deductiblePercent: suggestion.deductiblePercent });
+  const draft: BookingDraftEntity & { autoPost?: boolean } = {
+    id: `draft-${row.id}`, tenantId: t, transactionId: row.id, workflowStatus: booked ? 'posted' : suggested ? 'suggested' : 'imported',
+    postingDate: row.date, documentDate: row.date, bookingText: suggestion.memo || row.purpose || (moneyIn ? 'Einnahme' : 'Ausgabe'), reference: row.id,
+    period: period(row.date), fiscalYear: await reportingFiscalYear(tx, t, row.date), lines, validationIssues: [], updatedAt: now(),
+    ...(suggestion.trace?.length ? { ruleTrace: suggestion.trace } : {}),
+  };
+  draft.ruleFingerprint = draftFingerprint(draft);
+  if (suggestion.autoPost) draft.autoPost = true;
+  return draft;
+};
+
+const createDraftForTransaction = async (tx: PostgresQueryable, scope: TenantScope, transactionId: string): Promise<BookingDraftEntity | null> => {
+  const row = (await q<any>(tx, `SELECT * FROM bank_transactions WHERE tenant_id=$1 AND id=$2`, [tenant(scope), transactionId]))[0]; if (!row) return null;
+  if (row.status !== 'booked') {
+    const m = await mappings(tx, tenant(scope), (await policy(tx, tenant(scope))).activeChart);
+    const transfer = (await loadTransferState(tx, scope, m.transit!)).matches.get(row.id);
+    const { autoPost: _autoPost, ...draft } = await proposeDraft(tx, scope, row, undefined, { transit: transfer ? m.transit : undefined });
+    return saveDraftTarget(tx, scope, draft);
+  }
+  const draft = await proposeDraft(tx, scope, row);
+  const postedSourceDraft = (await q<any>(tx, `SELECT id FROM journal_entries WHERE tenant_id=$1 AND source_draft_id=$2 AND status='posted' LIMIT 1`, [tenant(scope), draft.id]))[0];
+  return postedSourceDraft ? draft : { ...draft, isVirtualProjection: true };
+};
+
 export const createPostgresProAccountingRepository = (db: PostgresQueryable): ProAccountingReportRepository => ({
   ...createPostgresAccountingSourceRunRepository(db),
+  ...createPostgresTransferRepository(db, { getDraft, createDraft: createDraftForTransaction, saveDraft: saveDraftTarget, roleAccounts: async (client, scope) => mappings(client, tenant(scope), (await policy(client, tenant(scope))).activeChart) }),
+  ...createPostgresBookingRuleRepository(db, {
+    getDraft, saveDraft: saveDraftTarget, proposeDraft: (client, scope, row, context) => proposeDraft(client, scope, row, context), loadContext: loadSuggestionContext,
+    transitAccount: async (client, scope) => (await mappings(client, tenant(scope), (await policy(client, tenant(scope))).activeChart)).transit!,
+    postDraft: (scope, draftId, options) => createPostgresProAccountingRepository(db).postDraft(scope, draftId, options),
+    confirmTransfer: (scope, input) => createPostgresProAccountingRepository(db).confirmTransfer(scope, input),
+  }),
   async listBankTransactions(scope) {
-    const [rows, suggestionContext] = await Promise.all([
+    const [rows, suggestionContext, roles] = await Promise.all([
       q<any>(db, `SELECT * FROM bank_transactions WHERE tenant_id=$1 ORDER BY date DESC,id`, [tenant(scope)]),
-      loadAccountSuggestionContext(db, scope),
+      loadSuggestionContext(db, scope),
+      policy(db, tenant(scope)).then((p) => mappings(db, tenant(scope), p.activeChart)),
     ]);
+    const transfers = await loadTransferState(db, scope, roles.transit!);
     return rows.map((r) => {
       const type: 'income' | 'expense' = r.type === 'income' ? 'income' : 'expense';
-      // Same layers as the desktop SQLite repository: rule, remembered counterparty, Bayes, keyword, fallback.
-      const suggestion = suggestAccountForTransaction(suggestionContext, { flowType: type, counterparty: r.counterparty ?? '', purpose: r.purpose ?? '' });
+      // Layers: transfer, rule (base stage), remembered counterparty, Bayes, keyword, fallback; rule overrides last.
+      const transfer = transferInfo(transfers, r.id);
+      const suggestion = transfer ? { accountNumber: roles.transit, reason: transfer.reasons.join(' · '), layer: 'transfer' as const, confidence: transfer.level === 'sicher' ? 0.99 : 0.8 } : suggestAccountForTransaction(suggestionContext, bankItem(r));
       return {
         id: r.id, tenantId: r.tenant_id, accountId: r.account_id, date: r.date, amount: Number(r.amount), type,
         counterparty: r.counterparty, purpose: r.purpose, status: r.status === 'booked' ? 'booked' : 'pending', linkedInvoiceId: r.linked_invoice_id ?? undefined,
-        suggestedAccountNumber: suggestion.accountNumber, suggestionReason: suggestion.reason, suggestionLayer: suggestion.layer, suggestionConfidence: suggestion.confidence,
+        suggestedAccountNumber: suggestion.accountNumber, suggestionReason: suggestion.reason, suggestionLayer: suggestion.layer, suggestionConfidence: suggestion.confidence, counterpartyIban: r.counterparty_iban ?? undefined, transfer,
       };
     });
   },
-  async getDraftByTransactionId(scope, transactionId) { return inTx(db, async (tx) => { const existing = await getDraft(tx, scope, transactionId); if (existing) return existing; const row = (await q<any>(tx, `SELECT * FROM bank_transactions WHERE tenant_id=$1 AND id=$2`, [tenant(scope), transactionId]))[0]; if (!row) return null; const p = await policy(tx, tenant(scope)); const m = await mappings(tx, tenant(scope), p.activeChart); const amount = round(Math.abs(row.amount)); const suggestion = row.status === 'booked' ? {} : suggestAccountForTransaction(await loadAccountSuggestionContext(tx, scope), { flowType: row.type === 'income' ? 'income' : 'expense', counterparty: row.counterparty ?? '', purpose: row.purpose ?? '' }); const suggested = suggestion.layer && suggestion.layer !== 'fallback' ? suggestion.accountNumber : undefined; const draft: BookingDraftEntity = { id: `draft-${row.id}`, tenantId: tenant(scope), transactionId: row.id, workflowStatus: row.status === 'booked' ? 'posted' : suggested ? 'suggested' : 'imported', postingDate: row.date, documentDate: row.date, bookingText: row.purpose || (row.type === 'income' ? 'Einnahme' : 'Ausgabe'), reference: row.id, period: period(row.date), fiscalYear: await reportingFiscalYear(tx, tenant(scope), row.date), lines: [{ id: `draft-${row.id}-1`, accountNumber: row.type === 'income' ? m.bank : suggested ?? m.expense, debitAmount: amount, creditAmount: 0 }, { id: `draft-${row.id}-2`, accountNumber: row.type === 'income' ? suggested ?? m.revenue : m.bank, debitAmount: 0, creditAmount: amount }], validationIssues: [], updatedAt: now() }; if (row.status !== 'booked') return saveDraftTarget(tx, scope, draft); const postedSourceDraft = (await q<any>(tx, `SELECT id FROM journal_entries WHERE tenant_id=$1 AND source_draft_id=$2 AND status='posted' LIMIT 1`, [tenant(scope), draft.id]))[0]; return postedSourceDraft ? draft : { ...draft, isVirtualProjection: true }; }); },
+  async getDraftByTransactionId(scope, transactionId) { return inTx(db, (tx) => draftForTransaction(tx, scope, transactionId)); },
   async saveDraft(scope, draft) { return inTx(db, (tx) => saveDraftTarget(tx, scope, draft, draft.mutation)); },
   async dispatchDraftAction(scope, args) { return inTx(db, async (tx) => { const draft = await getDraft(tx, scope, args.transactionId); if (!draft) throw new Error('Draft not found'); const transitions: Record<string, string[]> = { imported: ['suggested','incomplete','pending_approval'], suggested: ['suggested','incomplete','pending_approval'], incomplete: ['suggested','incomplete','pending_approval'], ready_for_review: ['pending_approval'], pending_approval: ['approved','incomplete'], approved: ['approved'], posted: ['reversed'], reversed: ['corrected'], corrected: ['suggested','incomplete'], period_locked: ['incomplete','suggested'], integration_error: ['incomplete','suggested'] }; const targets: Record<string, string> = { save_draft: 'suggested', submit_for_review: 'pending_approval', approve: 'approved', reject: 'incomplete', post: 'approved', reverse: 'reversed', create_correction: 'corrected', request_receipt: 'incomplete' }; const target = targets[args.action]; if (!transitions[draft.workflowStatus]?.includes(target)) throw new Error(`Invalid workflow transition: ${draft.workflowStatus} -> ${target}`); return saveDraftTarget(tx, scope, { ...draft, workflowStatus: target as BookingDraftEntity['workflowStatus'], validationIssues: args.action === 'reject' && args.rejectReason ? [{ id: randomUUID(), code: 'MANUAL_REVIEW_REJECTED', severity: 'warning', message: args.rejectReason, blocking: false, source: 'user' }] : draft.validationIssues }, args.mutation); }); },
   async validateTaxCompliance(scope, args) { const draft = args.draftId ? (await q<any>(db, `SELECT * FROM booking_drafts WHERE tenant_id=$1 AND id=$2`, [tenant(scope), args.draftId]))[0] : args.transactionId ? await getDraft(db, scope, args.transactionId) : null; if (!draft) throw new Error('Draft not found'); if ('draft_json' in draft) { const lines = await q<any>(db, `SELECT * FROM booking_draft_lines WHERE tenant_id=$1 AND draft_id=$2 ORDER BY line_no`, [tenant(scope), draft.id]); const issues = await q<any>(db, `SELECT * FROM draft_validation_issues WHERE tenant_id=$1 AND draft_id=$2`, [tenant(scope), draft.id]); const parsed = draftFromRows(draft, lines, issues, scope); const saved = await inTx(db, (tx) => saveDraftTarget(tx, scope, parsed, args.mutation)); return { ok: !saved.validationIssues.some((x) => x.blocking), issues: saved.validationIssues }; } return { ok: !(draft as BookingDraftEntity).validationIssues.some((x) => x.blocking), issues: (draft as BookingDraftEntity).validationIssues }; },

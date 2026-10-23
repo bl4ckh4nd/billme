@@ -911,6 +911,13 @@ export const accountSuggestionRules = pgTable("account_suggestion_rules", {
   active: boolean("active"),
   createdAt: text("created_at"),
   updatedAt: text("updated_at"),
+  name: text("name"),
+  stage: text("stage"),
+  logic: text("logic"),
+  conditionsJson: text("conditions_json"),
+  actionsJson: text("actions_json"),
+  autoPost: boolean("auto_post"),
+  stopProcessing: boolean("stop_processing"),
 });
 
 export const importBatches = pgTable("import_batches", {

@@ -29,6 +29,16 @@ const canManageTeam = (): boolean => {
 
 type SettingsTab = 'company' | 'catalog' | 'finance' | 'numbers' | 'dunning' | 'legal' | 'portal' | 'system' | 'email' | 'appearance' | 'team';
 
+/** A section one app adds (Pro: Buchhaltung). It saves on its own; the page's save button does not cover it. */
+export interface SettingsExtraSection {
+  group: string;
+  id: string;
+  label: string;
+  icon: React.ComponentType<{ size?: number; className?: string; 'aria-hidden'?: boolean | 'true' }>;
+  desc: string;
+  render: () => React.ReactNode;
+}
+
 const normalizeCategoryName = (value: string): string => value.trim();
 const formatCount = (count: number, singular: string, plural: string): string => `${count} ${count === 1 ? singular : plural}`;
 
@@ -52,7 +62,7 @@ const inferBusinessReportingProfile = (settings: AppSettings): BusinessReporting
 };
 
 /** One settings group: a card on the ground with a lined head. `flush` leaves the body padding to the rows. */
-const SettingsCard: React.FC<Pick<CardHeaderProps, 'title' | 'subtitle' | 'count' | 'actions'> & { flush?: boolean; children: React.ReactNode }> = ({
+export const SettingsCard: React.FC<Pick<CardHeaderProps, 'title' | 'subtitle' | 'count' | 'actions'> & { flush?: boolean; children: React.ReactNode }> = ({
   flush = false,
   children,
   ...head
@@ -88,12 +98,12 @@ const AppearanceSettings: React.FC = () => {
  * mounted only once the query has answered: a failed query must never leave the
  * user editing (and saving) a stand-in company, bank account or tax number.
  */
-export const SettingsView: React.FC = () => {
+export const SettingsView: React.FC<{ extraSections?: SettingsExtraSection[] }> = ({ extraSections = [] }) => {
   const { data: loadedSettings, isError, refetch } = useSettingsQuery();
 
   // Data first: once the form is mounted, a failed background refetch must not
   // throw away edits the user is making.
-  if (loadedSettings) return <SettingsForm initialSettings={loadedSettings} />;
+  if (loadedSettings) return <SettingsForm initialSettings={loadedSettings} extraSections={extraSections} />;
 
   if (isError) {
     return (
@@ -115,12 +125,15 @@ export const SettingsView: React.FC = () => {
   );
 };
 
-const SettingsForm: React.FC<{ initialSettings: AppSettings }> = ({ initialSettings }) => {
+const SettingsForm: React.FC<{ initialSettings: AppSettings; extraSections: SettingsExtraSection[] }> = ({ initialSettings, extraSections }) => {
   const isWebShell = getRendererRuntime().shell === 'web';
   const queryClient = useQueryClient();
   // `billme login` links here with its code (`#/settings?cliCode=…`); that lands on the section that takes it.
-  const [cliCode] = useState(() => new URLSearchParams(window.location.hash.split('?')[1] ?? '').get('cliCode') ?? undefined);
-  const [activeTab, setActiveTab] = useState<SettingsTab>(cliCode ? 'system' : 'company');
+  const [hashParams] = useState(() => new URLSearchParams(window.location.hash.split('?')[1] ?? ''));
+  const cliCode = hashParams.get('cliCode') ?? undefined;
+  // `#/settings?section=…` opens an added section directly (Pro: "Regeln bearbeiten").
+  const linkedSection = extraSections.find((section) => section.id === hashParams.get('section'))?.id;
+  const [activeTab, setActiveTab] = useState<SettingsTab | string>(cliCode ? 'system' : linkedSection ?? 'company');
   const loadedSettings = initialSettings;
   const setSettingsMutation = useSetSettingsMutation();
   const [settings, setSettings] = useState<AppSettings>(initialSettings);
@@ -485,6 +498,12 @@ const SettingsForm: React.FC<{ initialSettings: AppSettings }> = ({ initialSetti
       ],
     },
   ];
+  for (const section of extraSections) {
+    const group = navGroups.find((entry) => entry.label === section.group);
+    const item = { id: section.id, label: section.label, icon: section.icon as typeof Building2, desc: section.desc };
+    if (group) group.items.push(item);
+    else navGroups.splice(navGroups.length - 1, 0, { label: section.group, items: [item] });
+  }
   const navItems = navGroups.flatMap((g) => g.items);
 
   const emailTestBanner = emailTestStatus && (
@@ -1627,7 +1646,7 @@ const SettingsForm: React.FC<{ initialSettings: AppSettings }> = ({ initialSetti
           </>
         );
       default:
-        return null;
+        return extraSections.find((section) => section.id === activeTab)?.render() ?? null;
     }
   };
 

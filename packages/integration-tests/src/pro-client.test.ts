@@ -279,4 +279,55 @@ describe('pro renderer client against the embedded backend', () => {
     for (const entry of await journal(h)) assert.equal(entry.lines.reduce((sum, line) => sum + Math.round(line.debitAmount * 100) - Math.round(line.creditAmount * 100), 0), 0, `entry ${entry.entryNumber}`);
     assert.equal((await api().audit.verify()).ok, true);
   });
+
+  test('transfers between own accounts through the client: FinTS IBAN column, suggestion, confirm and post, Geldtransit, reject, settings', async () => {
+    const giro = `giro-${randomUUID().slice(0, 6)}`; const card = `card-${randomUUID().slice(0, 6)}`;
+    await api().accounts.upsert({ account: { id: giro, name: 'Transfer Giro', iban: 'DE89370400440532013000', balance: 0, transactions: [], type: 'bank', color: '#000000', defaultSkrAccountNumber: '1200' } });
+    await api().accounts.upsert({ account: { id: card, name: 'Transfer Karte', iban: 'DE21500105170000004021', balance: 0, transactions: [], type: 'credit', color: '#000000', defaultSkrAccountNumber: '1240' } });
+    const importCsv = async (accountId: string, rows: string[]) => {
+      const csv = ['Buchungstag;Auftraggeber/Empfänger;IBAN;Verwendungszweck;Betrag;Währung', ...rows].join('\n');
+      const preview = await api().finance.importPreview({ fileName: `transfer-${randomUUID().slice(0, 6)}.csv`, contentBase64: Buffer.from(csv).toString('base64'), profile: 'fints' });
+      assert.equal(preview.suggestedMapping.counterpartyIbanColumn, 'IBAN');
+      assert.equal((await api().finance.importCommit({ path: preview.path, accountId, profile: 'fints', mapping: preview.suggestedMapping })).errors.length, 0);
+    };
+    await importCsv(giro, ['03.04.2026;American Express;DE21 5001 0517 0000 0040 21;Kartenabrechnung;-1248,30;EUR', '04.04.2026;Kiosk;;Zeitung;-7,00;EUR']);
+    await importCsv(card, ['05.04.2026;Zahlung erhalten;;Danke;1248,30;EUR', '06.04.2026;Kunde;;Gutschrift;7,00;EUR']);
+
+    const rows = await api().pro.listBankTransactions();
+    const out = rows.find((row) => row.accountId === giro && row.amount === -1248.3)!;
+    const incoming = rows.find((row) => row.accountId === card && row.amount === 1248.3)!;
+    assert.equal(out.counterpartyIban, 'DE21500105170000004021');
+    assert.deepEqual([out.suggestionLayer, out.suggestedAccountNumber, out.transfer?.level, out.transfer?.partnerTransactionId, out.transfer?.partnerAccountName], ['transfer', '1360', 'sicher', incoming.id, 'Transfer Karte']);
+
+    const posted = await api().pro.confirmTransfer({ transactionId: out.id, post: true });
+    assert.deepEqual(posted.map((draft) => draft.workflowStatus), ['posted', 'posted']);
+    const transit = await api().pro.getTransitOverview();
+    assert.equal(transit.transitAccountNumber, '1360');
+    assert.equal(transit.months.find((month) => month.period === '2026-04')!.balance, 0);
+    assert.ok(!transit.openSides.some((side) => side.transactionId === out.id));
+
+    const kiosk = rows.find((row) => row.accountId === giro && row.amount === -7)!;
+    assert.equal(kiosk.transfer?.level, 'wahrscheinlich', 'opposite amount on another own account two days later');
+    await api().pro.rejectTransfer({ transactionId: kiosk.id });
+    assert.equal((await api().pro.listBankTransactions()).find((row) => row.id === kiosk.id)!.transfer, undefined);
+    await assert.rejects(api().pro.rejectTransfer({ transactionId: out.id }), /Erst stornieren/);
+
+    const settings = await api().pro.saveBookingSettings({ transferWindowDays: 3 });
+    assert.deepEqual([settings.transferWindowDays, settings.transferDetection, settings.autoPostTransfers], [3, true, false]);
+    assert.equal((await api().pro.getBookingSettings()).transferWindowDays, 3);
+
+    // Auto-post: only complete sure pairs, and only once the second side arrives.
+    await api().pro.saveBookingSettings({ autoPostTransfers: true });
+    await importCsv(giro, ['10.04.2026;American Express;DE21500105170000004021;Kartenabrechnung;-300,00;EUR']);
+    let next = await api().pro.listBankTransactions();
+    const lone = next.find((row) => row.accountId === giro && row.amount === -300)!;
+    assert.equal(lone.status, 'pending', 'a side without its partner waits');
+    await importCsv(card, ['11.04.2026;Zahlung erhalten;;Danke;300,00;EUR', '12.04.2026;Zahlung erhalten;;Danke;55,00;EUR']);
+    await importCsv(giro, ['12.04.2026;Umbuchung;;Karte;-55,00;EUR']);
+    next = await api().pro.listBankTransactions();
+    const pair = next.filter((row) => Math.abs(row.amount) === 300);
+    assert.deepEqual(pair.map((row) => [row.status, row.transfer?.status]), [['booked', 'confirmed'], ['booked', 'confirmed']]);
+    assert.ok(next.filter((row) => Math.abs(row.amount) === 55).every((row) => row.status === 'pending' && row.transfer?.level === 'wahrscheinlich'), 'probable pairs are never auto-posted');
+    await api().pro.saveBookingSettings({ autoPostTransfers: false });
+  });
 });

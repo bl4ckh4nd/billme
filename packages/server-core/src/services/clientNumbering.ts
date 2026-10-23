@@ -295,6 +295,10 @@ export function finalizeDocumentNumber<TSettings extends NumberingSettingsShape>
       if (reservation.status !== 'reserved') {
         throw new Error(`Cannot finalize reservation in status "${reservation.status}"`);
       }
+      // A saved draft holds its reservation; no other document may take it.
+      if (reservation.documentId !== null && reservation.documentId !== documentId) {
+        throw new Error('FINALIZED_RESERVATION_DOCUMENT_MISMATCH');
+      }
 
       return chainMaybePromise(
         ports.updateReservation({

@@ -51,6 +51,8 @@ export interface DatevBuchungsstapelOptions {
    * requires both inside the Wirtschaftsjahr, which is what DATEV itself demands (Lite EÜR export).
    */
   periodScope?: 'month' | 'fiscal-year';
+  /** Header field 21 Festschreibung: 1 when every booking of the stack lies in a closed period. Default 0. */
+  locked?: boolean;
 }
 
 // DATEV Developer Portal, booking-batch field heading (format version 13).
@@ -197,7 +199,7 @@ const buildHeader = (options: DatevBuchungsstapelOptions): string => {
     headerTimestamp(options.createdAt), '', quote(options.origin ?? 'RE'), quote(options.exportedBy ?? ''), quote(options.importedBy ?? ''),
     String(options.consultantNumber), String(options.clientNumber), datevYmd(options.fiscalYearStart), options.accountLength,
     datevYmd(options.from), datevYmd(options.to), quote(options.stackName ?? 'Buchungsstapel'), quote(options.dictationCode ?? ''),
-    1, 0, 0, quote('EUR'), '', quote(''), '', '', quote(options.chart.slice(-2)), '', '', quote(''), quote(''),
+    1, 0, options.locked ? 1 : 0, quote('EUR'), '', quote(''), '', '', quote(options.chart.slice(-2)), '', '', quote(''), quote(''),
   ];
   return fields.join(';');
 };

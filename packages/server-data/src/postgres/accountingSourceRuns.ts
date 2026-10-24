@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto';
+import { usableAccountNumbers } from './tenantLedgerAccounts.js';
 import {
   CANONICAL_TAX_CASES,
   CorrectionSettlementError,
@@ -208,8 +209,7 @@ const assertAccounts = async (db: PostgresQueryable, scope: TenantScope, account
   if (!requested.length) throw new Error('INVALID_ACCOUNT');
   const chart = await activeChart(db, scope);
   // Fail closed: an account that is not in the chart's catalogue (also an empty one) is refused.
-  const rows = await q<any>(db, `SELECT account_number FROM ledger_accounts WHERE chart=$1 AND account_number = ANY($2::text[])`, [chart, requested]);
-  const found = new Set(rows.map((row) => String(row.account_number)));
+  const found = await usableAccountNumbers(db, tenant(scope), chart, requested);
   const missing = requested.find((account) => !found.has(account));
   if (missing) throw new Error(`UNKNOWN_ACCOUNT:${missing}`);
 };

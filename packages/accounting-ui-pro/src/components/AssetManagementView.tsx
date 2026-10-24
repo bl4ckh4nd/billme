@@ -217,10 +217,11 @@ function AssetEditor({ form, busy, onChange, onSubmit, onCancel }: AssetEditorPr
             <Field id="asset-acquisition-cost" label={requiredLabel('Anschaffungskosten netto')}>
               <Input fullWidth type="number" min="0" step="0.01" value={form.acquisitionCost} onChange={input('acquisitionCost')} required />
             </Field>
-            <Input label="Nutzungsdauer in Jahren" fullWidth type="number" min="1" step="1" value={form.usefulLifeYears} onChange={input('usefulLifeYears')} />
-            <Field id="asset-depreciation-method" label={requiredLabel('Abschreibungsmethode')}>
+            <Input label="Nutzungsdauer in Jahren" fullWidth type="number" min="1" step="1" value={form.usefulLifeYears} onChange={input('usefulLifeYears')} hint="Computerhardware und Software: 1 Jahr ist erlaubt (BMF 22.02.2022) und schreibt im Anschaffungsjahr voll ab." />
+            <Field id="asset-depreciation-method" label={requiredLabel('Abschreibungsmethode')} hint={form.depreciationMethod === 'degressive' ? 'Nur für Zugänge 01.04.2020–31.12.2022 (bis 25 %) und 01.07.2025–31.12.2027 (bis 30 %).' : undefined}>
               <Select fullWidth value={form.depreciationMethod} onChange={input('depreciationMethod')} required>
                 <option value="linear">Linear</option>
+                <option value="degressive">Degressiv (§ 7 Abs. 2 EStG)</option>
                 <option value="gwg">GWG</option>
                 <option value="pool">Pool</option>
               </Select>

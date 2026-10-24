@@ -102,18 +102,21 @@ keep double-entry books.
   VAT ID or missing evidence
 - **DATEV Buchungsstapel export** — EXTF header, 12 columns, CP1252 + BOM, DDMMYYYY dates, with field
   validation that aborts the export rather than writing a malformed file
-- **Accounting periods** (open / soft-locked / closed) and an 11-state booking workflow with dual-control
-  gates: submit for review, approve, reject, post, reverse, create correction
+- **Accounting periods** (open / soft-locked / closed) enforced by the server: a soft-locked month still
+  takes a posting only with an explicit override and a reason; a closed month is festgeschrieben (cumulative,
+  every earlier month too) and refuses every posting, including reversals. Plus an 11-state booking workflow
+  with dual-control gates: submit for review, approve, reject, post, reverse, create correction
 - **Automatic account suggestions, entirely local** — a five-stage cascade of rule → counterparty memory →
   naive Bayes → keyword → fallback, with the confidence and reason surfaced in the UI. The classifier
   trains on your own booking history. No cloud AI, no data leaves the machine
-- **Betriebsprüfung export package** — one command produces JSONL exports of journal, lines, periods,
-  mappings and audit log with a SHA-256 per file and a manifest
+- **Betriebsprüfung export package (Z3)** — one button or command produces JSONL exports of journal, lines,
+  periods, Kontenplan, customers, vendors, incoming invoices with their receipt files, open items, assets,
+  mappings and audit log for a date range, with a SHA-256 per file and a manifest (no GDPdU `index.xml` yet)
 - **Database-level immutability** — SQL triggers protect `journal_entries`, `journal_lines` and
   `datev_exports` against update and delete (Lite protects only `audit_log`)
 - **Role gates** on posting, reversal, DATEV export and audit export
-- **SuSa, GuV and Bilanz** — the report engine is implemented and exposed over IPC; wiring the shared
-  accounting UI to it is still in progress, so those screens currently render sample data
+- **SuSa, GuV and Bilanz** — computed from the posted journal (§ 266 / § 275 HGB positions; accounts without
+  an own mapping fall back to a default by SKR account range, flagged in the report)
 
 ### Server mode — Lite and Pro
 
@@ -305,7 +308,8 @@ Billme includes technical controls that support GoBD-oriented workflows:
 **Important:** GoBD conformity is always process- and setup-dependent, including organizational controls
 and a Verfahrensdokumentation. Billme does not claim an official GoBD certification, and the project's
 own compliance checklist rates every clause (HGB §238, AO §146/§147, GoBD, UStG §14, DATEV) as *partial* —
-notably there is no year-end closing control path, no enforced receipt-to-booking linkage, and no
+notably the year-end closing is a manual run without a guided checklist, there is no enforced
+receipt-to-booking linkage, and no
 retention policy engine yet. Treat this as engineering support, not legal advice.
 
 ---

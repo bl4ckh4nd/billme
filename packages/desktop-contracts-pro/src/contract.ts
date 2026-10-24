@@ -264,6 +264,7 @@ const proListJournalEntriesArgsSchema = z.object({
   from: z.string().optional(),
   to: z.string().optional(),
   accountNumbers: z.array(z.string().min(1)).optional(),
+  sourceDraftId: z.string().min(1).optional(),
   limit: z.number().int().positive().max(5000).optional(),
   offset: z.number().int().min(0).optional(),
 });
@@ -407,6 +408,7 @@ const proGetAccountingHealthResultSchema = z.object({
   unmappedAccounts: z.array(z.string()).optional(),
   blocking: z.boolean().optional(),
   lastDatevExportAt: z.string().optional(),
+  missingDepreciation: z.array(z.object({ assetId: z.string(), assetNumber: z.string(), year: z.number().int() })).optional(),
 });
 
 const proSetAccountingPolicyArgsSchema = z.object({ activeChart: ledgerChartSchema, vatMethod: z.enum(['soll', 'ist']) });
@@ -669,6 +671,7 @@ export const ipcRoutes = {
   'pro:setAccountingPeriodStatus': { channel: 'pro:setAccountingPeriodStatus', args: proSetAccountingPeriodStatusArgsSchema, result: accountingPeriodStatusChangeSchema },
   'pro:listAccountingAccountMappings': { channel: 'pro:listAccountingAccountMappings', args: proListAccountingAccountMappingsArgsSchema, result: z.array(accountingAccountMappingSchema) },
   'pro:upsertAccountingAccountMapping': { channel: 'pro:upsertAccountingAccountMapping', args: proUpsertAccountingAccountMappingArgsSchema, result: accountingAccountMappingSchema },
+  'pro:saveLedgerAccount': { channel: 'pro:saveLedgerAccount', args: z.object({ chart: ledgerChartSchema, accountNumber: z.string().trim().regex(/^\d{4,8}$/), name: z.string().trim().min(1).max(40).optional(), active: z.boolean(), reason: z.string().trim().min(1) }), result: ledgerAccountSchema },
   'pro:listVendors': { channel: 'pro:listVendors', args: z.undefined(), result: z.array(vendorSchema) },
   'pro:upsertVendor': { channel: 'pro:upsertVendor', args: proUpsertVendorArgsSchema, result: vendorSchema },
   'pro:listIncomingInvoices': { channel: 'pro:listIncomingInvoices', args: z.undefined(), result: z.array(incomingInvoiceSchema) },

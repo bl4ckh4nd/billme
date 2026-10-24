@@ -275,7 +275,7 @@ test('Ist VAT is recognized only for allocated debtor amounts, never for overpay
   await withOpos(async (database, repo) => {
     const { id, reservationId } = await seedInvoice(database, { id: 'inv-ist' });
     await repo.postOutgoingInvoice(scope, id, { reservationId });
-    assert.deepEqual((await entryLines(database, id)).map((l) => l.account_number), ['1400', '8400', '1765']);
+    assert.deepEqual((await entryLines(database, id)).map((l) => l.account_number), ['1400', '8400', '1766']);
 
     const [item] = await repo.listOpenItems(scope);
     const paid = await repo.allocateOpenItemPayment(scope, payment(item!.id, 150, 50, 'pay-ist'));

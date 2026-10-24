@@ -2,6 +2,8 @@ import assert from 'node:assert/strict';
 import { createHash, randomUUID } from 'node:crypto';
 import { after, before, describe, test } from 'node:test';
 import { startPro, type ProHarness } from './harness.js';
+import { localIsoDate } from '@billme/server-core';
+import { newClient } from './fixtures.js';
 import { sha256Hex, stableStringify } from '@billme/server-data';
 import {
   addBankAccount, approveDraft, assertBalanced, assertLedgerConsistent, bankTx, cents, download, get, getDraft, importCsv, invoiceEntry, issue,
@@ -22,12 +24,23 @@ import {
  *   rejected override answered with a server error, a mapping without audit
  * - reports: BWA / GuV / Bilanz numbers that differ from the ledger, a balance
  *   sheet that does not balance, a blocked report that still shows numbers
+ * - range defaults: an HGB GuV / Bilanz that needs every DATEV account mapped
+ *   by hand, a default that is stored or beats a tenant mapping, a default that
+ *   is not flagged, Geldtransit (1360) without a balance-sheet position, a BWA
+ *   that silently guesses P&L positions; a balancing sole proprietor refused or
+ *   without Kapital and Privat in the Eigenkapital; a fiscal year after the
+ *   newest catalogue refused instead of running on it, marked provisional; SuSa
+ *   rows without the account name
  * - snapshots: a frozen report that changes afterwards, a duplicate that is not
  *   recognised, a snapshot of an incomplete mapping, one without a reason
  * - DATEV: a file whose record count, hash or bytes differ from the receipt, a
  *   wrong header (consultant, client, fiscal year, period), a text field in the
  *   wrong encoding, a stack spanning two periods, a bad query accepted, an
- *   export that cannot be fetched again unchanged
+ *   export that cannot be fetched again unchanged; a net row plus a VAT row
+ *   instead of one gross row (DATEV books the tax twice), the entry number in
+ *   Belegfeld 1 instead of the invoice number, a Storno under another
+ *   Belegfeld than its original, a booking text over 60 characters that
+ *   refuses the whole export, a file name without its period
  * - EÜR rules and PDF: a rule without value, line or reason accepted, a deleted
  *   rule still suggesting, a PDF faked when no printer is attached
  * - filing operations: an unknown, stale or anonymous filing validated or submitted
@@ -41,6 +54,17 @@ import {
  *   or Bilanz of the closed or the next year (result zeroed, balances counted
  *   twice), closing entries exported to DATEV, a closed year or a prepared
  *   UStVA month that stays open for postings without an override
+ * - assets: a disposal during the year refused (ASSET_DISPOSAL_PROJECTION_MISMATCH)
+ *   instead of booking the AfA up to the disposal month, or accepted while an
+ *   earlier AfA year is unposted; AfA years that ignore the Wirtschaftsjahr; an
+ *   AfA booked outside its year; a missing AfA of a past year not reported in the
+ *   health; IT hardware with a 1-year life spread over two years; degressive AfA
+ *   with the wrong rate or outside its legal windows
+ * - Prüferpaket (Z3): journal lines or posting pairs of other periods in a
+ *   package for one range, no Kontenplan, customers, vendors, incoming invoices
+ *   (with their receipt files, byte-identical), open items, asset register or
+ *   mappings, the retired account_mappings_hgb still exported, a file whose hash
+ *   does not match its bytes
  */
 
 const GROSS = 238;
@@ -293,7 +317,7 @@ describe('pro reporting', () => {
     });
 
     test('mapping every account clears the health lists per report family', async () => {
-      assert.ok((await health(h, 'hgb-bilanz')).includes('1400'));
+      assert.deepEqual(await health(h, 'hgb-bilanz'), [], 'the DATEV range defaults cover every booked account');
       for (const [account, hgb, bwa, management] of pnl) {
         for (const [type, position] of [['hgb-guv', hgb], ['bwa01', bwa], ['management-guv', management]] as const) {
           const response = await override(h, account, type, position, { reason: `Zuordnung ${account}` });
@@ -301,7 +325,7 @@ describe('pro reporting', () => {
           assert.deepEqual([response.body.source, response.body.version], ['tenant_override', 1]);
         }
       }
-      assert.deepEqual(await health(h, 'hgb-guv'), ['1200', '1400', '1576', '1600', '1776'], 'only the balance-sheet accounts are left');
+      assert.deepEqual(await health(h, 'hgb-guv'), [], 'the balance-sheet accounts are covered by their range default');
       for (const [account, position, side] of balance) {
         const response = await override(h, account, 'hgb-bilanz', position, { balanceSide: side });
         assert.equal(response.status, 200, `${account}: ${response.text}`);
@@ -427,6 +451,115 @@ describe('pro reporting', () => {
     });
   });
 
+  describe('balancing sole proprietor (own tenant): range defaults, Kapital and Privat, provisional catalogue', () => {
+    let e: ProHarness;
+    const book = (lines: Array<[string, number, number]>, text: string, date = '2026-05-10') => e.raw('POST', '/accounting/journal', { reason: text, reference: text.slice(0, 20), documentDate: date, postingDate: date, bookingText: text, idempotencyKey: randomUUID(), lines: lines.map(([accountNumber, debitAmount, creditAmount]) => ({ accountNumber, debitAmount, creditAmount })) });
+    before(async () => {
+      e = await startPro(null, 'pro-sole-balance');
+      const settings = await e.api.settings.get();
+      const saved = await e.raw('PUT', '/settings', { settings: { ...settings, businessReportingProfile: { jurisdiction: 'DE', legalForm: 'sole_proprietor', profitDetermination: 'double_entry', fiscalYearStart: '01-01', chart: 'SKR03', vatMethod: 'soll' } } });
+      assert.equal(saved.status, 200, `a sole proprietor may balance: ${saved.text}`);
+      assert.equal((await book([['1000', 1000, 0], ['1890', 0, 1000]], 'Privateinlage')).status, 200);
+      assert.equal((await book([['1800', 300, 0], ['1000', 0, 300]], 'Privatentnahme')).status, 200);
+      assert.equal((await book([['1360', 50, 0], ['1000', 0, 50]], 'Geldtransit')).status, 200);
+      await issue(e, { client: 'Einzel Kunde', date: '2026-05-12', dueDate: '2026-05-26' });
+    });
+    after(async () => { await e?.close(); });
+
+    test('GuV and Bilanz run on the DATEV range defaults without any mapping, flagged, and store nothing; the BWA still asks', async () => {
+      const guv = await get<any>(e, '/accounting/reports/hgb-guv?from=2026-01-01&to=2026-12-31');
+      assert.equal(guv.mappingHealth.blocking, false, JSON.stringify(guv.mappingHealth));
+      assert.equal(row(guv, 'revenue'), 200);
+      assert.equal(guv.netResult, 200);
+      assert.ok(guv.mappingHealth.inferredAccounts > 0 && guv.mappingHealth.warnings.some((warning: string) => /Standardzuordnung nach Kontenbereich \(SKR03\): .*8400/.test(warning)), 'the defaults are flagged');
+
+      const bilanz = await get<any>(e, '/accounting/reports/bilanz?asOfDate=2026-12-31');
+      assert.equal(bilanz.mappingHealth.blocking, false, JSON.stringify(bilanz.mappingHealth));
+      assert.deepEqual(bilanz.totals, { assets: 938, liabilities: 938, delta: 0 }, 'Kasse 650 + Geldtransit 50 + Forderung 238');
+      const equity = (bilanz.liabilities as Array<{ position: string; amount: number }>).find((line) => line.position === 'equity')?.amount;
+      assert.equal(equity, 900, 'Eigenkapital: Einlage 1000 − Entnahme 300 + Gewinn 200');
+      const current = (bilanz.assets as Array<{ position: string; amount: number; accounts?: string[] }>).find((line) => line.position === 'assets.current');
+      assert.equal(current?.amount, 938);
+
+      assert.deepEqual(await health(e, 'hgb-bilanz'), [], 'every booked account has a range default');
+      assert.deepEqual(await health(e, 'hgb-guv'), []);
+      assert.deepEqual(await health(e, 'bwa01'), ['8400'], 'the BWA has no range default: the revenue account must be mapped, the balance accounts need not');
+    });
+
+    test('a tenant mapping beats the range default', async () => {
+      const saved = await e.raw('PUT', '/accounting/mappings/overrides', { reason: 'Provision', chart: 'SKR03', asOfDate: '2026-01-01', accountNumber: '8400', statementType: 'hgb-guv', positionKey: 'other-operating-income', positionLabel: 'Sonstige' });
+      assert.equal(saved.status, 200, saved.text);
+      assert.equal(saved.body.version, 1, 'reading reports stored no default mapping before');
+      const guv = await get<any>(e, '/accounting/reports/hgb-guv?from=2026-01-01&to=2026-12-31');
+      assert.deepEqual([row(guv, 'revenue'), row(guv, 'other-operating-income')], [0, 200]);
+    });
+
+    test('2027 runs on the 2026 catalogue and says so', async () => {
+      const later = await get<any>(e, '/accounting/reports/hgb-guv?from=2027-01-01&to=2027-12-31');
+      assert.deepEqual([later.snapshot.catalogYear, later.snapshot.catalogProvisional], [2026, true]);
+      assert.ok(later.mappingHealth.warnings.some((warning: string) => /Berichtskatalog 2026 vorläufig für 2027/.test(warning)));
+      const positions = await e.raw('GET', '/accounting/mappings/positions?reportType=hgb-guv&asOfDate=2027-06-30');
+      assert.equal(positions.status, 200, `mapping positions for 2027: ${positions.text}`);
+      const current = await get<any>(e, '/accounting/reports/hgb-guv?from=2026-01-01&to=2026-12-31');
+      assert.deepEqual([current.snapshot.catalogYear, current.snapshot.catalogProvisional], [2026, false]);
+    });
+
+    test('SuSa rows carry the account name', async () => {
+      const susa = await get<{ rows: Array<{ accountNumber: string; accountName?: string }> }>(e, '/accounting/reports/susa?from=2026-01-01&to=2026-12-31');
+      const name = (account: string) => susa.rows.find((candidate) => candidate.accountNumber === account)?.accountName;
+      assert.deepEqual([name('1360'), name('1800'), name('1890'), name('8400')], ['Geldtransit', 'Privatentnahmen allgemein', 'Privateinlagen', 'Erlöse 19 % USt']);
+    });
+  });
+
+  describe('Prüferpaket (Z3)', () => {
+    test('the package of a range holds journal, Kontenplan, master data, receipts with their files, OPOS, assets and mappings of that range only', async () => {
+      const pdf = Buffer.concat([Buffer.from('%PDF-1.4\n'), Buffer.from(randomUUID())]);
+      const upload = await h.raw('POST', '/accounting/incoming-invoices/in-reports/documents', { reason: 'Beleg', originalFilename: 'hosting-maerz.pdf', mimeType: 'application/pdf', data: pdf.toString('base64') });
+      assert.equal(upload.status, 200, upload.text);
+      assert.equal((await h.raw('POST', '/clients', { reason: 'Kunde', client: newClient({ company: 'Prüfer Kunde GmbH' }) })).status, 200);
+      const asset = await h.raw('POST', '/accounting/assets', { reason: 'Anlage', asset: { assetNumber: 'A-PRUEF', name: 'Drucker', assetClass: 'IT-Hardware', status: 'aktiv', activationDate: '2026-03-05', acquisitionCost: 900, usefulLifeYears: 3, depreciationMethod: 'linear', costCenter: 'IT', location: 'Berlin', receiptLinked: true, assetAccountNumber: '0440' } });
+      assert.equal(asset.status, 200, asset.text);
+      const response = await h.raw('POST', '/tax/audit-export-package', { from: '2026-03-01', to: '2026-03-31', includeDocuments: true });
+      assert.equal(response.status, 200, response.text);
+      const files = response.body.files as Array<{ name: string; content: string; encoding?: 'base64'; sha256: string; sizeBytes: number; rowCount?: number }>;
+      const byName = new Map(files.map((entry) => [entry.name, entry]));
+      const rows = (name: string) => { const entry = byName.get(name); assert.ok(entry, `${name} is in the package`); return entry!.content ? entry!.content.split('\n').map((line) => JSON.parse(line)) : []; };
+      for (const entry of files) {
+        const bytes = Buffer.from(entry.content, entry.encoding === 'base64' ? 'base64' : 'utf8');
+        assert.equal(createHash('sha256').update(bytes).digest('hex'), entry.sha256, `${entry.name}: hash`);
+        assert.equal(bytes.byteLength, entry.sizeBytes, `${entry.name}: size`);
+      }
+      assert.ok(!byName.has('account-mappings-hgb.jsonl'), 'the retired HGB mapping table is not exported');
+
+      const entries = rows('journal-entries.jsonl');
+      assert.ok(entries.length > 0 && entries.every((entry) => entry.posting_date >= '2026-03-01' && entry.posting_date <= '2026-03-31'));
+      const ids = new Set(entries.map((entry) => entry.id));
+      const lines = rows('journal-lines.jsonl');
+      assert.ok(lines.length > 0 && lines.every((line) => ids.has(line.entry_id)), 'journal lines only of the March entries');
+      assert.ok(rows('journal-posting-pairs.jsonl').every((pair) => ids.has(pair.entry_id)), 'posting pairs only of the March entries');
+
+      const chart = rows('chart-of-accounts.jsonl');
+      assert.deepEqual(chart.find((account) => account.account_number === '1400'), { chart: 'SKR03', account_number: '1400', name: 'Forderungen aus Lieferungen und Leistungen', active: true, source: 'datev' });
+      assert.ok(rows('customers.jsonl').some((client) => client.company === 'Prüfer Kunde GmbH'), 'customers');
+      assert.ok(rows('vendors.jsonl').some((vendor) => vendor.name === 'Report Lieferant'), 'vendors');
+      assert.ok(rows('incoming-invoices.jsonl').some((invoice) => invoice.number === 'ER-R1'), 'incoming invoices');
+      assert.ok(rows('incoming-invoice-lines.jsonl').some((line) => line.incoming_invoice_id === 'in-reports'));
+      const documents = rows('incoming-invoice-documents.jsonl');
+      const document = documents.find((entry) => entry.id === upload.body.id);
+      assert.ok(document && !('content_bytes' in document), 'the receipt index without the bytes');
+      const receipt = files.find((entry) => entry.name.startsWith(`beleg-`) && entry.name.endsWith('.pdf') && entry.encoding === 'base64' && entry.sha256 === document.sha256);
+      assert.ok(receipt && Buffer.from(receipt.content, 'base64').equals(pdf), 'the receipt file is byte-identical');
+      assert.ok(rows('open-items.jsonl').every((item) => item.document_date >= '2026-03-01' && item.document_date <= '2026-03-31'));
+      assert.ok(rows('open-items.jsonl').length > 0, 'open items of March');
+      assert.ok(rows('assets.jsonl').some((entry) => entry.asset_number === 'A-PRUEF'), 'the asset register');
+      assert.ok(rows('asset-depreciation-schedule.jsonl').some((entry) => entry.asset_id === asset.body.id), 'its AfA plan');
+      const health = await get<{ unmappedAccountCount: number }>(h, '/accounting/health');
+      const mapping = await get<{ unmapped: unknown[] }>(h, `/accounting/mappings/health?reportType=hgb-bilanz&asOfDate=${localIsoDate(new Date())}`);
+      assert.equal(health.unmappedAccountCount, mapping.unmapped.length, 'the health count comes from the report mappings, not the retired HGB table');
+      for (const name of ['asset-depreciation-schedule.jsonl', 'asset-movements.jsonl', 'accounting-account-mappings.jsonl', 'tax-case-account-mappings.jsonl', 'report-account-mappings.jsonl', 'open-item-payments.jsonl', 'open-item-allocations.jsonl']) rows(name);
+    });
+  });
+
   describe('DATEV export', () => {
     const base = { from: '2026-03-01', to: '2026-03-31', consultantNumber: '1234567', clientNumber: '12345', fiscalYearStart: '2026-01-01', accountLength: 4, encoding: 'cp1252' };
     const qs = (over: Record<string, unknown>) => Object.entries({ ...base, ...over }).filter(([, value]) => value !== undefined).map(([key, value]) => `${key}=${encodeURIComponent(String(value))}`).join('&');
@@ -458,11 +591,14 @@ describe('pro reporting', () => {
       const exportedTotal = rows.reduce((sum, fields) => sum + Math.round(Number(fields[0]!.replace(',', '.')) * 100), 0);
       assert.equal(exportedTotal, debitTotal, 'the exported amounts add up to the debits of March');
       assert.deepEqual((await get<unknown[]>(h, '/accounting/datev/rows?from=2026-03-01&to=2026-03-31')).length, rows.length, 'the preview rows and the file agree');
-      const invoiceRow = rows.find((fields) => fields[6] === '1400' && fields[7] === '8400' && fields[0] === '200,00')!;
-      assert.ok(invoiceRow, 'the revenue pair of invoice A');
+      const invoiceRow = rows.find((fields) => fields[6] === '1400' && fields[7] === '8400')!;
+      assert.deepEqual([invoiceRow[0], invoiceRow[8]], ['238,00', ''], 'invoice A is one gross row on the Automatikkonto 8400, without BU key');
+      assert.ok(!rows.some((fields) => fields[6] === '1776' || fields[7] === '1776'), 'and no separate VAT row');
+      assert.match(invoiceRow[10]!, /^"RE-\d{4}-\d{3}"$/, 'Belegfeld 1 is the invoice number');
+      assert.match(exported.headers.get('content-disposition') ?? '', /filename="EXTF_Buchungsstapel_2026-03-01_2026-03-31\.csv"/);
       const preview = await get<Array<{ belegfeld1: string; konto: string; gegenkonto: string }>>(h, '/accounting/datev/rows?from=2026-03-01&to=2026-03-31');
       for (const entry of march) {
-        const pairs = preview.filter((row) => row.belegfeld1 === String(entry.entryNumber));
+        const pairs = preview.filter((row) => row.belegfeld1 === (entry.reference || String(entry.entryNumber)));
         const lineOrder = (account: string) => entry.lines.findIndex((line) => line.accountNumber === account);
         assert.deepEqual(pairs, [...pairs].sort((a, b) => lineOrder(a.konto) - lineOrder(b.konto) || lineOrder(a.gegenkonto) - lineOrder(b.gegenkonto)), 'DATEV pairs follow journal line order, never random pair IDs');
       }
@@ -487,7 +623,7 @@ describe('pro reporting', () => {
       assert.equal(again.headers.get('x-billme-datev-record-count'), exported.headers.get('x-billme-datev-record-count'));
       assert.equal((await download(h, '/api/v1/pro/accounting/datev/exports/does-not-exist')).status, 404);
       const receipt = await h.api.pro.exportDatevBuchungsstapel({ from: '2026-03-01', to: '2026-03-31', consultantNumber: '1234567', clientNumber: '12345', fiscalYearStart: '2026-01-01', accountLength: 4 } as never);
-      assert.equal(receipt.recordCount, Number(exported.headers.get('x-billme-datev-record-count')) + 2, 'the later invoice adds its two posting pairs to a new export');
+      assert.equal(receipt.recordCount, Number(exported.headers.get('x-billme-datev-record-count')) + 1, 'the later invoice adds its one gross row to a new export');
       assert.match(receipt.contentSha256 ?? receipt.sha256 ?? '', /^[a-f0-9]{64}$/);
       assert.ok((await h.api.pro.listDatevExports({} as never)).some((entry) => entry.id === receipt.id));
     });
@@ -525,21 +661,35 @@ describe('pro reporting', () => {
       assert.equal(receipt.encoding, 'utf8-bom');
     });
 
-    test('reversals appear as opposite pairs, and a tax-case mapping puts the BU key on the revenue row', async () => {
+    test('reversals appear as opposite pairs under the Belegfeld 1 of the original, and 7 % revenue is one gross row on the Automatikkonto 8300', async () => {
       const april = await exportCsv({ from: '2026-04-01', to: '2026-04-30' });
       assert.equal(april.status, 200, april.bytes.toString());
       const rows = dataRows(april.bytes);
       const sum = (konto: string, gegen: string) => rows.filter((fields) => fields[6] === konto && fields[7] === gegen).reduce((total, fields) => total + Math.round(Number(fields[0]!.replace(',', '.')) * 100) * (fields[1] === 'S' ? 1 : -1), 0);
       assert.ok(rows.some((fields) => /Storno/.test(fields[13]!)), 'the reversal says Storno');
       assert.equal(sum('1400', '8400') - sum('8400', '1400'), 0, 'the invoice and its reversal cancel on the revenue pair');
-      assert.equal(sum('1400', '1776') - sum('1776', '1400'), 0, 'and on the VAT pair');
+      const reversal = rows.find((fields) => /Storno/.test(fields[13]!))!;
+      assert.ok(rows.some((fields) => fields !== reversal && fields[10] === reversal[10]), 'the Storno keeps the Belegfeld 1 of the original invoice');
 
       assert.equal((await h.raw('POST', '/accounting/tax-case-account-mappings', { reason: 'BU 2', chart: 'SKR03', taxCaseKey: 'DE_STD_7', role: 'datev_bu', accountNumber: '1771', datevBuKey: '2' })).status, 200);
       const seven = await issue(h, { client: 'Sieben DATEV', date: '2026-05-10', dueDate: '2026-05-24', items: [{ kind: 'item', description: 'Buch', quantity: 1, price: 50, total: 50, taxRate: 7 }] });
       assert.ok(seven.id);
       const may = dataRows((await exportCsv({ from: '2026-05-01', to: '2026-05-31' })).bytes);
-      const revenueRow = may.find((fields) => fields[6] === '1400' && fields[7] === '8300' && fields[0] === '50,00')!;
-      assert.equal(revenueRow[8], '"0002"', 'BU key 2 for 7 %');
+      const revenueRow = may.find((fields) => fields[6] === '1400' && fields[7] === '8300')!;
+      assert.deepEqual([revenueRow[0], revenueRow[8]], ['53,50', ''], '8300 is the Automatikkonto for 7 %: gross, and a BU key there would be refused by DATEV');
+    });
+
+    test('a booking text over 60 characters is shortened, the export is not refused', async () => {
+      const bank = await addBankAccount(h, 'bank-long');
+      await importCsv(h, bank, [{ date: '2026-07-02', amount: -20, counterparty: 'Langtext', purpose: 'plain' }]);
+      const d = await getDraft(h, (await bankTx(h, 'Langtext')).id);
+      const long = 'Wartungsvertrag Kopierer Standort Hauptgebäude zweites Quartal inklusive Toner';
+      await approveDraft(h, d, [{ id: `${d.id}-1`, accountNumber: '4930', debitAmount: 20, creditAmount: 0 }, { id: `${d.id}-2`, accountNumber: '1200', debitAmount: 0, creditAmount: 20 }], { postingDate: '2026-07-02', bookingText: long });
+      assert.equal((await postDraft(h, d.id, { postingDate: '2026-07-02' })).status, 200);
+      const july = await exportCsv({ from: '2026-07-01', to: '2026-07-31' });
+      assert.equal(july.status, 200, july.bytes.toString());
+      const textField = dataRows(july.bytes).find((fields) => fields[13]!.startsWith('"Wartungsvertrag'))![13]!;
+      assert.equal(textField, `"${long.slice(0, 59)}…"`.replace('…', '\u0085'), 'cut to 60 characters with an ellipsis');
     });
 
     test('a month without bookings exports an empty stack', async () => {
@@ -854,8 +1004,6 @@ describe('pro reporting', () => {
     test('a disposal books proceeds against the residual book value, retries idempotently and ends the asset', async () => {
       const created = await save({ assetNumber: 'A-SOLD', usefulLifeYears: 2, activationDate: '2026-01-01' });
       const id = created.body.id;
-      const early = await dispose(id);
-      refused('a disposal before the due depreciation is posted', early);
       assert.equal((await depreciate(id)).status, 200);
       const sold = await dispose(id);
       assert.equal(sold.status, 200, sold.text);
@@ -874,6 +1022,74 @@ describe('pro reporting', () => {
       const refusedDraft = await dispose(draftAsset.body.id);
       refused('the disposal of a draft asset', refusedDraft);
       assert.equal((await dispose(id, { reason: ' ' })).status, 400);
+    });
+
+    test('a disposal during the year books the AfA up to the disposal month, then the disposal; with an earlier year unposted it is refused', async () => {
+      const created = await save({ assetNumber: 'A-MIDYEAR', usefulLifeYears: 3, activationDate: '2026-01-01', acquisitionCost: 3600 });
+      const id = created.body.id;
+      const sold = await dispose(id, { disposalDate: '2026-06-30', proceeds: 0 });
+      assert.equal(sold.status, 200, sold.text);
+      assert.deepEqual([sold.body.residualBookValue, sold.body.gainLoss, sold.body.asset.status], [3000, -3000, 'stillgelegt'], 'six of 36 months written off');
+      const entries = await journal(h);
+      const afa = entries.find((entry) => entry.bookingText === 'AfA A-MIDYEAR 2026 bis Abgang')!;
+      assert.deepEqual([afa.postingDate, ...afa.lines.map((line) => [line.accountNumber, line.debitAmount, line.creditAmount])], ['2026-06-30', ['4830', 600, 0], ['0440', 0, 600]]);
+      const disposal = entries.find((entry) => entry.id === sold.body.journalEntryId)!;
+      assert.deepEqual(disposal.lines.map((line) => [line.accountNumber, line.debitAmount, line.creditAmount]).sort(), [['0440', 0, 3000], ['2310', 3000, 0]]);
+      const schedule = await get<Array<{ year: number; amount: number; months: number; status: string }>>(h, `/accounting/assets/${id}/schedule`);
+      assert.deepEqual(schedule.map((row) => [row.year, row.amount, row.months, row.status]), [[2026, 600, 6, 'posted'], [2027, 1200, 12, 'cancelled'], [2028, 1200, 12, 'cancelled']]);
+      assert.equal(net(entries, '0440') >= 0, true);
+
+      const late = await save({ assetNumber: 'A-LATE', usefulLifeYears: 3, activationDate: '2026-01-01', acquisitionCost: 3600 });
+      const refusedLate = await dispose(late.body.id, { disposalDate: '2027-03-31', proceeds: 0 });
+      refused('a disposal in 2027 while the AfA 2026 is unposted', refusedLate);
+      assert.match(refusedLate.text, /ASSET_DISPOSAL_PROJECTION_MISMATCH/);
+    });
+
+    test('the AfA of a year is booked inside that year; a past year without AfA shows in the health', async () => {
+      const created = await save({ assetNumber: 'A-PAST', usefulLifeYears: 5, activationDate: '2025-03-01', acquisitionCost: 6000 });
+      assert.equal(created.status, 200, created.text);
+      const outside = await depreciate(created.body.id, { year: 2025, postingDate: '2026-01-10' });
+      assert.equal(outside.status, 400, outside.text);
+      assert.match(outside.text, /INVALID_DEPRECIATION_POSTING_DATE/);
+      const health = await get<{ missingDepreciation?: Array<{ assetNumber: string; year: number }> }>(h, '/accounting/health');
+      assert.ok(health.missingDepreciation?.some((row) => row.assetNumber === 'A-PAST' && row.year === 2025), JSON.stringify(health.missingDepreciation));
+      assert.ok(!health.missingDepreciation?.some((row) => row.assetNumber === 'A-PAST' && row.year === 2026), 'the running year is not missing yet');
+    });
+
+    test('computer hardware with a 1-year life is written off in the year of acquisition; other classes still spread', async () => {
+      const it = await save({ assetNumber: 'A-IT1', assetClass: 'IT-Hardware', usefulLifeYears: 1, activationDate: '2026-05-01', acquisitionCost: 1200 });
+      assert.equal(it.status, 200, it.text);
+      assert.deepEqual((await get<Array<{ year: number; amount: number }>>(h, `/accounting/assets/${it.body.id}/schedule`)).map((row) => [row.year, row.amount]), [[2026, 1200]]);
+      const desk = await save({ assetNumber: 'A-DESK1', assetClass: 'Büromöbel', usefulLifeYears: 1, activationDate: '2026-05-01', acquisitionCost: 1200 });
+      assert.deepEqual((await get<Array<{ year: number; amount: number }>>(h, `/accounting/assets/${desk.body.id}/schedule`)).map((row) => [row.year, row.amount]), [[2026, 800], [2027, 400]]);
+    });
+
+    test('degressive AfA: three times linear, at most 30 %, on the book value; refused for additions outside the legal windows', async () => {
+      const machine = await save({ assetNumber: 'A-DEGR', assetClass: 'Maschinen', usefulLifeYears: 10, activationDate: '2026-01-01', acquisitionCost: 10000, depreciationMethod: 'degressive', assetAccountNumber: '0210' });
+      assert.equal(machine.status, 200, machine.text);
+      assert.equal(machine.body.depreciationMethod, 'degressive');
+      const schedule = await get<Array<{ year: number; amount: number }>>(h, `/accounting/assets/${machine.body.id}/schedule`);
+      assert.deepEqual(schedule.slice(0, 3).map((row) => [row.year, row.amount]), [[2026, 3000], [2027, 2100], [2028, 1470]], '30 % of the book value');
+      assert.equal(money(schedule.reduce((sum, row) => sum + row.amount, 0)), 10000);
+      assert.equal(schedule.at(-1)!.year, 2035, 'the useful life still ends after ten years (switch to linear)');
+      const old = await save({ assetNumber: 'A-DEGR-OLD', assetClass: 'Maschinen', usefulLifeYears: 10, activationDate: '2024-03-01', acquisitionCost: 10000, depreciationMethod: 'degressive', assetAccountNumber: '0210' });
+      refused('degressive AfA for a 2024 addition', old);
+      assert.match(old.text, /ASSET_DEGRESSIVE_NOT_ALLOWED/);
+    });
+
+    test('AfA years follow the Wirtschaftsjahr', async () => {
+      const settings = await h.api.settings.get();
+      await h.api.settings.set({ settings: { ...settings, businessReportingProfile: { jurisdiction: 'DE', legalForm: 'gmbh', profitDetermination: 'double_entry', hgbSizeClass: 'small', fiscalYearStart: '04-01', chart: 'SKR03', vatMethod: 'soll' } } } as never);
+      try {
+        const created = await save({ assetNumber: 'A-WJ', usefulLifeYears: 3, activationDate: '2026-05-01', acquisitionCost: 1200 });
+        assert.equal(created.status, 200, created.text);
+        const schedule = await get<Array<{ year: number; amount: number; months: number }>>(h, `/accounting/assets/${created.body.id}/schedule`);
+        assert.deepEqual(schedule.map((row) => [row.year, row.amount, row.months]), [[2026, 366.67, 11], [2027, 400, 12], [2028, 400, 12], [2029, 33.33, 1]], 'May 2026 to March 2027 is the first Wirtschaftsjahr');
+        assert.equal((await depreciate(created.body.id, { year: 2026, postingDate: '2027-04-01' })).status, 400, 'April 2027 belongs to the next Wirtschaftsjahr');
+        assert.equal((await depreciate(created.body.id, { year: 2026, postingDate: '2027-03-31' })).status, 200);
+      } finally {
+        await h.api.settings.set({ settings: { ...settings, businessReportingProfile: { jurisdiction: 'DE', legalForm: 'gmbh', profitDetermination: 'double_entry', hgbSizeClass: 'small', fiscalYearStart: '01-01', chart: 'SKR03', vatMethod: 'soll' } } } as never);
+      }
     });
 
     test('selling an asset after full depreciation books the proceeds as a gain without crediting the asset account', async () => {
@@ -1170,7 +1386,8 @@ describe('pro reporting', () => {
         const bilanz = await get<any>(h, '/accounting/reports/bilanz?asOfDate=2026-06-30');
         assert.equal(bilanz.snapshot.fiscalYearRange.start, '2026-04-15');
         assert.equal(bilanz.snapshot.fiscalYearRange.end, '2027-04-14');
-        refused('a report for a year without a catalogue (2027)', await h.raw('GET', '/accounting/reports/bwa01?from=2027-04-15&to=2028-04-14'));
+        const later = await get<any>(h, '/accounting/reports/bwa01?from=2027-04-15&to=2028-04-14');
+        assert.deepEqual([later.snapshot.fiscalYear, later.snapshot.catalogYear, later.snapshot.catalogProvisional], [2027, 2026, true], 'a year without its own catalogue runs on the newest one, marked provisional');
       } finally {
         await h.api.settings.set({ settings: { ...settings, businessReportingProfile: { jurisdiction: 'DE', legalForm: 'gmbh', profitDetermination: 'double_entry', hgbSizeClass: 'small', fiscalYearStart: '01-01', chart: 'SKR03', vatMethod: 'soll' } } } as never);
       }

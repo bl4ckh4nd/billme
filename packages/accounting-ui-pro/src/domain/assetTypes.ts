@@ -1,5 +1,5 @@
 export type AssetStatus = 'entwurf' | 'aktiv' | 'voll_abgeschrieben' | 'verkauft' | 'stillgelegt';
-export type DepreciationMethod = 'linear' | 'gwg' | 'pool';
+export type DepreciationMethod = 'linear' | 'degressive' | 'gwg' | 'pool';
 
 export interface AssetItem {
   id: string;

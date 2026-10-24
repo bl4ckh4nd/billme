@@ -37,3 +37,4 @@ export type {
 export * from './taxExports';
 export * from './closingDomain';
 export * from './settlementCommands';
+export * from './reportDefaultMapping';

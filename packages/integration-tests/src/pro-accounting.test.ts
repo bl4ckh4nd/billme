@@ -18,6 +18,11 @@ import {
  * - setup: a role mapping with a bad role/chart/blank account or no reason, a
  *   mapping onto an account that does not exist (every later invoice would
  *   fail), a mapping change rewriting entries that were already posted
+ * - Kontenplan: an own account without name, with a bad number or without a
+ *   reason accepted; an own account that cannot be booked or is not listed; a
+ *   deactivated account (own or DATEV) that still takes postings, or whose old
+ *   entry can no longer be reversed; a role account deactivated (every invoice
+ *   would fail); a change that is not audited
  * - issuing posts: an entry that does not balance, the wrong accounts or
  *   direction, VAT lumped together across rates, 7 % VAT on the 19 % account,
  *   a tax case without its evidence (Kleinunternehmer, §13b, EU supply), a
@@ -66,6 +71,7 @@ import {
  *   Soll although §13 Abs. 1 Nr. 1a S. 4 makes it due with the payment, the
  *   advance never released at the final invoice (revenue short or 1718 left
  *   standing), a Storno of the advance booking other accounts than the advance
+ * - bank accounts: a deletion audited under a service name instead of the person
  * - bank workbench: an import that double-books, a rolled-back batch that
  *   stays bookable, a suggestion rule that outranks a better one, ignores its
  *   flow/chart/active flag, or is credited for a booking it did not decide
@@ -137,6 +143,47 @@ describe('pro accounting: setup and posting of issued invoices', () => {
       } finally {
         await map(h, 'revenue', '8400');
       }
+    });
+
+    test('Kontenplan: an own account is created, listed and booked; deactivated it takes no postings, its old entry still reverses', async () => {
+      const save = (chart: string, number: string, body: Record<string, unknown>) => h.raw('PUT', `/accounting/ledger/accounts/${chart}/${number}`, body);
+      const book = (account: string) => h.raw('POST', '/accounting/journal', { reason: 'Kontenplan', reference: `KP-${account}`, documentDate: today(), postingDate: today(), bookingText: `Kontenplan ${account}`, idempotencyKey: randomUUID(), lines: [{ accountNumber: account, debitAmount: 10, creditAmount: 0 }, { accountNumber: '1000', debitAmount: 0, creditAmount: 10 }] });
+      assert.equal((await save('SKR03', '4997', { active: true, reason: 'eigenes Konto' })).status, 400, 'an own account needs a name');
+      assert.equal((await save('SKR03', '4997', { name: 'x'.repeat(41), active: true, reason: 'eigenes Konto' })).status, 400, 'at most 40 characters (DATEV)');
+      assert.equal((await save('SKR03', '4997', { name: 'Fortbildung Team', active: true })).status, 400, 'a reason is required');
+      assert.equal((await save('SKR03', '49a9', { name: 'Fortbildung Team', active: true, reason: 'x' })).status, 400, 'digits only');
+      assert.equal((await save('SKR05', '4997', { name: 'Fortbildung Team', active: true, reason: 'x' })).status, 400, 'a known chart');
+      assert.equal((await book('4997')).status >= 400, true, 'before it exists 4997 cannot be booked');
+
+      const created = await save('SKR03', '4997', { name: 'Fortbildung Team', active: true, reason: 'eigenes Konto' });
+      assert.equal(created.status, 200, created.text);
+      assert.deepEqual([created.body.accountNumber, created.body.name, created.body.source, created.body.active], ['4997', 'Fortbildung Team', 'tenant', true]);
+      const listed = await get<Array<{ accountNumber: string; name: string; source: string; active?: boolean }>>(h, '/accounting/ledger/accounts?chart=SKR03&search=Fortbildung&limit=50');
+      assert.deepEqual(listed.filter((row) => row.accountNumber === '4997').map((row) => [row.name, row.source, row.active]), [['Fortbildung Team', 'tenant', true]]);
+      const booked = await book('4997');
+      assert.equal(booked.status, 200, booked.text);
+
+      assert.equal((await save('SKR03', '4997', { active: false, reason: 'nicht mehr gebraucht' })).status, 200);
+      const refused = await book('4997');
+      assert.ok(refused.status >= 400 && refused.status < 500, `a deactivated own account takes no posting (${refused.status})`);
+      const reversed = await h.raw('POST', `/accounting/journal/${booked.body.id}/reverse`, { reason: 'Konto aufgelöst' });
+      assert.equal(reversed.status, 200, `the old entry still reverses: ${reversed.text}`);
+
+      assert.equal((await save('SKR03', '4930', { active: false, reason: 'Bürobedarf nicht genutzt' })).status, 200, 'a DATEV account can be deactivated');
+      try {
+        assert.equal((await book('4930')).status >= 400, true, 'a deactivated DATEV account takes no posting');
+        const standard = await get<Array<{ accountNumber: string; name: string; active?: boolean }>>(h, '/accounting/ledger/accounts?chart=SKR03&search=4930&limit=20');
+        assert.deepEqual(standard.filter((row) => row.accountNumber === '4930').map((row) => [row.name, row.active]), [['Bürobedarf', false]], 'it keeps its DATEV name');
+      } finally {
+        assert.equal((await save('SKR03', '4930', { name: 'Umbenannt', active: true, reason: 'wieder aktiv' })).status, 200);
+      }
+      assert.equal((await book('4930')).status, 200, 'active again');
+      assert.equal((await get<Array<{ accountNumber: string; name: string }>>(h, '/accounting/ledger/accounts?chart=SKR03&search=4930&limit=20')).find((row) => row.accountNumber === '4930')?.name, 'Bürobedarf', 'a DATEV account is never renamed');
+
+      const inUse = await save('SKR03', '1776', { active: false, reason: 'weg damit' });
+      assert.equal(inUse.status, 409, `a role account cannot be deactivated: ${inUse.text}`);
+      assert.match(inUse.body.message, /ACCOUNT_IN_USE/);
+      assert.ok((await h.api.audit.exportCsv()).includes('nicht mehr gebraucht'), 'the change is audited with its reason');
     });
 
     test('changing a role mapping moves the next posting and leaves posted entries alone', async () => {
@@ -278,7 +325,10 @@ describe('pro accounting: setup and posting of issued invoices', () => {
       const invoice = await issue(h, { client: 'Sieben konfiguriert', items: [{ kind: 'item', description: 'Buch', quantity: 1, price: 50, total: 50, taxRate: 7 }] });
       assert.deepEqual(shape((await invoiceEntry(h, invoice.id))!), [['1400', 53.5, 0], ['8300', 0, 50], ['1771', 0, 3.5]]);
       const rows = await get<Array<{ konto: string; gegenkonto: string; buSchluessel?: string; umsatz: number }>>(h, '/accounting/datev/rows');
-      assert.ok(rows.some((row) => row.gegenkonto === '8300' && row.buSchluessel === '0002' && row.umsatz === 50), 'the revenue pair carries BU key 2');
+      // 8300 is a DATEV Automatikkonto (AM 7 %): the export carries the gross amount without a BU key, a BU 2 on top
+      // would make DATEV compute the tax twice. The configured key applies to revenue accounts without Automatik.
+      assert.ok(rows.some((row) => row.gegenkonto === '8300' && !row.buSchluessel && row.umsatz === 53.5), JSON.stringify(rows.filter((row) => row.gegenkonto === '8300')));
+      assert.ok(!rows.some((row) => row.gegenkonto === '1771' || row.konto === '1771'), 'no separate VAT row');
     });
 
     test('Kleinunternehmer and §13b invoices post without VAT lines and keep their evidence; without it issuing is refused', async () => {
@@ -1352,6 +1402,15 @@ describe('pro accounting: setup and posting of issued invoices', () => {
   });
 
   describe('bank import and the reconciliation workbench', () => {
+    test('deleting a bank account is audited with the person who did it, not a service name', async () => {
+      const id = await addBankAccount(h);
+      assert.deepEqual(await h.api.accounts.delete({ id }), { ok: true });
+      const line = (await h.api.audit.exportCsv()).split('\n').find((row) => row.includes(`"${id}"`) && row.includes('"account.delete"'));
+      assert.ok(line, 'the deletion is in the audit log');
+      assert.doesNotMatch(line!, /server-banking/);
+      assert.match(line!, /""type"":""user""/, 'actor type user');
+    });
+
     let bank: string;
     before(async () => { bank = await addBankAccount(h, 'bank-workbench'); });
     const token = () => randomUUID().replaceAll('-', '').slice(0, 6);
@@ -1619,7 +1678,7 @@ describe('pro accounting: setup and posting of issued invoices', () => {
     const balances = async (accounts: string[]) => { const entries = await journal(h); return accounts.map((account) => ledgerNet(entries, account)); };
 
     test('an advance invoice books Erhaltene Anzahlungen, its VAT is due on payment even under Soll, and the final invoice releases it into revenue', async () => {
-      const accounts = ['1718', '1765', '1776', '8400'];
+      const accounts = ['1718', '1766', '1776', '8400'];
       const before = await balances(accounts);
       const moved = async () => (await balances(accounts)).map((value, index) => money(value - before[index]!));
       /** What the UStVA basis (VAT summary of DE_STD_19) moved since the start: [net, VAT]. */
@@ -1629,14 +1688,14 @@ describe('pro accounting: setup and posting of issued invoices', () => {
       const confirmation = await order('Anzahlung GmbH');
       const advance = await settle(confirmation.id, 'advance_invoice', 119);
       const advanceEntry = (await invoiceEntry(h, advance.id))!;
-      assert.deepEqual(shape(advanceEntry), [['1400', 119, 0], ['1718', 0, 100], ['1765', 0, 19]], 'not revenue, and the VAT waits');
+      assert.deepEqual(shape(advanceEntry), [['1400', 119, 0], ['1718', 0, 100], ['1766', 0, 19]], 'not revenue, and the VAT waits');
       assert.ok(!advanceEntry.lines.some((line) => line.taxAmount), 'nothing for the VAT return before the money comes in');
       assert.deepEqual(await moved(), [-100, -19, 0, 0]);
       assert.deepEqual(await vatMoved(), [0, 0], 'the UStVA does not see an unpaid advance');
 
       assert.equal((await pay(advance.id, 119)).status, 200);
       const recognised = (await journal(h)).filter((entry) => entry.sourceType === 'payment_vat').at(-1)!;
-      assert.deepEqual(shape(recognised), [['1765', 19, 0], ['1776', 0, 19]], 'Mindest-Ist: due with the payment');
+      assert.deepEqual(shape(recognised), [['1766', 19, 0], ['1776', 0, 19]], 'Mindest-Ist: due with the payment');
       assert.deepEqual([recognised.lines[0]!.taxCaseKey, recognised.lines[0]!.netAmount, recognised.lines[0]!.taxAmount], ['DE_STD_19', 100, 19]);
       assert.deepEqual(await vatMoved(), [100, 19], 'the UStVA reports the advance in the month it was paid');
 
@@ -1649,13 +1708,13 @@ describe('pro accounting: setup and posting of issued invoices', () => {
     });
 
     test('an unpaid advance invoice cancelled by Storno leaves nothing on Erhaltene Anzahlungen or the VAT accounts', async () => {
-      const accounts = ['1718', '1765', '1776', '8400'];
+      const accounts = ['1718', '1766', '1776', '8400'];
       const before = await balances(accounts);
       const confirmation = await order('Anzahlung Storno GmbH');
       const advance = await settle(confirmation.id, 'advance_invoice', 119);
       const storno = await chain({ operation: 'correction', kind: 'cancellation_invoice', invoiceId: advance.id, reason: 'Storno' });
       const entry = (await entryFor(h, `outgoing-correction:${storno.id}`))!;
-      assert.deepEqual(shape(entry), [['1400', 0, 119], ['1718', 100, 0], ['1765', 19, 0]]);
+      assert.deepEqual(shape(entry), [['1400', 0, 119], ['1718', 100, 0], ['1766', 19, 0]]);
       assert.deepEqual((await balances(accounts)).map((value, index) => money(value - before[index]!)), [0, 0, 0, 0]);
     });
   });

@@ -79,6 +79,8 @@ export default function DatevExportPanel({ dataAdapter, chartFramework = 'SKR03'
   const [exporting, setExporting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<DatevExportResult | null>(null);
+  const [auditBusy, setAuditBusy] = useState(false);
+  const [auditNotice, setAuditNotice] = useState<{ text: string; error: boolean } | null>(null);
   const historyRequestId = useRef(0);
   const mounted = useRef(true);
 
@@ -117,6 +119,20 @@ export default function DatevExportPanel({ dataAdapter, chartFramework = 'SKR03'
   }, []);
 
   const validationError = useMemo(() => validate(values), [values]);
+  const canExportAudit = permissionContextForRole(role).canMutate && Boolean(dataAdapter?.exportAuditPackage);
+  const exportAudit = async () => {
+    if (!dataAdapter?.exportAuditPackage) return;
+    setAuditBusy(true);
+    setAuditNotice(null);
+    try {
+      const result = await dataAdapter.exportAuditPackage({ from: values.from, to: values.to, includeDocuments: true });
+      setAuditNotice({ text: `Prüferpaket gespeichert: ${result.fileCount} Dateien in ${result.bundleDir}`, error: false });
+    } catch (auditError) {
+      setAuditNotice({ text: auditError instanceof Error ? auditError.message : 'Prüferpaket konnte nicht erstellt werden.', error: true });
+    } finally {
+      setAuditBusy(false);
+    }
+  };
   const update = <K extends keyof DatevExportValues>(key: K, value: DatevExportValues[K]) => {
     setValues((current) => ({ ...current, [key]: value }));
     setError(null);
@@ -197,10 +213,18 @@ export default function DatevExportPanel({ dataAdapter, chartFramework = 'SKR03'
         ) : null}
         <div className="flex flex-wrap items-center justify-between gap-3">
           {!canExport ? <p className="text-caption text-muted">Der Browserzugriff kann keine Datei schreiben oder exportieren.</p> : <span />}
-          <Button type="submit" variant="secondary" disabled={exporting || !canExport} aria-busy={exporting}>
-            {exporting ? 'Export läuft…' : 'Buchungsstapel exportieren'}
-          </Button>
+          <div className="flex flex-wrap gap-2">
+            {canExportAudit ? (
+              <Button type="button" variant="ghost" disabled={auditBusy || !values.from || !values.to} aria-busy={auditBusy} onClick={() => void exportAudit()}>
+                {auditBusy ? 'Prüferpaket wird erstellt…' : 'Prüferpaket (Z3) exportieren'}
+              </Button>
+            ) : null}
+            <Button type="submit" variant="secondary" disabled={exporting || !canExport} aria-busy={exporting}>
+              {exporting ? 'Export läuft…' : 'Buchungsstapel exportieren'}
+            </Button>
+          </div>
         </div>
+        {auditNotice ? <p role={auditNotice.error ? 'alert' : 'status'} className={`text-control ${auditNotice.error ? 'text-error-text' : 'text-muted'} break-all`}>{auditNotice.text}</p> : null}
       </form>
 
       <div className="border-t border-border p-3.5" aria-label="Unveränderlicher DATEV-Exportverlauf">

@@ -114,9 +114,9 @@ export const TaxFilingCenter: React.FC = () => {
       <Card className="space-y-3">
         <div>
           <h2 className="text-section">Übermittlung</h2>
-          <p className="mt-1 text-control text-muted">Deaktiviert: Ein serverseitiger Vier-Augen-Grant ist in dieser Desktop-Installation nicht verfügbar. Es wird keine lokale Übermittlung simuliert.</p>
+          <p className="mt-1 text-control text-muted">billme übermittelt nichts an ELSTER, das BZSt oder den Bundesanzeiger. Exportieren Sie den Bericht und reichen Sie ihn mit ELSTER oder über Ihre Steuerberatung ein.</p>
         </div>
-        <Button type="button" variant="secondary" disabled>Übermitteln (Server-Freigabe erforderlich)</Button>
+        <Button type="button" variant="secondary" disabled>Übermittlung an ELSTER nicht verfügbar</Button>
       </Card>
     </div>
   </div>;

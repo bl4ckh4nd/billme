@@ -7,6 +7,7 @@ import {
   DEPRECIATION_EXPENSE_ACCOUNTS,
   resolveDepreciationMethod,
   listReportMappingPositions,
+  defaultReportMappings,
 } from '@billme/accounting-engine';
 import {
   fiscalYearForDate,
@@ -27,7 +28,7 @@ import type {
   AssetDepreciationInput, AssetDepreciationResult, AssetDepreciationScheduleEntry, AssetDisposalInput, AssetDisposalResult,
   AssetItem, AssetMutationOptions, AssetStatus, AssetUpsertInput,
 } from '@billme/server-core';
-import { businessReportingProfileSchema } from '@billme/server-core';
+import { businessReportingProfileSchema, localIsoDate } from '@billme/server-core';
 import { AccountingPolicyError } from '@billme/accounting-shared';
 import { runInTransaction, type PostgresQueryable, type PostgresTransactionClient } from './connection.js';
 import { suggestAccountForTransaction } from '@billme/finance-intelligence';
@@ -45,7 +46,9 @@ import { assertServerEurCashSource, assertServerEurProfile, listServerEurCashIte
 import { saveServerEurClassification, type ServerEurClassificationRecord } from './proAccounting.js';
 import { createPostgresAccountingSourceRunRepository, sourceEntries, type AccountingSourceRunRepository } from './accountingSourceRuns.js';
 import { ACCOUNT_ROLE_DEFAULTS, accountRoleMappings, taxCaseAccount } from './taxAccounts.js';
-import { listAccountingPeriods, lockPeriodRow, reportingFiscalYear, setAccountingPeriodStatus, type AccountingPeriodRecord, type AccountingPeriodStatus, type AccountingPeriodStatusChange } from './accountingPeriods.js';
+import { DATEV_AUTOMATIC_ACCOUNTS } from './datevAutomaticAccounts.js';
+import { usableAccountNumbers } from './tenantLedgerAccounts.js';
+import { listAccountingPeriods, lockPeriodRow, reportingFiscalYear, reportingFiscalYearStart, setAccountingPeriodStatus, type AccountingPeriodRecord, type AccountingPeriodStatus, type AccountingPeriodStatusChange } from './accountingPeriods.js';
 
 const q = async <T = any>(db: PostgresQueryable, text: string, values: unknown[] = []): Promise<T[]> => (await db.query(text, values)).rows as T[];
 const inTx = <T>(db: PostgresQueryable, work: (client: PostgresTransactionClient) => Promise<T>): Promise<T> =>
@@ -133,11 +136,13 @@ const reportProfile = async (db: PostgresQueryable, t: string, activeChart: 'SKR
   const profile = parsed.data;
   if (profile.chart && profile.chart !== activeChart) throw new Error('REPORT_CHART_MISMATCH');
   const hgbReport = reportType === 'hgb-guv' || reportType === 'hgb-bilanz';
-  const supportedProfile = ((profile.legalForm === 'gmbh' || profile.legalForm === 'ug') && profile.profitDetermination === 'double_entry')
-    || ((profile.legalForm === 'sole_proprietor' || profile.legalForm === 'gbr' || profile.legalForm === 'ek') && profile.profitDetermination === 'eur');
+  const corporation = profile.legalForm === 'gmbh' || profile.legalForm === 'ug';
+  // A GmbH/UG always balances; a sole proprietor, eK or GbR either files an EÜR or balances (§ 238 HGB / voluntarily).
+  const supportedProfile = corporation ? profile.profitDetermination === 'double_entry' : true;
   if (!supportedProfile) throw new Error('REPORTING_PROFILE_REQUIRED');
   const fiscalYearStart = profile.profitDetermination === 'eur' ? '01-01' : profile.fiscalYearStart;
-  if (hgbReport && !profile.hgbSizeClass) throw new Error('REPORTING_PROFILE_REQUIRED');
+  // § 267 size classes apply to corporations; a balancing sole proprietor gets the short (Kleinst) layout.
+  if (hgbReport && (profile.profitDetermination === 'eur' || (corporation && !profile.hgbSizeClass))) throw new Error('REPORTING_PROFILE_REQUIRED');
   const size = profile.hgbSizeClass ?? 'micro';
   return { size, fiscalYearStart, chart: activeChart, businessId: t };
 };
@@ -199,7 +204,14 @@ const calculateDatabaseReport = async <T extends DatabaseReportType>(db: Postgre
   const profile = balanceProfile ?? await reportProfile(db, tenant(scope), chart, reportType);
   const mappings = await reportMappings(db, scope, chart, reportTo);
   const excluded = await eurBalanceAccounts(db, scope, chart, reportType);
-  return calculateReport({ kind: reportKindFor(reportType), profile, ledger: { balances: queriedBalances.filter((row) => !excluded.has(String(row.account_number))).map((row) => ({ accountNumber: String(row.account_number), openingBalance: Number(row.opening_balance), debitTurnover: Number(row.debit_turnover), creditTurnover: Number(row.credit_turnover), closingBalance: Number(row.opening_balance) + Number(row.debit_turnover) - Number(row.credit_turnover) })) }, mappings, from: ledgerFromDate, to: reportTo, asOfDate: args.asOfDate ?? reportTo }) as DatabaseReportFor<T>;
+  // GuV/Bilanz positions by account range for every account the tenant has not mapped itself (never stored).
+  const explicit = new Set(mappings.flatMap((mapping) => [mapping.statement].flat().map((statement) => `${mapping.accountNumber}:${statement}`)));
+  const defaults = defaultReportMappings(chart, queriedBalances.map((row) => String(row.account_number)), profile.size, reportTo ?? args.asOfDate ?? now().slice(0, 10), (account, statement) => explicit.has(`${account}:${statement}`));
+  const result = calculateReport({ kind: reportKindFor(reportType), profile, ledger: { balances: queriedBalances.filter((row) => !excluded.has(String(row.account_number))).map((row) => ({ accountNumber: String(row.account_number), openingBalance: Number(row.opening_balance), debitTurnover: Number(row.debit_turnover), creditTurnover: Number(row.credit_turnover), closingBalance: Number(row.opening_balance) + Number(row.debit_turnover) - Number(row.credit_turnover) })) }, mappings: [...mappings, ...defaults], from: ledgerFromDate, to: reportTo, asOfDate: args.asOfDate ?? reportTo }) as DatabaseReportFor<T>;
+  const used = defaults.filter((mapping) => !excluded.has(mapping.accountNumber) && (reportType === 'hgb-bilanz' || reportType === 'hgb-guv' || mapping.statement === 'hgb-bilanz'));
+  if (!used.length) return result;
+  const health = (result as { mappingHealth: { inferredAccounts: number; warnings: string[] } }).mappingHealth;
+  return { ...result, mappingHealth: { ...health, inferredAccounts: used.length, warnings: [...health.warnings, `Standardzuordnung nach Kontenbereich (${chart}): ${used.map((mapping) => mapping.accountNumber).sort().join(', ')}`] } } as DatabaseReportFor<T>;
 };
 
 type ReportMappingType = 'bwa01' | 'management-guv' | 'hgb-guv' | 'hgb-bilanz';
@@ -301,10 +313,8 @@ const backfillConfig = async (db: PostgresQueryable, t: string): Promise<unknown
   const taxCaseMappings = await q<any>(db, `SELECT tenant_id,chart,tax_case_key,role,account_number,datev_bu_key,valid_from,valid_to,updated_at,id FROM tax_case_account_mappings WHERE (tenant_id=$1 OR tenant_id IS NULL) AND chart=$2 ORDER BY (tenant_id IS NULL),tax_case_key,role,valid_from NULLS FIRST,valid_to NULLS LAST,updated_at,id`, [t, p.activeChart]);
   return { policy: p, mappings: rows, taxCaseMappings };
 };
-const accountExists = async (db: PostgresQueryable, chart: string, account: string): Promise<boolean> => {
-  // Fail closed: without a catalogue for the chart no account exists.
-  return Boolean((await q(db, `SELECT 1 FROM ledger_accounts WHERE chart=$1 AND account_number=$2 LIMIT 1`, [chart, account]))[0]);
-};
+// Fail closed: without a catalogue for the chart no account exists; a deactivated tenant account does not either.
+const accountExists = async (db: PostgresQueryable, chart: string, account: string, tenantId: string): Promise<boolean> => (await usableAccountNumbers(db, tenantId, chart, [account])).has(account);
 type DraftBankLine = { account_id: unknown; amount: unknown; type: string };
 /** The money of a bank line moved on its bank account: the draft books exactly that amount there, on that side. */
 const bankLineIssue = async (db: PostgresQueryable, t: string, draft: BookingDraftEntity, bank: DraftBankLine): Promise<ValidationIssue | undefined> => {
@@ -329,7 +339,7 @@ const validateDraft = async (db: PostgresQueryable, scope: TenantScope, draft: B
     if (ids.has(line.id)) out.push(issue('DUPLICATE_LINE_ID', 'Buchungszeilen müssen eindeutige IDs haben.', `lines[${index}].id`)); ids.add(line.id);
     const d = cents(line.debitAmount); const c = cents(line.creditAmount);
     if (d === null || c === null || d < 0 || c < 0 || (d > 0) === (c > 0)) out.push(issue('INVALID_LINE_AMOUNT', 'Beträge müssen Centbeträge mit genau einer Seite sein.', `lines[${index}]`));
-    if (line.accountNumber && !(await accountExists(db, chart, line.accountNumber))) out.push(issue('UNKNOWN_ACCOUNT', `Sachkonto ${line.accountNumber} ist im Kontenrahmen nicht vorhanden.`, `lines[${index}].accountNumber`));
+    if (line.accountNumber && !(await accountExists(db, chart, line.accountNumber, tenant(scope)))) out.push(issue('UNKNOWN_ACCOUNT', `Sachkonto ${line.accountNumber} ist im Kontenrahmen nicht vorhanden.`, `lines[${index}].accountNumber`));
   }
   if (bank) { const mismatch = await bankLineIssue(db, tenant(scope), draft, bank); if (mismatch) out.push(mismatch); }
   if (periodStatus === 'closed') out.push(issue('POSTING_DATE_IN_CLOSED_PERIOD', 'Periode ist geschlossen.'));
@@ -351,6 +361,58 @@ const saveDraftTarget = async (db: PostgresQueryable, scope: TenantScope, draft:
   return normalized;
 };
 
+type DatevVatAccount = { rate: number; flow: 'income' | 'expense' };
+type DatevPair = { amount: number; debit: string; credit: string; debitRate?: number; creditRate?: number; bu?: string; euLandUstId?: string; euSteuersatz?: number; sachverhaltLl?: string };
+/** The VAT rate a journal line carries: its tax case (DE_STD_19/DE_STD_7), else the rate on the line. */
+const datevLineRate = (taxCaseKey: unknown, rate: unknown): number | undefined => taxCaseKey === 'DE_STD_19' ? 19 : taxCaseKey === 'DE_STD_7' ? 7 : rate == null || rate === '' ? undefined : Number(rate);
+/** DATEV Belegfeld 1: at most 36 characters of a-z, A-Z, 0-9 and $&%*+-/; anything else becomes a hyphen. */
+const datevBelegfeld = (value: unknown): string => String(value ?? '').trim().replace(/[^\w$&%*+\-/]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 36);
+/** DATEV Buchungstext: one line of at most 60 characters; a longer text is cut, not the whole export refused. */
+const datevText = (value: unknown): string => { const text = String(value ?? '').replace(/[\u0000-\u001f\u007f]+/g, ' ').trim(); return text.length > 60 ? `${text.slice(0, 59)}…` : text; };
+const DATEV_BU_KEY: Record<DatevVatAccount['flow'], Record<number, string>> = { income: { 19: '0003', 7: '0002' }, expense: { 19: '0009', 7: '0008' } };
+/** BU-Schlüssel 40: Berichtigungsschlüssel 4 = Aufhebung der Automatik (DATEV Kontenrahmen, Hinweis zum Berichtigungsschlüssel 4). */
+const DATEV_AUTOMATIC_OFF = '0040';
+/**
+ * One DATEV row per Geschäftsvorfall and rate instead of a net row plus a VAT row: DATEV computes the VAT itself from a
+ * gross amount on an Automatikkonto (8400, 3400, 8736, …) or from a BU-Schlüssel on any other account, so a separate
+ * row on 1776/1576 would book the tax twice. A VAT pair (due USt/VSt 19 % or 7 %, the role accounts) folds into the
+ * pair of the same entry that shares its other account and carries that rate; with several such pairs the tax is
+ * split by their amounts. The folded row is gross: without BU on an Automatikkonto of that rate, else with BU 3/2
+ * (USt) or 9/8 (VSt) like the Lite export (a tenant's datev_bu mapping wins). Pairs that cannot fold (not-yet-due
+ * VAT under Ist, § 13b and Erwerb, an Automatikkonto of another rate) stay as booked, and an Automatikkonto with a
+ * rate on such a row gets BU 40 so DATEV adds no VAT of its own.
+ */
+const collapseDatevPairs = (pairs: DatevPair[], vat: Map<string, DatevVatAccount>, automatic: Readonly<Record<string, number>>): DatevPair[] => {
+  const rows = pairs.map((pair) => ({ ...pair }));
+  const dropped = new Set<number>(); const folded = new Set<number>();
+  rows.forEach((tax, index) => {
+    const onCredit = vat.get(tax.credit); const onDebit = vat.get(tax.debit);
+    if (Boolean(onCredit) === Boolean(onDebit)) return;
+    const account = (onCredit ?? onDebit)!; const side = onCredit ? 'credit' : 'debit';
+    const other = side === 'credit' ? tax.debit : tax.credit;
+    const candidates = rows.map((pair, at) => ({ pair, at })).filter(({ pair, at }) => at !== index && !dropped.has(at) && (side === 'credit' ? pair.debit === other && !vat.has(pair.credit) : pair.credit === other && !vat.has(pair.debit)));
+    const atRate = candidates.filter(({ pair }) => (side === 'credit' ? pair.creditRate : pair.debitRate) === account.rate);
+    const bases = atRate.length ? atRate : candidates.length === 1 ? candidates : [];
+    if (!bases.length) return;
+    const baseAccount = (pair: DatevPair) => side === 'credit' ? pair.credit : pair.debit;
+    if (bases.some(({ pair }) => automatic[baseAccount(pair)] !== undefined && automatic[baseAccount(pair)] !== account.rate)) return;
+    const total = bases.reduce((sum, { pair }) => sum + Math.round(pair.amount * 100), 0);
+    let rest = Math.round(tax.amount * 100);
+    bases.forEach(({ pair, at }, position) => {
+      const share = position === bases.length - 1 ? rest : Math.round(Math.round(tax.amount * 100) * Math.round(pair.amount * 100) / total);
+      rest -= share;
+      pair.amount = round((Math.round(pair.amount * 100) + share) / 100);
+      pair.bu = automatic[baseAccount(pair)] === account.rate ? undefined : pair.bu ?? DATEV_BU_KEY[account.flow][account.rate];
+      folded.add(at);
+    });
+    dropped.add(index);
+  });
+  return rows.filter((_, at) => !dropped.has(at)).map((pair) => {
+    if (pair.bu !== undefined || folded.has(rows.indexOf(pair))) return pair;
+    const rate = Math.max(automatic[pair.debit] ?? 0, automatic[pair.credit] ?? 0);
+    return rate > 0 ? { ...pair, bu: DATEV_AUTOMATIC_OFF } : pair;
+  });
+};
 const pairLines = (lines: JournalLineEntity[]): Array<{ debit: JournalLineEntity; credit: JournalLineEntity; amount: number; taxCaseKey?: string }> => {
   const debits = lines.filter((l) => Number(l.debitAmount) > 0).map((l) => ({ l, n: round(l.debitAmount) })); const credits = lines.filter((l) => Number(l.creditAmount) > 0).map((l) => ({ l, n: round(l.creditAmount) })); const out: Array<{ debit: JournalLineEntity; credit: JournalLineEntity; amount: number; taxCaseKey?: string }> = [];
   for (const debit of debits) for (const credit of credits) { if (debit.n <= 0 || credit.n <= 0) continue; const amount = round(Math.min(debit.n, credit.n)); out.push({ debit: debit.l, credit: credit.l, amount, taxCaseKey: debit.l.taxCaseKey ?? credit.l.taxCaseKey }); debit.n = round(debit.n - amount); credit.n = round(credit.n - amount); }
@@ -600,7 +662,7 @@ const postingPreview = async (db: PostgresQueryable, scope: TenantScope, row: an
     lines.push({ accountNumber: m.accounts_payable, debitAmount: 0, creditAmount: tax.gross });
   }
   const snapshot: AccountingSnapshot = { sourceType: type, sourceId: id, sourceVersion: sourceVersion(row, type === 'incoming_invoice' ? incomingLines : invoiceLines(row)), chart: p.activeChart, vatMethod, netAmount: tax.net, taxAmount: tax.tax, grossAmount: tax.gross, lines, capturedAt: now() };
-  const accounts = [...new Set(lines.map((line) => line.accountNumber))]; const missing: string[] = []; for (const account of accounts) if (!(await accountExists(db, p.activeChart, account))) missing.push(account); if (missing.length) return { sourceType: type, sourceId: id, status: 'unresolved', reason: 'UNKNOWN_ACCOUNT', snapshot, issues: [{ code: 'UNKNOWN_ACCOUNT', message: `Konten fehlen: ${missing.join(', ')}`, blocking: true }] };
+  const accounts = [...new Set(lines.map((line) => line.accountNumber))]; const missing: string[] = []; for (const account of accounts) if (!(await accountExists(db, p.activeChart, account, tenant(scope)))) missing.push(account); if (missing.length) return { sourceType: type, sourceId: id, status: 'unresolved', reason: 'UNKNOWN_ACCOUNT', snapshot, issues: [{ code: 'UNKNOWN_ACCOUNT', message: `Konten fehlen: ${missing.join(', ')}`, blocking: true }] };
   return { sourceType: type, sourceId: id, status: 'ready', snapshot, issues: [] };
 };
 const rowVendor = (row: any): VendorEntity => ({ id: row.id, tenantId: row.tenant_id, vendorNumber: row.vendor_number ?? undefined, name: row.name, email: row.email ?? undefined, address: row.address ?? undefined, vatId: row.vat_id ?? undefined, iban: row.iban ?? undefined, defaultExpenseAccount: row.default_expense_account ?? undefined, createdAt: row.created_at, updatedAt: row.updated_at });
@@ -813,7 +875,7 @@ export const createPostgresProAccountingRepository = (db: PostgresQueryable): Pr
   async validateTaxCompliance(scope, args) { const draft = args.draftId ? (await q<any>(db, `SELECT * FROM booking_drafts WHERE tenant_id=$1 AND id=$2`, [tenant(scope), args.draftId]))[0] : args.transactionId ? await getDraft(db, scope, args.transactionId) : null; if (!draft) throw new Error('Draft not found'); if ('draft_json' in draft) { const lines = await q<any>(db, `SELECT * FROM booking_draft_lines WHERE tenant_id=$1 AND draft_id=$2 ORDER BY line_no`, [tenant(scope), draft.id]); const issues = await q<any>(db, `SELECT * FROM draft_validation_issues WHERE tenant_id=$1 AND draft_id=$2`, [tenant(scope), draft.id]); const parsed = draftFromRows(draft, lines, issues, scope); const saved = await inTx(db, (tx) => saveDraftTarget(tx, scope, parsed, args.mutation)); return { ok: !saved.validationIssues.some((x) => x.blocking), issues: saved.validationIssues }; } return { ok: !(draft as BookingDraftEntity).validationIssues.some((x) => x.blocking), issues: (draft as BookingDraftEntity).validationIssues }; },
   async postDraft(scope, draftId, options: PostDraftOptions = {}) { return inTx(db, async (tx) => { const t = tenant(scope); const sourceKey = options.idempotencyKey?.trim() || `booking-draft:${draftId}`; const existing = await q<any>(tx, `SELECT id FROM journal_entries WHERE tenant_id=$1 AND source_type='booking_draft' AND source_key=$2`, [t, sourceKey]); if (existing[0]) return { entry: (await loadEntry(tx, scope, existing[0].id))!, issues: [] }; const rows = await q<any>(tx, `SELECT * FROM booking_drafts WHERE tenant_id=$1 AND id=$2`, [t, draftId]); if (!rows[0]) throw new Error('Draft not found'); const lines = await q<any>(tx, `SELECT * FROM booking_draft_lines WHERE tenant_id=$1 AND draft_id=$2 ORDER BY line_no`, [t, draftId]); const savedIssues = await q<any>(tx, `SELECT * FROM draft_validation_issues WHERE tenant_id=$1 AND draft_id=$2`, [t, draftId]); const draft = draftFromRows(rows[0], lines, savedIssues, scope); const bankLine = (await q<any>(tx, `SELECT status,linked_invoice_id,account_id,amount,type FROM bank_transactions WHERE tenant_id=$1 AND id=$2 FOR UPDATE`, [t, draft.transactionId]))[0]; if (!bankLine) throw new Error('BANK_TRANSACTION_NOT_FOUND: Ein Buchungsentwurf ohne Bankzeile wird nicht gebucht; das ist eine freie Buchung mit Beleg.'); if (bankLine.status === 'booked' || bankLine.linked_invoice_id) throw new Error('PAYMENT_SOURCE_ALREADY_BOOKED'); const postingDate = options.postingDate ?? draft.postingDate; const p = await policy(tx, t); const fiscalYear = postingDate && isoDate(postingDate) ? await reportingFiscalYear(tx, t, postingDate) : draft.fiscalYear; const periodStatus = postingDate && isoDate(postingDate) ? await ensurePeriod(tx, scope, period(postingDate), postingDate) : 'open'; const issues = await validateDraft(tx, scope, { ...draft, postingDate, period: postingDate ? period(postingDate) : draft.period, fiscalYear }, periodStatus, p.activeChart, bankLine); if (rows[0].workflow_status !== 'approved') issues.push(issue('DRAFT_NOT_APPROVED', 'Nur freigegebene Entwürfe dürfen gebucht werden.')); if (periodStatus === 'soft_locked' && (!options.softLockOverride || !options.overrideReason?.trim())) issues.push(issue('SOFT_LOCK_OVERRIDE_REQUIRED', 'Vorläufig gesperrte Periode benötigt Freigabe und Begründung.')); if (issues.some((x) => x.blocking)) return { entry: { id: '', tenantId: t, entryNumber: 0, postingDate: postingDate ?? '', bookingText: draft.bookingText, period: draft.period, fiscalYear, status: 'posted', createdAt: now(), lines: [] }, issues }; const normalized = { ...draft, postingDate: postingDate!, period: period(postingDate!), fiscalYear }; const entryId = await insertEntry(tx, scope, 'booking_draft', sourceKey, postingDate!, normalized.bookingText, normalized.lines, { documentDate: normalized.documentDate, reference: normalized.reference, sourceDraftId: normalized.id, softLockOverride: options.softLockOverride, overrideReason: options.overrideReason, mutation: options.mutation }); await q(tx, `UPDATE booking_drafts SET workflow_status='posted',draft_json=$1,updated_at=$2 WHERE tenant_id=$3 AND id=$4`, [JSON.stringify({ ...normalized, workflowStatus: 'posted' }), now(), t, draftId]); await q(tx, `UPDATE bank_transactions SET status='booked',updated_at=$1 WHERE tenant_id=$2 AND id=$3`, [now(), t, draft.transactionId]); return { entry: (await loadEntry(tx, scope, entryId))!, issues: [] }; }); },
   async reverseJournalEntry(scope, entryId, reason, options: ReverseJournalEntryOptions = {}) { return inTx(db, (tx) => reverseEntryInTransaction(tx, scope, entryId, reason, options)); },
-  async listJournalEntries(scope, args = {}) { const t = tenant(scope); const values: unknown[] = [t]; const where = ['tenant_id=$1']; if (args.from) { values.push(args.from); where.push(`posting_date >= $${values.length}`); } if (args.to) { values.push(args.to); where.push(`posting_date <= $${values.length}`); } if (args.accountNumbers?.length) { values.push(args.accountNumbers); where.push(`id IN (SELECT entry_id FROM journal_lines WHERE tenant_id=$1 AND account_number = ANY($${values.length}))`); } values.push(Math.max(1, Math.min(5000, args.limit ?? 500)), Math.max(0, args.offset ?? 0)); const rows = await q<any>(db, `SELECT * FROM journal_entries WHERE ${where.join(' AND ')} ORDER BY posting_date DESC,entry_number DESC LIMIT $${values.length - 1} OFFSET $${values.length}`, values); return Promise.all(rows.map((r) => loadEntry(db, scope, r.id))).then((items) => items.filter(Boolean) as JournalEntryEntity[]); },
+  async listJournalEntries(scope, args = {}) { const t = tenant(scope); const values: unknown[] = [t]; const where = ['tenant_id=$1']; if (args.from) { values.push(args.from); where.push(`posting_date >= $${values.length}`); } if (args.to) { values.push(args.to); where.push(`posting_date <= $${values.length}`); } if (args.accountNumbers?.length) { values.push(args.accountNumbers); where.push(`id IN (SELECT entry_id FROM journal_lines WHERE tenant_id=$1 AND account_number = ANY($${values.length}))`); } if (args.sourceDraftId) { values.push(args.sourceDraftId); where.push(`source_draft_id = $${values.length}`); } values.push(Math.max(1, Math.min(5000, args.limit ?? 500)), Math.max(0, args.offset ?? 0)); const rows = await q<any>(db, `SELECT * FROM journal_entries WHERE ${where.join(' AND ')} ORDER BY posting_date DESC,entry_number DESC LIMIT $${values.length - 1} OFFSET $${values.length}`, values); return Promise.all(rows.map((r) => loadEntry(db, scope, r.id))).then((items) => items.filter(Boolean) as JournalEntryEntity[]); },
   async getJournalEntryById(scope, entryId) { return loadEntry(db, scope, entryId); },
   async getLedgerBalances(scope, args = {}) { const values: unknown[] = [tenant(scope)]; const conditions = [`jl.tenant_id=$1`, `je.status IN ('posted','reversed')`, RUNNING_JOURNAL]; const asOf = args.to ?? args.asOfDate; const from = args.fromDate ?? args.from ?? (asOf ? `${asOf.slice(0, 4)}-01-01` : undefined); if (asOf) { values.push(asOf); conditions.push(`je.posting_date <= $${values.length}`); } if (from) values.push(from); const rangeParam = from ? `$${values.length}` : ''; const rows = await q<any>(db, `SELECT jl.account_number,COALESCE(SUM(CASE WHEN ${from ? `je.posting_date < ${rangeParam}` : 'FALSE'} THEN jl.debit_amount ELSE 0 END),0) opening_debit,COALESCE(SUM(CASE WHEN ${from ? `je.posting_date < ${rangeParam}` : 'FALSE'} THEN jl.credit_amount ELSE 0 END),0) opening_credit,COALESCE(SUM(CASE WHEN ${from ? `je.posting_date >= ${rangeParam}` : 'TRUE'} THEN jl.debit_amount ELSE 0 END),0) debit,COALESCE(SUM(CASE WHEN ${from ? `je.posting_date >= ${rangeParam}` : 'TRUE'} THEN jl.credit_amount ELSE 0 END),0) credit FROM journal_lines jl JOIN journal_entries je ON je.id=jl.entry_id AND je.tenant_id=jl.tenant_id WHERE ${conditions.join(' AND ')} GROUP BY jl.account_number ORDER BY jl.account_number`, values); return rows.map((r) => ({ accountNumber: r.account_number, openingBalance: round(Number(r.opening_debit) - Number(r.opening_credit)), debitTurnover: round(r.debit), creditTurnover: round(r.credit), closingBalance: round(Number(r.opening_debit) - Number(r.opening_credit) + Number(r.debit) - Number(r.credit)) } as LedgerBalance)); },
   async getSusaReport(scope, args = {}) {
@@ -824,7 +886,10 @@ export const createPostgresProAccountingRepository = (db: PostgresQueryable): Pr
     }
     const fromDate = args.fromDate ?? args.from;
     const asOfDate = args.to ?? args.asOfDate;
-    const rows = await this.getLedgerBalances(scope, { ...args, fromDate, asOfDate });
+    const balances = await this.getLedgerBalances(scope, { ...args, fromDate, asOfDate });
+    const chart = requestedChart ?? (await policy(db, tenant(scope))).activeChart;
+    const names = new Map((await q<any>(db, `SELECT n.account_number,COALESCE(t.name,g.name) AS name FROM unnest($3::text[]) AS n(account_number) LEFT JOIN tenant_ledger_accounts t ON t.tenant_id=$1 AND t.chart=$2 AND t.account_number=n.account_number LEFT JOIN ledger_accounts g ON g.chart=$2 AND g.account_number=n.account_number`, [tenant(scope), chart, balances.map((row) => row.accountNumber)])).map((row) => [String(row.account_number), row.name == null ? undefined : String(row.name)]));
+    const rows = balances.map((row) => ({ ...row, accountName: names.get(row.accountNumber) }));
     return { from: fromDate, to: asOfDate, chart: requestedChart, asOfDate: asOfDate ?? now().slice(0, 10), rows, totals: { debit: round(rows.reduce((s, r) => s + r.debitTurnover, 0)), credit: round(rows.reduce((s, r) => s + r.creditTurnover, 0)), balance: round(rows.reduce((s, r) => s + r.closingBalance, 0)) } };
   },
   async getBwa01Report(scope, args = {}) {
@@ -905,7 +970,12 @@ export const createPostgresProAccountingRepository = (db: PostgresQueryable): Pr
     const effectiveAsOfDate = asOfDate ?? '2025-12-31';
     const rows = await q<any>(db, `SELECT DISTINCT jl.account_number,$3::text AS statement_type FROM journal_lines jl LEFT JOIN report_account_mappings relevant ON relevant.tenant_id=jl.tenant_id AND relevant.chart=$2 AND relevant.account_number=jl.account_number AND relevant.report_type = ANY($4::text[]) AND (relevant.valid_from IS NULL OR relevant.valid_from::date <= $5::date) AND (relevant.valid_to IS NULL OR relevant.valid_to::date >= $5::date) LEFT JOIN report_account_mappings current_mapping ON current_mapping.tenant_id=jl.tenant_id AND current_mapping.chart=$2 AND current_mapping.account_number=jl.account_number AND current_mapping.report_type=$3 AND (current_mapping.valid_from IS NULL OR current_mapping.valid_from::date <= $5::date) AND (current_mapping.valid_to IS NULL OR current_mapping.valid_to::date >= $5::date) WHERE jl.tenant_id=$1 AND (relevant.id IS NOT NULL OR NOT EXISTS (SELECT 1 FROM report_account_mappings any_mapping WHERE any_mapping.tenant_id=jl.tenant_id AND any_mapping.chart=$2 AND any_mapping.account_number=jl.account_number AND (any_mapping.valid_from IS NULL OR any_mapping.valid_from::date <= $5::date) AND (any_mapping.valid_to IS NULL OR any_mapping.valid_to::date >= $5::date))) AND current_mapping.id IS NULL ORDER BY jl.account_number`, [tenant(scope), activeChart, requested, requested === 'hgb-bilanz' ? ['hgb-bilanz'] : ['bwa01', 'management-guv', 'hgb-guv'], effectiveAsOfDate]);
     const excluded = await eurBalanceAccounts(db, scope, activeChart, requested);
-    return { chart: activeChart, reportType: requested, unmapped: rows.filter((row) => !excluded.has(String(row.account_number))).map((r) => ({ accountNumber: String(r.account_number), statementType: String(r.statement_type) })) };
+    // An account covered by the range default is not unmapped: a balance-sheet default (or a GuV default for the
+    // HGB families) settles it; BWA and management GuV still need their own mapping for P&L accounts.
+    const size = await reportProfile(db, tenant(scope), activeChart, requested).then((profile) => profile.size, () => 'small' as const);
+    const covered = new Set(defaultReportMappings(activeChart, rows.map((row) => String(row.account_number)), size, effectiveAsOfDate, () => false)
+      .filter((mapping) => mapping.statement === 'hgb-bilanz' || requested === 'hgb-guv' || requested === 'hgb-bilanz').map((mapping) => mapping.accountNumber));
+    return { chart: activeChart, reportType: requested, unmapped: rows.filter((row) => !excluded.has(String(row.account_number)) && !covered.has(String(row.account_number))).map((r) => ({ accountNumber: String(r.account_number), statementType: String(r.statement_type) })) };
   },
   async listReportMappingPositions(scope, reportType, asOfDate) {
     const p = await policy(db, tenant(scope));
@@ -936,18 +1006,22 @@ export const createPostgresProAccountingRepository = (db: PostgresQueryable): Pr
   async listDatevExports(scope) { return (await q<any>(db, `SELECT * FROM datev_exports WHERE tenant_id=$1 ORDER BY created_at DESC`, [tenant(scope)])).map((r) => { const metadata = parse<{ contentSha256?: string; encoding?: 'cp1252' | 'utf8-bom'; headerVersion?: number; formatVersion?: number; chart?: 'SKR03' | 'SKR04'; sourceSnapshot?: DatevExportSourceSnapshot }>(r.meta_json, {}); return { id: r.id, filePath: r.file_path, recordCount: Number(r.record_count), fromDate: r.from_date ?? undefined, toDate: r.to_date ?? undefined, createdAt: r.created_at, contentSha256: metadata.contentSha256, encoding: metadata.encoding, headerVersion: metadata.headerVersion, formatVersion: metadata.formatVersion, chart: metadata.chart, sourceSnapshotHash: metadata.sourceSnapshot ? createHash('sha256').update(JSON.stringify(metadata.sourceSnapshot)).digest('hex') : undefined }; }); },
   async getDatevExportContent(scope, exportId): Promise<DatevExportContent> { const row = (await q<any>(db, `SELECT * FROM datev_exports WHERE tenant_id=$1 AND id=$2`, [tenant(scope), exportId]))[0]; if (!row) throw new Error('DATEV_EXPORT_NOT_FOUND'); if (!row.content_bytes) throw new Error('DATEV_EXPORT_CONTENT_UNAVAILABLE'); const content = new Uint8Array(row.content_bytes); const contentSha256 = createHash('sha256').update(content).digest('hex'); const metadata = parse<{ contentSha256?: string; encoding?: 'cp1252' | 'utf8-bom'; headerVersion?: number; formatVersion?: number; chart?: 'SKR03' | 'SKR04'; sourceSnapshot?: DatevExportSourceSnapshot }>(row.meta_json, {}); if (metadata.contentSha256 && metadata.contentSha256 !== contentSha256) throw new Error('DATEV_EXPORT_HASH_MISMATCH'); return { id: row.id, filePath: row.file_path, recordCount: Number(row.record_count), fromDate: row.from_date ?? undefined, toDate: row.to_date ?? undefined, createdAt: row.created_at, contentSha256, content, encoding: metadata.encoding, headerVersion: metadata.headerVersion, formatVersion: metadata.formatVersion, chart: metadata.chart, sourceSnapshotHash: metadata.sourceSnapshot ? createHash('sha256').update(JSON.stringify(metadata.sourceSnapshot)).digest('hex') : undefined }; },
   async insertDatevExport(scope, args) { return inTx(db, async (tx) => { const existing = (await q<any>(tx, `SELECT * FROM datev_exports WHERE tenant_id=$1 AND file_path=$2`, [tenant(scope), args.filePath]))[0]; if (existing) { const existingMeta = parse<{ contentSha256?: string; encoding?: 'cp1252' | 'utf8-bom'; headerVersion?: number; formatVersion?: number; chart?: 'SKR03' | 'SKR04'; sourceSnapshot?: DatevExportSourceSnapshot }>(existing.meta_json, {}); return { id: existing.id, filePath: existing.file_path, recordCount: Number(existing.record_count), fromDate: existing.from_date ?? undefined, toDate: existing.to_date ?? undefined, createdAt: existing.created_at, contentSha256: existingMeta.contentSha256, encoding: existingMeta.encoding, headerVersion: existingMeta.headerVersion, formatVersion: existingMeta.formatVersion, chart: existingMeta.chart }; } const id = randomUUID(); const createdAt = now(); if (!args.content) throw new Error('DATEV_EXPORT_CONTENT_REQUIRED'); const content = Buffer.from(args.content); const contentSha256 = createHash('sha256').update(content).digest('hex'); if (args.contentSha256 && args.contentSha256 !== contentSha256) throw new Error('DATEV_EXPORT_HASH_MISMATCH'); const metadata = { immutable: true, contentSha256, encoding: args.encoding, headerVersion: args.headerVersion, formatVersion: args.formatVersion, chart: args.chart, sourceSnapshot: args.sourceSnapshot }; await q(tx, `INSERT INTO datev_exports (id,tenant_id,file_path,record_count,from_date,to_date,created_at,meta_json,content_bytes) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`, [id, tenant(scope), args.filePath, args.recordCount, args.fromDate ?? null, args.toDate ?? null, createdAt, JSON.stringify(metadata), content]); await audit(tx as PostgresTransactionClient, scope, 'pro_datev_export', id, 'export', 'DATEV export recorded', null, { ...args, content: undefined, contentSha256, mutation: undefined }, args.mutation); return { id, filePath: args.filePath, recordCount: args.recordCount, fromDate: args.fromDate, toDate: args.toDate, createdAt, contentSha256, encoding: args.encoding, headerVersion: args.headerVersion, formatVersion: args.formatVersion, chart: args.chart }; }); },
-  async getAccountingHealth(scope) { const t = tenant(scope); const [draft, posted, reversed, unbalanced, last] = await Promise.all([q<any>(db, `SELECT COUNT(*)::int c FROM booking_drafts WHERE tenant_id=$1`, [t]), q<any>(db, `SELECT COUNT(*)::int c FROM journal_entries WHERE tenant_id=$1 AND status='posted'`, [t]), q<any>(db, `SELECT COUNT(*)::int c FROM journal_entries WHERE tenant_id=$1 AND status='reversed'`, [t]), q<any>(db, `SELECT COUNT(*)::int c FROM draft_validation_issues WHERE tenant_id=$1 AND code='UNBALANCED_ENTRY' AND blocking=true`, [t]), q<any>(db, `SELECT created_at FROM datev_exports WHERE tenant_id=$1 ORDER BY created_at DESC LIMIT 1`, [t])]); const lineAccounts = new Set((await q<any>(db, `SELECT DISTINCT account_number FROM journal_lines WHERE tenant_id=$1`, [t])).map((r) => r.account_number)); const mappingsRows = await q<any>(db, `SELECT DISTINCT account_number FROM account_mappings_hgb WHERE tenant_id=$1`, [t]); const mapped = new Set(mappingsRows.map((r) => r.account_number)); return { draftCount: Number(draft[0]?.c || 0), postedCount: Number(posted[0]?.c || 0), reversedCount: Number(reversed[0]?.c || 0), unbalancedDraftCount: Number(unbalanced[0]?.c || 0), unmappedAccountCount: [...lineAccounts].filter((a) => !mapped.has(a)).length, lastDatevExportAt: last[0]?.created_at }; },
+  async getAccountingHealth(scope) { const t = tenant(scope); const [draft, posted, reversed, unbalanced, last] = await Promise.all([q<any>(db, `SELECT COUNT(*)::int c FROM booking_drafts WHERE tenant_id=$1`, [t]), q<any>(db, `SELECT COUNT(*)::int c FROM journal_entries WHERE tenant_id=$1 AND status='posted'`, [t]), q<any>(db, `SELECT COUNT(*)::int c FROM journal_entries WHERE tenant_id=$1 AND status='reversed'`, [t]), q<any>(db, `SELECT COUNT(*)::int c FROM draft_validation_issues WHERE tenant_id=$1 AND code='UNBALANCED_ENTRY' AND blocking=true`, [t]), q<any>(db, `SELECT created_at FROM datev_exports WHERE tenant_id=$1 ORDER BY created_at DESC LIMIT 1`, [t])]); const today = localIsoDate(new Date()); const unmapped = (await this.getAccountMappingHealth(scope, undefined, 'hgb-bilanz', today)).unmapped; const currentYear = await reportingFiscalYear(db, t, today); const missingDepreciation = (await q<any>(db, `SELECT a.id,a.asset_number,s.year FROM asset_depreciation_schedule s JOIN assets a ON a.tenant_id=s.tenant_id AND a.id=s.asset_id WHERE s.tenant_id=$1 AND s.status='planned' AND s.year < $2 AND a.status='aktiv' AND a.activation_journal_entry_id IS NOT NULL AND a.disposal_date IS NULL ORDER BY a.asset_number,s.year`, [t, currentYear])).map((row) => ({ assetId: String(row.id), assetNumber: String(row.asset_number), year: Number(row.year) })); return { draftCount: Number(draft[0]?.c || 0), postedCount: Number(posted[0]?.c || 0), reversedCount: Number(reversed[0]?.c || 0), unbalancedDraftCount: Number(unbalanced[0]?.c || 0), unmappedAccountCount: unmapped.length, lastDatevExportAt: last[0]?.created_at, missingDepreciation }; },
   async getVatSummary(scope, args = {}) { const values: unknown[] = [tenant(scope)]; const date: string[] = []; if (args.from) { values.push(args.from); date.push(`je.posting_date >= $${values.length}`); } if (args.to) { values.push(args.to); date.push(`je.posting_date <= $${values.length}`); } const rows = await q<any>(db, `SELECT jl.tax_case_key,SUM(jl.net_amount) net,SUM(jl.tax_amount) tax,SUM(COALESCE(jl.gross_amount,CASE WHEN jl.debit_amount>0 THEN jl.debit_amount ELSE jl.credit_amount END)) gross,COUNT(*)::int line_count FROM journal_lines jl JOIN journal_entries je ON je.id=jl.entry_id AND je.tenant_id=jl.tenant_id WHERE jl.tenant_id=$1 AND jl.tax_case_key IS NOT NULL AND je.status IN ('posted','reversed')${date.length ? ` AND ${date.join(' AND ')}` : ''} GROUP BY jl.tax_case_key ORDER BY jl.tax_case_key`, values); // The same Kennzahlen as the prepared UStVA, live and without locking the period.
     const kennzahlen = computeUstva({ from: args.from ?? '0000-01-01', to: args.to ?? '9999-12-31', entries: await sourceEntries(db, scope) });
     return { from: args.from, to: args.to, rows: rows.map((r) => ({ taxCaseKey: r.tax_case_key, netAmount: round(r.net), taxAmount: round(r.tax), grossAmount: round(r.gross), lineCount: Number(r.line_count) })), kennzahlen }; },
   async buildDatevRows(scope, args = {}) {
-    const values: unknown[] = [tenant(scope)]; const date: string[] = [];
+    const t = tenant(scope); const values: unknown[] = [t]; const date: string[] = [];
     if (args.from) { values.push(args.from); date.push(`posting_date >= $${values.length}`); }
     if (args.to) { values.push(args.to); date.push(`posting_date <= $${values.length}`); }
     const entries = await q<any>(db, `SELECT * FROM journal_entries je WHERE tenant_id=$1 AND status IN ('posted','reversed') AND ${RUNNING_JOURNAL}${date.length ? ` AND ${date.join(' AND ')}` : ''} ORDER BY posting_date,entry_number`, values);
+    const chart = (await policy(db, t)).activeChart;
+    const roles = await accountRoleMappings(db, t, chart);
+    const vat = new Map<string, DatevVatAccount>([[roles.output_vat!, { rate: 19, flow: 'income' }], [roles.output_vat_7!, { rate: 7, flow: 'income' }], [roles.input_vat!, { rate: 19, flow: 'expense' }], [roles.input_vat_7!, { rate: 7, flow: 'expense' }]]);
     const result: any[] = [];
     for (const entry of entries) {
       const persisted = await q<any>(db, `SELECT jp.amount,jp.tax_case_key,jp.datev_bu_key,dl.account_number konto,cl.account_number gegenkonto,
+        dl.tax_case_key debit_case,cl.tax_case_key credit_case,dl.tax_rate debit_rate,cl.tax_rate credit_rate,
         COALESCE(dl.country_code,cl.country_code) country_code,
         COALESCE(dl.counterparty_vat_id,cl.counterparty_vat_id) counterparty_vat_id,
         COALESCE(dl.tax_rate,cl.tax_rate) tax_rate,
@@ -955,16 +1029,36 @@ export const createPostgresProAccountingRepository = (db: PostgresQueryable): Pr
         FROM journal_posting_pairs jp
         JOIN journal_lines dl ON dl.id=jp.debit_line_id AND dl.tenant_id=jp.tenant_id
         JOIN journal_lines cl ON cl.id=jp.credit_line_id AND cl.tenant_id=jp.tenant_id
-        WHERE jp.tenant_id=$1 AND jp.entry_id=$2 ORDER BY dl.line_no,cl.line_no,jp.id`, [tenant(scope), entry.id]);
-      const pairs = persisted.length ? persisted.map((pair) => ({ amount: Number(pair.amount), debit: pair.konto, credit: pair.gegenkonto, bu: normalizeDatevBuKey(pair.datev_bu_key), euLandUstId: datevDestinationCases.has(pair.tax_case_key as TaxCaseKey) ? pair.counterparty_vat_id ?? pair.country_code : undefined, euSteuersatz: pair.tax_rate == null ? undefined : Number(pair.tax_rate), sachverhaltLl: pair.datev_sachverhalt_ll ?? undefined })) : pairLines((await q<any>(db, `SELECT * FROM journal_lines WHERE tenant_id=$1 AND entry_id=$2 ORDER BY line_no`, [tenant(scope), entry.id])).map(mapLine)).map((pair) => ({ amount: pair.amount, debit: pair.debit.accountNumber, credit: pair.credit.accountNumber, bu: undefined, euLandUstId: datevDestinationCases.has(pair.taxCaseKey as TaxCaseKey) ? pair.debit.counterpartyVatId ?? pair.credit.counterpartyVatId ?? pair.debit.countryCode ?? pair.credit.countryCode : undefined, euSteuersatz: pair.debit.taxRate ?? pair.credit.taxRate, sachverhaltLl: pair.debit.datevSachverhaltLl ?? pair.credit.datevSachverhaltLl }));
-      for (const pair of pairs) result.push({ date: entry.posting_date, belegfeld1: String(entry.entry_number), buchungstext: entry.booking_text, konto: pair.debit, gegenkonto: pair.credit, sollHabenKennzeichen: 'S', buSchluessel: pair.bu ?? undefined, euLandUstId: pair.euLandUstId, euSteuersatz: pair.euLandUstId === undefined ? undefined : pair.euSteuersatz, sachverhaltLl: pair.sachverhaltLl, umsatz: round(pair.amount) });
+        WHERE jp.tenant_id=$1 AND jp.entry_id=$2 ORDER BY dl.line_no,cl.line_no,jp.id`, [t, entry.id]);
+      const pairs: DatevPair[] = persisted.length ? persisted.map((pair) => ({ amount: Number(pair.amount), debit: pair.konto, credit: pair.gegenkonto, debitRate: datevLineRate(pair.debit_case, pair.debit_rate), creditRate: datevLineRate(pair.credit_case, pair.credit_rate), bu: normalizeDatevBuKey(pair.datev_bu_key), euLandUstId: datevDestinationCases.has(pair.tax_case_key as TaxCaseKey) ? pair.counterparty_vat_id ?? pair.country_code : undefined, euSteuersatz: pair.tax_rate == null ? undefined : Number(pair.tax_rate), sachverhaltLl: pair.datev_sachverhalt_ll ?? undefined })) : pairLines((await q<any>(db, `SELECT * FROM journal_lines WHERE tenant_id=$1 AND entry_id=$2 ORDER BY line_no`, [t, entry.id])).map(mapLine)).map((pair) => ({ amount: pair.amount, debit: pair.debit.accountNumber, credit: pair.credit.accountNumber, debitRate: datevLineRate(pair.debit.taxCaseKey, pair.debit.taxRate), creditRate: datevLineRate(pair.credit.taxCaseKey, pair.credit.taxRate), bu: undefined, euLandUstId: datevDestinationCases.has(pair.taxCaseKey as TaxCaseKey) ? pair.debit.counterpartyVatId ?? pair.credit.counterpartyVatId ?? pair.debit.countryCode ?? pair.credit.countryCode : undefined, euSteuersatz: pair.debit.taxRate ?? pair.credit.taxRate, sachverhaltLl: pair.debit.datevSachverhaltLl ?? pair.credit.datevSachverhaltLl }));
+      const belegfeld1 = datevBelegfeld(entry.reference) || String(entry.entry_number);
+      const documentDate = entry.document_date && isoDate(entry.document_date) && (args.from && args.to ? entry.document_date >= args.from && entry.document_date <= args.to : entry.document_date.slice(0, 7) === entry.posting_date.slice(0, 7)) ? entry.document_date : entry.posting_date;
+      for (const pair of collapseDatevPairs(pairs, vat, DATEV_AUTOMATIC_ACCOUNTS[chart])) result.push({ date: documentDate, belegfeld1, buchungstext: datevText(entry.booking_text), konto: pair.debit, gegenkonto: pair.credit, sollHabenKennzeichen: 'S', buSchluessel: pair.bu ?? undefined, euLandUstId: pair.euLandUstId, euSteuersatz: pair.euLandUstId === undefined ? undefined : pair.euSteuersatz, sachverhaltLl: pair.sachverhaltLl, umsatz: round(pair.amount) });
     }
     return result;
   },
   async getAccountingPolicy(scope) { return policy(db, tenant(scope)); },
   async setAccountingPolicy(scope, input) { return inTx(db, async (tx) => { const t = tenant(scope); const before = await policy(tx, t); if (input.activeChart !== before.activeChart && (await q<any>(tx, `SELECT 1 FROM journal_entries WHERE tenant_id=$1 AND status='posted' LIMIT 1`, [t]))[0]) throw new AccountingPolicyError('ACCOUNTING_CHART_LOCKED', 'Der Kontenrahmen kann nach einer gebuchten Journalbuchung nicht mehr geändert werden.'); const stamp = now(); await q(tx, `INSERT INTO accounting_policies (tenant_id,active_chart,vat_method,period_policy,updated_at) VALUES ($1,$2,$3,'calendar_month',$4) ON CONFLICT (tenant_id) DO UPDATE SET active_chart=EXCLUDED.active_chart,vat_method=EXCLUDED.vat_method,updated_at=EXCLUDED.updated_at`, [t, input.activeChart, input.vatMethod, stamp]); await audit(tx as PostgresTransactionClient, scope, 'accounting_policy', t, 'update', 'Accounting policy changed', before, { activeChart: input.activeChart, vatMethod: input.vatMethod }, input.mutation); return policy(tx, t); }); },
   async listAccountingAccountMappings(scope, chart) { const rows = await q<any>(db, `SELECT * FROM accounting_account_mappings WHERE tenant_id=$1${chart ? ' AND chart=$2' : ''} ORDER BY chart,role`, chart ? [tenant(scope), chart] : [tenant(scope)]); return rows.map((r) => ({ id: r.id, tenantId: r.tenant_id, chart: r.chart, role: r.role, accountNumber: r.account_number, updatedAt: r.updated_at })); },
-  async upsertAccountingAccountMapping(scope, input) { return inTx(db, async (tx) => { const t = tenant(scope); if (!(await accountExists(tx, input.chart, input.accountNumber.trim()))) throw new Error(`UNKNOWN_ACCOUNT:${input.accountNumber.trim()}`); const id = input.id ?? randomUUID(); const stamp = now(); await q(tx, `INSERT INTO accounting_account_mappings (id,tenant_id,chart,role,account_number,updated_at) VALUES ($1,$2,$3,$4,$5,$6) ON CONFLICT (tenant_id,chart,role) DO UPDATE SET account_number=EXCLUDED.account_number,updated_at=EXCLUDED.updated_at`, [id, t, input.chart, input.role, input.accountNumber.trim(), stamp]); await audit(tx as PostgresTransactionClient, scope, 'accounting_mapping', id, 'update', 'Accounting mapping changed', null, { chart: input.chart, role: input.role, accountNumber: input.accountNumber }, input.mutation); const row = (await q<any>(tx, `SELECT * FROM accounting_account_mappings WHERE tenant_id=$1 AND chart=$2 AND role=$3`, [t, input.chart, input.role]))[0]; return { id: row.id, tenantId: row.tenant_id, chart: row.chart, role: row.role, accountNumber: row.account_number, updatedAt: row.updated_at }; }); },
+  async saveTenantLedgerAccount(scope, input) { return inTx(db, async (tx) => {
+    const t = tenant(scope); const number = input.accountNumber.trim(); const stamp = now();
+    if (!/^\d{4,8}$/.test(number)) throw new Error('INVALID_ACCOUNT_NUMBER: Kontonummern haben 4 bis 8 Ziffern.');
+    const catalogue = (await q<any>(tx, `SELECT name FROM ledger_accounts WHERE chart=$1 AND account_number=$2`, [input.chart, number]))[0];
+    const before = (await q<any>(tx, `SELECT * FROM tenant_ledger_accounts WHERE tenant_id=$1 AND chart=$2 AND account_number=$3 FOR UPDATE`, [t, input.chart, number]))[0];
+    // A catalogue account keeps its DATEV name; only an own account is named by the tenant (DATEV Kontenbeschriftung: 40 characters).
+    const name = catalogue ? String(catalogue.name) : (input.name ?? before?.name ?? '').trim();
+    if (!catalogue && (!name || name.length > 40)) throw new Error('INVALID_ACCOUNT_NAME: Ein eigenes Konto braucht eine Bezeichnung mit höchstens 40 Zeichen.');
+    if (!input.active) {
+      const roles = Object.values(await accountRoleMappings(tx, t, input.chart));
+      const taxCases = await q<any>(tx, `SELECT 1 FROM tax_case_account_mappings WHERE tenant_id=$1 AND chart=$2 AND account_number=$3 LIMIT 1`, [t, input.chart, number]);
+      if (roles.includes(number) || taxCases.length) throw new Error(`ACCOUNT_IN_USE: Konto ${number} ist als Standardkonto zugeordnet und kann nicht deaktiviert werden.`);
+    }
+    await q(tx, `INSERT INTO tenant_ledger_accounts (tenant_id,chart,account_number,name,active,created_at,updated_at) VALUES ($1,$2,$3,$4,$5,$6,$6) ON CONFLICT (tenant_id,chart,account_number) DO UPDATE SET name=EXCLUDED.name,active=EXCLUDED.active,updated_at=EXCLUDED.updated_at`, [t, input.chart, number, name, input.active, stamp]);
+    const after = { chart: input.chart, accountNumber: number, name, active: input.active };
+    await audit(tx as PostgresTransactionClient, scope, 'ledger_account', `${input.chart}:${number}`, before ? 'update' : 'create', input.active ? 'Konto aktiv' : 'Konto deaktiviert', before ? { name: before.name, active: before.active } : null, after, input.mutation);
+    return { id: catalogue ? `${input.chart}:${number}` : `tenant:${input.chart}:${number}`, chart: input.chart, accountNumber: number, name, source: catalogue ? 'server-catalog' : 'tenant', active: input.active, createdAt: before?.created_at ?? stamp, updatedAt: stamp };
+  }); },
+  async upsertAccountingAccountMapping(scope, input) { return inTx(db, async (tx) => { const t = tenant(scope); if (!(await accountExists(tx, input.chart, input.accountNumber.trim(), t))) throw new Error(`UNKNOWN_ACCOUNT:${input.accountNumber.trim()}`); const id = input.id ?? randomUUID(); const stamp = now(); await q(tx, `INSERT INTO accounting_account_mappings (id,tenant_id,chart,role,account_number,updated_at) VALUES ($1,$2,$3,$4,$5,$6) ON CONFLICT (tenant_id,chart,role) DO UPDATE SET account_number=EXCLUDED.account_number,updated_at=EXCLUDED.updated_at`, [id, t, input.chart, input.role, input.accountNumber.trim(), stamp]); await audit(tx as PostgresTransactionClient, scope, 'accounting_mapping', id, 'update', 'Accounting mapping changed', null, { chart: input.chart, role: input.role, accountNumber: input.accountNumber }, input.mutation); const row = (await q<any>(tx, `SELECT * FROM accounting_account_mappings WHERE tenant_id=$1 AND chart=$2 AND role=$3`, [t, input.chart, input.role]))[0]; return { id: row.id, tenantId: row.tenant_id, chart: row.chart, role: row.role, accountNumber: row.account_number, updatedAt: row.updated_at }; }); },
   async listVendors(scope) { return (await q<any>(db, `SELECT * FROM vendors WHERE tenant_id=$1 ORDER BY name,id`, [tenant(scope)])).map(rowVendor); },
   async upsertVendor(scope, input) { return inTx(db, async (tx) => { const t = tenant(scope); const id = input.id || randomUUID(); const stamp = now(); const existing = (await q<any>(tx, `SELECT * FROM vendors WHERE tenant_id=$1 AND id=$2`, [t, id]))[0]; const foreign = (await q<any>(tx, `SELECT tenant_id FROM vendors WHERE id=$1 AND tenant_id<>$2`, [id, t]))[0]; if (foreign) throw new Error('VENDOR_NOT_FOUND'); if (existing && (await q<any>(tx, `SELECT accounting_status FROM incoming_invoices WHERE tenant_id=$1 AND vendor_id=$2 AND accounting_status='posted' LIMIT 1`, [t, id]))[0]) throw new Error('VENDOR_HAS_POSTED_DOCUMENTS'); await q(tx, `INSERT INTO vendors (id,tenant_id,vendor_number,name,email,address,vat_id,iban,default_expense_account,created_at,updated_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$10) ON CONFLICT (id) DO UPDATE SET vendor_number=EXCLUDED.vendor_number,name=EXCLUDED.name,email=EXCLUDED.email,address=EXCLUDED.address,vat_id=EXCLUDED.vat_id,iban=EXCLUDED.iban,default_expense_account=EXCLUDED.default_expense_account,updated_at=EXCLUDED.updated_at`, [id, t, input.vendorNumber ?? null, input.name, input.email ?? null, input.address ?? null, input.vatId ?? null, input.iban ?? null, input.defaultExpenseAccount ?? null, stamp]); await audit(tx as PostgresTransactionClient, scope, 'vendor', id, 'upsert', 'Vendor changed', existing ?? null, { ...input, mutation: undefined }, input.mutation); return rowVendor((await q<any>(tx, `SELECT * FROM vendors WHERE tenant_id=$1 AND id=$2`, [t, id]))[0]); }); },
   async listIncomingInvoices(scope) { const rows = await q<any>(db, `SELECT * FROM incoming_invoices WHERE tenant_id=$1 ORDER BY invoice_date DESC,number`, [tenant(scope)]); return Promise.all(rows.map(async (r) => rowIncoming(r, await q(db, `SELECT * FROM incoming_invoice_lines WHERE tenant_id=$1 AND incoming_invoice_id=$2 ORDER BY position`, [tenant(scope), r.id])))); },
@@ -1053,7 +1147,8 @@ export const createPostgresProAccountingRepository = (db: PostgresQueryable): Pr
       const id = input.id ?? existingByNumber?.id ?? randomUUID();
       const existing = existingById ?? (existingByNumber ? await assetRow(tx, scope, existingByNumber.id, true) : undefined);
       const method = resolveDepreciationMethod(assetInputFor(input));
-      const schedule = buildDepreciationSchedule({ ...assetInputFor(input), method });
+      // AfA years are Wirtschaftsjahre of the tenant (a GmbH with a fiscal year from April depreciates per April–March).
+      const schedule = buildDepreciationSchedule({ ...assetInputFor(input), method, fiscalYearStart: await reportingFiscalYearStart(tx, t) });
       const oldSchedule = existing ? await assetSchedule(tx, scope, id) : [];
       const financiallyOwned = Boolean(existing?.activation_journal_entry_id) || oldSchedule.some((entry) => entry.status === 'posted') || Boolean((await q<any>(tx, `SELECT 1 FROM asset_movements WHERE tenant_id=$1 AND asset_id=$2 LIMIT 1`, [t, id]))[0]);
       if (existing && financiallyOwned) {
@@ -1100,10 +1195,12 @@ export const createPostgresProAccountingRepository = (db: PostgresQueryable): Pr
       if (row.accounting_repair_required) throw new Error('ASSET_ACTIVATION_REPAIR_REQUIRED');
       if (row.status === 'entwurf' || !row.activation_journal_entry_id) throw new Error('ASSET_NOT_ACTIVE');
       if (!isoDate(input.postingDate)) throw new Error('INVALID_POSTING_DATE');
+      // The AfA of a Wirtschaftsjahr is booked inside that Wirtschaftsjahr, not in the year before or after.
+      if (await reportingFiscalYear(tx, tenant(scope), input.postingDate) !== input.year) throw new Error(`INVALID_DEPRECIATION_POSTING_DATE: Die AfA ${input.year} muss im Wirtschaftsjahr ${input.year} gebucht werden.`);
       const status = await ensurePeriod(tx, scope, period(input.postingDate), input.postingDate);
       if (status === 'closed') throw new Error('POSTING_DATE_IN_CLOSED_PERIOD');
       if (status === 'soft_locked' && (!input.softLockOverride || !input.overrideReason?.trim())) throw new Error('SOFT_LOCK_OVERRIDE_REQUIRED');
-      const chart = (await policy(tx, tenant(scope))).activeChart; const expense = DEPRECIATION_EXPENSE_ACCOUNTS[chart]; await assertAccounts(tx, chart, [expense, row.asset_account_number], 'DEPRECIATION_ACCOUNT_NOT_IN_CHART');
+      const chart = (await policy(tx, tenant(scope))).activeChart; const expense = DEPRECIATION_EXPENSE_ACCOUNTS[chart]; await assertAccounts(tx, chart, [expense, row.asset_account_number], 'DEPRECIATION_ACCOUNT_NOT_IN_CHART', tenant(scope));
       const journalEntryId = await insertEntry(tx, scope, 'asset_depreciation', sourceKey, input.postingDate, `AfA ${row.asset_number} ${input.year}`, [
         { id: `${row.id}-expense-${input.year}`, accountNumber: expense, debitAmount: entry.amount, creditAmount: 0, evidenceType: 'asset_depreciation', evidenceReference: row.invoice_ref ?? row.asset_number, costCenter: row.cost_center, memo: input.reason },
         { id: `${row.id}-asset-${input.year}`, accountNumber: row.asset_account_number, debitAmount: 0, creditAmount: entry.amount, costCenter: row.cost_center, memo: input.reason },
@@ -1126,11 +1223,31 @@ export const createPostgresProAccountingRepository = (db: PostgresQueryable): Pr
       const status = await ensurePeriod(tx, scope, period(input.disposalDate), input.disposalDate); if (status === 'closed') throw new Error('POSTING_DATE_IN_CLOSED_PERIOD'); if (status === 'soft_locked' && (!input.softLockOverride || !input.overrideReason?.trim())) throw new Error('SOFT_LOCK_OVERRIDE_REQUIRED');
       if (row.depreciation_method === 'pool') throw new Error('POOL_INDIVIDUAL_DISPOSAL_NOT_SUPPORTED');
       if (row.accounting_repair_required) throw new Error('ASSET_ACTIVATION_REPAIR_REQUIRED'); if (row.status === 'entwurf' || !row.activation_journal_entry_id) throw new Error('ASSET_NOT_ACTIVE'); if (row.disposal_date) throw new Error('ASSET_ALREADY_DISPOSED'); if (input.proceeds > 0 && input.taxRate === undefined) throw new Error('TAX_RATE_REQUIRED_FOR_PROCEEDS');
-      const residualBookValue = await postedDepreciationAmount(tx, scope, row).then((posted) => round(Math.max(0, Number(row.acquisition_cost) - posted)));
-      const disposal = computeAssetDisposal({ ...assetInputFor(row), disposalDate: input.disposalDate, proceeds: input.proceeds });
-      if (Math.abs(disposal.residualBookValue - residualBookValue) > 0.01) throw new Error('ASSET_DISPOSAL_PROJECTION_MISMATCH');
-      const chart = (await policy(tx, tenant(scope))).activeChart; const accounts = disposalAccounts(chart); const proceedsAccount = input.proceedsAccountNumber || await accountFor(tx, scope, chart, 'bank'); if (input.proceeds > 0 && !proceedsAccount) throw new Error('PROCEEDS_ACCOUNT_REQUIRED');
-      const taxAccount = input.taxRate && input.taxRate > 0 ? await taxCaseAccount(tx, tenant(scope), chart, input.taxRate === 7 ? 'DE_STD_7' : 'DE_STD_19', 'output_tax', outputTaxAccount(chart, input.taxRate), input.disposalDate) : undefined; await assertAccounts(tx, chart, [row.asset_account_number, accounts.loss, accounts.gain, ...(input.proceeds > 0 && proceedsAccount ? [proceedsAccount] : []), ...(taxAccount ? [taxAccount] : [])], 'DISPOSAL_ACCOUNT_NOT_IN_CHART');
+      const fiscalYearStart = await reportingFiscalYearStart(tx, tenant(scope));
+      const disposal = computeAssetDisposal({ ...assetInputFor(row), fiscalYearStart, disposalDate: input.disposalDate, proceeds: input.proceeds });
+      const chart = (await policy(tx, tenant(scope))).activeChart; const accounts = disposalAccounts(chart);
+      // A disposal during the year first books the AfA of that Wirtschaftsjahr up to the disposal month (§ 7 Abs. 1 Satz 4 EStG);
+      // every earlier year must already be posted, otherwise the book value is not known.
+      const disposalYear = await reportingFiscalYear(tx, tenant(scope), input.disposalDate);
+      const schedule = await assetSchedule(tx, scope, row.id, true);
+      const posted = await postedDepreciationAmount(tx, scope, row);
+      const partial = round(disposal.depreciationToDate - posted);
+      const yearEntry = schedule.find((entry) => entry.year === disposalYear && entry.status === 'planned');
+      if (schedule.some((entry) => entry.year < disposalYear && entry.status === 'planned') || partial < -0.01 || (partial > 0.005 && !yearEntry)) throw new Error('ASSET_DISPOSAL_PROJECTION_MISMATCH');
+      if (partial > 0.005 && yearEntry) {
+        const expense = DEPRECIATION_EXPENSE_ACCOUNTS[chart]; await assertAccounts(tx, chart, [expense, row.asset_account_number], 'DEPRECIATION_ACCOUNT_NOT_IN_CHART', tenant(scope));
+        const depreciationKey = `asset_depreciation:${row.id}:${disposalYear}`;
+        const depreciationEntryId = await insertEntry(tx, scope, 'asset_depreciation', depreciationKey, input.disposalDate, `AfA ${row.asset_number} ${disposalYear} bis Abgang`, [
+          { id: `${row.id}-expense-${disposalYear}`, accountNumber: expense, debitAmount: partial, creditAmount: 0, evidenceType: 'asset_depreciation', evidenceReference: row.invoice_ref ?? row.asset_number, costCenter: row.cost_center, memo: input.reason },
+          { id: `${row.id}-asset-${disposalYear}`, accountNumber: row.asset_account_number, debitAmount: 0, creditAmount: partial, costCenter: row.cost_center, memo: input.reason },
+        ], { reference: row.asset_number, softLockOverride: input.softLockOverride, overrideReason: input.overrideReason, mutation: input.mutation });
+        const months = Math.max(1, Math.min(yearEntry.months, Math.round(yearEntry.months * partial / yearEntry.amount)));
+        await q(tx, `UPDATE asset_depreciation_schedule SET amount=$1,months=$2,status='posted',journal_entry_id=$3,source_type='asset_depreciation',source_key=$4,posted_at=$5 WHERE tenant_id=$6 AND id=$7 AND status='planned'`, [partial, months, depreciationEntryId, depreciationKey, now(), tenant(scope), yearEntry.id]);
+        await q(tx, `INSERT INTO asset_movements (id,tenant_id,asset_id,type,movement_date,amount,proceeds,gain_loss,journal_entry_id,source_type,source_key,reason,created_at) VALUES ($1,$2,$3,'depreciation',$4,$5,NULL,NULL,$6,'asset_depreciation',$7,$8,$9)`, [randomUUID(), tenant(scope), row.id, input.disposalDate, partial, depreciationEntryId, depreciationKey, input.overrideReason?.trim() || input.reason, now()]);
+      }
+      const residualBookValue = round(Math.max(0, Number(row.acquisition_cost) - posted - Math.max(0, partial)));
+      if (Math.abs(disposal.residualBookValue - residualBookValue) > 0.01) throw new Error('ASSET_DISPOSAL_PROJECTION_MISMATCH'); const proceedsAccount = input.proceedsAccountNumber || await accountFor(tx, scope, chart, 'bank'); if (input.proceeds > 0 && !proceedsAccount) throw new Error('PROCEEDS_ACCOUNT_REQUIRED');
+      const taxAccount = input.taxRate && input.taxRate > 0 ? await taxCaseAccount(tx, tenant(scope), chart, input.taxRate === 7 ? 'DE_STD_7' : 'DE_STD_19', 'output_tax', outputTaxAccount(chart, input.taxRate), input.disposalDate) : undefined; await assertAccounts(tx, chart, [row.asset_account_number, accounts.loss, accounts.gain, ...(input.proceeds > 0 && proceedsAccount ? [proceedsAccount] : []), ...(taxAccount ? [taxAccount] : [])], 'DISPOSAL_ACCOUNT_NOT_IN_CHART', tenant(scope));
       const gainLoss = round(input.proceeds - residualBookValue); const gross = round(input.proceeds * (1 + (input.taxRate ?? 0) / 100)); const vat = round(gross - input.proceeds); const lines: JournalLineEntity[] = [];
       if (input.proceeds > 0) lines.push({ id: `${row.id}-proceeds`, accountNumber: proceedsAccount!, debitAmount: gross, creditAmount: 0, memo: input.reason });
       if (gainLoss < 0) lines.push({ id: `${row.id}-loss`, accountNumber: accounts.loss, debitAmount: -gainLoss, creditAmount: 0, memo: input.reason });
@@ -1216,8 +1333,8 @@ const getAsset = async (db: PostgresQueryable, scope: TenantScope, assetId: stri
 };
 
 const accountFor = async (db: PostgresQueryable, scope: TenantScope, chart: 'SKR03' | 'SKR04', role: string): Promise<string | undefined> => (await mappings(db, tenant(scope), chart))[role];
-const assertAccounts = async (db: PostgresQueryable, chart: 'SKR03' | 'SKR04', accounts: string[], code: string): Promise<void> => {
-  if ((await Promise.all(accounts.map((account) => accountExists(db, chart, account)))).some((exists) => !exists)) throw new Error(code);
+const assertAccounts = async (db: PostgresQueryable, chart: 'SKR03' | 'SKR04', accounts: string[], code: string, tenantId: string): Promise<void> => {
+  if ((await Promise.all(accounts.map((account) => accountExists(db, chart, account, tenantId)))).some((exists) => !exists)) throw new Error(code);
 };
 const disposalAccounts = (chart: 'SKR03' | 'SKR04') => chart === 'SKR03' ? { loss: '2310', gain: '8829' } : { loss: '6895', gain: '4849' };
 const outputTaxAccount = (chart: 'SKR03' | 'SKR04', rate: 0 | 7 | 19): string => chart === 'SKR03' ? (rate === 7 ? '1771' : '1776') : (rate === 7 ? '3801' : '3806');
@@ -1226,7 +1343,7 @@ const movementSourceExists = async (db: PostgresQueryable, scope: TenantScope, s
 const postAssetActivation = async (db: PostgresQueryable, scope: TenantScope, input: AssetUpsertInput, id: string, reason: string, options: AssetMutationOptions, chart: 'SKR03' | 'SKR04'): Promise<{ journalEntryId: string; offset: string }> => {
   const offset = input.acquisitionOffsetAccountNumber || await accountFor(db, scope, chart, 'accounts_payable');
   if (!offset) throw new Error('ACQUISITION_OFFSET_ACCOUNT_REQUIRED');
-  await assertAccounts(db, chart, [input.assetAccountNumber, offset], 'ACQUISITION_ACCOUNT_NOT_IN_CHART');
+  await assertAccounts(db, chart, [input.assetAccountNumber, offset], 'ACQUISITION_ACCOUNT_NOT_IN_CHART', tenant(scope));
   const sourceKey = `asset_activation:${id}`;
   const journalEntryId = await insertEntry(db, scope, 'asset_activation', sourceKey, input.activationDate, `Anlagenzugang ${input.assetNumber}`, [
     { id: `${id}-asset`, accountNumber: input.assetAccountNumber, debitAmount: round(input.acquisitionCost), creditAmount: 0, costCenter: input.costCenter, memo: reason },
@@ -1339,15 +1456,24 @@ export const postDunningFeeInTransaction = async (db: PostgresQueryable, scope: 
   const invoice = (await q<any>(db, `SELECT id,number,accounting_status FROM invoices WHERE tenant_id=$1 AND id=$2`, [t, input.invoiceId]))[0];
   const item = (await q<any>(db, `SELECT party_id FROM open_items WHERE tenant_id=$1 AND source_type='outgoing_invoice' AND source_id=$2`, [t, input.invoiceId]))[0];
   if (!invoice || invoice.accounting_status !== 'posted' || !item) return;
-  // A locked month must not undo the record that the reminder went out: the fee then stays in the dunning history
-  // only and is booked by hand.
-  if (await ensurePeriod(db, scope, period(input.date), input.date) !== 'open') return;
+  // A reminder dated in a soft-locked or closed month is booked on the first day of the next open month: refusing it
+  // would undo the record that the reminder went out, and the fee carries no VAT, so no submitted UStVA changes.
+  // The reminder date stays the document date and is named in the text.
+  let postingDate = input.date;
+  let status = await ensurePeriod(db, scope, period(postingDate), postingDate);
+  for (let step = 0; status !== 'open' && step < 36; step += 1) {
+    const [year, month] = postingDate.split('-').map(Number);
+    postingDate = `${month === 12 ? year! + 1 : year}-${String(month === 12 ? 1 : month! + 1).padStart(2, '0')}-01`;
+    status = await ensurePeriod(db, scope, period(postingDate), postingDate);
+  }
+  if (status !== 'open') return;
   const p = await policy(db, t); const m = await mappings(db, t, p.activeChart);
   const fee = round(input.fee); const sourceId = `${invoice.id}:${input.level}`;
-  const entryId = await insertEntry(db, scope, 'dunning_fee', `dunning-fee:${sourceId}`, input.date, `Mahngebühr ${invoice.number} Stufe ${input.level}`, [
+  const moved = postingDate === input.date ? '' : ` (Mahnung vom ${input.date.slice(8, 10)}.${input.date.slice(5, 7)}.${input.date.slice(0, 4)})`;
+  const entryId = await insertEntry(db, scope, 'dunning_fee', `dunning-fee:${sourceId}`, postingDate, `Mahngebühr ${invoice.number} Stufe ${input.level}${moved}`, [
     { id: randomUUID(), accountNumber: m.accounts_receivable, debitAmount: fee, creditAmount: 0 },
     { id: randomUUID(), accountNumber: m.dunning_fees, debitAmount: 0, creditAmount: fee },
-  ], { reference: invoice.number, mutation: input.mutation });
+  ], { documentDate: input.date, reference: invoice.number, mutation: input.mutation });
   const stamp = now();
   await q(db, `INSERT INTO open_items (id,tenant_id,party_type,party_id,source_type,source_id,document_number,document_date,due_date,original_amount,allocated_amount,residual_amount,status,journal_entry_id,created_at,updated_at) VALUES ($1,$2,'debtor',$3,'dunning_fee',$4,$5,$6,$6,$7,0,$7,'open',$8,$9,$9) ON CONFLICT (tenant_id,source_type,source_id) DO NOTHING`, [randomUUID(), t, item.party_id, sourceId, invoice.number, input.date, fee, entryId, stamp]);
 };
@@ -1551,7 +1677,7 @@ const allocatePayment = async (db: PostgresQueryable, scope: TenantScope, input:
   }
   const p = await policy(db, t);
   const m = await mappings(db, t, p.activeChart);
-  if (!(await accountExists(db, p.activeChart, input.bankAccountNumber))) throw new Error(`UNKNOWN_ACCOUNT:${input.bankAccountNumber}`);
+  if (!(await accountExists(db, p.activeChart, input.bankAccountNumber, tenant(scope)))) throw new Error(`UNKNOWN_ACCOUNT:${input.bankAccountNumber}`);
   const moneyIn = (input.partyType === 'debtor') !== refund;
   const party = input.partyType === 'debtor' ? m.accounts_receivable : m.accounts_payable;
   const lines: JournalLineEntity[] = moneyIn
@@ -1862,7 +1988,7 @@ export const postManualJournalEntryInTransaction = async (db: PostgresQueryable,
     const accountNumber = String(line.accountNumber ?? '').trim();
     const debit = cents(line.debitAmount ?? 0); const credit = cents(line.creditAmount ?? 0);
     if (debit === null || credit === null || debit < 0 || credit < 0 || (debit > 0) === (credit > 0)) throw new Error(`INVALID_LINE_AMOUNT: Zeile ${index + 1} braucht einen Centbetrag im Soll oder im Haben.`);
-    if (!accountNumber || !(await accountExists(db, p.activeChart, accountNumber))) throw new Error(`UNKNOWN_ACCOUNT:${accountNumber} ist im Kontenrahmen ${p.activeChart} nicht vorhanden.`);
+    if (!accountNumber || !(await accountExists(db, p.activeChart, accountNumber, tenant(scope)))) throw new Error(`UNKNOWN_ACCOUNT:${accountNumber} ist im Kontenrahmen ${p.activeChart} nicht vorhanden.`);
     const debitSide = debit > 0;
     const gross = debitSide ? debit : credit;
     if (!line.taxCaseKey) {
@@ -1877,7 +2003,7 @@ export const postManualJournalEntryInTransaction = async (db: PostgresQueryable,
     const taxAccount = debitSide
       ? await taxCaseAccount(db, t, p.activeChart, line.taxCaseKey, 'input_tax', m.input_vat!, postingDate)
       : await taxCaseAccount(db, t, p.activeChart, line.taxCaseKey, 'output_tax', m.output_vat!, postingDate);
-    if (!(await accountExists(db, p.activeChart, taxAccount))) throw new Error(`UNKNOWN_ACCOUNT:${taxAccount} (Steuerkonto) ist im Kontenrahmen ${p.activeChart} nicht vorhanden.`);
+    if (!(await accountExists(db, p.activeChart, taxAccount, tenant(scope)))) throw new Error(`UNKNOWN_ACCOUNT:${taxAccount} (Steuerkonto) ist im Kontenrahmen ${p.activeChart} nicht vorhanden.`);
     lines.push({ id: randomUUID(), accountNumber, debitAmount: debitSide ? net / 100 : 0, creditAmount: debitSide ? 0 : net / 100, taxCaseKey: line.taxCaseKey as TaxCaseKey, taxRate: rate, netAmount: net / 100, taxAmount: tax / 100, grossAmount: gross / 100, memo: line.memo });
     if (tax > 0) lines.push({ id: randomUUID(), accountNumber: taxAccount, debitAmount: debitSide ? tax / 100 : 0, creditAmount: debitSide ? 0 : tax / 100, memo: `${debitSide ? 'Vorsteuer' : 'USt'} ${line.taxCaseKey}` });
   }

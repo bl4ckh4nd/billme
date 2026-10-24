@@ -41,3 +41,13 @@ export const useImportSkrMutation = () => {
     },
   });
 };
+
+export const useSaveLedgerAccountMutation = () => {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (args: IpcArgs<'pro:saveLedgerAccount'>) => ipc.pro.saveLedgerAccount(args),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ['pro', 'ledger', 'accounts'] });
+    },
+  });
+};

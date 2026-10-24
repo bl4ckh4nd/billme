@@ -302,7 +302,15 @@ export const PUBLIC_MANAGEMENT_GUV_SMALL_2025 = catalog('management-guv-small-20
 export const PUBLIC_MANAGEMENT_GUV_MICRO_2026 = catalog('management-guv-micro-2026', 'Interne Management-GuV – Kleinstunternehmen (nicht gesetzliche Steuerungsrechnung, 2026)', 'management-guv', 'micro', MANAGEMENT_GUV_2026, managementGuvPositions);
 export const PUBLIC_MANAGEMENT_GUV_SMALL_2026 = catalog('management-guv-small-2026', 'Interne Management-GuV – kleine Unternehmen (nicht gesetzliche Steuerungsrechnung, 2026)', 'management-guv', 'small', MANAGEMENT_GUV_2026, managementGuvPositions);
 
-export const getPublicReportCatalogs = (year: number): PublicReportCatalog[] => {
+/**
+ * The newest year with its own report catalogues. A later year runs on these and the report says so
+ * (ReportSnapshot.catalogProvisional) until its own catalogue is added after checking §§ 266/275 HGB again.
+ */
+export const LATEST_REPORT_CATALOG_YEAR = 2026;
+export const reportCatalogYear = (year: number): number => (year > LATEST_REPORT_CATALOG_YEAR ? LATEST_REPORT_CATALOG_YEAR : year);
+
+export const getPublicReportCatalogs = (requestedYear: number): PublicReportCatalog[] => {
+  const year = reportCatalogYear(requestedYear);
   if (year === 2025) {
     return [
       PUBLIC_HGB_BILANZ_MICRO_2025,
@@ -326,7 +334,8 @@ export const getPublicReportCatalogs = (year: number): PublicReportCatalog[] => 
   throw new Error(`PUBLIC_REPORT_CATALOG_UNAVAILABLE:${year}`);
 };
 
-export const getManagementReportCatalogs = (year: number): PublicReportCatalog[] => {
+export const getManagementReportCatalogs = (requestedYear: number): PublicReportCatalog[] => {
+  const year = reportCatalogYear(requestedYear);
   if (year === 2025) return [PUBLIC_MANAGEMENT_GUV_MICRO_2025, PUBLIC_MANAGEMENT_GUV_SMALL_2025];
   if (year === 2026) return [PUBLIC_MANAGEMENT_GUV_MICRO_2026, PUBLIC_MANAGEMENT_GUV_SMALL_2026];
   throw new Error(`PUBLIC_REPORT_CATALOG_UNAVAILABLE:${year}`);

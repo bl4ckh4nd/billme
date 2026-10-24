@@ -219,6 +219,7 @@ const journalQuery = z.object({
   from: z.string().optional(),
   to: z.string().optional(),
   accountNumbers: z.union([z.string(), z.array(z.string())]).optional(),
+  sourceDraftId: z.string().min(1).optional(),
   limit: z.coerce.number().int().positive().max(5000).optional(),
   offset: z.coerce.number().int().min(0).optional(),
 });
@@ -1122,7 +1123,13 @@ export const registerProAccountingRoutes = (app: FastifyInstance, options: ProAc
       const service = serviceFor(app);
       const policy = await service.getAccountingPolicy(session.scope);
       const rows = await service.buildDatevRows(session.scope, { from: query.from, to: query.to });
+      // Festschreibung only when every month of the stack is closed; a soft lock can still be overridden.
+      const fromMonth = query.from.slice(0, 7); const toMonth = query.to.slice(0, 7);
+      const years = [...new Set([Number(query.from.slice(0, 4)), Number(query.to.slice(0, 4))])];
+      const months = (await Promise.all(years.map((year) => repositoryFor(app).listAccountingPeriods(session.scope, year)))).flat().filter((period) => period.period >= fromMonth && period.period <= toMonth);
+      const locked = months.length > 0 && months.every((period) => period.status === 'closed');
       const content = buildDatevBuchungsstapelCsv(rows, {
+        locked,
         consultantNumber: query.consultantNumber,
         clientNumber: query.clientNumber,
         fiscalYearStart: query.fiscalYearStart,
@@ -1165,7 +1172,7 @@ export const registerProAccountingRoutes = (app: FastifyInstance, options: ProAc
       reply.header('x-billme-datev-content-sha256', contentSha256);
       reply.header('x-billme-datev-record-count', String(rows.length));
       reply.header('content-type', query.encoding === 'utf8-bom' ? 'text/csv; charset=utf-8' : 'text/csv; charset=windows-1252');
-      reply.header('content-disposition', 'attachment; filename="datev-buchungsstapel.csv"');
+      reply.header('content-disposition', `attachment; filename="EXTF_Buchungsstapel_${query.from}_${query.to}.csv"`);
       reply.send(Buffer.from(content));
     },
   });
@@ -1182,7 +1189,7 @@ export const registerProAccountingRoutes = (app: FastifyInstance, options: ProAc
       reply.header('x-billme-datev-record-count', String(exportSnapshot.recordCount));
       const encoding = exportSnapshot.encoding ?? 'cp1252';
       reply.header('content-type', encoding === 'utf8-bom' ? 'text/csv; charset=utf-8' : 'text/csv; charset=windows-1252');
-      reply.header('content-disposition', 'attachment; filename="datev-buchungsstapel.csv"');
+      reply.header('content-disposition', `attachment; filename="EXTF_Buchungsstapel_${exportSnapshot.fromDate ?? ''}_${exportSnapshot.toDate ?? ''}.csv"`);
       reply.send(Buffer.from(exportSnapshot.content));
     },
   });
@@ -1271,6 +1278,22 @@ export const registerProAccountingRoutes = (app: FastifyInstance, options: ProAc
     async handler({ request, query }) {
       const session = await requireProSession(app, request.headers.authorization);
       return repositoryFor(app).listReportMappingPositions(session.scope, query.reportType, query.asOfDate);
+    },
+  });
+
+  typedRoute(app, {
+    method: 'PUT',
+    url: `${prefix}/ledger/accounts/:chart/:accountNumber`,
+    params: z.object({ chart: z.enum(['SKR03', 'SKR04']), accountNumber: z.string().regex(/^\d{4,8}$/) }),
+    body: z.object({ name: z.string().trim().min(1).max(40).optional(), active: z.boolean(), reason: reasonSchema }),
+    async handler({ request, params, body }) {
+      const session = await requireMutationSession(app, request.headers.authorization);
+      try {
+        return await repositoryFor(app).saveTenantLedgerAccount(session.scope, { chart: params.chart, accountNumber: params.accountNumber, name: body.name, active: body.active, mutation: mutationFor(session, body.reason) });
+      } catch (error) {
+        if (error instanceof Error && error.message.startsWith('ACCOUNT_IN_USE')) throw new ApiError(409, error.message);
+        throw error;
+      }
     },
   });
 

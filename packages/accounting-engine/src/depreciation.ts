@@ -1,4 +1,6 @@
-export type DepreciationMethod = 'linear' | 'gwg' | 'pool';
+import { fiscalYearForDate } from '@billme/accounting-shared';
+
+export type DepreciationMethod = 'linear' | 'degressive' | 'gwg' | 'pool';
 
 export interface DepreciationSchedulePeriod {
   year: number;
@@ -12,6 +14,8 @@ export interface DepreciationInput {
   assetClass: string;
   usefulLifeYears?: number;
   method?: DepreciationMethod;
+  /** MM-DD of the Wirtschaftsjahr; schedule years are fiscal years (the year the Wirtschaftsjahr starts). Default 01-01. */
+  fiscalYearStart?: string;
 }
 
 export interface AssetDisposalResult {
@@ -63,6 +67,28 @@ export const DEFAULT_AFA_USEFUL_LIVES: Readonly<Record<string, number>> = {
   'Fuhrpark': 6,
   'Personenkraftwagen': 6,
   'Maschinen': 10,
+};
+
+/**
+ * Computer hardware and software may be written off over one year (BMF 26.02.2021 and 22.02.2022,
+ * "Nutzungsdauer von Computerhardware und Software zur Dateneingabe und -verarbeitung"): with a useful
+ * life of 1 year these classes are depreciated in full in the year of acquisition. A longer life stays allowed.
+ */
+export const DIGITAL_ASSET_CLASSES: ReadonlySet<string> = new Set(['IT-Hardware', 'Computerhardware', 'Software', 'EDV-Software']);
+
+/**
+ * Degressive AfA (§ 7 Abs. 2 EStG) is only open for additions in these windows: 2.5 × linear, at most 25 %
+ * (01.04.2020–31.12.2022, Zweites Corona-Steuerhilfegesetz) and 3 × linear, at most 30 % (01.07.2025–31.12.2027,
+ * Gesetz für ein steuerliches Investitionssofortprogramm).
+ */
+const DEGRESSIVE_WINDOWS = [
+  { from: '2020-04-01', to: '2022-12-31', factor: 2.5, cap: 0.25 },
+  { from: '2025-07-01', to: '2027-12-31', factor: 3, cap: 0.3 },
+] as const;
+export const degressiveRate = (activationDate: string, usefulLifeYears: number): number => {
+  const window = DEGRESSIVE_WINDOWS.find((entry) => activationDate >= entry.from && activationDate <= entry.to);
+  if (!window) throw new Error('ASSET_DEGRESSIVE_NOT_ALLOWED: Degressive AfA gilt nur für Zugänge 01.04.2020–31.12.2022 und 01.07.2025–31.12.2027.');
+  return Math.min(window.cap, window.factor / usefulLifeYears);
 };
 
 export const DEPRECIATION_EXPENSE_ACCOUNTS = {
@@ -144,8 +170,11 @@ export const buildDepreciationSchedule = (input: DepreciationInput): Depreciatio
 
   const activation = parseDate(input.activationDate);
   const method = resolveDepreciationMethod(input);
+  const fiscalYearStart = input.fiscalYearStart ?? '01-01';
+  const fiscalYearOf = (date: Date): number => fiscalYearForDate(date.toISOString().slice(0, 10), fiscalYearStart);
+  const firstYear = fiscalYearOf(activation);
   if (method === 'gwg') {
-    return [{ year: activation.getUTCFullYear(), amount: fromCents(baseCents), months: 12 }];
+    return [{ year: firstYear, amount: fromCents(baseCents), months: 12 }];
   }
   if (method === 'pool') {
     const periods: DepreciationSchedulePeriod[] = [];
@@ -154,7 +183,7 @@ export const buildDepreciationSchedule = (input: DepreciationInput): Depreciatio
       const amount = index === 4 ? baseCents - allocated : Math.round(baseCents / 5);
       allocated += amount;
       periods.push({
-        year: activation.getUTCFullYear() + index,
+        year: firstYear + index,
         amount: fromCents(amount),
         months: 12,
       });
@@ -162,7 +191,11 @@ export const buildDepreciationSchedule = (input: DepreciationInput): Depreciatio
     return periods;
   }
 
-  const totalMonths = resolveUsefulLife(input) * 12;
+  const usefulLife = resolveUsefulLife(input);
+  if (usefulLife === 1 && method === 'linear' && DIGITAL_ASSET_CLASSES.has(input.assetClass)) {
+    return [{ year: firstYear, amount: fromCents(baseCents), months: 12 }];
+  }
+  const totalMonths = usefulLife * 12;
   const monthsByYear = new Map<number, number>();
   for (let month = 0; month < totalMonths; month += 1) {
     const cursor = new Date(Date.UTC(
@@ -170,8 +203,26 @@ export const buildDepreciationSchedule = (input: DepreciationInput): Depreciatio
       activation.getUTCMonth() + month,
       1,
     ));
-    const year = cursor.getUTCFullYear();
+    const year = fiscalYearOf(cursor);
     monthsByYear.set(year, (monthsByYear.get(year) ?? 0) + 1);
+  }
+
+  if (method === 'degressive') {
+    // Book value × rate, pro rata temporis in the first year; switch to linear on the rest once that is higher (§ 7 Abs. 3 EStG).
+    const rate = degressiveRate(input.activationDate, usefulLife);
+    const periods: DepreciationSchedulePeriod[] = [];
+    let remaining = baseCents;
+    let remainingMonths = totalMonths;
+    for (const [year, months] of monthsByYear) {
+      if (remaining <= 0) break;
+      const degressive = Math.round(remaining * rate * months / 12);
+      const linear = Math.round(remaining * months / remainingMonths);
+      const amount = remainingMonths <= months ? remaining : Math.min(remaining, Math.max(degressive, linear));
+      periods.push({ year, amount: fromCents(amount), months });
+      remaining -= amount;
+      remainingMonths -= months;
+    }
+    return periods;
   }
 
   const periods: DepreciationSchedulePeriod[] = [];
@@ -205,6 +256,19 @@ export const computeAssetDisposal = (
         .filter((period) => period.year <= disposal.getUTCFullYear())
         .reduce((sum, period) => sum + period.amount, 0),
     );
+  } else if (method === 'degressive' || (resolveUsefulLife(input) === 1 && DIGITAL_ASSET_CLASSES.has(input.assetClass))) {
+    // Every earlier Wirtschaftsjahr in full, the year of the disposal up to its month (pro rata temporis).
+    const fiscalYearStart = input.fiscalYearStart ?? '01-01';
+    const disposalYear = fiscalYearForDate(input.disposalDate, fiscalYearStart);
+    const schedule = buildDepreciationSchedule(input);
+    const before = schedule.filter((period) => period.year < disposalYear).reduce((sum, period) => sum + toCents(period.amount), 0);
+    const current = schedule.find((period) => period.year === disposalYear);
+    const [startMonth] = fiscalYearStart.split('-').map(Number);
+    const periodStart = disposalYear === fiscalYearForDate(input.activationDate, fiscalYearStart)
+      ? activation
+      : new Date(Date.UTC(disposalYear, startMonth! - 1, 1));
+    const elapsed = (disposal.getUTCFullYear() - periodStart.getUTCFullYear()) * 12 + disposal.getUTCMonth() - periodStart.getUTCMonth() + 1;
+    depreciationCents = before + (current ? Math.round(toCents(current.amount) * Math.min(current.months, elapsed) / current.months) : 0);
   } else {
     const totalMonths = resolveUsefulLife(input) * 12;
     const elapsedMonths = Math.min(

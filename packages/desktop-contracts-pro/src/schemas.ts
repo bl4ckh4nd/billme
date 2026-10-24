@@ -65,6 +65,7 @@ export const openRouterVlmConfigSchema = z.object({ configured: z.boolean(), mod
 export const taxAuditExportArtifactFileSchema = z.object({
   name: z.string().min(1),
   content: z.string(),
+  encoding: z.literal('base64').optional(),
   sha256: z.string().length(64),
   sizeBytes: z.number().int().nonnegative(),
   rowCount: z.number().int().nonnegative().optional(),
@@ -273,6 +274,7 @@ export const ledgerAccountSchema = z.object({
   name: z.string(),
   keywords: z.array(z.string()).optional(),
   source: z.string(),
+  active: z.boolean().optional(),
   createdAt: z.string(),
   updatedAt: z.string(),
 });
@@ -564,6 +566,8 @@ export const proBankLedgerReconciliationRowSchema = z.object({
 
 export const ledgerBalanceRowSchema = z.object({
   accountNumber: z.string(),
+  /** DATEV name, or the tenant's name of an own account (SuSa). */
+  accountName: z.string().optional(),
   openingBalance: z.number(),
   debitTurnover: z.number(),
   creditTurnover: z.number(),
@@ -578,7 +582,7 @@ export const assetStatusSchema = z.enum([
   'stillgelegt',
 ]);
 
-export const depreciationMethodSchema = z.enum(['linear', 'gwg', 'pool']);
+export const depreciationMethodSchema = z.enum(['linear', 'degressive', 'gwg', 'pool']);
 
 export const assetSchema = z.object({
   id: z.string(),

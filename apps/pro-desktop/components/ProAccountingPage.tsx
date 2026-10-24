@@ -533,7 +533,8 @@ export const ProAccountingPage: React.FC<{ view?: unknown; onViewChange?: (view:
               };
             }
           } else if (action === 'reverse') {
-            const entries = await pro.listJournalEntries({ limit: 500, offset: 0 });
+            // Asked server-side by draft: a list of the latest 500 entries missed older postings silently.
+            const entries = await pro.listJournalEntries({ sourceDraftId: resolvedDraft.id, limit: 50, offset: 0 });
             const entry = entries.find((row) => row.sourceDraftId === resolvedDraft.id && row.status === 'posted');
             if (entry) {
               await pro.reverseJournalEntry({
@@ -707,6 +708,9 @@ export const ProAccountingPage: React.FC<{ view?: unknown; onViewChange?: (view:
       },
       exportDatevBuchungsstapel(args: DatevExportArgs) {
         return runMutation(() => ipc.pro.exportDatevBuchungsstapel(args));
+      },
+      exportAuditPackage(args: { from: string; to: string; includeDocuments: boolean }) {
+        return runMutation(() => ipc.tax.auditExportPackage(args));
       },
       listOpenItems() {
         return ipc.pro.listOpenItems();

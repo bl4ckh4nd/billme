@@ -137,6 +137,8 @@ export interface ProAccountingDataAdapter {
     encoding: 'cp1252' | 'utf8-bom';
   }) => Promise<DatevExportResult>;
   listDatevExports?: (limit?: number) => Promise<DatevExportResult[]>;
+  /** Prüferpaket (GoBD Z3): journal, Kontenplan, master data, receipts, OPOS, assets and mappings of the range. */
+  exportAuditPackage?: (args: { from: string; to: string; includeDocuments: boolean }) => Promise<{ bundleDir: string; fileCount: number }>;
   getDatevExportContent?: (exportId: string) => Promise<Blob>;
   listOpenItems?: () => Promise<OpenItemEntity[]>;
   listBankTransactions?: () => Promise<OposBankTransaction[]>;

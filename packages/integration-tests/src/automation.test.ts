@@ -31,7 +31,7 @@ import { addDays, asSmallBusiness, draftInvoice, issueInvoice, newClient, today 
  * - dunning: invoices dunned that are not overdue, paid, still a draft, not
  *   receivables or already settled by a Stornorechnung/full credit note; the wrong level; a fee charged twice or for a mail that was
  *   never sent, or added to the issued invoice's amount (it is the customer's own debt, not taxable
- *   revenue); in Pro a fee missing from the journal and OPOS, booked with VAT or twice; a reminder whose %A demands what was already paid or credited; the
+ *   revenue); in Pro a fee missing from the journal and OPOS, booked with VAT or twice, or silently not booked because its month is locked; a reminder whose %A demands what was already paid or credited; the
  *   40 € Pauschale charged to a consumer or on top of fees it replaces; one level mailed twice; the same invoice escalated twice in
  *   one day; a rejected mail recorded as sent; a run that silently does
  *   nothing when automation, levels or the mail provider are missing
@@ -119,7 +119,8 @@ const parseCsv = (text: string): string[][] => text.replace(/^﻿/, '').split('\
 
 /**
  * The Mahngebühr is recorded in the dunning history for both products and never changes the issued
- * invoice. ponytail: Pro does not book it in the journal yet; that needs its own Mahngebühr entry and open item.
+ * invoice. Pro books it as the customer's receivable with its own open item; a reminder dated in a locked
+ * month is booked on the first day of the next open month (the fee carries no VAT, so no UStVA changes).
  */
 const chargedFee = (_product: Product, fee: number) => fee;
 
@@ -698,6 +699,27 @@ for (const product of PRODUCTS) describe(`automation (${product})`, () => {
       const paid = await h.raw('POST', '/accounting/open-items/payments', { reason: 'Gebühr bezahlt', payment: { sourceType: 'manual', sourceId: `pay-${randomUUID()}`, partyType: 'debtor', paymentDate: today(), amount: 5, bankAccountNumber: '1200', allocations: [{ openItemId: fee.id, amount: 5 }], allocationEventId: `event-${randomUUID()}` } });
       assert.equal(paid.status, 200, paid.text);
       assert.equal((await items()).find((item) => item.id === fee.id)!.status, 'paid');
+    });
+
+    if (product === 'pro') test('a dunning fee dated in a locked month is booked on the first day of the next open month, with the reminder date in the text', async () => {
+      const invoice = await overdueInvoice(15, 'Gebuehr gesperrt');
+      const month = today().slice(0, 7);
+      const next = localIsoDate(new Date(Number(month.slice(0, 4)), Number(month.slice(5, 7)), 1, 12));
+      const setStatus = (status: string, reason: string) => h.raw('POST', `/accounting/periods/${month}/status`, { status, reason });
+      assert.equal((await setStatus('soft_locked', 'UStVA abgegeben')).status, 200);
+      try {
+        await withSettings(dunningSetup([level(1, 7, 4)]), async () => { await h.api.dunning.manualRun(); });
+        assert.equal((await statusOf(invoice.id)).totalFeesApplied, 4, 'the reminder goes out and keeps its fee');
+        const entries = ((await h.raw('GET', '/accounting/journal?limit=5000')).body as Array<{ sourceType: string; reference?: string; postingDate: string; documentDate?: string; bookingText: string; lines: Array<{ accountNumber: string; debitAmount: number; creditAmount: number }> }>)
+          .filter((entry) => entry.sourceType === 'dunning_fee' && entry.reference === invoice.number);
+        assert.equal(entries.length, 1, 'booked, not left to a manual posting');
+        assert.equal(entries[0]!.postingDate, next, 'the first day of the next open month');
+        assert.equal(entries[0]!.documentDate, today(), 'the reminder date stays the document date');
+        assert.match(entries[0]!.bookingText, new RegExp(`Mahnung vom ${today().slice(8, 10)}\\.${today().slice(5, 7)}\\.${today().slice(0, 4)}`));
+        assert.deepEqual(entries[0]!.lines.map((line) => [line.accountNumber, line.debitAmount, line.creditAmount]), [['1400', 4, 0], ['2700', 0, 4]]);
+      } finally {
+        assert.equal((await setStatus('open', 'Test zurückgesetzt')).status, 200);
+      }
     });
 
     if (product === 'pro') test('Verzugszinsen claimed in a letter reach the journal', { todo: 'BUG: the interest is computed for the letter only (dunningDocument.lateInterest) and never stored in the dunning history, so nothing can be booked (Zinserträge SKR03 2650 / SKR04 7100)' }, async () => {

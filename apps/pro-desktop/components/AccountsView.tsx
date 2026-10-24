@@ -4,6 +4,7 @@ import { Button, Card, CardHeader, Select, formatEmptyValue } from '@billme/ui';
 import { useSettingsQuery } from '@billme/desktop-renderer/hooks/useSettings';
 import { AccountsView as SharedAccountsView } from '@billme/desktop-renderer/components/AccountsView';
 import { BankAccountModal } from './BankAccountModal';
+import { LedgerPlanCard } from './LedgerPlanCard';
 import { useAccountsQuery, useDeleteAccountMutation, useUpsertAccountMutation } from '../hooks/useAccounts';
 import { useImportSkrMutation, useProActiveChart, useProLedgerAccountsQuery, useProLedgerStatsQuery } from '../hooks/useProLedger';
 import type { Account } from '../types';
@@ -88,6 +89,8 @@ export function AccountsView(): ReactElement {
         ),
       }}
       footer={(
+        <>
+        <LedgerPlanCard chart={activeChart} accounts={ledgerAccounts} />
         <section aria-labelledby="skr-import-heading">
           <Card>
             <CardHeader
@@ -108,6 +111,7 @@ export function AccountsView(): ReactElement {
             ) : null}
           </Card>
         </section>
+        </>
       )}
     />
   );

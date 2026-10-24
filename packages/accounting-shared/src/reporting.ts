@@ -189,6 +189,10 @@ export interface ReportSnapshot {
   ledgerEntryCount: number;
   ledgerAccountCount: number;
   cashEntryCount: number;
+  /** The year whose report catalogue (§ 266 / § 275 HGB, BWA) was used. */
+  catalogYear?: number;
+  /** True when the fiscal year has no own catalogue yet and the latest one is used. */
+  catalogProvisional?: boolean;
 }
 
 export interface ReportRequest {

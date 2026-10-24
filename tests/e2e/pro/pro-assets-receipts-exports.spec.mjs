@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -16,6 +17,10 @@ import { appUrl, importPendingProTransaction, invokeDesktopIpc, launchDesktopApp
  *   invoice missing from Belege or the Belege link not opening it
  * - bank reconciliation: "Im Editor öffnen" landing anywhere but the draft of the line
  * - report export: the SuSa CSV not written or not matching the screen
+ * - Kontenplan: an own account not created or not listed, a deactivation that does
+ *   not show, an account that cannot be reactivated
+ * - Prüferpaket (Z3): the button writing nothing, a package without manifest,
+ *   Kontenplan or journal, a manifest hash that does not match the written file
  */
 
 let desktop;
@@ -166,6 +171,49 @@ test('the SuSa is exported as CSV with the rows the screen shows', async () => {
   await expect.poll(() => fs.existsSync(target) && fs.statSync(target).size > 0, { timeout: 15_000 }).toBe(true);
   const csv = fs.readFileSync(target, 'utf8');
   expect(csv).toMatch(/1200/);
-  expect(csv).toMatch(/8400/);
+  // The seed issues as Kleinunternehmer, so its revenue sits on 8195 (Erlöse § 19 UStG) since the per-tax-case revenue accounts.
+  expect(csv).toMatch(/^8195;/m);
   fs.rmSync(target, { force: true });
+});
+
+test('an own account is created in the Kontenplan, deactivated and activated again', async () => {
+  const { page, baseUrl } = desktop;
+  const shot = shooter(page);
+  await page.goto(appUrl(baseUrl, '/accounts'));
+  const plan = page.locator('section').filter({ has: page.getByRole('heading', { name: /Kontenplan \(SKR0[34]\)/ }) });
+  await expect(plan).toBeVisible();
+  await plan.getByLabel('Kontonummer').fill('4997');
+  await expect(plan.getByRole('button', { name: 'Konto anlegen' }), 'no own account without a name').toBeDisabled();
+  await plan.getByLabel('Bezeichnung').fill('Projektkosten E2E');
+  await plan.getByRole('button', { name: 'Konto anlegen' }).click();
+  await expect(plan.getByRole('status')).toHaveText('Konto 4997 angelegt');
+  const row = plan.getByRole('row').filter({ hasText: '4997' });
+  await expect(row).toContainText('Projektkosten E2E');
+  await expect(row).toContainText('eigenes Konto');
+  await expect(row).toContainText('aktiv');
+  await shot('kontenplan-angelegt');
+  await row.getByRole('button', { name: 'Deaktivieren' }).click();
+  await expect(row).toContainText('deaktiviert');
+  await row.getByRole('button', { name: 'Aktivieren' }).click();
+  await expect(plan.getByRole('status')).toHaveText('Konto 4997 aktiviert');
+  await expect(row.getByRole('button', { name: 'Deaktivieren' })).toBeVisible();
+  await shot('kontenplan-reaktiviert');
+});
+
+test('the Prüferpaket (Z3) is written from the reports screen with a manifest that matches its files', async () => {
+  const { page, baseUrl } = desktop;
+  await page.goto(appUrl(baseUrl, '/accounting?view=reports'));
+  await page.getByRole('button', { name: 'Prüferpaket (Z3) exportieren' }).click();
+  const notice = page.getByText(/^Prüferpaket gespeichert: \d+ Dateien in /);
+  await expect(notice).toBeVisible({ timeout: 30_000 });
+  const bundleDir = (await notice.textContent()).replace(/^Prüferpaket gespeichert: \d+ Dateien in /, '').trim();
+  const manifest = JSON.parse(fs.readFileSync(path.join(bundleDir, 'manifest.json'), 'utf8'));
+  const names = manifest.files.map((entry) => entry.name);
+  for (const name of ['journal-entries.jsonl', 'journal-lines.jsonl', 'chart-of-accounts.jsonl', 'customers.jsonl', 'vendors.jsonl', 'open-items.jsonl', 'assets.jsonl']) expect(names).toContain(name);
+  expect(names).not.toContain('account-mappings-hgb.jsonl');
+  for (const entry of manifest.files) {
+    expect(createHash('sha256').update(fs.readFileSync(path.join(bundleDir, entry.name))).digest('hex'), entry.name).toBe(entry.sha256);
+  }
+  fs.copyFileSync(path.join(bundleDir, 'manifest.json'), test.info().outputPath('prueferpaket-manifest.json'));
+  await page.screenshot({ path: test.info().outputPath('prueferpaket.png'), fullPage: true });
 });

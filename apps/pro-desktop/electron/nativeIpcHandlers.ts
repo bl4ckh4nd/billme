@@ -27,6 +27,7 @@ type TaxAuditExportArtifact = {
   files: Array<{
     name: string;
     content: string;
+    encoding?: 'base64';
     sizeBytes: number;
     sha256: string;
     rowCount?: number;
@@ -49,7 +50,7 @@ const saveTaxAuditExportPackage = (deps: NativeHandlerDependencies): NativeIpcHa
       throw new Error('Ungültiger Dateiname im Steuerprüfungsexport.');
     }
     seenNames.add(entry.name);
-    const bytes = Buffer.from(entry.content, 'utf8');
+    const bytes = Buffer.from(entry.content, entry.encoding === 'base64' ? 'base64' : 'utf8');
     const sha256 = createHash('sha256').update(bytes).digest('hex');
     if (bytes.byteLength !== entry.sizeBytes || sha256 !== entry.sha256) {
       throw new Error(`Integritätsprüfung für ${entry.name} fehlgeschlagen.`);
@@ -60,15 +61,15 @@ const saveTaxAuditExportPackage = (deps: NativeHandlerDependencies): NativeIpcHa
       sha256,
       sizeBytes: bytes.byteLength,
       ...(entry.rowCount === undefined ? {} : { rowCount: entry.rowCount }),
-      content: entry.content,
+      bytes,
     };
   });
 
   try {
     mkdirSync(exportRoot, { recursive: true });
     mkdirSync(stagingDir, { recursive: false });
-    for (const entry of files) writeFileSync(join(stagingDir, entry.name), entry.content, 'utf8');
-    const resultFiles = files.map(({ content: _content, ...entry }) => entry);
+    for (const entry of files) writeFileSync(join(stagingDir, entry.name), entry.bytes);
+    const resultFiles = files.map(({ bytes: _bytes, ...entry }) => entry);
     writeFileSync(
       join(stagingDir, 'manifest.json'),
       JSON.stringify({

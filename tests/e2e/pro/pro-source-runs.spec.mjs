@@ -432,9 +432,32 @@ test('posts a linked correction against a booked incoming invoice', async () => 
   expect((await invokeDesktopIpc(page, 'pro:listJournalEntries', { limit: 500, offset: 0 })).length).toBeGreaterThan(entriesBefore);
 });
 
-test('posts close, provision, inventory and FX command workflows', async () => {
+test('posts provision, inventory and FX before the close; the close soft-locks the month', async () => {
   const { page } = desktop;
   const accounts = await pickPostingAccounts(page);
+  // Year-end order: provisions, inventory and FX valuation first, then the close. The close soft-locks April, so a
+  // later posting into April needs an override with a reason (P1); the test books in the order a bookkeeper would.
+  const generated = [
+    ['provision', { sourceId: unique('provision'), sourceRevision: 'r1', effectiveDate: '2026-04-15', period: '2026-04', fiscalYear: 2026, currency: 'EUR', previousAmount: 10, targetAmount: 25, expenseAccount: accounts.expense, provisionAccount: accounts.provision }],
+    ['inventory_closing', { sourceId: unique('inventory'), sourceRevision: 'r1', effectiveDate: '2026-04-15', period: '2026-04', fiscalYear: 2026, currency: 'EUR', items: [{ id: 'stock-1', quantity: 10, unitCost: 10, unitMarketValue: 8, inventoryAccount: accounts.inventory, expenseAccount: accounts.expense }] }],
+    ['fx_valuation', { sourceId: unique('fx'), sourceRevision: 'r1', effectiveDate: '2026-04-15', period: '2026-04', fiscalYear: 2026, foreignCurrency: 'USD', functionalCurrency: 'EUR', foreignAmount: 100, closingRate: 1, carryingAmount: 90, position: 'asset', positionAccount: accounts.bank, gainAccount: accounts.gain, lossAccount: accounts.loss }],
+  ];
+  const results = {};
+  for (const [kind, domainFacts] of generated) {
+    results[kind] = await invokeDesktopIpc(page, 'pro:postAccountingCommand', {
+      kind,
+      source: sourceFact({ sourceType: kind, sourceId: `${domainFacts.sourceId}-input`, lines: journalLines(accounts) }),
+      domainFacts,
+      chart: accounts.chart,
+      reason: `E2E ${kind}`,
+    });
+    expect(results[kind].status, kind).toBe('posted');
+  }
+  // Raising the provision from 10 € to 25 books the difference: expense on the debit side, provision on the credit side.
+  const provisionEntry = (await invokeDesktopIpc(page, 'pro:listJournalEntries', { limit: 500, offset: 0 })).find((entry) => entry.id === results.provision.sourceRun.journalEntryId);
+  expect(provisionEntry).toBeTruthy();
+  expect(provisionEntry.lines.map((line) => [line.accountNumber, line.debitAmount, line.creditAmount])).toEqual([[accounts.expense, 15, 0], [accounts.provision, 0, 15]]);
+
   const balances = await seedClosingBalances(page, accounts, '2026-04-30');
   const closingCommand = {
     kind: 'fiscal_close',
@@ -456,26 +479,16 @@ test('posts close, provision, inventory and FX command workflows', async () => {
   const close = await invokeDesktopIpc(page, 'pro:postAccountingCommand', closingCommand);
   expect(close.status).toBe('posted');
 
-  const generated = [
-    ['provision', { sourceId: unique('provision'), sourceRevision: 'r1', effectiveDate: '2026-04-15', period: '2026-04', fiscalYear: 2026, currency: 'EUR', previousAmount: 10, targetAmount: 25, expenseAccount: accounts.expense, provisionAccount: accounts.provision }],
-    ['inventory_closing', { sourceId: unique('inventory'), sourceRevision: 'r1', effectiveDate: '2026-04-15', period: '2026-04', fiscalYear: 2026, currency: 'EUR', items: [{ id: 'stock-1', quantity: 10, unitCost: 10, unitMarketValue: 8, inventoryAccount: accounts.inventory, expenseAccount: accounts.expense }] }],
-    ['fx_valuation', { sourceId: unique('fx'), sourceRevision: 'r1', effectiveDate: '2026-04-15', period: '2026-04', fiscalYear: 2026, foreignCurrency: 'USD', functionalCurrency: 'EUR', foreignAmount: 100, closingRate: 1, carryingAmount: 90, position: 'asset', positionAccount: accounts.bank, gainAccount: accounts.gain, lossAccount: accounts.loss }],
-  ];
-  const results = {};
-  for (const [kind, domainFacts] of generated) {
-    results[kind] = await invokeDesktopIpc(page, 'pro:postAccountingCommand', {
-      kind,
-      source: sourceFact({ sourceType: kind, sourceId: `${domainFacts.sourceId}-input`, lines: journalLines(accounts) }),
-      domainFacts,
-      chart: accounts.chart,
-      reason: `E2E ${kind}`,
-    });
-    expect(results[kind].status, kind).toBe('posted');
-  }
-  // Raising the provision from 10 € to 25 books the difference: expense on the debit side, provision on the credit side.
-  const provisionEntry = (await invokeDesktopIpc(page, 'pro:listJournalEntries', { limit: 500, offset: 0 })).find((entry) => entry.id === results.provision.sourceRun.journalEntryId);
-  expect(provisionEntry).toBeTruthy();
-  expect(provisionEntry.lines.map((line) => [line.accountNumber, line.debitAmount, line.creditAmount])).toEqual([[accounts.expense, 15, 0], [accounts.provision, 0, 15]]);
+  // After the close April is soft-locked: a late provision without an override is refused and books nothing.
+  const afterClose = await accountingStateIds(page);
+  await expect(invokeDesktopIpc(page, 'pro:postAccountingCommand', {
+    kind: 'provision',
+    source: sourceFact({ sourceType: 'provision', sourceId: unique('late-provision-input'), lines: journalLines(accounts) }),
+    domainFacts: { sourceId: unique('late-provision'), sourceRevision: 'r1', effectiveDate: '2026-04-20', period: '2026-04', fiscalYear: 2026, currency: 'EUR', previousAmount: 25, targetAmount: 30, expenseAccount: accounts.expense, provisionAccount: accounts.provision },
+    chart: accounts.chart,
+    reason: 'E2E late provision',
+  })).rejects.toThrow(/SOFT_LOCK_OVERRIDE_REQUIRED/);
+  expect(await accountingStateIds(page)).toEqual(afterClose);
 
   const runs = await invokeDesktopIpc(page, 'pro:listAccountingSourceRuns');
   expect(runs.map((run) => run.sourceType)).toEqual(expect.arrayContaining(['fiscal_close', 'provision', 'inventory_closing', 'fx_valuation']));

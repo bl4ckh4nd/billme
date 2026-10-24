@@ -22,6 +22,7 @@ import { and, asc, count, desc, eq, ilike, isNull, or, sql } from 'drizzle-orm';
 import { accountSuggestionRuleMatches } from '@billme/finance-intelligence';
 import { runInTransaction, type PostgresQueryable, type PostgresTransactionClient } from './connection.js';
 import { appendWithClient } from './audit.js';
+import { usableAccountNumbers } from './tenantLedgerAccounts.js';
 import { createDrizzle, schema } from './drizzle.js';
 
 const toNumber = (value: string | number): number => (typeof value === 'number' ? value : Number(value));
@@ -434,6 +435,7 @@ export const deleteServerBankAccount = async (
   db: PostgresQueryable,
   tenantId: string,
   id: string,
+  actor: { type: 'user' | 'service'; id?: string; displayName: string } = { type: 'service', displayName: 'server-banking' },
 ): Promise<void> => {
   const refused = await runInTransaction(db, async (tx) => {
     const account = await tx.query<{ id: string; product: 'lite' | 'pro'; deployment_mode: TenantScope['deploymentMode'] }>('SELECT a.id, t.product, t.deployment_mode FROM accounts a JOIN tenants t ON t.id=a.tenant_id WHERE a.tenant_id=$1 AND a.id=$2 FOR UPDATE OF a', [tenantId, id]);
@@ -444,7 +446,7 @@ export const deleteServerBankAccount = async (
     await appendWithClient(tx, { tenantId, product: account.rows[0]!.product, deploymentMode: account.rows[0]!.deployment_mode }, {
       occurredAt: nowIso(), action: used.rows.length ? 'account.delete.refused' : 'account.delete',
       reason: used.rows.length ? 'Konto enthält Buchungen oder Importhistorie.' : 'Bankkonto gelöscht.',
-      actor: { type: 'service', displayName: 'server-banking' },
+      actor,
       subject: { entityType: 'account', entityId: id, tenantId },
       change: { before: { id, tenantId } },
     });
@@ -904,7 +906,16 @@ export const createPostgresProAccountingCatalogRepository = (
     const rows = await drizzleDb(db).select().from(schema.ledgerAccounts)
       .where(conditions.length ? and(...conditions) : undefined)
       .orderBy(asc(schema.ledgerAccounts.chart), asc(schema.ledgerAccounts.accountNumber)).limit(limit).offset(offset);
-    const filtered = rows;
+    // The tenant's own accounts and deactivations (migration 0048) overlay the global catalogue.
+    const tenantRows = (await executeSql(db, sql`SELECT chart,account_number,name,active,created_at,updated_at FROM tenant_ledger_accounts WHERE tenant_id=${tenantId}${args.chart ? sql` AND chart=${args.chart}` : sql``} ORDER BY chart,account_number`)).rows as Array<{ chart: string; account_number: string; name: string; active: boolean; created_at: string; updated_at: string }>;
+    const own = new Map(tenantRows.map((row) => [`${row.chart}:${row.account_number}`, row]));
+    const term = args.search?.trim().toLowerCase();
+    const catalogued = new Set(rows.map((row) => `${row.chart}:${row.accountNumber}`));
+    const ownOnly = offset > 0 ? [] : tenantRows.filter((row) => !catalogued.has(`${row.chart}:${row.account_number}`) && (!term || row.account_number.includes(term) || row.name.toLowerCase().includes(term)));
+    const filtered = [
+      ...rows.map((row) => ({ ...row, active: own.get(`${row.chart}:${row.accountNumber}`)?.active ?? true })),
+      ...ownOnly.map((row) => ({ id: `tenant:${row.chart}:${row.account_number}`, chart: row.chart, accountNumber: row.account_number, name: row.name, source: 'tenant', active: row.active, createdAt: row.created_at, updatedAt: row.updated_at })),
+    ].sort((a, b) => String(a.chart).localeCompare(String(b.chart)) || String(a.accountNumber).localeCompare(String(b.accountNumber)));
     const keywords = await drizzleDb(db).select().from(schema.accountKeywords)
       .where(and(eq(schema.accountKeywords.tenantId, tenantId), eq(schema.accountKeywords.active, true))).orderBy(asc(schema.accountKeywords.keyword));
     const keywordMap = new Map<string, string[]>();
@@ -912,7 +923,7 @@ export const createPostgresProAccountingCatalogRepository = (
     return filtered.map((row) => ({
     id: row.id!,
       chart: row.chart as LedgerAccount['chart'], accountNumber: row.accountNumber!, name: row.name!,
-      keywords: keywordMap.get(`${row.chart}:${row.accountNumber}`), source: row.source!, createdAt: row.createdAt!, updatedAt: row.updatedAt!,
+      keywords: keywordMap.get(`${row.chart}:${row.accountNumber}`), source: row.source!, active: row.active, createdAt: row.createdAt!, updatedAt: row.updatedAt!,
     }));
   },
 
@@ -1022,9 +1033,8 @@ export const createPostgresProAccountingCatalogRepository = (
 
   async upsertAccountSuggestionRule(scope, input) {
     return inTaxMappingTransaction(db, async (tx) => {
-      const account = await executeSql(tx, sql`SELECT 1 FROM ledger_accounts WHERE chart=${input.chart} AND account_number=${input.targetAccountNumber.trim()} LIMIT 1`);
-      if (!account.rows.length) throw new Error(`UNKNOWN_ACCOUNT:${input.targetAccountNumber.trim()}`);
       const tenantId = getTenantId(scope);
+      if (!(await usableAccountNumbers(tx, tenantId, input.chart, [input.targetAccountNumber.trim()])).has(input.targetAccountNumber.trim())) throw new Error(`UNKNOWN_ACCOUNT:${input.targetAccountNumber.trim()}`);
       const now = nowIso();
       const existing = input.id ? await executeSql(tx, sql`SELECT id,tenant_id,created_at FROM account_suggestion_rules WHERE id=${input.id} LIMIT 1`) : { rows: [] };
       const existingRow = existing.rows[0] as { id: string; tenant_id: string; created_at: string } | undefined;

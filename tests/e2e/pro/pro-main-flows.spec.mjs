@@ -105,7 +105,9 @@ test('issues an invoice, books Forderung/Erlös/USt, lists the open item and set
   const susa = page.getByRole('table', { name: 'Summen- und Saldenliste' });
   // Seeded: 1.250 € paid + 3.450,50 € open without VAT; this invoice adds 1.190 € / 1.000 € / 190 €.
   await expect(susa.getByRole('row', { name: /^1400 Forderungen aus Lieferungen und Leistungen 0,00 € 5\.890,50 € 1\.250,00 € 4\.640,50 €/ })).toBeVisible();
-  await expect(susa.getByRole('row', { name: /^8400 Erlöse 19 % USt 0,00 € 0,00 € 5\.700,50 € -5\.700,50 €/ })).toBeVisible();
+  // The seed issues as Kleinunternehmer (Erlöse § 19 UStG on 8195); only this invoice is on 8400.
+  await expect(susa.getByRole('row', { name: /^8400 Erlöse 19 % USt 0,00 € 0,00 € 1\.000,00 € -1\.000,00 €/ })).toBeVisible();
+  await expect(susa.getByRole('row', { name: /^8195 .* 0,00 € 0,00 € 4\.700,50 € -4\.700,50 €/ })).toBeVisible();
   await expect(susa.getByRole('row', { name: /^1776 Umsatzsteuer 19 % 0,00 € 0,00 € 190,00 € -190,00 €/ })).toBeVisible();
   await susa.getByRole('button', { name: '1776', exact: true }).click();
   const drilldown = page.getByRole('complementary').filter({ has: page.getByRole('button', { name: 'Drilldown schließen' }) });
@@ -281,12 +283,6 @@ const bookRent = async (page) => {
   return transaction;
 };
 
-const BILANZ_POSITIONS = {
-  1200: 'IV. Kassenbestand, Bundesbankguthaben, Guthaben bei Kreditinstituten und Schecks · Aktiva',
-  1400: 'II. Forderungen und sonstige Vermögensgegenstände · Aktiva',
-  1776: 'C. Verbindlichkeiten · Passiva',
-};
-
 /** Maps one account for one report catalog in "Report-Konten einrichten" and waits until it leaves the open list. */
 const mapAccount = async (page, account, statement, positionLabel) => {
   const main = page.getByRole('main');
@@ -304,7 +300,8 @@ const prepareYear = async () => {
   await bookRent(page);
   const entries = await journal(page);
   const net = (account) => Math.round(entries.flatMap((entry) => entry.lines).filter((line) => line.accountNumber === account).reduce((sum, line) => sum + line.creditAmount - line.debitAmount, 0) * 100) / 100;
-  const revenue = net('8400');
+  // The seeded invoices are Kleinunternehmer revenue (8195), the UI invoice is 19 % revenue (8400).
+  const revenue = Math.round((net('8400') + net('8195')) * 100) / 100;
   const rent = -net('4210');
   expect([revenue, rent]).toEqual([5700.5, 1190]);
   return { revenue, rent, result: Math.round((revenue - rent) * 100) / 100 };
@@ -328,10 +325,10 @@ test('BWA01 and HGB-GuV show the year from the postings once their accounts are 
   await expect(page.getByRole('alert').filter({ hasText: 'Auswertung blockiert: Konten-Mapping unvollständig' })).toBeVisible();
   await page.screenshot({ path: shot('01-bwa-blocked'), fullPage: true });
 
-  // P&L accounts go to their BWA positions; the balance-sheet accounts have no BWA position and are mapped in the Bilanz catalog.
+  // P&L accounts go to their BWA positions; the balance-sheet accounts fall to their SKR range default and need no mapping.
   await mapAccount(page, '8400', 'bwa01', 'Umsatzerlöse');
+  await mapAccount(page, '8195', 'bwa01', 'Umsatzerlöse');
   await mapAccount(page, '4210', 'bwa01', 'Raumkosten');
-  for (const [account, position] of Object.entries(BILANZ_POSITIONS)) await mapAccount(page, account, 'hgb-bilanz', position);
   await tabs.getByRole('button', { name: 'BWA01', exact: true }).click();
   const bwa = page.getByRole('table', { name: 'BWA01' });
   await expect(bwa).toBeVisible();
@@ -339,7 +336,7 @@ test('BWA01 and HGB-GuV show the year from the postings once their accounts are 
   await expect(metric(page, 'Ergebnis')).toContainText('4.510,50 €');
   await expect(metric(page, 'Umsätze')).toContainText('5.700,50 €');
   await expect(metric(page, 'Aufwendungen')).toContainText('1.190,00 €');
-  await expect(bwa.getByRole('row', { name: /^Umsatzerlöse Konten: 8400 5\.700,50 €/ })).toBeVisible();
+  await expect(bwa.getByRole('row', { name: /^Umsatzerlöse Konten: .*8400.* 5\.700,50 €/ })).toBeVisible();
   await expect(bwa.getByRole('row', { name: /^Raumkosten Konten: 4210 .*1\.190,00 €/ })).toBeVisible();
   expect([revenue, rent, result]).toEqual([5700.5, 1190, 4510.5]);
   await page.screenshot({ path: shot('02-bwa-mapped'), fullPage: true });
@@ -351,12 +348,10 @@ test('BWA01 and HGB-GuV show the year from the postings once their accounts are 
   await expect(drilldown).toContainText('8400');
   await page.screenshot({ path: shot('03-bwa-drilldown'), fullPage: true });
 
-  // HGB-GuV: the same two accounts, the same result.
+  // HGB-GuV: the same accounts land on their § 275 positions by SKR range without a manual mapping, same result.
   await tabs.getByRole('button', { name: 'HGB-GuV', exact: true }).click();
-  await mapAccount(page, '8400', 'hgb-guv', '1. Umsatzerlöse');
-  await mapAccount(page, '4210', 'hgb-guv', '8. Sonstige betriebliche Aufwendungen');
   const hgb = page.getByRole('table', { name: 'Gewinn- und Verlustrechnung nach HGB' });
-  await expect(hgb.getByRole('row', { name: /^1\. Umsatzerlöse Konten: 8400 5\.700,50 €/ })).toBeVisible();
+  await expect(hgb.getByRole('row', { name: /^1\. Umsatzerlöse Konten: .*8400.* 5\.700,50 €/ })).toBeVisible();
   await expect(hgb.getByRole('row', { name: /^8\. Sonstige betriebliche Aufwendungen Konten: 4210 -1\.190,00 €/ })).toBeVisible();
   await expect(metric(page, 'Ergebnis')).toContainText('4.510,50 €');
   await expect(metric(page, 'Aufwendungen')).toContainText('1.190,00 €');
@@ -368,14 +363,14 @@ test('Management-GuV shows the year from the postings once its accounts are mapp
   await prepareYear();
   const tabs = await openReports(page);
 
-  // The balance-sheet accounts have no position in a P&L catalog; they are mapped in the Bilanz catalog (as for the BWA).
-  await tabs.getByRole('button', { name: 'Management-GuV', exact: true }).click();
-  for (const [account, position] of Object.entries(BILANZ_POSITIONS)) await mapAccount(page, account, 'hgb-bilanz', position);
+  // The balance-sheet accounts fall to their SKR range default (as for the BWA); the P&L accounts need a management position.
   await tabs.getByRole('button', { name: 'Management-GuV', exact: true }).click();
   await mapAccount(page, '8400', 'management-guv', 'Betriebliche Erlöse');
+  await mapAccount(page, '8195', 'management-guv', 'Betriebliche Erlöse');
   await mapAccount(page, '4210', 'management-guv', 'Fixkosten');
+  await tabs.getByRole('button', { name: 'Management-GuV', exact: true }).click();
   const guv = page.getByRole('table', { name: 'Management-GuV' });
-  await expect(guv.getByRole('row', { name: /^Betriebliche Erlöse Konten: 8400 5\.700,50 €/ })).toBeVisible();
+  await expect(guv.getByRole('row', { name: /^Betriebliche Erlöse Konten: .*8400.* 5\.700,50 €/ })).toBeVisible();
   await expect(guv.getByRole('row', { name: /^Fixkosten Konten: 4210 -1\.190,00 €/ })).toBeVisible();
   await expect(guv.getByRole('row', { name: /^Managementergebnis .* 4\.510,50 €/ })).toBeVisible();
   await expect(metric(page, 'Ergebnis')).toContainText('4.510,50 €');
@@ -398,9 +393,9 @@ test('Übersicht shows the result of the month from the postings', async () => {
   await page.screenshot({ path: shot('01-overview'), fullPage: true });
   const tabs = await openReports(page);
   await tabs.getByRole('button', { name: 'Management-GuV', exact: true }).click();
-  for (const [account, position] of Object.entries(BILANZ_POSITIONS)) await mapAccount(page, account, 'hgb-bilanz', position);
-  await tabs.getByRole('button', { name: 'Management-GuV', exact: true }).click();
   await mapAccount(page, '8400', 'management-guv', 'Betriebliche Erlöse');
+  // The seeded Kleinunternehmer revenue account blocks the management GuV until it has a position too.
+  await mapAccount(page, '8195', 'management-guv', 'Betriebliche Erlöse');
   const month = today().slice(0, 7);
   const monthEnd = `${month}-${String(new Date(Number(month.slice(0, 4)), Number(month.slice(5, 7)), 0).getDate()).padStart(2, '0')}`;
   expect(await invokeDesktopIpc(page, 'pro:getGuvReport', { from: `${month}-01`, to: monthEnd })).toMatchObject({ blocking: false, netResult: 1000 });
@@ -431,20 +426,20 @@ test('exports the DATEV Buchungsstapel from the UI and leaves the file', async (
 
   const success = panel.getByRole('status').filter({ hasText: 'DATEV-Datei heruntergeladen' });
   await expect(success).toBeVisible();
-  await expect(success).toContainText('2 Buchungen');
+  await expect(success).toContainText('1 Buchung.');
   await expect.poll(() => fs.existsSync(target) && fs.statSync(target).size > 0).toBe(true);
   await page.screenshot({ path: shot('02-datev-exported'), fullPage: true });
 
-  // The file is a DATEV Buchungsstapel (EXTF header, CP1252) with the invoice as two bookings: net 1000,00 and VAT 190,00, both receivable (1400) against 8400 / 1776.
+  // The file is a DATEV Buchungsstapel (EXTF header, CP1252) with the invoice as one gross booking 1190,00 on the
+  // Automatikkonto 8400 (no BU key, DATEV derives the 19 % VAT) and the invoice number as Belegfeld 1.
   const text = fs.readFileSync(target).toString('latin1');
   const [header, columns, ...rows] = text.split(/\r?\n/).filter(Boolean);
   expect(header).toMatch(/^"EXTF";700;21;"Buchungsstapel";/);
   expect(header).toContain(';1001;1;');
   expect(columns).toContain('Umsatz (ohne Soll/Haben-Kz)');
-  expect(rows).toHaveLength(2);
-  expect(rows[0]).toMatch(/^1000,00;"S";"EUR";;;;1400;8400;/);
-  expect(rows[1]).toMatch(/^190,00;"S";"EUR";;;;1400;1776;/);
-  for (const row of rows) expect(row).toContain(`"Rechnung ${invoice.number}"`);
+  expect(rows).toHaveLength(1);
+  expect(rows[0]).toMatch(/^1190,00;"S";"EUR";;;;1400;8400;;/);
+  expect(rows[0]).toContain(`"${invoice.number}"`);
 
   // The export is listed as immutable history.
   await expect(panel.getByLabel('Unveränderlicher DATEV-Exportverlauf').getByRole('listitem')).toHaveCount(1);

@@ -377,6 +377,16 @@ export const ledgerAccounts = pgTable("ledger_accounts", {
   updatedAt: text("updated_at"),
 });
 
+export const tenantLedgerAccounts = pgTable("tenant_ledger_accounts", {
+  tenantId: text("tenant_id"),
+  chart: text("chart"),
+  accountNumber: text("account_number"),
+  name: text("name"),
+  active: boolean("active"),
+  createdAt: text("created_at"),
+  updatedAt: text("updated_at"),
+});
+
 export const proWorkflowEntries = pgTable("pro_workflow_entries", {
   tenantId: text("tenant_id"),
   transactionId: text("transaction_id"),

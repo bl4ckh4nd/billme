@@ -24,6 +24,7 @@ import type {
 import {
   getManagementReportCatalogs,
   getPublicReportCatalogsIncludingUnverified,
+  reportCatalogYear,
 } from './catalogs/publicReportCatalogs.js';
 import type { PublicReportCatalog, PublicReportPosition } from './catalogs/types.js';
 
@@ -177,6 +178,11 @@ function makeContext(request: ReportRequest): ReportingContext {
     ledgerAccountCount: ledgerAccountNumbers.length,
     cashEntryCount: cashEntries.length,
   };
+  if (snapshot.fiscalYear) {
+    snapshot.catalogYear = reportCatalogYear(snapshot.fiscalYear);
+    snapshot.catalogProvisional = snapshot.catalogYear !== snapshot.fiscalYear;
+    if (snapshot.catalogProvisional) health.warnings.push(`Berichtskatalog ${snapshot.catalogYear} vorläufig für ${snapshot.fiscalYear} verwendet`);
+  }
   return {
     request,
     profile: request.profile,

@@ -277,7 +277,10 @@ export interface LedgerAccount {
   accountNumber: string;
   name: string;
   keywords?: string[];
+  /** 'tenant' for an own account of the tenant; the catalogue rows keep their import source. */
   source: string;
+  /** False when the tenant deactivated the account: it stays in old entries but takes no new postings. */
+  active?: boolean;
   createdAt: string;
   updatedAt: string;
 }

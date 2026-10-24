@@ -25,13 +25,7 @@ export const businessReportingProfileSchema = z
         message: 'EÜR requires a calendar-year start (01-01)',
       });
     }
-    if (['sole_proprietor', 'gbr', 'ek'].includes(profile.legalForm) && profile.profitDetermination !== 'eur') {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ['profitDetermination'],
-        message: 'Sole proprietors require EÜR (cash-basis accounting)',
-      });
-    }
+    // A sole proprietor, eK or GbR may file an EÜR or balance (Bilanz, § 238 HGB or voluntarily).
     if (profile.legalForm !== 'gmbh' && profile.legalForm !== 'ug') return;
     if (profile.profitDetermination !== 'double_entry') {
       ctx.addIssue({

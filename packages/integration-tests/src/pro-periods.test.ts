@@ -5,7 +5,7 @@ import { startPro, type ProHarness } from './harness.js';
 import { addDays, today } from './fixtures.js';
 import {
   addBankAccount, approveDraft, assertLedgerConsistent, bankTx, draft, draftAction, entryFor, get, getDraft, importCsv, invoiceEntry, issue,
-  journal, money, openItems, payOpenItem, periods, postDraft, saveDraft, setPeriod, shape, statusOf, type JournalEntry,
+  download, journal, money, openItems, payOpenItem, periods, postDraft, saveDraft, setPeriod, shape, statusOf, type JournalEntry,
 } from './pro-fixtures.js';
 
 /**
@@ -17,7 +17,13 @@ import {
  *   soft-locked again, a change without a written reason, a change that is not
  *   audited, an unknown month or status accepted, a status that is lost across
  *   a restart, a month before a closed one that still takes postings
- *   (Festschreibung is cumulative), a reopened soft lock that still blocks
+ *   (Festschreibung is cumulative), a reopened soft lock that still blocks;
+ *   a DATEV stack of a festgeschriebener month without Festschreibung 1 in the
+ *   header, or a soft-locked month exported as festgeschrieben
+ * - DATEV rows: a net row plus a separate VAT row (DATEV books the tax twice),
+ *   a purchase on a non-automatic account without its BU key, the entry number
+ *   instead of the invoice number in Belegfeld 1; under Ist-VAT an Automatikkonto
+ *   row without BU 40 next to the not-yet-due VAT row
  * - closed period: an invoice, a manual draft, a free entry (Buchungssatz), a
  *   payment, a Zahlungsstorno or a reversal that still posts into it; a refused issue that leaves the invoice half-issued
  *   (number lost, no entry); a correction that is only possible by rewriting the
@@ -99,6 +105,26 @@ test('closed and soft-locked periods stop every posting path, and ledger, open i
     assert.equal(earlier.status, 409, earlier.text);
     assert.equal(await statusOf(h, '2026-01'), 'closed');
     assert.ok((await h.api.audit.exportCsv()).includes('Januar festgeschrieben nach UStVA'), 'the reason of the Festschreibung is audited');
+  });
+
+  await t.test('the DATEV stack of the festgeschriebene January says so in the header, February and March do not; rows are gross with the document number', async () => {
+    const stack = async (month: string, last: string) => {
+      const exported = await download(h, `/api/v1/pro/accounting/datev/export.csv?from=${month}-01&to=${month}-${last}&consultantNumber=1234567&clientNumber=12345&fiscalYearStart=2026-01-01&accountLength=4&encoding=cp1252`);
+      assert.equal(exported.status, 200, exported.bytes.toString());
+      const lines = exported.bytes.toString('latin1').split('\r\n');
+      return { header: lines[0]!.split(';'), rows: lines.slice(2).filter(Boolean).map((line) => line.split(';')), disposition: exported.headers.get('content-disposition') };
+    };
+    const jan = await stack('2026-01', '31');
+    assert.equal(jan.header[20], '1', 'Festschreibung 1 for a closed month');
+    assert.match(jan.disposition ?? '', /EXTF_Buchungsstapel_2026-01-01_2026-01-31\.csv/);
+    assert.equal((await stack('2026-02', '28')).header[20], '0', 'a soft lock is no Festschreibung');
+    assert.equal((await stack('2026-03', '31')).header[20], '0');
+    const sale = jan.rows.filter((fields) => fields[6] === '1400');
+    assert.deepEqual(sale.map((fields) => [fields[0], fields[7], fields[8], fields[10]]), [['238,00', '8400', '', `"${january.number}"`]], 'one gross row on the Automatikkonto 8400, no BU, the invoice number');
+    const purchase = jan.rows.filter((fields) => fields[7] === '1600');
+    assert.equal(purchase.length, 1, `one gross row for the purchase: ${JSON.stringify(purchase)}`);
+    assert.deepEqual([purchase[0]![0], purchase[0]![8], purchase[0]![10]], ['119,00', '"0009"', '"ER-1"'], 'the expense with BU 9 (Vorsteuer 19 %) and the vendor invoice number');
+    assert.ok(!jan.rows.some((fields) => ['1776', '1576'].includes(fields[6]!) || ['1776', '1576'].includes(fields[7]!)), 'no separate VAT row');
   });
 
   await t.test('the period route needs a written reason, a real month and a known status', async () => {
@@ -327,7 +353,7 @@ describe('SKR04 with Ist-VAT', () => {
   test('an issued invoice posts the SKR04 accounts and defers its VAT until it is paid', async () => {
     const invoice = await issue(h, { client: 'Ist GmbH' });
     const entry = (await invoiceEntry(h, invoice.id))!;
-    assert.deepEqual(shape(entry), [['1200', GROSS, 0], ['4400', 0, 200], ['3815', 0, 38]], 'Umsatzsteuer nicht fällig 19 %');
+    assert.deepEqual(shape(entry), [['1200', GROSS, 0], ['4400', 0, 200], ['3816', 0, 38]], 'Umsatzsteuer nicht fällig 19 %');
     assert.equal(entry.lines[1]!.memo, 'UStBasis DE_STD_19');
     const vat = (await get<{ rows: Array<{ taxCaseKey: string; taxAmount: number }> }>(h, '/accounting/vat/summary')).rows;
     assert.equal(vat.reduce((sum, row) => sum + row.taxAmount, 0), 0, 'no output VAT reported before payment (Ist)');
@@ -339,7 +365,7 @@ describe('SKR04 with Ist-VAT', () => {
     assert.deepEqual(shape(entries.find((candidate) => candidate.id === partial.body.journalEntryId)!), [['1800', 100, 0], ['1200', 0, 100]]);
     const recognised = entries.filter((candidate) => candidate.sourceType === 'payment_vat');
     assert.equal(recognised.length, 1);
-    assert.deepEqual(shape(recognised[0]!), [['3815', 15.97, 0], ['3806', 0, 15.97]], 'VAT is recognised pro rata: 38 × 100 / 238');
+    assert.deepEqual(shape(recognised[0]!), [['3816', 15.97, 0], ['3806', 0, 15.97]], 'VAT is recognised pro rata: 38 × 100 / 238');
     assert.equal((await payOpenItem(h, item, 138, { bankAccountNumber: '1800' })).status, 200);
     const all = (await journal(h)).filter((candidate) => candidate.sourceType === 'payment_vat');
     assert.equal(money(all.reduce((sum, entry) => sum + entry.lines.filter((line) => line.accountNumber === '3806').reduce((s, line) => s + line.creditAmount, 0), 0)), 38, 'the full VAT is recognised once the invoice is paid');
@@ -429,11 +455,11 @@ describe('SKR03 with Ist-VAT: not-yet-due VAT per rate, Skonto, Forderungsausfal
   });
   after(async () => { await h.close(); });
   const net = async (account: string) => money((await journal(h)).reduce((sum, entry) => sum + entry.lines.filter((line) => line.accountNumber === account).reduce((s, line) => s + line.debitAmount - line.creditAmount, 0), 0));
-  /** What a step moved on the not-yet-due (1765) and the due (1776) VAT account. */
+  /** What a step moved on the not-yet-due (1766) and the due (1776) VAT account. */
   const vatMoves = async (step: () => Promise<unknown>) => {
-    const before = [await net('1765'), await net('1776')];
+    const before = [await net('1766'), await net('1776')];
     await step();
-    return [money(await net('1765') - before[0]!), money(await net('1776') - before[1]!)];
+    return [money(await net('1766') - before[0]!), money(await net('1776') - before[1]!)];
   };
   const pay = async (invoiceId: string, amount: number, date = today()) => {
     const response = await h.raw('POST', `/invoices/${invoiceId}/payments`, { reason: 'Zahlung', payment: { id: randomUUID(), date, amount, method: 'Überweisung' } });
@@ -455,14 +481,24 @@ describe('SKR03 with Ist-VAT: not-yet-due VAT per rate, Skonto, Forderungsausfal
       { kind: 'item', description: 'Buch', quantity: 1, price: 50, total: 50, taxRate: 7 },
     ] });
     const entry = (await invoiceEntry(h, invoice.id))!;
-    assert.deepEqual(entry.lines.filter((line) => line.memo?.startsWith('USt ')).map((line) => [line.accountNumber, line.creditAmount]), [['1765', 19], ['1760', 3.5]]);
+    assert.deepEqual(entry.lines.filter((line) => line.memo?.startsWith('USt ')).map((line) => [line.accountNumber, line.creditAmount]), [['1766', 19], ['1761', 3.5]]);
     assert.ok(!entry.lines.some((line) => line.accountNumber === '1780'), '1780 is the USt-Vorauszahlungen account');
     await pay(invoice.id, invoice.amount);
     const recognised = (await journal(h)).filter((candidate) => candidate.sourceType === 'payment_vat').at(-1)!;
-    assert.deepEqual(shape(recognised).sort(), [['1760', 3.5, 0], ['1765', 19, 0], ['1771', 0, 3.5], ['1776', 0, 19]]);
+    assert.deepEqual(shape(recognised).sort(), [['1761', 3.5, 0], ['1766', 19, 0], ['1771', 0, 3.5], ['1776', 0, 19]]);
   });
 
-  test('a Skonto after the payment books the not-yet-due VAT, nothing stays on 1765 and 1776 carries the VAT of the money received', async () => {
+  test('in DATEV the not-yet-due VAT stays its own row and the revenue row turns the Automatik off (BU 40), so DATEV adds no VAT of its own', async () => {
+    const invoice = await issue(h, { client: 'Ist DATEV', items: [{ kind: 'item', description: 'Beratung', quantity: 1, price: 100, total: 100, taxRate: 19 }] });
+    const month = today().slice(0, 7);
+    const last = `${month}-${String(new Date(Number(month.slice(0, 4)), Number(month.slice(5, 7)), 0).getDate()).padStart(2, '0')}`;
+    const exported = await download(h, `/api/v1/pro/accounting/datev/export.csv?from=${month}-01&to=${last}&consultantNumber=1234567&clientNumber=12345&fiscalYearStart=${month.slice(0, 4)}-01-01&accountLength=4&encoding=cp1252`);
+    assert.equal(exported.status, 200, exported.bytes.toString());
+    const rows = exported.bytes.toString('latin1').split('\r\n').slice(2).filter(Boolean).map((line) => line.split(';')).filter((fields) => fields[10] === `"${invoice.number}"`);
+    assert.deepEqual(rows.map((fields) => [fields[0], fields[6], fields[7], fields[8]]).sort(), [['100,00', '1400', '8400', '"0040"'], ['19,00', '1400', '1766', '']]);
+  });
+
+  test('a Skonto after the payment books the not-yet-due VAT, nothing stays on 1766 and 1776 carries the VAT of the money received', async () => {
     let invoice!: Awaited<ReturnType<typeof issue>>;
     const moved = await vatMoves(async () => { invoice = await issue(h, { client: 'Ist Skonto danach' }); await pay(invoice.id, 226.1); await skonto(invoice.id, 11.9); });
     assert.deepEqual(moved, [0, -36.1]);
@@ -487,7 +523,7 @@ describe('SKR03 with Ist-VAT: not-yet-due VAT per rate, Skonto, Forderungsausfal
     const invoice = await issue(h, { client: 'Ist Storno bezahlt' });
     await pay(invoice.id, GROSS);
     const cancelled = await vatMoves(async () => { await h.api.documents.chainIssue({ id: randomUUID(), date: today(), dueDate: today(), operation: 'correction', invoiceId: invoice.id, kind: 'cancellation_invoice', reason: 'Storno' } as never); });
-    assert.deepEqual(cancelled, [38, 0], 'the reduction waits on 1765 until the refund (§17 with Ist-Versteuerung)');
+    assert.deepEqual(cancelled, [38, 0], 'the reduction waits on 1766 until the refund (§17 with Ist-Versteuerung)');
     const refunded = await vatMoves(async () => { await pay(invoice.id, -GROSS); });
     assert.deepEqual(refunded, [-38, 38], 'the refund moves the reduction into the due VAT');
     await assertLedgerConsistent(h);
@@ -502,13 +538,13 @@ describe('SKR03 with Ist-VAT: not-yet-due VAT per rate, Skonto, Forderungsausfal
     assert.equal(listed.status, 'paid');
     assert.equal(listed.payments?.find((payment) => payment.method === 'Skonto')?.amount, 4.76);
     const skontoEntry = (await journal(h)).find((entry) => entry.sourceType === 'skonto' && entry.reference === invoice.number)!;
-    assert.deepEqual(shape(skontoEntry), [['8736', 4, 0], ['1765', 0.76, 0], ['1400', 0, 4.76]]);
+    assert.deepEqual(shape(skontoEntry), [['8736', 4, 0], ['1766', 0.76, 0], ['1400', 0, 4.76]]);
     const cash = listed.payments!.find((payment) => payment.method === 'Überweisung')!;
     const back = await vatMoves(async () => {
       const reversed = await h.raw('POST', `/invoices/${invoice.id}/payments/${cash.id}/reverse`, { reason: 'Rücklastschrift', expectedPayment: cash });
       assert.equal(reversed.status, 200, reversed.text);
     });
-    assert.deepEqual(back, [-38, 37.24], 'no money, no Skonto: the whole VAT waits again on 1765');
+    assert.deepEqual(back, [-38, 37.24], 'no money, no Skonto: the whole VAT waits again on 1766');
     const reopened = (await h.api.invoices.list()).find((candidate) => candidate.id === invoice.id)!;
     assert.equal(reopened.status, 'open');
     assert.ok(!reopened.payments?.some((payment) => payment.method === 'Skonto'));

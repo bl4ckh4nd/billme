@@ -145,10 +145,11 @@ test('disposal after posted AfA books the residual loss on 2310, cancels the rem
   });
 });
 
-test('disposal is rejected while posted AfA lags the depreciation due at the disposal date', async () => {
+test('disposal is rejected while the AfA of an earlier year is still unposted', async () => {
   await withDatabase(async (database) => {
     const repository = createPostgresProAccountingRepository(database);
-    await repository.upsertAsset(scope, asset('dispose-no-afa'), 'Disposal test');
+    // The AfA of the disposal year itself is posted by the disposal (pro rata); a missing earlier year is not.
+    await repository.upsertAsset(scope, asset('dispose-no-afa', { activationDate: '2025-01-01', usefulLifeYears: 3 }), 'Disposal test');
     await assert.rejects(
       () => repository.disposeAsset(scope, { assetId: 'dispose-no-afa', disposalDate: '2026-06-30', proceeds: 100, taxRate: 0, proceedsAccountNumber: '1200', reason: 'No AfA disposal' }),
       /ASSET_DISPOSAL_PROJECTION_MISMATCH/,

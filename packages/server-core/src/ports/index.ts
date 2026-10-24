@@ -379,6 +379,8 @@ export interface ListJournalEntriesOptions {
   from?: string;
   to?: string;
   accountNumbers?: string[];
+  /** Only the entries posted from this booking draft (the Storno of a draft looks its entry up server-side). */
+  sourceDraftId?: string;
   limit?: number;
   offset?: number;
 }
@@ -455,6 +457,8 @@ export interface AccountingHealthSnapshot {
   unmappedAccounts?: string[];
   blocking?: boolean;
   lastDatevExportAt?: string;
+  /** AfA years of active assets that ended (Wirtschaftsjahr before the current one) and are still unposted. */
+  missingDepreciation?: Array<{ assetId: string; assetNumber: string; year: number }>;
 }
 
 export interface VatSummary {
@@ -537,6 +541,8 @@ export interface ProAccountingRepository {
   getAccountingPolicy(scope: TenantScope): Promise<{ tenantId: string; activeChart: 'SKR03' | 'SKR04'; vatMethod: 'soll' | 'ist'; periodPolicy: 'calendar_month'; updatedAt: string }>;
   setAccountingPolicy(scope: TenantScope, input: { activeChart: 'SKR03' | 'SKR04'; vatMethod: 'soll' | 'ist'; mutation?: AccountingMutationContext }): Promise<{ tenantId: string; activeChart: 'SKR03' | 'SKR04'; vatMethod: 'soll' | 'ist'; periodPolicy: 'calendar_month'; updatedAt: string }>;
   listAccountingAccountMappings(scope: TenantScope, chart?: 'SKR03' | 'SKR04'): Promise<AccountingAccountMapping[]>;
+  /** Creates an own account of the tenant or (de)activates an own or a catalogue account (Kontenplan). */
+  saveTenantLedgerAccount(scope: TenantScope, input: { chart: 'SKR03' | 'SKR04'; accountNumber: string; name?: string; active: boolean; mutation?: AccountingMutationContext }): Promise<LedgerAccount>;
   upsertAccountingAccountMapping(scope: TenantScope, input: { id?: string; chart: 'SKR03' | 'SKR04'; role: AccountingAccountMapping['role']; accountNumber: string; mutation?: AccountingMutationContext }): Promise<AccountingAccountMapping>;
   listVendors(scope: TenantScope): Promise<VendorEntity[]>;
   upsertVendor(scope: TenantScope, input: Omit<VendorEntity, 'tenantId' | 'createdAt' | 'updatedAt'> & { mutation?: AccountingMutationContext }): Promise<VendorEntity>;
@@ -621,7 +627,7 @@ export interface AccountingSourceRunRepository {
 }
 
 export type AssetStatus = 'entwurf' | 'aktiv' | 'voll_abgeschrieben' | 'verkauft' | 'stillgelegt';
-export type DepreciationMethod = 'linear' | 'gwg' | 'pool';
+export type DepreciationMethod = 'linear' | 'degressive' | 'gwg' | 'pool';
 
 export interface AssetItem {
   id: string;

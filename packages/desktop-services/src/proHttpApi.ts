@@ -103,6 +103,8 @@ const reportSnapshotSchema = z.object({
   ledgerEntryCount: z.number(),
   ledgerAccountCount: z.number(),
   cashEntryCount: z.number(),
+  catalogYear: z.number().optional(),
+  catalogProvisional: z.boolean().optional(),
 });
 const mappingHealthSchema = z.object({
   mappedAccounts: z.number(),
@@ -865,6 +867,9 @@ export const createProWebClient = (config: ProWebClientConfig) => {
     listAccountingMappings(chart?: 'SKR03' | 'SKR04') {
       return requestJson({ parser: parseArray(accountingAccountMappingSchema), query: { chart } }, '/api/v1/pro/accounting/mappings');
     },
+    saveLedgerAccount(input: { chart: string; accountNumber: string; name?: string; active: boolean; reason: string }) {
+      return requestJson({ method: 'PUT', body: { name: input.name, active: input.active, reason: input.reason }, parser: ledgerAccountSchema }, `/api/v1/pro/accounting/ledger/accounts/${encodeURIComponent(input.chart)}/${encodeURIComponent(input.accountNumber)}`);
+    },
     saveAccountingMapping(mapping: unknown, reason: string) {
       return requestJson({ method: 'POST', body: { ...(isRecord(mapping) ? mapping : {}), reason }, parser: accountingAccountMappingSchema }, '/api/v1/pro/accounting/mappings');
     },
@@ -1564,7 +1569,7 @@ export const createProHttpBillmeApi = ({ fallback, onInvoke, downloadBlob, ...cl
           if (!receipt) throw new Error('DATEV-Export wurde nicht in der Serverhistorie gefunden.');
           const parsedReceipt = ipcRoutes[key].result.parse(receipt) as IpcResult<K>;
           await validateDatevExportReceipt(exported, parsedReceipt as DatevExportReceiptMetadata);
-          (downloadBlob ?? downloadBlobInBrowser)(exported.blob, `datev-buchungsstapel-${parsedArgs.from}-${parsedArgs.to}.csv`);
+          (downloadBlob ?? downloadBlobInBrowser)(exported.blob, `EXTF_Buchungsstapel_${parsedArgs.from}_${parsedArgs.to}.csv`);
           return parsedReceipt;
         }
         case 'pro:listDatevExports': {
@@ -1576,6 +1581,10 @@ export const createProHttpBillmeApi = ({ fallback, onInvoke, downloadBlob, ...cl
           const parsedArgs = ipcRoutes[key].args.parse(args) as IpcArgs<'pro:listAccountingAccountMappings'>;
           const result = await client.listAccountingMappings(parsedArgs.chart);
           return ipcRoutes[key].result.parse(result) as IpcResult<K>;
+        }
+        case 'pro:saveLedgerAccount': {
+          const parsedArgs = ipcRoutes[key].args.parse(args) as IpcArgs<'pro:saveLedgerAccount'>;
+          return ipcRoutes[key].result.parse(await client.saveLedgerAccount(parsedArgs)) as IpcResult<K>;
         }
         case 'pro:upsertAccountingAccountMapping': {
           const parsedArgs = ipcRoutes[key].args.parse(args) as IpcArgs<'pro:upsertAccountingAccountMapping'>;

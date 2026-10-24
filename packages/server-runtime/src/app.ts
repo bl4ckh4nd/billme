@@ -1212,7 +1212,7 @@ const registerCatalogRoutes = (app: FastifyInstance, product: 'lite' | 'pro', pr
     response: okSchema,
     async handler({ request, params }) {
       const session = await requireMutationSessionFor(app, product, request.headers.authorization);
-      await deleteServerBankAccount(requireDatabase(app), session.scope.tenantId, params.id);
+      await deleteServerBankAccount(requireDatabase(app), session.scope.tenantId, params.id, toMutationActor(session));
       return { ok: true as const };
     },
   });

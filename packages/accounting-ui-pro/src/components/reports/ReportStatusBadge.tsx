@@ -23,8 +23,16 @@ export default function ReportStatusBadge({ quality }: ReportStatusBadgeProps) {
   );
 }
 
-export function MappingHealthBlock({ quality }: ReportStatusBadgeProps & { notes?: string[] }) {
-  if (!reportIsMappingBlocked(quality)) return null;
+export function MappingHealthBlock({ quality }: { quality?: Pick<ReportQuality, 'mappingStatus' | 'unmappedAccounts' | 'mappingNotes'> }) {
+  // Accounts placed by their SKR range default are shown, so nobody takes the result for a reviewed mapping.
+  const defaults = quality?.mappingNotes?.filter((note) => note.startsWith('Standardzuordnung')) ?? [];
+  if (!reportIsMappingBlocked(quality)) {
+    return defaults.length ? (
+      <div className="rounded-control border border-info-border bg-info-bg px-3 py-2.5 text-control text-info-text" role="status">
+        {defaults.map((note) => <p key={note}>{note}</p>)}
+      </div>
+    ) : null;
+  }
   return (
     <div className="rounded-control border border-error-border bg-error-bg px-3 py-2.5 text-control text-error-text" role="alert">
       <div className="font-semibold">Auswertung blockiert: Konten-Mapping unvollständig</div>

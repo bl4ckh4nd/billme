@@ -164,8 +164,10 @@ describe('pro renderer client against the embedded backend', () => {
     const susa = await api().pro.getSusaReport({ from: '2026-01-01', to: '2026-12-31' });
     assert.equal(susa.totals.balance, 0);
     assert.equal(susa.totals.debit, susa.totals.credit);
-    const unmapped = await api().pro.getReportMappingHealth({ statement: 'hgb-guv', asOfDate: '2026-12-31' });
-    assert.ok(unmapped.unmapped.length > 0 && unmapped.unmapped.every((row) => row.statement === 'hgb-guv'));
+    // HGB GuV accounts fall to their SKR03 range default; the management GuV still needs its own mapping.
+    assert.deepEqual((await api().pro.getReportMappingHealth({ statement: 'hgb-guv', asOfDate: '2026-12-31' })).unmapped, []);
+    const unmapped = await api().pro.getReportMappingHealth({ statement: 'management-guv', asOfDate: '2026-12-31' });
+    assert.ok(unmapped.unmapped.length > 0 && unmapped.unmapped.every((row) => row.statement === 'management-guv'), JSON.stringify(unmapped));
     const positions = await api().pro.listReportMappingPositions({ statement: 'hgb-guv', asOfDate: '2026-12-31' });
     assert.ok(positions.some((position) => position.key === 'revenue'));
     for (const account of ['8400', '4900', '4930']) {

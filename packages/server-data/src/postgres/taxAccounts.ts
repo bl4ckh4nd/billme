@@ -7,7 +7,8 @@ import type { PostgresQueryable } from './connection.js';
  *
  * Every account is a role of `accounting_account_mappings` with a chart default below, so a tenant can map it
  * to another account of its chart; a `tax_case_account_mappings` row for the case and role wins over both.
- * Numbers are those of the shipped SKR catalogue (canonicalLedgerCatalog.ts, migrations 0029, 0045 and 0047).
+ * Numbers and names are those of the DATEV Kontenrahmen SKR 03/SKR 04 2025 (canonicalLedgerCatalog.ts, migrations 0029,
+ * 0045, 0047 and 0048); canonicalLedgerCatalog.test.ts pins every default to its DATEV number and name.
  * Self-assessed purchases (§ 13b, innergemeinschaftlicher Erwerb) book the USt the buyer owes and the same amount as
  * Vorsteuer: `output_tax`/`input_tax` of those cases resolve to the § 13b and Erwerb accounts.
  */
@@ -16,8 +17,8 @@ export type LedgerChart = 'SKR03' | 'SKR04';
 export const ACCOUNT_ROLE_DEFAULTS: Record<LedgerChart, Record<string, string>> = {
   SKR03: {
     accounts_receivable: '1400', accounts_payable: '1600', bank: '1200', revenue: '8400', expense: '4900', asset: '0480',
-    output_vat: '1776', output_vat_deferred: '1765', input_vat: '1576', cash: '1000',
-    output_vat_7: '1771', output_vat_deferred_7: '1760', input_vat_7: '1571',
+    output_vat: '1776', output_vat_deferred: '1766', input_vat: '1576', cash: '1000',
+    output_vat_7: '1771', output_vat_deferred_7: '1761', input_vat_7: '1571',
     revenue_7: '8300', revenue_small_business: '8195', revenue_exempt: '8100', revenue_rc_13b: '8337', revenue_eu_supply: '8125',
     revenue_eu_service: '8336', revenue_export: '8120', revenue_outside_scope: '8338',
     cash_discount_granted: '8736', cash_discount_granted_7: '8731',
@@ -27,8 +28,8 @@ export const ACCOUNT_ROLE_DEFAULTS: Record<LedgerChart, Record<string, string>> 
   },
   SKR04: {
     accounts_receivable: '1200', accounts_payable: '3300', bank: '1800', revenue: '4400', expense: '6300', asset: '0670',
-    output_vat: '3806', output_vat_deferred: '3815', input_vat: '1406', cash: '1600',
-    output_vat_7: '3801', output_vat_deferred_7: '3810', input_vat_7: '1401',
+    output_vat: '3806', output_vat_deferred: '3816', input_vat: '1406', cash: '1600',
+    output_vat_7: '3801', output_vat_deferred_7: '3811', input_vat_7: '1401',
     revenue_7: '4300', revenue_small_business: '4185', revenue_exempt: '4100', revenue_rc_13b: '4337', revenue_eu_supply: '4125',
     revenue_eu_service: '4336', revenue_export: '4120', revenue_outside_scope: '4338',
     cash_discount_granted: '4736', cash_discount_granted_7: '4731',

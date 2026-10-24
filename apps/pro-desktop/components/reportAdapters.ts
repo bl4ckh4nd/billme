@@ -33,7 +33,7 @@ export const mapSusaReport = (
   const names = accountNameMap(accounts, report.chart);
   const rows = report.rows.map((row) => ({
     ...row,
-    accountName: names.get(row.accountNumber) ?? `Konto ${row.accountNumber}`,
+    accountName: row.accountName ?? names.get(row.accountNumber) ?? `Konto ${row.accountNumber}`,
     normalBalance: isCreditNormal(row.accountNumber) ? 'credit' as const : 'debit' as const,
   }));
   const unmappedAccounts = report.unmappedAccounts;

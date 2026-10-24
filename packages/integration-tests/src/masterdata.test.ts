@@ -181,7 +181,6 @@ for (const product of PRODUCTS) describe(`masterdata (${product})`, () => {
         ['plain-http portal URL', { ...before, portal: { baseUrl: 'http://portal.example.com' } }],
         ['unknown e-mail provider', { ...before, email: { ...before.email, provider: 'sendgrid' } }],
         ['GmbH on cash-basis accounting', { ...before, businessReportingProfile: { jurisdiction: 'DE', legalForm: 'gmbh', profitDetermination: 'eur', fiscalYearStart: '01-01', vatMethod: 'soll' } }],
-        ['sole proprietor on double entry', { ...before, businessReportingProfile: { jurisdiction: 'DE', legalForm: 'sole_proprietor', profitDetermination: 'double_entry', fiscalYearStart: '01-01', vatMethod: 'soll' } }],
         ['EÜR with a broken fiscal year', { ...before, businessReportingProfile: { jurisdiction: 'DE', legalForm: 'sole_proprietor', profitDetermination: 'eur', fiscalYearStart: '04-01', vatMethod: 'soll' } }],
         ['impossible fiscal year start', { ...before, businessReportingProfile: { jurisdiction: 'DE', legalForm: 'ek', profitDetermination: 'eur', fiscalYearStart: '02-31', vatMethod: 'soll' } }],
         ['missing sections', { company: before.company }],

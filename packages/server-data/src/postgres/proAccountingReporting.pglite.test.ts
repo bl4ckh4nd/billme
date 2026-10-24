@@ -137,7 +137,8 @@ test('reading a report never writes guessed mappings', () => withRepo(async (dat
 
   const report: any = await repo.getGuvReport(scope, { profile: 'hgb-guv', from: '2026-03-01', to: '2026-03-31' });
   assert.equal(report.mappingHealth.blocking, true);
-  assert.deepEqual([...report.mappingHealth.unmappedAccounts].sort(), ['1200', '9999']);
+  // 1200 (Bank) falls to the SKR03 range default at report time; 9999 has no range and still blocks.
+  assert.deepEqual([...report.mappingHealth.unmappedAccounts].sort(), ['9999']);
   assert.equal(await count(database, `SELECT COUNT(*)::int AS c FROM report_account_mappings WHERE tenant_id = 'tenant-a'`), 0);
 }));
 
@@ -165,8 +166,9 @@ test('mapping health exposes unknown accounts and never matches another chart or
   await insertMapping(database, 'tenant-b', 'tenant-b-map', 'SKR03', '9998', 'hgb-guv', 'revenue', 'Umsatz');
   const unmapped = async (s: typeof scope) => (await repo.getAccountMappingHealth(s, 'SKR03', 'hgb-guv', '2025-12-31')).unmapped.map((row) => row.accountNumber);
 
-  assert.deepEqual(await unmapped(scope), ['1200', '9999']);
-  assert.deepEqual(await unmapped(otherScope), ['1200']);
+  // 1200 is covered by the SKR03 range default; 9999 is mapped only for SKR04 and tenant-b's mapping never leaks.
+  assert.deepEqual(await unmapped(scope), ['9999']);
+  assert.deepEqual(await unmapped(otherScope), []);
 }));
 
 test('overrides apply from their effective date and a retry on the same date updates in place', () => withRepo(async (database, repo) => {
@@ -209,7 +211,8 @@ test('override validation rejects unknown catalog keys, empty fields and a forei
   assert.equal(await count(database, `SELECT COUNT(*)::int AS c FROM report_account_mappings`), 0);
 
   await assert.rejects(() => repo.upsertAccountMappingOverride(scope, { ...base, asOfDate: '2026-02-30' } as never), /REPORT_MAPPING_DATE_INVALID/);
-  await assert.rejects(() => repo.upsertAccountMappingOverride(scope, { ...base, asOfDate: '2027-01-01' } as never), /PUBLIC_REPORT_CATALOG_UNAVAILABLE:2027/);
+  // Years after the latest catalogue use it provisionally; years before the first catalogue stay refused.
+  await assert.rejects(() => repo.upsertAccountMappingOverride(scope, { ...base, asOfDate: '2024-01-01' } as never), /PUBLIC_REPORT_CATALOG_UNAVAILABLE:2024/);
 
   const saved: any = await repo.upsertAccountMappingOverride(scope, base as never);
   assert.equal(saved.reportType, 'bwa01');

@@ -21,6 +21,8 @@ import { schema, tryCreateDrizzle } from './drizzle.js';
 import { runPostgresMigrations } from './migrations.js';
 import { CANONICAL_LEDGER_ACCOUNTS, CANONICAL_TAX_CASES } from './canonicalCatalog.js';
 import { importRawTenantRows, restoreIncomingInvoiceAccountingRows } from './oposImport.js';
+import { LEGACY_EUR_LINES_2025 } from './eurLegacyCatalog2025.js';
+import { remapLegacyEurDeductionColumns } from './eurFacts.js';
 import {
   saveServerAccountKeyword,
   saveServerAccountSuggestionRule,
@@ -838,12 +840,14 @@ export const validateCanonicalEurLines = (rows: ServerEurLineRecord[]): void => 
       && row.taxYear === canonical.year
       && (row.kennziffer ?? '') === (canonical.kennziffer ?? '')
       && (row.providerPath ?? 'main') === (canonical.providerPath ?? 'main')
-      && row.label === canonical.label
       && row.kind === canonical.kind
       && row.exportable === canonical.exportable
       && row.sortOrder === canonicalEurCatalog.findIndex((line) => line.id === canonical.id)
-      && (row.computedFromJson ?? '[]') === JSON.stringify(canonical.computedFromIds ?? [])
-      && (row.computedTermsJson ?? '[]') === JSON.stringify(canonical.computedTerms ?? [])
+      // Up to v0.4.0 some labels and the Kz 159/199 terms differed (corrected by migration 0046).
+      && [canonical, LEGACY_EUR_LINES_2025[row.id]].some((expected) => expected
+        && row.label === expected.label
+        && (row.computedFromJson ?? '[]') === JSON.stringify(expected.computedFromIds ?? [])
+        && (row.computedTermsJson ?? '[]') === JSON.stringify(expected.computedTerms ?? []))
       && row.sourceVersion === EUR_SOURCE_VERSION_2025;
     if (!matches) throw new Error(`EÜR catalog row does not match canonical 2025 catalog: ${row.id}`);
   }
@@ -1106,6 +1110,8 @@ export const importDesktopSqliteToServerDatabase = async (options: DesktopSqlite
         const eurAnnexFacts = loadEurAnnexFacts(sqliteDb);
         if (eurAnnexFacts.length) counts.eurAnnexFacts += await importRawTenantRows(rawClient, 'eur_annex_facts', eurAnnexFacts, tenantId, ['id', 'tenant_id', 'tax_year', 'annex', 'line_id', 'amount', 'source_id', 'fact_date', 'reason', 'actor_id', 'actor_name', 'idempotency_key', 'provenance_json', 'created_at']);
         for (const row of loadEurClassifications(sqliteDb, tenantId)) { await saveServerEurClassification(repositoryClient, row); counts.eurClassifications += 1; }
+        // SQLite data chose the limited-deduction columns by their old, swapped labels (see migration 0046).
+        await remapLegacyEurDeductionColumns(rawClient as never, tenantId);
         for (const row of loadEmailLog(sqliteDb)) { await insertEmailLogRow(repositoryClient, tenantId, { id: row.id, documentType: row.document_type, documentId: row.document_id, documentNumber: row.document_number, recipientEmail: row.recipient_email, recipientName: row.recipient_name, subject: row.subject, bodyText: row.body_text, provider: row.provider, status: row.status, errorMessage: row.error_message, sentAt: row.sent_at, createdAt: row.created_at }); counts.emailLog += 1; }
         for (const row of loadDunningHistory(sqliteDb)) { await requireImportDrizzle(client).insert(schema.dunningHistory).values({ id: row.id, tenantId, invoiceId: row.invoice_id, invoiceNumber: row.invoice_number, dunningLevel: row.dunning_level, daysOverdue: row.days_overdue, feeApplied: row.fee_applied, emailSent: Boolean(row.email_sent), emailLogId: row.email_log_id, processedAt: row.processed_at, createdAt: row.created_at } as any); counts.dunningHistory += 1; }
         for (const row of sourceAuditRows) { await insertAuditRow(repositoryClient, tenantId, { sequence: row.sequence, ts: row.ts, entityType: row.entity_type, entityId: row.entity_id, action: row.action, reason: row.reason, beforeJson: row.before_json, afterJson: row.after_json, prevHash: row.prev_hash, hash: row.hash, actor: row.actor }); counts.auditLog += 1; }

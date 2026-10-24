@@ -570,19 +570,19 @@ describe('EÜR', () => {
       await importBankRows(h.api, account, [['2026-07-05', -100, 'Gastro GmbH', 'Bewirtung']]);
       const tx = await txId('Gastro GmbH');
       const split = (a: number, b: number) => [
-        { amountNet: a, deductibility: 'deductible', lineId: YEAR_LINE(2026, '165'), reason: '70 % abziehbar' },
+        { amountNet: a, deductibility: 'deductible', lineId: YEAR_LINE(2026, '175'), reason: '70 % abziehbar' },
         { amountNet: b, deductibility: 'non-deductible', reason: '30 % nicht abziehbar' },
       ];
       const before = await reportOf();
       const wrong = await fact({ sourceType: 'transaction', sourceId: tx, kind: 'expense', flowType: 'expense', amountNet: 100, splits: split(70, 29.99) });
       assert.equal(wrong.status, 400);
-      assert.match(wrong.text, /EUR_SPLIT_ALLOCATION_MISMATCH/);
-      const noReason = await fact({ sourceType: 'transaction', sourceId: tx, kind: 'expense', flowType: 'expense', amountNet: 100, splits: [{ amountNet: 100, deductibility: 'deductible', lineId: YEAR_LINE(2026, '165'), reason: '' }] });
+      assert.match(wrong.text, /Nettobetrag/);
+      const noReason = await fact({ sourceType: 'transaction', sourceId: tx, kind: 'expense', flowType: 'expense', amountNet: 100, splits: [{ amountNet: 100, deductibility: 'deductible', lineId: YEAR_LINE(2026, '175'), reason: '' }] });
       assert.equal(noReason.status, 400);
       const ok = await fact({ sourceType: 'transaction', sourceId: tx, kind: 'expense', flowType: 'expense', amountNet: 100, splits: split(70, 30) });
       assert.equal(ok.status, 200, ok.text);
       const after = await reportOf();
-      assert.equal(totalOf(after, '165'), 70);
+      assert.equal(totalOf(after, '175'), 70, 'Kz 175 is the deductible column of Bewirtung');
       assert.equal(after.summary.expenseTotal, money(before.summary.expenseTotal + 70));
       const listed = await h.raw('GET', '/reports/eur/facts/cash?taxYear=2026');
       assert.ok(listed.body.some((f: { sourceId: string; provenance: { catalogId: string } }) => f.sourceId === tx && f.provenance.catalogId === 'anlage-euer-2026'));
@@ -672,13 +672,13 @@ describe('EÜR', () => {
 
   describe('boundaries', () => {
     test('unsupported tax years and partial-year ranges are rejected', async () => {
-      await assert.rejects(h.api.eur.getReport({ taxYear: 2027 }), /EUR_CATALOG_UNAVAILABLE/);
-      await assert.rejects(h.api.eur.listItems({ taxYear: 2027 } as never), /EUR_CATALOG_UNAVAILABLE/);
-      await assert.rejects(h.api.eur.exportCsv({ taxYear: 2027 }), /EUR_CATALOG_UNAVAILABLE/);
+      await assert.rejects(h.api.eur.getReport({ taxYear: 2024 }), /EUR_CATALOG_UNAVAILABLE|2025/);
+      await assert.rejects(h.api.eur.listItems({ taxYear: 2024 } as never), /EUR_CATALOG_UNAVAILABLE|2025/);
+      await assert.rejects(h.api.eur.exportCsv({ taxYear: 2024 }), /EUR_CATALOG_UNAVAILABLE|2025/);
       await assert.rejects(h.api.eur.getReport({ taxYear: 2024 }));
       await assert.rejects(h.api.eur.getReport({ taxYear: 2026, from: '2026-02-01' }), /EUR_RANGE_2026_REQUIRED/);
       await assert.rejects(h.api.eur.getReport({ taxYear: 2026, to: '2026-06-30' }), /EUR_RANGE_2026_REQUIRED/);
-      for (const url of ['?taxYear=2027', '?taxYear=2026&from=2026-02-01', '?taxYear=2026&to=2026-11-30', '?taxYear=2025&from=2026-01-01', '?taxYear=abc', '?from=2026-01-01', '?taxYear=2026.5']) {
+      for (const url of ['?taxYear=2024', '?taxYear=2026&from=2026-02-01', '?taxYear=2026&to=2026-11-30', '?taxYear=2025&from=2026-01-01', '?taxYear=abc', '?from=2026-01-01', '?taxYear=2026.5']) {
         assert.equal((await h.raw('GET', `/reports/eur${url}`)).status, 400, url);
         assert.equal((await h.raw('GET', `/reports/eur/items${url}`)).status, 400, `items${url}`);
       }
@@ -944,6 +944,256 @@ describe('Geldtransit, Privat und Steuerzahlungen (Lite)', () => {
     assert.equal(unknown.suggestedLineId, undefined);
     assert.match(unknown.suggestionReason ?? '', /Finanzamt/);
     assert.notEqual((await itemOf('Zustellung August')).suggestedLineId, YEAR_LINE(2026, '186'), '"ust" inside a word is no tax payment');
+  });
+});
+
+describe('Anlage EÜR: Formularrechnung, Aufteilungen und Steuerjahre (Lite)', () => {
+  let h: LiteHarness;
+  const giro = 'bank-form';
+  const items = (taxYear = 2026) => h.api.eur.listItems({ taxYear } as never) as Promise<Array<Record<string, any>>>;
+  const itemOf = async (purpose: string, taxYear = 2026) => {
+    const found = (await items(taxYear)).find((item) => item.purpose === purpose);
+    assert.ok(found, `item ${purpose} not found`);
+    return found;
+  };
+  const classify = (sourceId: string, body: Record<string, unknown>, taxYear = 2026) =>
+    h.raw('PUT', '/reports/eur/classifications', { sourceType: 'transaction', sourceId, taxYear, reason: 'Beleg geprüft', ...body });
+  const report = (taxYear = 2026) => h.api.eur.getReport({ taxYear }) as Promise<any>;
+
+  before(async () => {
+    h = await startLite(null, 'reports-form');
+    await configureLite(h.api);
+    await h.api.accounts.upsert({ account: bankAccount(giro) } as never);
+    await importBankRows(h.api, giro, [
+      ['2026-03-01', -100, 'Büro AG', 'Bewirtung abziehbar'],
+      ['2026-03-02', -50, 'Büro AG', 'Bewirtung nicht abziehbar'],
+      ['2026-03-03', 200, 'Kunde Z', 'davon nicht steuerbar'],
+      ['2026-03-04', -119, 'Restaurant Adler', 'Geschäftsessen'],
+      ['2026-03-05', -119, 'Präsente GmbH', 'Geschenk Kunde'],
+      ['2026-03-06', 500, 'Kunde Offen', 'Unklar Eingang'],
+      ['2026-03-07', -80, 'Lieferant Offen', 'Unklar Ausgang'],
+      ['2027-02-01', -40, 'Telekom', 'Telefon 2027'],
+    ]);
+  });
+  after(async () => { await h.close(); });
+
+  test('the form columns: 164/165/162/168 are not deductible, 174/175/172/177 are; the sums follow the form (davon lines and non-deductible columns stay out)', async () => {
+    const rows = (await report()).rows as Array<{ kennziffer?: string; label: string; total: number }>;
+    const label = (code: string) => rows.find((row) => row.kennziffer === code)?.label ?? '';
+    for (const code of ['164', '165', '162', '168']) assert.match(label(code), /nicht abziehbar/, `Kz ${code}`);
+    for (const code of ['174', '175', '172', '177']) assert.doesNotMatch(label(code), /nicht abziehbar/, `Kz ${code}`);
+    assert.doesNotMatch(rows.map((row) => row.label).join(' '), /ae|oe|ue(?!r)|fuer/, 'labels carry real umlauts');
+    const before = await report();
+    assert.equal((await classify((await itemOf('Bewirtung abziehbar')).sourceId, { eurLineId: YEAR_LINE(2026, '175') })).status, 200);
+    assert.equal((await classify((await itemOf('Bewirtung nicht abziehbar')).sourceId, { eurLineId: YEAR_LINE(2026, '165') })).status, 200);
+    assert.equal((await classify((await itemOf('davon nicht steuerbar')).sourceId, { eurLineId: YEAR_LINE(2026, '119') })).status, 200);
+    const after = await report();
+    assert.equal(totalOf(after, '175'), 100);
+    assert.equal(totalOf(after, '165'), 50, 'the non-deductible column is shown');
+    assert.equal(totalOf(after, '119'), 200, 'the davon line is shown');
+    assert.equal(after.summary.expenseTotal, money(before.summary.expenseTotal + 100), 'only the deductible column reduces the profit');
+    assert.equal(after.summary.incomeTotal, before.summary.incomeTotal, 'a davon line is already part of Kz 111');
+    assert.equal(totalOf(after, '199'), after.summary.expenseTotal, 'Kz 199 is the expense total');
+    assert.equal(totalOf(after, '159'), after.summary.incomeTotal, 'Kz 159 is the income total');
+    assert.equal(after.summary.surplus, money(after.summary.incomeTotal - after.summary.expenseTotal));
+  });
+
+  test('Bewirtung: 70 % abziehbar (Kz 175), 30 % nicht abziehbar (Kz 165), the Vorsteuer in full (Kz 185), in one classification', async () => {
+    const meal = await itemOf('Geschäftsessen');
+    const before = await report();
+    const split = (deductible: number, rest: number, restLine = '165') => [
+      { amountNet: deductible, deductibility: 'deductible', lineId: YEAR_LINE(2026, '175'), reason: '70 % abziehbar' },
+      { amountNet: rest, deductibility: 'non-deductible', lineId: YEAR_LINE(2026, restLine), reason: '30 % nicht abziehbar' },
+    ];
+    const wrongSum = await classify(meal.sourceId, { eurLineId: YEAR_LINE(2026, '175'), vatMode: 'default', vatRate: 19, splits: split(70, 31) });
+    assert.equal(wrongSum.status, 400, 'the parts must add up to the net amount');
+    const wrongColumn = await classify(meal.sourceId, { eurLineId: YEAR_LINE(2026, '175'), vatMode: 'default', vatRate: 19, splits: split(70, 30, '183') });
+    assert.equal(wrongColumn.status, 400, 'a non-deductible part cannot sit on a line that counts');
+    const saved = await classify(meal.sourceId, { eurLineId: YEAR_LINE(2026, '175'), vatMode: 'default', vatRate: 19, splits: split(70, 30) });
+    assert.equal(saved.status, 200, saved.text);
+    const after = await report();
+    assert.equal(money(totalOf(after, '175')! - totalOf(before, '175')!), 70);
+    assert.equal(money(totalOf(after, '165')! - totalOf(before, '165')!), 30);
+    assert.equal(money(totalOf(after, '185')! - totalOf(before, '185')!), 19, 'Vorsteuer on Bewirtung stays deductible in full');
+    assert.equal(after.summary.expenseTotal, money(before.summary.expenseTotal + 89));
+    assert.ok((await items()).find((item) => item.sourceId === meal.sourceId)?.splits?.length === 2, 'the item shows its parts');
+    // Choosing a plain line again drops the parts.
+    assert.equal((await classify(meal.sourceId, { eurLineId: YEAR_LINE(2026, '183'), vatMode: 'default', vatRate: 19 })).status, 200);
+    const plain = await report();
+    assert.equal(totalOf(plain, '165'), totalOf(before, '165'));
+    assert.equal(plain.summary.expenseTotal, money(before.summary.expenseTotal + 119));
+  });
+
+  test('a gift over 50 € is not deductible and carries no Vorsteuer (§ 4 Abs. 5 Nr. 1 EStG, § 15 Abs. 1a UStG)', async () => {
+    const gift = await itemOf('Geschenk Kunde');
+    const before = await report();
+    const withVat = await classify(gift.sourceId, { eurLineId: YEAR_LINE(2026, '164'), vatMode: 'default', vatRate: 19 });
+    assert.equal(withVat.status, 400, withVat.text);
+    assert.match(withVat.text, /Vorsteuer/);
+    assert.equal((await classify(gift.sourceId, { eurLineId: YEAR_LINE(2026, '164') })).status, 200);
+    const after = await report();
+    assert.equal(money(totalOf(after, '164')! - totalOf(before, '164')!), 119);
+    assert.equal(totalOf(after, '185'), totalOf(before, '185'));
+    assert.equal(after.summary.expenseTotal, before.summary.expenseTotal);
+  });
+
+  test('payments without a category are named with count and amount, income and expense apart (no silent gap)', async () => {
+    const result = await report();
+    const open = (await items()).filter((item) => !item.classification?.eurLineId && !item.classification?.excluded && !item.kind);
+    assert.equal(result.unclassified.incomeCount, open.filter((item) => item.flowType === 'income').length);
+    assert.equal(result.unclassified.incomeAmount, money(open.filter((item) => item.flowType === 'income').reduce((sum, item) => sum + Math.abs(item.amountGross), 0)));
+    assert.equal(result.unclassified.expenseCount, open.filter((item) => item.flowType === 'expense').length);
+    assert.equal(result.unclassified.expenseAmount, money(open.filter((item) => item.flowType === 'expense').reduce((sum, item) => sum + Math.abs(item.amountGross), 0)));
+    assert.ok(result.unclassified.incomeAmount >= 500);
+  });
+
+  test('2026 is the official BMF form; a year without a published form (2027) uses the newest one, marked provisional', async () => {
+    const official = await report(2026);
+    assert.equal(official.catalog.provisional, false);
+    assert.match(official.catalog.version, /2026-09-01/);
+    const next = await report(2027);
+    assert.equal(next.taxYear, 2027);
+    assert.equal(next.catalog.provisional, true);
+    assert.match(next.catalog.title, /vorläufig/);
+    const phone = await itemOf('Telefon 2027', 2027);
+    const line = next.rows.find((row: any) => row.kennziffer === '280').lineId;
+    assert.equal((await classify(phone.sourceId, { eurLineId: line }, 2027)).status, 200);
+    assert.equal((await report(2027)).summary.expenseTotal, 40);
+    const vat = await h.raw('GET', '/reports/vat?from=2027-01-01&to=2027-03-31');
+    assert.equal(vat.status, 200, vat.text);
+    assert.equal((await h.raw('GET', '/reports/eur?taxYear=2024')).status, 400, 'before the first catalog stays refused');
+  });
+});
+
+describe('USt-Voranmeldung: Dauerfristverlängerung, Kz 39/83, Kleinunternehmer (Lite)', () => {
+  let h: LiteHarness;
+  const vat = (from: string, to: string) => h.api.vat.getReport({ from, to }) as Promise<any>;
+  const setLegal = async (legal: Record<string, unknown>, smallBusiness = false) => {
+    const current = await configureLite(h.api, { vatMethod: 'soll', smallBusiness });
+    await h.api.settings.set({ settings: { ...current, legal: { ...current.legal, ...legal } } } as never);
+  };
+
+  before(async () => {
+    h = await startLite(null, 'reports-vat-filing');
+    await configureLite(h.api, { vatMethod: 'soll' });
+    await issueDated(h.api, { client: 'Dezember GmbH', date: '2026-12-02', servicePeriod: '2026-12-02', items: [line('Beratung', 10000, 19)] });
+    await issueDated(h.api, { client: 'November GmbH', date: '2026-11-02', servicePeriod: '2026-11-02', items: [line('Beratung', 1000, 19)] });
+  });
+  after(async () => { await h.close(); });
+
+  test('Kz 87 and Kz 90 carry the wording of the form (0 % under § 12 Abs. 3 UStG, taxable intra-EU acquisition at 0 %)', async () => {
+    await issueDated(h.api, { client: 'Solar GmbH', date: '2026-12-03', servicePeriod: '2026-12-03', items: [line('Photovoltaikanlage', 5000, 0)] });
+    await h.api.cash.saveReceipt({ receipt: { id: 'rcpt-ige-0', number: 'EU-0', counterparty: 'EU Lieferant', documentDate: '2026-12-04', receivedDate: '2026-12-04', serviceDate: '2026-12-04', grossAmountCents: 10000, taxMode: 'intra_eu_acquisition', deductiblePercent: 100, reviewed: true, taxBreakdown: [{ rate: 0, netAmountCents: 10000, vatAmountCents: 0 }] }, reason: 'Beleg geprüft' } as never);
+    const report = await vat('2026-12-01', '2026-12-31');
+    const label = (code: string) => report.positions.find((position: any) => position.code === code)?.label;
+    assert.equal(label('87'), 'Steuerpflichtige Umsätze zum Steuersatz von 0 % (§ 12 Abs. 3 UStG)');
+    assert.equal(label('90'), 'Steuerpflichtige innergemeinschaftliche Erwerbe zum Steuersatz von 0 %');
+  });
+
+  test('without Dauerfristverlängerung: Kz 83 is the payable amount, no Kz 39, due on the 10th of the next month', async () => {
+    await setLegal({ vatPermanentExtension: false });
+    const december = await vat('2026-12-01', '2026-12-31');
+    assert.equal(december.specialPrepaymentCents, 0);
+    assert.equal(december.remainingCents, december.payableCents, 'Kz 83');
+    assert.equal(december.payableCents, 190000);
+    assert.equal(december.dueDate, '2027-01-10');
+  });
+
+  test('with Dauerfristverlängerung the Sondervorauszahlung (Kz 39) is deducted only in the last Voranmeldung of the year; the deadline moves by a month', async () => {
+    await setLegal({ vatPermanentExtension: true, vatSpecialPrepayment: { year: 2026, amountCents: 120000 } });
+    const stored = (await h.api.settings.get() as any).legal;
+    assert.deepEqual([stored.vatPermanentExtension, stored.vatSpecialPrepayment], [true, { year: 2026, amountCents: 120000 }], 'settings survive save and refetch');
+    const december = await vat('2026-12-01', '2026-12-31');
+    assert.equal(december.specialPrepaymentCents, 120000);
+    assert.equal(december.remainingCents, 190000 - 120000, 'Kz 83 = Zahllast − Kz 39');
+    assert.equal(december.dueDate, '2027-02-10');
+    const quarter = await vat('2026-10-01', '2026-12-31');
+    assert.equal(quarter.specialPrepaymentCents, 120000, 'Q4 is the last quarterly Voranmeldung');
+    const november = await vat('2026-11-01', '2026-11-30');
+    assert.equal(november.specialPrepaymentCents, 0, 'not before the last Voranmeldung');
+    assert.equal(november.remainingCents, november.payableCents);
+    const year = await vat('2026-01-01', '2026-12-31');
+    assert.equal(year.specialPrepaymentCents, 0, 'a whole year is no Voranmeldung');
+    await setLegal({ vatPermanentExtension: true, vatSpecialPrepayment: { year: 2025, amountCents: 120000 } });
+    assert.equal((await vat('2026-12-01', '2026-12-31')).specialPrepaymentCents, 0, 'the prepayment of another year does not count');
+    await assert.rejects(setLegal({ vatPermanentExtension: true, vatSpecialPrepayment: { year: 2026, amountCents: -5 } }), 'a negative Sondervorauszahlung is refused');
+  });
+
+  test('Kleinunternehmer: no Voranmeldung to file, and the § 19 limits (25.000 € last year, 100.000 € this year) are watched', async () => {
+    // October holds no invoice with VAT (those of November/December would owe it even for a Kleinunternehmer, § 14c UStG).
+    await setLegal({ vatPermanentExtension: false }, true);
+    const quiet = await vat('2026-10-01', '2026-10-31');
+    assert.equal(quiet.filingRequired, false);
+    assert.deepEqual([quiet.smallBusinessLimits.previousLimitCents, quiet.smallBusinessLimits.currentLimitCents], [2_500_000, 10_000_000]);
+    assert.equal(quiet.smallBusinessLimits.previousYear, 2025);
+    assert.equal(quiet.smallBusinessLimits.currentYear, 2026);
+    assert.ok(quiet.smallBusinessLimits.currentYearCents >= 1_309_000, 'the issued invoices of 2026 are counted');
+    assert.ok(quiet.issues.some((issue: any) => issue.code === 'KU_LIMIT_EXCEEDED') === false, 'within the limits');
+    await issueDated(h.api, { client: 'Großkunde', date: '2026-10-10', servicePeriod: '2026-10-10', taxMode: 'small_business_19_ustg', items: [line('Großauftrag', 95_000)] });
+    const over = await vat('2026-10-01', '2026-10-31');
+    assert.ok(over.smallBusinessLimits.currentYearCents > 10_000_000);
+    assert.ok(over.issues.some((issue: any) => issue.code === 'KU_LIMIT_EXCEEDED'), 'over 100.000 € this year');
+    await setLegal({}, false);
+    assert.equal((await vat('2026-10-01', '2026-10-31')).smallBusinessLimits, undefined, 'only for a Kleinunternehmer');
+    assert.equal((await vat('2026-10-01', '2026-10-31')).filingRequired, true);
+  });
+});
+
+describe('Zahlungsart manueller Buchungen und Buchungen ohne Geldfluss (Lite)', () => {
+  let h: LiteHarness;
+  const account = 'bank-method';
+  const entry = (id: string, cashDate: string, amountCents: number, extra: Record<string, unknown> = {}) =>
+    h.raw('POST', '/cash/entries', { entry: { id, cashDate, amountCents, currency: 'EUR', flowType: amountCents < 0 ? 'expense' : 'income', counterparty: 'Max Muster', purpose: `Buchung ${id}`, ...extra }, reason: 'Erfasst' });
+  const classify = (sourceId: string, code: string) =>
+    h.raw('PUT', '/reports/eur/classifications', { sourceType: 'manual', sourceId, taxYear: 2026, eurLineId: YEAR_LINE(2026, code), reason: 'Beleg geprüft' });
+  const datev = async () => {
+    const response = await h.raw('GET', '/eur/datev.csv?from=2026-01-01&to=2026-12-31');
+    assert.equal(response.status, 200, response.text);
+    const rows = Buffer.from(response.body.contentBase64, 'base64').toString('latin1').split('\r\n').slice(2).filter(Boolean).map((row) => row.split(';'));
+    return { rows, errors: response.body.errors as Array<{ sourceId: string; message: string }> };
+  };
+
+  before(async () => {
+    h = await startLite(null, 'reports-payment-method');
+    const current = await configureLite(h.api);
+    await h.api.settings.set({ settings: { ...current, datev: { consultantNumber: '1234567', clientNumber: '12345', accountLength: 4, chart: 'SKR03' } } } as never);
+    await h.api.accounts.upsert({ account: bankAccount(account) } as never);
+    await importBankRows(h.api, account, [['2026-06-03', -50, 'Max Muster', 'Kartenzahlung']]);
+  });
+  after(async () => { await h.close(); });
+
+  test('a booking without money (Pauschale, AfA, Privatanteil) counts in the EÜR, needs no receipt for the VAT, cannot be matched to the bank and carries no receipt', async () => {
+    const pauschale = await entry('np-verpflegung', '2026-06-30', -2800, { paymentMethod: 'non_cash', purpose: 'Verpflegungsmehraufwand Juni' });
+    assert.equal(pauschale.status, 200, pauschale.text);
+    assert.equal(pauschale.body.paymentMethod, 'non_cash');
+    assert.equal((await entry('np-receipt', '2026-06-30', -1000, { paymentMethod: 'non_cash', receiptId: 'gibt-es-nicht' })).status, 400, 'no receipt on a booking without money');
+    const before = await h.api.eur.getReport({ taxYear: 2026 });
+    assert.equal((await classify('np-verpflegung', '171')).status, 200);
+    const after = await h.api.eur.getReport({ taxYear: 2026 });
+    assert.equal(after.summary.expenseTotal, money(before.summary.expenseTotal + 28));
+    const vat = await h.api.vat.getReport({ from: '2026-06-01', to: '2026-06-30' });
+    assert.ok(!vat.issues.some((issue) => issue.sourceId === 'np-verpflegung'), 'no "receipt required" for a booking without money');
+    const bank = (await h.api.transactions.list({} as never)).find((t) => t.purpose === 'Kartenzahlung')!;
+    const card = await entry('np-card', '2026-06-03', -5000, { paymentMethod: 'non_cash' });
+    assert.equal(card.status, 200);
+    const match = await h.raw('POST', '/cash/entries/np-card/match', { transactionId: bank.id, expectedCashDate: '2026-06-03', reason: 'Abgleich' });
+    assert.ok(match.status >= 400 && match.status < 500, `${match.status} ${match.text}`);
+  });
+
+  test('DATEV: Bar goes to Kasse, a booking without money to the private account, an unmatched bank entry and an entry without Zahlungsart are named', async () => {
+    assert.equal((await entry('m-cash', '2026-07-01', -3000, { paymentMethod: 'cash', purpose: 'Bürobedarf bar' })).status, 200);
+    assert.equal((await entry('m-bank', '2026-07-02', -4000, { paymentMethod: 'bank', purpose: 'Überweisung ohne Import' })).status, 200);
+    assert.equal((await entry('m-legacy', '2026-07-03', -2000, { purpose: 'Altbuchung' })).status, 200);
+    for (const id of ['m-cash', 'm-bank', 'm-legacy']) assert.equal((await classify(id, '183')).status, 200);
+    const { rows, errors } = await datev();
+    const cash = rows.find((row) => row[10] === '"m-cash"');
+    assert.ok(cash, 'the cash entry is exported');
+    assert.deepEqual([cash[6], cash[7], cash[1]], ['1000', '4900', '"H"'], 'Kasse 1000 against the expense account');
+    const flatRate = rows.find((row) => row[10] === '"np-verpflegung"');
+    assert.ok(flatRate, 'the Verpflegungspauschale is exported');
+    assert.deepEqual([flatRate[6], flatRate[7]], ['1890', '4674'], 'Privateinlage against Verpflegungsmehraufwand, never Kasse or Bank');
+    assert.match(errors.find((error) => error.sourceId === 'm-bank')?.message ?? '', /Bankumsatz/);
+    assert.match(errors.find((error) => error.sourceId === 'm-legacy')?.message ?? '', /Zahlungsart/);
   });
 });
 
@@ -1348,17 +1598,17 @@ describe('VAT preparation', () => {
   });
 
   describe('periods', () => {
-    test('only whole months, calendar quarters and the calendar year of 2025/2026 are accepted', async () => {
+    test('only whole months, calendar quarters and calendar years from 2025 on are accepted', async () => {
       const bad: Array<[string, string]> = [
         ['2026-01-15', '2026-01-31'], ['2026-01-01', '2026-01-30'], ['2026-02-01', '2026-04-30'], ['2026-01-01', '2026-02-28'], ['2026-03-01', '2026-05-31'],
-        ['2026-01-01', '2027-01-31'], ['2024-01-01', '2024-12-31'], ['2027-01-01', '2027-01-31'], ['2026-02-01', '2026-02-30'], ['2026-03-31', '2026-03-01'], ['26-01-01', '26-01-31'],
+        ['2026-01-01', '2027-01-31'], ['2024-01-01', '2024-12-31'], ['2027-01-15', '2027-01-31'], ['2026-02-01', '2026-02-30'], ['2026-03-31', '2026-03-01'], ['26-01-01', '26-01-31'],
       ];
       for (const [from, to] of bad) {
         await assert.rejects(h.api.vat.getReport({ from, to }), Error, `${from}..${to}`);
         assert.equal((await h.raw('GET', `/reports/vat?from=${from}&to=${to}`)).status, 400, `${from}..${to}`);
         assert.equal((await h.raw('GET', `/reports/vat/export/csv?from=${from}&to=${to}`)).status, 400, `export ${from}..${to}`);
       }
-      for (const [from, to] of [['2025-01-01', '2025-01-31'], ['2025-07-01', '2025-09-30'], ['2026-10-01', '2026-12-31'], ['2025-01-01', '2025-12-31'], ['2026-02-01', '2026-02-28']] as const) {
+      for (const [from, to] of [['2025-01-01', '2025-01-31'], ['2025-07-01', '2025-09-30'], ['2026-10-01', '2026-12-31'], ['2025-01-01', '2025-12-31'], ['2026-02-01', '2026-02-28'], ['2027-01-01', '2027-01-31']] as const) {
         assert.equal((await h.raw('GET', `/reports/vat?from=${from}&to=${to}`)).status, 200, `${from}..${to}`);
       }
       assert.equal((await h.raw('GET', '/reports/vat')).status, 400);
@@ -1556,7 +1806,7 @@ describe('DATEV export (EÜR → Buchungsstapel)', () => {
       h.raw('PUT', '/reports/eur/classifications', { sourceType, sourceId, taxYear: 2026, eurLineId: code ? YEAR_LINE(2026, code) : undefined, reason: 'Beleg geprüft', ...extra });
     ids.income = await tx('Kunde Ü');
     ids.hoster = await tx('Hoster AG');
-    ids.private = await tx('Max Muster');
+    ids.private = (await h.api.transactions.list({} as never)).find((t) => t.purpose === 'Privatentnahme')!.id;
     ids.unclassified = await tx('Unbekannt GmbH');
     ids.unmapped = await tx('Pendler AG');
     ids.legacy = await tx('Alt GmbH');
@@ -1575,7 +1825,7 @@ describe('DATEV export (EÜR → Buchungsstapel)', () => {
       [ids.legacy, undefined, { excluded: true }],
       // Kz 152 (doppelte Haushaltsführung) has no standard account in the map.
       [ids.unmapped, '152', {}],
-    ] as const) assert.equal((await classify('transaction', sourceId, code, extra)).status, 200);
+    ] as const) { const saved = await classify('transaction', sourceId, code, extra); assert.equal(saved.status, 200, saved.text); }
     // 7 % invoice paid into the bank: Erlöse 7 % is its own Automatikkonto.
     const invoice = await issueDated(h.api, { client: 'Buchladen Köhler', date: '2026-03-18', items: [line('Fachbuch', 100, 7)], servicePeriod: '2026-03-18' });
     ids.invoiceNumber = invoice.number;

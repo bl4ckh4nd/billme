@@ -31,10 +31,10 @@ const ACCOUNTS: Record<string, DatevAccount> = {
   '120': { SKR03: '4120', SKR04: '6020', label: 'Gehälter' },
   '132': { SKR03: '4855', SKR04: '6260', label: 'Sofortabschreibung geringwertiger Wirtschaftsgüter' },
   '150': { SKR03: '4210', SKR04: '6310', label: 'Miete' },
-  '165': { SKR03: '4650', SKR04: '6640', label: 'Bewirtungskosten' },
-  '175': { SKR03: '4654', SKR04: '6644', label: 'Nicht abzugsfähige Bewirtungskosten' },
-  '164': { SKR03: '4630', SKR04: '6610', label: 'Geschenke abzugsfähig' },
-  '174': { SKR03: '4635', SKR04: '6620', label: 'Geschenke nicht abzugsfähig' },
+  '175': { SKR03: '4650', SKR04: '6640', label: 'Bewirtungskosten' },
+  '165': { SKR03: '4654', SKR04: '6644', label: 'Nicht abzugsfähige Bewirtungskosten' },
+  '174': { SKR03: '4630', SKR04: '6610', label: 'Geschenke abzugsfähig' },
+  '164': { SKR03: '4635', SKR04: '6620', label: 'Geschenke nicht abzugsfähig' },
   '171': { SKR03: '4674', SKR04: '6674', label: 'Reisekosten Unternehmer Verpflegungsmehraufwand' },
   '183': { SKR03: '4900', SKR04: '6300', label: 'Sonstige betriebliche Aufwendungen' },
   '185': { SKR03: '1576', SKR04: '1406', label: 'Abziehbare Vorsteuer 19 %' },
@@ -62,6 +62,15 @@ export const DATEV_MONEY_ACCOUNTS = {
   bank: { SKR03: '1200', SKR04: '1800' },
   cash: { SKR03: '1000', SKR04: '1600' },
 } as const;
+
+/** Privatentnahmen allgemein / Privateinlagen (SKR03 1800/1890, SKR04 2100/2180). */
+export const DATEV_PRIVATE_ACCOUNTS = {
+  withdrawal: { SKR03: '1800', SKR04: '2100' },
+  contribution: { SKR03: '1890', SKR04: '2180' },
+} as const;
+
+/** Geldtransit between own accounts (SKR03 1360, SKR04 1460); both legs balance it out. */
+export const DATEV_TRANSIT_ACCOUNT = { SKR03: '1360', SKR04: '1460' } as const;
 
 export type DatevAccountChoice = { account: string; buKey?: string } | { error: string };
 

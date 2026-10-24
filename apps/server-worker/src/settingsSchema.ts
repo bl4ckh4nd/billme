@@ -74,6 +74,8 @@ const LegalSettingsSchema = z.object({
   taxAccountingMethod: z.enum(['soll', 'ist']).optional().default('soll'),
   taxAccountingMethodSince: z.string().optional(),
   previousTaxAccountingMethod: z.enum(['soll', 'ist']).optional(),
+  vatPermanentExtension: z.boolean().optional(),
+  vatSpecialPrepayment: z.object({ year: z.number().int(), amountCents: z.number().int() }).optional(),
   paymentTermsDays: z.number(),
   defaultIntroText: z.string(),
   defaultFooterText: z.string(),

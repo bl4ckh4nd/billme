@@ -997,7 +997,7 @@ for (const product of PRODUCTS) describe(`transactions, banking and cash (${prod
       const invoice = await newInvoice();
       const paidBy = await bankLine(invoice.amount);
       await h.api.transactions.link({ transactionId: paidBy.id, invoiceId: invoice.id });
-      const refund = await bankLine(-50, { purpose: 'Erstattung' });
+      const refund = await bankLine(-50, { purpose: `Erstattung ${invoice.number}` });
       assert.ok((await h.api.transactions.findMatches({ transactionId: refund.id })).suggestions.some((s) => s.invoice.id === invoice.id), 'the paid invoice is offered for the outgoing line');
       const linked = await h.api.transactions.link({ transactionId: refund.id, invoiceId: invoice.id });
       assert.equal(linked.invoice!.status, 'open', '188 of 238 is left after the refund');
@@ -1016,20 +1016,30 @@ for (const product of PRODUCTS) describe(`transactions, banking and cash (${prod
       const invoice = await newInvoice();
       const paidBy = await bankLine(invoice.amount);
       await h.api.transactions.link({ transactionId: paidBy.id, invoiceId: invoice.id });
-      const tooMuch = await bankLine(-(invoice.amount + 1), { purpose: 'Rücklastschrift' });
-      assert.equal((await h.raw('POST', `/transactions/${tooMuch.id}/link`, { invoiceId: invoice.id, reason: 'x' })).status, 400, 'nothing is refunded beyond what was paid');
-      const returned = await bankLine(-invoice.amount, { purpose: 'Rücklastschrift' });
+      const larger = await bankLine(-(invoice.amount + 1), { purpose: 'Rücklastschrift mit Gebühr' });
+      const over = await h.raw('POST', `/transactions/${larger.id}/link`, { invoiceId: invoice.id, appliedAmountCents: Math.round(invoice.amount * 100) + 100, reason: 'x' });
+      assert.equal(over.status, 400, 'nothing is refunded beyond what was paid');
+      const returned = await bankLine(-invoice.amount, { purpose: `Rücklastschrift ${invoice.number}` });
+      assert.equal((await h.api.transactions.findMatches({ transactionId: returned.id })).suggestions[0]?.invoice.id, invoice.id, 'the paid invoice is the first suggestion');
       const result = await h.api.transactions.link({ transactionId: returned.id, invoiceId: invoice.id });
       assert.equal(result.invoice!.status, 'open');
       assert.equal((await invoiceOf(invoice.id)).payments.reduce((sum, payment) => sum + payment.amount, 0), 0);
     });
 
-    if (product === 'pro') test('Pro keeps refusing an outgoing line on an invoice (the ledger settles refunds)', async () => {
+    if (product === 'pro') test('Pro books an outgoing line on an invoice as a refund through OPOS: the invoice reopens, unlinking reverses it', async () => {
       const invoice = await newInvoice();
       const paidBy = await bankLine(invoice.amount);
       await h.api.transactions.link({ transactionId: paidBy.id, invoiceId: invoice.id });
       const refund = await bankLine(-50, { purpose: 'Erstattung' });
-      assert.equal((await h.raw('POST', `/transactions/${refund.id}/link`, { invoiceId: invoice.id, reason: 'x' })).status, 400);
+      const linked = await h.raw('POST', `/transactions/${refund.id}/link`, { invoiceId: invoice.id, reason: 'Teilerstattung' });
+      assert.equal(linked.status, 200, linked.text);
+      assert.equal(linked.body.invoice.status, 'open', '188 of 238 is paid after the refund');
+      const items = (await h.raw('GET', '/accounting/open-items')).body as Array<{ sourceId: string; residualAmount: number }>;
+      assert.equal(items.find((item) => item.sourceId === invoice.id)!.residualAmount, 50);
+      const tooMuch = await bankLine(-500, { purpose: 'zu viel' });
+      assert.equal((await h.raw('POST', `/transactions/${tooMuch.id}/link`, { invoiceId: invoice.id, reason: 'x', appliedAmountCents: 50000 })).status, 400, 'no refund beyond what was paid');
+      assert.equal((await h.raw('POST', `/transactions/${refund.id}/unlink`, { reason: 'falsch' })).status, 200);
+      assert.equal((await invoiceOf(invoice.id)).status, 'paid');
     });
 
     test('one bank line cannot pay a second invoice', async () => {

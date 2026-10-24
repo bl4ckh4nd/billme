@@ -195,6 +195,10 @@ export default function OposView({ dataAdapter, role = 'admin', initialInvoiceId
   const [selectedBankTransactionId, setSelectedBankTransactionId] = useState('');
   const [reason, setReason] = useState('');
   const [lastPayment, setLastPayment] = useState<OpenItemPaymentEntity | null>(null);
+  const [payments, setPayments] = useState<OpenItemPaymentEntity[]>([]);
+  const [correction, setCorrection] = useState<{ payment: OpenItemPaymentEntity; mode: 'reverse' | 'reallocate' } | null>(null);
+  const [correctionReason, setCorrectionReason] = useState('');
+  const [correctionTargetId, setCorrectionTargetId] = useState('');
   const [remainingItemId, setRemainingItemId] = useState('');
   const [remainingAmount, setRemainingAmount] = useState('');
   const [invoiceNumber, setInvoiceNumber] = useState('');
@@ -263,6 +267,7 @@ export default function OposView({ dataAdapter, role = 'admin', initialInvoiceId
       setBankTransactions(nextBankTransactions);
       setVendors(nextVendors);
       setInvoices(nextInvoices);
+      if (dataAdapter.listOpenItemPayments) setPayments(await dataAdapter.listOpenItemPayments());
     } finally {
       setLoading(false);
     }
@@ -328,8 +333,14 @@ export default function OposView({ dataAdapter, role = 'admin', initialInvoiceId
 
   const selectedBankTransaction = bankTransactions.find((transaction) => transaction.id === selectedBankTransactionId);
   const eligibleBankTransactions = selectedItem
-    ? bankTransactions.filter((transaction) => transaction.status === 'pending' && !transaction.linkedInvoiceId && transaction.type === (selectedItem.partyType === 'debtor' ? 'income' : 'expense'))
+    ? bankTransactions.filter((transaction) => transaction.status === 'pending' && !transaction.linkedInvoiceId && (
+      // Money in the normal direction settles what is open; the other direction is a refund
+      // (Rückzahlung, Rücklastschrift) of a credit or of what was paid.
+      transaction.type === (selectedItem.partyType === 'debtor' ? 'income' : 'expense')
+        ? selectedItem.residualAmount > 0
+        : selectedItem.residualAmount < 0 || selectedItem.allocatedAmount > 0))
     : [];
+  const refundRoom = (item: OpenItemEntity) => item.residualAmount < 0 ? -item.residualAmount : item.allocatedAmount;
 
   const paymentOpenItemTargetId = selectedItemId
     ? `opos-open-item-${selectedItemId}`
@@ -406,7 +417,7 @@ export default function OposView({ dataAdapter, role = 'admin', initialInvoiceId
         paymentDate: selectedBankTransaction.date,
         amount,
         bankAccountNumber: selectedBankTransaction.bankAccountNumber,
-        allocations: [{ openItemId: selectedItem.id, amount: Math.min(amount, selectedItem.residualAmount) }],
+        allocations: [{ openItemId: selectedItem.id, amount: Math.min(amount, selectedBankTransaction.type === (selectedItem.partyType === 'debtor' ? 'income' : 'expense') ? selectedItem.residualAmount : refundRoom(selectedItem)) }],
         reason: reason.trim(),
         allocationEventId,
         mutation: { reason: reason.trim(), actor: { type: 'user', displayName: 'Pro Workspace' } },
@@ -443,6 +454,27 @@ export default function OposView({ dataAdapter, role = 'admin', initialInvoiceId
       setLastPayment(payment);
       remainingEventRef.current = null;
       setFeedback({ kind: 'success', text: payment.residualAmount > 0 ? `Restzahlung gespeichert. Verbleibend ${euro(payment.residualAmount)}.` : 'Zahlung vollständig zugeordnet.' });
+      await refresh();
+    });
+  };
+
+  const correctionTargets = correction ? items.filter((item) => item.partyType === correction.payment.partyType && item.residualAmount > 0 && !item.id.startsWith('payment-credit:')) : [];
+  const submitCorrection = () => {
+    if (!correction || !canMutate) return;
+    const trimmed = correctionReason.trim();
+    const target = correctionTargets.find((item) => item.id === correctionTargetId);
+    if (!trimmed || (correction.mode === 'reallocate' && !target)) {
+      setFeedback({ kind: 'error', text: correction.mode === 'reallocate' ? 'Neuer offener Posten und Begründung sind Pflichtfelder.' : 'Begründung ist erforderlich.' });
+      return;
+    }
+    void run(async () => {
+      if (correction.mode === 'reverse') await dataAdapter!.reverseOpenItemPayment!(correction.payment.id, trimmed);
+      else await dataAdapter!.reallocateOpenItemPayment!(correction.payment.id, { reason: trimmed, partyId: target!.partyId, allocations: [{ openItemId: target!.id, amount: Math.min(correction.payment.amount, target!.residualAmount) }], allocationEventId: eventId() });
+      setFeedback({ kind: 'success', text: correction.mode === 'reverse' ? 'Zahlung storniert. Gegenbuchung im Journal, Posten wieder offen.' : 'Zahlung umgebucht. Storno und neue Zuordnung stehen im Journal.' });
+      setCorrection(null);
+      setCorrectionReason('');
+      setCorrectionTargetId('');
+      setLastPayment(null);
       await refresh();
     });
   };
@@ -688,7 +720,7 @@ export default function OposView({ dataAdapter, role = 'admin', initialInvoiceId
                 </TableCell>
                 <TableCell muted className="tabular-nums">{formatDate(item.dueDate)}</TableCell>
                 <TableCell numeric>{euro(item.residualAmount)}</TableCell>
-                <TableCell><Badge tone={openItemStatusTones[item.status]}>{openItemStatusLabels[item.status]}</Badge></TableCell>
+                <TableCell>{item.residualAmount < 0 ? <Badge tone="warning">Guthaben</Badge> : <Badge tone={openItemStatusTones[item.status]}>{openItemStatusLabels[item.status]}</Badge>}</TableCell>
               </TableRow>
             );
           })}</TableBody>
@@ -795,6 +827,53 @@ export default function OposView({ dataAdapter, role = 'admin', initialInvoiceId
             ) : null}
           </div>
         </Card>
+
+        {dataAdapter?.listOpenItemPayments ? (
+          <Card padding="none" className="min-w-0 overflow-hidden">
+            <CardHeader as="h3" className="border-b border-border px-3.5 py-3" title="Gebuchte Zahlungen" subtitle="Storno mit Gegenbuchung oder Umbuchung auf einen anderen Posten" />
+            {payments.length === 0 ? <EmptyState title="Noch keine Zahlungen gebucht." /> : (
+              <Table aria-label="Gebuchte Zahlungen" bare>
+                <TableHeader><TableRow><TableHead>Datum</TableHead><TableHead>Quelle</TableHead><TableHead numeric>Betrag</TableHead><TableHead>Status</TableHead><TableHead>Aktion</TableHead></TableRow></TableHeader>
+                <TableBody>{payments.slice(0, 50).map((payment) => (
+                  <TableRow key={payment.id} selected={correction?.payment.id === payment.id}>
+                    <TableCell className="whitespace-nowrap tabular-nums">{payment.paymentDate}</TableCell>
+                    <TableCell>{payment.sourceType === 'bank_transaction' ? 'Bank' : payment.sourceType === 'invoice_payment' ? 'Rechnung' : 'Manuell'}</TableCell>
+                    <TableCell numeric>{euro(payment.refund ? -payment.amount : payment.amount)}</TableCell>
+                    <TableCell>{payment.status === 'reversed' ? <Badge tone="neutral">Storniert</Badge> : payment.refund ? <Badge tone="warning">Erstattung</Badge> : <Badge tone="success">Gebucht</Badge>}</TableCell>
+                    <TableCell>
+                      {payment.status !== 'reversed' && canMutate ? (
+                        <div className="flex gap-1">
+                          <Button size="sm" variant="ghost" disabled={busy} onClick={() => { setCorrection({ payment, mode: 'reverse' }); setCorrectionTargetId(''); }}>Stornieren</Button>
+                          {payment.sourceType !== 'invoice_payment' && !payment.refund ? <Button size="sm" variant="ghost" disabled={busy} onClick={() => { setCorrection({ payment, mode: 'reallocate' }); setCorrectionTargetId(''); }}>Umbuchen</Button> : null}
+                        </div>
+                      ) : null}
+                    </TableCell>
+                  </TableRow>
+                ))}</TableBody>
+              </Table>
+            )}
+            {correction ? (
+              <div className="flex flex-col gap-3 border-t border-border p-3.5" data-testid="opos-payment-correction">
+                <p className="text-control text-muted">
+                  {correction.mode === 'reverse'
+                    ? `Storno der Zahlung vom ${correction.payment.paymentDate} über ${euro(correction.payment.amount)}: Gegenbuchung zum Zahlungsdatum, Zuordnung zurückgenommen, Beleg und Bankzeile wieder offen.`
+                    : `Umbuchung der Zahlung vom ${correction.payment.paymentDate} über ${euro(correction.payment.amount)}: Storno und neue Zuordnung mit derselben Begründung.`}
+                </p>
+                {correction.mode === 'reallocate' ? (
+                  <Select id="opos-correction-target" label="Neuer offener Posten" required fullWidth value={correctionTargetId} onChange={(e) => setCorrectionTargetId(e.target.value)}>
+                    <option value="">Posten wählen</option>
+                    {correctionTargets.map((item) => <option key={item.id} value={item.id}>{item.documentNumber} ({euro(item.residualAmount)})</option>)}
+                  </Select>
+                ) : null}
+                <Input id="opos-correction-reason" label="Begründung" required fullWidth value={correctionReason} onChange={(e) => setCorrectionReason(e.target.value)} placeholder="z. B. falscher Kunde zugeordnet" />
+                <div className="flex gap-2">
+                  <Button variant={correction.mode === 'reverse' ? 'danger' : 'primary'} disabled={busy} onClick={submitCorrection}>{correction.mode === 'reverse' ? 'Zahlung stornieren' : 'Umbuchen'}</Button>
+                  <Button variant="secondary" disabled={busy} onClick={() => setCorrection(null)}>Abbrechen</Button>
+                </div>
+              </div>
+            ) : null}
+          </Card>
+        ) : null}
 
         <section className="min-w-0 space-y-3.5" aria-labelledby="incoming-heading">
           <Card padding="none">

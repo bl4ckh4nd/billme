@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { expect, test } from '@playwright/test';
-import { appUrl, importPendingProTransaction, approveProDraft, invokeDesktopIpc, launchDesktopApp, PRO_DOUBLE_ENTRY_SETTINGS, seedDesktopData } from '../support.mjs';
+import { appUrl, importPendingProTransaction, approveProDraft, getDesktopSettings, invokeDesktopIpc, launchDesktopApp, PRO_DOUBLE_ENTRY_SETTINGS, seedDesktopData, setDesktopSettings } from '../support.mjs';
 
 /**
  * The main Pro flows through the visible UI, with the ledger as the witness (Playwright against the real Electron app):
@@ -20,7 +20,10 @@ const SETTINGS = { ...PRO_DOUBLE_ENTRY_SETTINGS, legal: { smallBusinessRule: fal
 
 test.beforeEach(async () => {
   desktop = await launchDesktopApp({ app: 'pro' });
-  await seedDesktopData(desktop.page, { app: 'pro', settingsOverrides: SETTINGS });
+  // The seed issues Kleinunternehmer invoices, so it runs under KU; the flows then charge VAT.
+  await seedDesktopData(desktop.page, { app: 'pro', settingsOverrides: PRO_DOUBLE_ENTRY_SETTINGS });
+  const settings = await getDesktopSettings(desktop.page);
+  await setDesktopSettings(desktop.page, { ...settings, legal: { ...settings.legal, ...SETTINGS.legal } });
   // Seeding writes past react-query and the onboarding gate; reload so the shell reads the seeded rows.
   await desktop.page.reload();
 });
@@ -152,6 +155,28 @@ test('issues an invoice, books Forderung/Erlös/USt, lists the open item and set
   // The whole ledger still balances.
   const all = await journal(page);
   expect(all.flatMap((candidateEntry) => candidateEntry.lines).reduce((sum, line) => Math.round((sum + line.debitAmount - line.creditAmount) * 100) / 100, 0)).toBe(0);
+
+  // Zahlungsstorno: the payment was wrong. It is reversed in Offene Posten with a written reason; the mirror
+  // entry is in the journal and receivable, invoice and bank line are open again.
+  const payments = page.getByRole('table', { name: 'Gebuchte Zahlungen' });
+  const paymentRow = payments.getByRole('row').filter({ hasText: 'Bank' }).filter({ hasText: '1.190,00 €' });
+  await paymentRow.getByRole('button', { name: 'Stornieren' }).click();
+  const correction = page.getByTestId('opos-payment-correction');
+  await correction.getByRole('button', { name: 'Zahlung stornieren' }).click();
+  await expect(page.getByRole('alert').filter({ hasText: 'Begründung ist erforderlich.' })).toBeVisible();
+  await correction.getByRole('textbox', { name: 'Begründung' }).fill('E2E falscher Kunde');
+  await correction.getByRole('button', { name: 'Zahlung stornieren' }).click();
+  await expect(page.getByRole('status').filter({ hasText: 'Zahlung storniert.' })).toBeVisible();
+  await expect(payments.getByRole('row').filter({ hasText: 'Storniert' })).toBeVisible();
+  await expect(page.getByRole('table', { name: 'Forderungen' }).getByRole('row', { name: new RegExp(`^${invoice.number} .* 1\\.190,00 € Offen`) })).toBeVisible();
+  await page.screenshot({ path: shot('06-opos-payment-reversed'), fullPage: true });
+  const reversedEntry = (await journal(page)).find((candidateEntry) => candidateEntry.id === paymentEntry.id);
+  expect(reversedEntry.status).toBe('reversed');
+  const mirror = (await journal(page)).find((candidateEntry) => candidateEntry.sourceKey === `reversal:${paymentEntry.id}`);
+  expect(shape(mirror)).toEqual([['1200', 0, 1190], ['1400', 1190, 0]]);
+  expect(mirror.bookingText).toContain('E2E falscher Kunde');
+  expect((await invokeDesktopIpc(page, 'invoices:list', {})).find((candidateInvoice) => candidateInvoice.id === invoice.id)?.status).toBe('open');
+  expect((await invokeDesktopIpc(page, 'pro:listBankTransactions')).find((row) => row.id === bankLine.id)?.status).toBe('pending');
 });
 
 test('Bankabgleich opens Offene Posten with the matched invoice preselected', async () => {

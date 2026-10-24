@@ -33,6 +33,7 @@ export interface DashboardFlows {
 }
 
 const EUR_MIN_TAX_YEAR = 2025;
+const NEUTRAL_KINDS = new Set(['transit', 'private-withdrawal', 'private-contribution']);
 const monthKey = (date: Date) => `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
 
 const lastTwelveMonths = (now: Date): MonthFlow[] =>
@@ -60,8 +61,11 @@ export const aggregateFlows = (
   const byMonth = new Map(months.map((month) => [month.key, month]));
   const byCounterparty = new Map<string, { label: string; value: number }>();
   let openTransactionCount = 0;
+  // Geldtransit and Privatentnahme/-einlage move money but are neither income nor expense.
+  const neutral = new Set((eurItems ?? []).filter((item) => item.sourceType === 'transaction' && NEUTRAL_KINDS.has(item.kind ?? '')).map((item) => item.sourceId));
 
   for (const tx of transactions) {
+    if (neutral.has(tx.id)) continue;
     if (tx.type === 'income' && !tx.linkedInvoiceId) openTransactionCount += 1;
     const month = byMonth.get(tx.date.slice(0, 7));
     if (!month) continue;
@@ -81,7 +85,7 @@ export const aggregateFlows = (
   let unclassifiedCount = 0;
   const byLine = new Map<string, { label: string; value: number }>();
   for (const item of eurItems ?? []) {
-    if (!byMonth.has(item.date.slice(0, 7)) || item.classification?.excluded) continue;
+    if (!byMonth.has(item.date.slice(0, 7)) || item.classification?.excluded || NEUTRAL_KINDS.has(item.kind ?? '')) continue;
     if (!item.classification && item.sourceType === 'transaction') unclassifiedCount += 1;
     if (item.flowType !== 'expense' || !item.line) continue;
     const entry = byLine.get(item.line.id) ?? { label: item.line.label, value: 0 };

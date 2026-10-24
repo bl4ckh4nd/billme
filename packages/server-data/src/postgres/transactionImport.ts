@@ -4,6 +4,7 @@ import { isReceivableDocumentKind, type Invoice, type TenantScope } from '@billm
 import { createPostgresBillingDependencies, creditedAmount, isSkontoPayment, settledInvoiceStatus, withSkontoSettlement } from './billing.js';
 import { assertLitePeriodsOpen, periodClosedMessage } from './liteCash.js';
 import { appendWithClient } from './audit.js';
+import { bookBankLinkInTransaction, findActiveOpenItemPayment, reverseOpenItemPaymentInTransaction } from './proAccountingRepository.js';
 import { runInTransaction, type PostgresQueryable } from './connection.js';
 import type { ServerDatabase, ServerDatabaseSession } from '../database.js';
 
@@ -409,7 +410,7 @@ const bookedBankLinesOfBatch = `
   WHERE b.tenant_id = $1 AND t.import_batch_id = $2 AND (
     b.status = 'booked'
     OR (b.linked_invoice_id IS NOT NULL AND b.linked_invoice_id <> '')
-    OR EXISTS (SELECT 1 FROM open_item_payments p WHERE p.tenant_id = b.tenant_id AND p.source_type = 'bank_transaction' AND p.source_id = b.id)
+    OR EXISTS (SELECT 1 FROM open_item_payments p WHERE p.tenant_id = b.tenant_id AND p.source_type = 'bank_transaction' AND p.source_id = b.id AND p.status <> 'reversed')
     OR EXISTS (SELECT 1 FROM booking_drafts d WHERE d.tenant_id = b.tenant_id AND d.transaction_id = b.id AND d.workflow_status = 'posted'))`;
 
 export const getServerImportBatchFile = async (
@@ -632,12 +633,40 @@ export const findServerTransactionMatches = async (
   if (!transaction) throw new Error('TRANSACTION_NOT_FOUND');
   if (transaction.status !== 'booked') throw new Error('PAYMENT_ALLOCATION_INVALID');
   const invoices = await createPostgresBillingDependencies(database).invoiceRepo.list(scope);
+  // Lite: an outgoing line can be a refund or Rücklastschrift of an invoice that was paid.
+  if (scope.product === 'lite' && transaction.amount < 0) return { transaction, suggestions: refundMatchSuggestions(transaction, invoices) };
   return {
     transaction,
     suggestions: invoiceMatchSuggestions(transaction, invoices.filter((invoice) =>
       (invoice.status === 'open' || invoice.status === 'overdue')
       && isReceivableDocumentKind(invoice.documentKind))),
   };
+};
+
+const paidCashCents = (invoice: Invoice): number =>
+  (invoice.payments ?? []).filter((payment) => !isSkontoPayment(payment)).reduce((sum, payment) => sum + Math.round(Number(payment.amount) * 100), 0);
+
+/** Paid invoices an outgoing bank line can refund: the amount paid back fits, the number or the client is named. */
+const refundMatchSuggestions = (transaction: ServerTransactionRecord, invoices: Invoice[]): InvoiceMatchSuggestion[] => {
+  const outCents = Math.round(Math.abs(transaction.amount) * 100);
+  const suggestions: InvoiceMatchSuggestion[] = [];
+  for (const invoice of invoices) {
+    const paid = paidCashCents(invoice);
+    if (!['open', 'overdue', 'paid'].includes(invoice.status) || !isReceivableDocumentKind(invoice.documentKind) || paid < outCents) continue;
+    const matchReasons: string[] = [];
+    let confidence: InvoiceMatchSuggestion['confidence'] = 'low';
+    if (paid === outCents) { matchReasons.push('Betrag entspricht der erhaltenen Zahlung (Rücklastschrift?)'); confidence = 'high'; }
+    if (transaction.purpose.toLowerCase().includes(invoice.number.toLowerCase())) { matchReasons.push('Rechnungsnummer in Verwendungszweck'); confidence = 'high'; }
+    const counterparty = transaction.counterparty.toLowerCase();
+    if (invoice.client.toLowerCase().split(/\s+/).filter((word) => word.length > 2).some((word) => counterparty.includes(word))) {
+      matchReasons.push('Kundenname im Empfänger');
+      if (confidence === 'low') confidence = 'medium';
+    }
+    if (matchReasons.length) suggestions.push({ invoice, confidence, matchReasons: [...matchReasons, `Erstattung: bisher ${(paid / 100).toFixed(2)} € erhalten`], amountDiff: (paid - outCents) / 100 });
+  }
+  const order = { high: 3, medium: 2, low: 1 };
+  const named = (suggestion: InvoiceMatchSuggestion) => (transaction.purpose.toLowerCase().includes(suggestion.invoice.number.toLowerCase()) ? 1 : 0);
+  return suggestions.sort((left, right) => order[right.confidence] - order[left.confidence] || named(right) - named(left) || left.amountDiff - right.amountDiff).slice(0, 5);
 };
 
 const audit = async (
@@ -684,20 +713,35 @@ export const linkServerTransaction = async (
   const dependencies = createPostgresBillingDependencies(session);
   const invoice = await dependencies.invoiceRepo.getById(scope, invoiceId);
   if (!invoice) throw new Error('INVOICE_NOT_FOUND');
-  if (['draft', 'cancelled'].includes(invoice.status) || ['order_confirmation', 'delivery_note', 'credit_note', 'cancellation_invoice'].includes(invoice.documentKind ?? 'invoice')) throw new Error('PAYMENT_ALLOCATION_INVALID');
+  // Lite: an outgoing line on an invoice is a refund or Rücklastschrift (also of a cancelled, paid invoice).
+  // Pro books the refund through OPOS (below).
+  const refund = transaction.amount < 0;
+  if (invoice.status === 'draft' || (invoice.status === 'cancelled' && !refund) || ['order_confirmation', 'delivery_note', 'credit_note', 'cancellation_invoice'].includes(invoice.documentKind ?? 'invoice')) throw new Error('PAYMENT_ALLOCATION_INVALID');
   await assertLitePeriodsOpen(session, scope, [transaction.date]);
   const existingPayment = (invoice.payments ?? []).find((payment) => payment.id === transactionPaymentId(transaction.id));
   if (transaction.linkedInvoiceId) {
     if (existingPayment && (appliedAmountCents === undefined || Math.round(existingPayment.amount * 100) === appliedAmountCents)) return { success: true, invoice };
     throw new Error('TRANSACTION_ALREADY_LINKED');
   }
+  if (scope.product === 'pro') {
+    // Pro (P2): the bank line is booked through OPOS, Bank (account of the bank line) an Forderungen, in this
+    // transaction; open item, journal and the payments listed on the invoice move together.
+    await bookBankLinkInTransaction(session, scope, { legacyTransactionId: transaction.id, invoiceId, appliedAmount: appliedAmountCents === undefined ? undefined : appliedAmountCents / 100, mutation: { reason, actor: { type: 'user', id: actor.id, displayName: actor.displayName } } });
+    const bookedInvoice = (await dependencies.invoiceRepo.getById(scope, invoiceId))!;
+    await audit(session, scope, 'transaction', transactionId, 'link_invoice', reason, transaction, { ...transaction, linkedInvoiceId: invoiceId }, actor);
+    await audit(session, scope, 'invoice', invoiceId, 'payment_linked', reason, invoice, bookedInvoice, actor);
+    return { success: true, invoice: bookedInvoice };
+  }
   const cashCents = Math.round(transaction.amount * 100);
   // Issued credit notes reduce what is still owed, like payments do.
   const outstandingCents = Math.round(invoice.amount * 100) - Math.round(await creditedAmount(session, scope, invoiceId) * 100)
-    - (invoice.payments ?? []).filter((payment) => !isSkontoPayment(payment)).reduce((sum, payment) => sum + Math.round(payment.amount * 100), 0);
-  const applied = appliedAmountCents ?? Math.min(cashCents, outstandingCents);
-  if (!Number.isSafeInteger(applied) || applied <= 0 || applied > cashCents || applied > outstandingCents) throw new Error('PAYMENT_ALLOCATION_INVALID');
-  const payment = { id: transactionPaymentId(transaction.id), date: transaction.date, amount: applied / 100, method: 'Überweisung' };
+    - paidCashCents(invoice);
+  // A refund is a negative payment of at most what was paid (appliedAmountCents is its size); it reopens the
+  // invoice, and the Lite EÜR counts it once, as that payment, because the bank line has no rest left.
+  const applied = refund ? -(appliedAmountCents ?? Math.min(-cashCents, paidCashCents(invoice))) : appliedAmountCents ?? Math.min(cashCents, outstandingCents);
+  if (refund ? (!Number.isSafeInteger(applied) || applied >= 0 || applied < cashCents || -applied > paidCashCents(invoice))
+    : (!Number.isSafeInteger(applied) || applied <= 0 || applied > cashCents || applied > outstandingCents)) throw new Error('PAYMENT_ALLOCATION_INVALID');
+  const payment = { id: transactionPaymentId(transaction.id), date: transaction.date, amount: applied / 100, method: refund ? 'Erstattung' : 'Überweisung' };
   const withPayment: Invoice = await withSkontoSettlement(session, scope, { ...invoice, payments: [...(invoice.payments ?? []), payment] });
   const updatedInvoice: Invoice = { ...withPayment, status: await settledInvoiceStatus(session, scope, withPayment) };
   const savedInvoice = await dependencies.invoiceRepo.save(scope, updatedInvoice, { replacePayments: true });
@@ -724,6 +768,17 @@ export const unlinkServerTransaction = async (
   const dependencies = createPostgresBillingDependencies(session);
   const invoice = await dependencies.invoiceRepo.getById(scope, transaction.linkedInvoiceId);
   await assertLitePeriodsOpen(session, scope, [transaction.date]);
+  if (scope.product === 'pro') {
+    // Pro (P2): unlinking a booked bank line is its Zahlungsstorno; the mirror entries are in the journal.
+    const bank = (await query<{ id: string }>(session, 'SELECT id FROM bank_transactions WHERE tenant_id=$1 AND source_transaction_id=$2', [tenant(scope), transactionId])).rows[0];
+    const booked = bank ? await findActiveOpenItemPayment(session, scope, 'bank_transaction', bank.id) : undefined;
+    if (booked) {
+      await reverseOpenItemPaymentInTransaction(session, scope, { paymentId: booked.id, reason, mutation: { reason, actor: { type: 'user', id: actor.id, displayName: actor.displayName } } });
+      if (invoice) await audit(session, scope, 'invoice', invoice.id, 'payment_unlinked', reason, invoice, await dependencies.invoiceRepo.getById(scope, invoice.id), actor);
+      await audit(session, scope, 'transaction', transactionId, 'unlink_invoice', reason, transaction, { ...transaction, linkedInvoiceId: undefined }, actor);
+      return { success: true };
+    }
+  }
   if (invoice) {
     // Payment identity is transaction-derived.  Filtering by date and amount
     // would remove a legitimate second payment with the same values.

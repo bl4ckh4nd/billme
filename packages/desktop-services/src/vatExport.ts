@@ -11,6 +11,7 @@ export const exportLiteVatCsv = (report: LiteVatReport): string => {
     ['Umsatzsteuer-Vorbereitung', report.from, report.to, report.method, report.preparationComplete ? 'Prüfung vollständig' : 'Prüfung offen', 'Keine ELSTER-Übermittlung'],
     ['Datenstand', report.generatedAt, report.sourceHash],
     ['Umsatzsteuer EUR', decimal(report.outputVatCents), 'Vorsteuer EUR', decimal(report.inputVatCents), 'Zahllast EUR', decimal(report.payableCents)],
+    ['Kz 39 Sondervorauszahlung EUR', decimal(report.specialPrepaymentCents ?? 0), 'Kz 83 verbleibende Vorauszahlung/Überschuss EUR', decimal(report.remainingCents ?? report.payableCents)],
     ['Kennziffer Basis', 'Kennziffer Steuer', 'Bezeichnung', 'Richtung', 'Bemessungsgrundlage EUR', 'Bemessungsgrundlage volle EUR', 'Steuer EUR'],
     ...report.positions.map((position) => [position.code, position.taxCode ?? (position.direction === 'input' ? position.code : ''), position.label, position.direction, decimal(position.basisCents), position.basisWholeEuros, decimal(position.taxCents)]),
     ['Zahlungen EUR', decimal(report.reconciliation.paymentCashCents), 'Zuordenbar EUR', decimal(report.reconciliation.paymentRecognizedCents), 'Rest EUR', decimal(report.reconciliation.paymentResidualCents)],
@@ -43,6 +44,8 @@ export const exportLiteVatPdf = async (report: LiteVatReport): Promise<Uint8Arra
   line('Keine ELSTER-Uebermittlung. Bezeichnungen und Quelldetails siehe CSV.');
   line(`Umsatzsteuer: ${decimal(report.outputVatCents)} EUR | Vorsteuer: ${decimal(report.inputVatCents)} EUR`);
   line(`Zahllast / Erstattung: ${decimal(report.payableCents)} EUR`, true);
+  if (report.specialPrepaymentCents) line(`Kz 39 Sondervorauszahlung: ${decimal(report.specialPrepaymentCents)} EUR`);
+  line(`Kz 83 verbleibende Vorauszahlung / Ueberschuss: ${decimal(report.remainingCents ?? report.payableCents)} EUR`, true);
   for (const position of report.positions) {
     wrapped(`${position.code}${position.taxCode ? ` / Steuer ${position.taxCode}` : ''}: ${position.label}`);
     line(`Netto ${decimal(position.basisCents)} EUR (Formular: ${position.basisWholeEuros} EUR), Steuer ${decimal(position.taxCents)} EUR`);

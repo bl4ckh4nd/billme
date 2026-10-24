@@ -490,7 +490,7 @@ export const ipcRoutes = {
   'cash:saveEntry': { channel: 'cash:saveEntry', args: z.object({ entry: liteCashEntryInputSchema, expectedUpdatedAt: z.string().optional(), reason: z.string().trim().min(1) }), result: liteCashEntrySchema },
   'cash:saveReceipt': { channel: 'cash:saveReceipt', args: z.object({ receipt: liteReceiptInputSchema, expectedUpdatedAt: z.string().optional(), reason: z.string().trim().min(1) }), result: liteReceiptSchema },
   'cash:deleteEntry': { channel: 'cash:deleteEntry', args: z.object({ id: z.string().min(1), expectedUpdatedAt: z.string(), reason: z.string().trim().min(1) }), result: okSchema },
-  'cash:matchEntry': { channel: 'cash:matchEntry', args: z.object({ id: z.string().min(1), transactionId: z.string().min(1), expectedCashDate: z.string(), reason: z.string().trim().min(1) }), result: liteCashEntrySchema },
+  'cash:matchEntry': { channel: 'cash:matchEntry', args: z.object({ id: z.string().min(1), transactionId: z.string().min(1), expectedCashDate: z.string(), transit: z.boolean().optional(), reason: z.string().trim().min(1) }), result: liteCashEntrySchema },
   'cash:unmatchEntry': { channel: 'cash:unmatchEntry', args: z.object({ id: z.string().min(1), reason: z.string().trim().min(1) }), result: liteCashEntrySchema },
   'cash:listClosedPeriods': { channel: 'cash:listClosedPeriods', args: z.undefined(), result: z.array(z.object({ period: z.string(), closedAt: z.string() })) },
   'cash:closePeriod': { channel: 'cash:closePeriod', args: z.object({ period: z.string().regex(/^\d{4}-(0[1-9]|1[0-2])$/), reason: z.string().trim().min(1) }), result: z.object({ period: z.string(), closed: z.literal(true) }) },

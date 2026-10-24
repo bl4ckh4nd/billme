@@ -295,6 +295,20 @@
       "when": 1790985600009,
       "tag": "0042_server_data_journal_balance_guards",
       "breakpoints": false
+    },
+    {
+      "idx": 43,
+      "version": "7",
+      "when": 1790985600010,
+      "tag": "0043_server_data_payment_reversal",
+      "breakpoints": false
+    },
+    {
+      "idx": 46,
+      "version": "7",
+      "when": 1790985600013,
+      "tag": "0046_server_data_eur_form_columns",
+      "breakpoints": false
     }
   ]
 }

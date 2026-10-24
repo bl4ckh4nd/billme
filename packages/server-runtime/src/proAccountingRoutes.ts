@@ -290,6 +290,7 @@ const paymentBody = z.object({
     method: z.string().optional(),
     allocations: z.array(z.object({ openItemId: z.string().min(1), amount: z.number().positive() })),
     allocationEventId: z.string().min(1),
+    refund: z.boolean().optional(),
   }),
 });
 const remainingPaymentBody = z.object({
@@ -1504,6 +1505,39 @@ export const registerProAccountingRoutes = (app: FastifyInstance, options: ProAc
         mutationFor(session, body.reason),
       );
       return payment;
+    },
+  });
+
+  typedRoute(app, {
+    method: 'GET',
+    url: `${prefix}/open-items/payments`,
+    async handler({ request }) {
+      const session = await requireProSession(app, request.headers.authorization);
+      return repositoryFor(app).listOpenItemPayments(session.scope);
+    },
+  });
+
+  // Zahlungsstorno: mirror entries, allocations taken back, invoice and bank line open again.
+  typedRoute(app, {
+    method: 'POST',
+    url: `${prefix}/open-items/payments/:paymentId/reverse`,
+    params: z.object({ paymentId: z.string().min(1) }),
+    body: z.object({ reason: reasonSchema, postingDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional() }),
+    async handler({ request, params, body }) {
+      const session = await requireMutationSession(app, request.headers.authorization);
+      return repositoryFor(app).reverseOpenItemPayment(session.scope, { paymentId: params.paymentId, reason: body.reason, postingDate: body.postingDate, mutation: mutationFor(session, body.reason) });
+    },
+  });
+
+  // Umbuchung: the same money to another open item or partner, Storno and new allocation under one reason.
+  typedRoute(app, {
+    method: 'POST',
+    url: `${prefix}/open-items/payments/:paymentId/reallocate`,
+    params: z.object({ paymentId: z.string().min(1) }),
+    body: z.object({ reason: reasonSchema, partyId: z.string().min(1), allocations: z.array(z.object({ openItemId: z.string().min(1), amount: z.number().positive() })).min(1), allocationEventId: z.string().min(1) }),
+    async handler({ request, params, body }) {
+      const session = await requireMutationSession(app, request.headers.authorization);
+      return repositoryFor(app).reallocateOpenItemPayment(session.scope, { paymentId: params.paymentId, ...body, mutation: mutationFor(session, body.reason) });
     },
   });
 

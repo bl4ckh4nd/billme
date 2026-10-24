@@ -830,20 +830,212 @@ describe('pro accounting: setup and posting of issued invoices', () => {
       assert.equal(age, 66, 'the buckets of the aging view are computed from dueDate');
     });
 
-    test('recording an invoice payment on a Pro invoice either works or is refused with a typed error, never a 500', async () => {
+    const invoicePayment = (invoiceId: string, payment: Record<string, unknown>, reason = 'Zahlung erfasst') =>
+      h.raw('POST', `/invoices/${invoiceId}/payments`, { reason, payment: { id: randomUUID(), date: today(), method: 'Überweisung', ...payment } });
+
+    test('a payment recorded on a Pro invoice settles its open item and books bank against receivable in the same step', async () => {
       const invoice = await issue(h, { client: 'Rechnungszahlung' });
-      const response = await h.raw('POST', `/invoices/${invoice.id}/payments`, { reason: 'bezahlt', payment: { id: randomUUID(), date: today(), amount: GROSS, method: 'bank' } });
-      assert.ok(response.status < 500, `${response.status} ${response.text.slice(0, 120)}`);
-      assert.doesNotMatch(response.text, /insert into|params:/i);
+      const entries = (await journal(h)).length;
+      const response = await invoicePayment(invoice.id, { amount: GROSS });
+      assert.equal(response.status, 200, response.text);
+      assert.equal(response.body.status, 'paid', 'the response carries the settled status');
+      const paymentId = response.body.payments[0].id;
+      assert.deepEqual([(await itemOf(invoice.id)).status, (await itemOf(invoice.id)).residualAmount], ['paid', 0]);
+      assert.equal((await journal(h)).length, entries + 1, 'exactly one payment entry');
+      const entry = (await entryFor(h, `payment:invoice_payment:${paymentId}`))!;
+      assert.ok(entry, 'the payment is in the journal under its invoice payment id');
+      assert.deepEqual(shape(entry), [['1200', GROSS, 0], ['1400', 0, GROSS]]);
+      assert.equal((await invoiceOf(h, invoice.id)).status, 'paid');
+      await assertLedgerConsistent(h);
     });
 
-    test('linking a bank transaction to an issued Pro invoice records the payment', async () => {
+    test('a cash payment on a Pro invoice books the cash account, a partial one leaves the item partly open', async () => {
+      const invoice = await issue(h, { client: 'Barzahler' });
+      const response = await invoicePayment(invoice.id, { amount: 100, method: 'Bar' });
+      assert.equal(response.status, 200, response.text);
+      const entry = (await entryFor(h, `payment:invoice_payment:${response.body.payments[0].id}`))!;
+      assert.deepEqual(shape(entry), [['1000', 100, 0], ['1400', 0, 100]], 'Bar goes to Kasse 1000');
+      const item = await itemOf(invoice.id);
+      assert.deepEqual([item.status, item.allocatedAmount, item.residualAmount], ['partially_paid', 100, 138]);
+      assert.notEqual((await invoiceOf(h, invoice.id)).status, 'paid');
+    });
+
+    test('reversing a payment recorded on a Pro invoice posts the mirror entry and reopens item and invoice', async () => {
+      const invoice = await issue(h, { client: 'Zahlung zurück' });
+      const paid = await invoicePayment(invoice.id, { amount: GROSS });
+      assert.equal(paid.status, 200, paid.text);
+      const payment = paid.body.payments[0];
+      const entry = (await entryFor(h, `payment:invoice_payment:${payment.id}`))!;
+      const reversed = await h.raw('POST', `/invoices/${invoice.id}/payments/${payment.id}/reverse`, { reason: 'Falsch erfasst', expectedPayment: payment });
+      assert.equal(reversed.status, 200, reversed.text);
+      assert.equal(reversed.body.status, 'open');
+      assert.deepEqual(reversed.body.payments, []);
+      assert.equal((await get<JournalEntry>(h, `/accounting/journal/${entry.id}`)).status, 'reversed');
+      const mirror = (await journal(h)).find((candidate) => candidate.sourceKey === `reversal:${entry.id}`)!;
+      assert.deepEqual(shape(mirror), [['1200', 0, GROSS], ['1400', GROSS, 0]]);
+      assert.deepEqual([(await itemOf(invoice.id)).status, (await itemOf(invoice.id)).residualAmount], ['open', GROSS]);
+      // The same invoice takes a new payment afterwards.
+      assert.equal((await invoicePayment(invoice.id, { amount: GROSS })).status, 200);
+      assert.equal((await itemOf(invoice.id)).status, 'paid');
+      await assertLedgerConsistent(h);
+    });
+
+    test('a Pro invoice payment that cannot be booked is refused and changes neither invoice nor ledger', async () => {
+      const invoice = await issue(h, { client: 'Unbuchbar' });
+      const entries = (await journal(h)).length;
+      const negative = await invoicePayment(invoice.id, { amount: -50 });
+      assert.ok(negative.status >= 400 && negative.status < 500, `a refund with nothing paid was accepted (${negative.status})`);
+      const tooMuch = await invoicePayment(invoice.id, { amount: GROSS + 100 });
+      assert.ok(tooMuch.status >= 400 && tooMuch.status < 500, `an overpayment on the invoice route was accepted (${tooMuch.status})`);
+      assert.equal((await journal(h)).length, entries);
+      assert.deepEqual((await invoiceOf(h, invoice.id)).payments ?? [], []);
+      assert.equal((await itemOf(invoice.id)).allocatedAmount, 0);
+    });
+
+    test('a payment allocated in OPOS shows on the invoice: invoice payments and open item tell the same story', async () => {
+      const invoice = await issue(h, { client: 'Eine Wahrheit' });
+      const paid = await pay(h, await itemOf(invoice.id), 100);
+      assert.equal(paid.status, 200, paid.text);
+      const shown = await invoiceOf(h, invoice.id);
+      assert.equal(money((shown.payments ?? []).reduce((sum, payment) => sum + payment.amount, 0)), 100, 'the invoice lists the OPOS payment');
+      const edit = await h.raw('POST', `/invoices/${invoice.id}/payments/${shown.payments![0]!.id}/reverse`, { reason: 'x', expectedPayment: shown.payments![0] });
+      assert.equal(edit.status, 409, 'an OPOS payment is corrected in OPOS, not on the invoice');
+    });
+
+    test('linking a bank transaction to an issued Pro invoice books the bank line against the receivable on the account of the bank', async () => {
       const invoice = await issue(h, { client: `Verknüpfung ${randomUUID().slice(0, 6)}` });
-      const account = await addBankAccount(h);
+      const account = await addBankAccount(h, undefined, '1240');
       await importCsv(h, account, [{ date: today(), amount: GROSS, counterparty: invoice.client, purpose: `Zahlung ${invoice.number}` }]);
       const legacy = (await get<Array<{ id: string; counterparty: string }>>(h, '/transactions')).find((tx) => tx.counterparty === invoice.client)!;
+      const tx = await bankTx(h, invoice.client);
+      const entries = (await journal(h)).length;
       const response = await h.raw('POST', `/transactions/${legacy.id}/link`, { reason: 'Zuordnung', invoiceId: invoice.id });
       assert.equal(response.status, 200, response.text.slice(0, 160));
+      assert.equal(response.body.invoice.status, 'paid');
+      assert.equal((await journal(h)).length, entries + 1);
+      const entry = (await entryFor(h, `payment:bank_transaction:${tx.id}`))!;
+      assert.deepEqual(shape(entry), [['1240', GROSS, 0], ['1400', 0, GROSS]], 'the bank account books on its own ledger account');
+      assert.deepEqual([(await itemOf(invoice.id)).status, (await bankTx(h, invoice.client)).status], ['paid', 'booked']);
+      // The same bank line cannot be booked a second time through OPOS.
+      const again = await pay(h, await itemOf(invoice.id), GROSS, { sourceType: 'bank_transaction', sourceId: tx.id, partyId: invoice.client, bankAccountNumber: '1240' });
+      assert.equal(again.status, 200, again.text);
+      const wrongAccount = await pay(h, await itemOf(invoice.id), GROSS, { sourceType: 'bank_transaction', sourceId: tx.id, partyId: invoice.client, bankAccountNumber: '1200' });
+      assert.equal(wrongAccount.status, 422, 'the bank line cannot be booked on another bank account');
+      assert.equal((await journal(h)).length, entries + 1, 'still one entry');
+
+      const unlinked = await h.raw('POST', `/transactions/${legacy.id}/unlink`, { reason: 'Falscher Kunde' });
+      assert.equal(unlinked.status, 200, unlinked.text);
+      assert.equal((await get<JournalEntry>(h, `/accounting/journal/${entry.id}`)).status, 'reversed', 'unlinking reverses the payment entry');
+      assert.deepEqual([(await itemOf(invoice.id)).status, (await bankTx(h, invoice.client)).status, (await invoiceOf(h, invoice.id)).status], ['open', 'pending', 'open']);
+      await assertLedgerConsistent(h);
+    });
+
+    const paymentsList = () => get<Array<{ id: string; status: string; sourceId: string; partyId?: string; allocatedAmount: number; residualAmount: number; refund?: boolean }>>(h, '/accounting/open-items/payments');
+    const reversePayment = (id: string, reason: string | null = 'Falsch zugeordnet', extra: Record<string, unknown> = {}) =>
+      h.raw('POST', `/accounting/open-items/payments/${id}/reverse`, reason === null ? extra : { reason, ...extra });
+    const bankLine = async (amount: number, counterparty: string, skr = '1200') => {
+      const account = await addBankAccount(h, undefined, skr);
+      await importCsv(h, account, [{ date: today(), amount, counterparty, purpose: `Bank ${counterparty}` }]);
+      return bankTx(h, counterparty);
+    };
+
+    test('Umbuchung: a bank payment on the wrong customer is reversed and booked on the right one, both visible in the journal', async () => {
+      const wrong = await issue(h, { client: `Kunde A ${randomUUID().slice(0, 6)}` });
+      const right = await issue(h, { client: `Kunde B ${randomUUID().slice(0, 6)}` });
+      const tx = await bankLine(GROSS, `Zahler ${randomUUID().slice(0, 6)}`);
+      const first = await pay(h, await itemOf(wrong.id), GROSS, { sourceType: 'bank_transaction', sourceId: tx.id, partyId: wrong.client });
+      assert.equal(first.status, 200, first.text);
+      assert.equal((await invoiceOf(h, wrong.id)).status, 'paid');
+
+      const call = (body: Record<string, unknown>) => h.raw('POST', `/accounting/open-items/payments/${first.body.id}/reallocate`, { reason: 'Zahlung gehört zu Kunde B', partyId: right.client, allocationEventId: `um-${randomUUID()}`, allocations: [{ openItemId: '', amount: GROSS }], ...body });
+      const rightItem = await itemOf(right.id);
+      const entries = (await journal(h)).length;
+      assert.equal((await call({ reason: ' ', allocations: [{ openItemId: rightItem.id, amount: GROSS }] })).status, 400, 'a reason is required');
+      const foreignParty = await call({ partyId: wrong.client, allocations: [{ openItemId: rightItem.id, amount: GROSS }] });
+      assert.equal(foreignParty.status, 422, 'the partner and the open item must match');
+      assert.equal((await journal(h)).length, entries, 'a refused Umbuchung books nothing, the Storno is rolled back too');
+      assert.equal((await invoiceOf(h, wrong.id)).status, 'paid');
+
+      const moved = await call({ allocations: [{ openItemId: rightItem.id, amount: GROSS }] });
+      assert.equal(moved.status, 200, moved.text);
+      assert.deepEqual([(await itemOf(wrong.id)).status, (await itemOf(right.id)).status], ['open', 'paid']);
+      assert.deepEqual([(await invoiceOf(h, wrong.id)).status, (await invoiceOf(h, right.id)).status], ['open', 'paid']);
+      assert.deepEqual((await invoiceOf(h, wrong.id)).payments ?? [], [], 'the wrong invoice no longer lists the payment');
+      assert.equal(money(((await invoiceOf(h, right.id)).payments ?? []).reduce((sum, payment) => sum + payment.amount, 0)), GROSS);
+      const all = await journal(h);
+      assert.equal(all.length, entries + 2, 'one Storno entry and one new payment entry');
+      assert.equal(all.find((entry) => entry.id === first.body.journalEntryId)!.status, 'reversed');
+      const mirror = all.find((entry) => entry.sourceKey === `reversal:${first.body.journalEntryId}`)!;
+      assert.match(mirror.bookingText, /Zahlung gehört zu Kunde B/);
+      const rebooked = all.find((entry) => entry.id === moved.body.payment.journalEntryId)!;
+      assert.match(rebooked.bookingText, /Umbuchung/);
+      assert.deepEqual(shape(rebooked), [['1200', GROSS, 0], ['1400', 0, GROSS]]);
+      const booked = await bankTx(h, tx.counterparty);
+      assert.deepEqual([booked.status, booked.linkedInvoiceId], ['booked', right.id]);
+      const listed = await paymentsList();
+      assert.equal(listed.find((payment) => payment.id === first.body.id)!.status, 'reversed', 'the reversed payment stays as history');
+      assert.ok((await h.api.audit.exportCsv()).includes('Zahlung gehört zu Kunde B'));
+
+      const twice = await reversePayment(first.body.id);
+      assert.equal(twice.status, 409, 'a payment is reversed once');
+      assert.equal((await reversePayment('nope')).status, 404);
+      assert.equal((await reversePayment(moved.body.payment.id, null)).status, 400, 'a Zahlungsstorno needs a reason');
+      await assertLedgerConsistent(h);
+    });
+
+    test('a Rücklastschrift (outgoing bank line to the customer) reopens the paid invoice; a refund beyond what was paid is refused', async () => {
+      const invoice = await issue(h, { client: `Lastschrift ${randomUUID().slice(0, 6)}` });
+      assert.equal((await pay(h, await itemOf(invoice.id), GROSS)).status, 200);
+      const back = await bankLine(-GROSS, `Rücklastschrift ${randomUUID().slice(0, 6)}`);
+      const entries = (await journal(h)).length;
+      const tooMuch = await pay(h, await itemOf(invoice.id), GROSS + 10, { sourceType: 'bank_transaction', sourceId: back.id, partyId: invoice.client, amount: GROSS, allocations: [{ openItemId: (await itemOf(invoice.id)).id, amount: GROSS + 10 }] });
+      assert.equal(tooMuch.status, 400, tooMuch.text);
+      assert.equal((await journal(h)).length, entries);
+      const returned = await pay(h, await itemOf(invoice.id), GROSS, { sourceType: 'bank_transaction', sourceId: back.id, partyId: invoice.client });
+      assert.equal(returned.status, 200, returned.text);
+      assert.equal(returned.body.refund, true);
+      const entry = (await journal(h)).find((candidate) => candidate.id === returned.body.journalEntryId)!;
+      assert.deepEqual(shape(entry), [['1400', GROSS, 0], ['1200', 0, GROSS]], 'Forderungen an Bank');
+      assert.equal(entry.bookingText, 'Erstattung');
+      assert.deepEqual([(await itemOf(invoice.id)).status, (await itemOf(invoice.id)).residualAmount, (await invoiceOf(h, invoice.id)).status], ['open', GROSS, 'open']);
+      assert.equal((await bankTx(h, back.counterparty)).status, 'booked');
+      // The payment that was returned cannot be reversed while the Rücklastschrift stands.
+      const original = (await paymentsList()).find((payment) => payment.partyId === invoice.client && !payment.refund)!;
+      assert.equal((await reversePayment(original.id)).status, 409);
+      await assertLedgerConsistent(h);
+    });
+
+    test('an overpayment is the customer\'s credit with its partner, and paying it out closes it', async () => {
+      const invoice = await issue(h, { client: `Guthaben ${randomUUID().slice(0, 6)}` });
+      const over = await pay(h, await itemOf(invoice.id), 300, { partyId: invoice.client }, GROSS);
+      assert.equal(over.status, 200, over.text);
+      const credit = (await openItems(h)).find((item) => item.sourceType === 'payment' && item.sourceId === over.body.id)!;
+      assert.ok(credit, 'the surplus is listed as an open item');
+      assert.deepEqual([credit.partyType, credit.partyId, credit.residualAmount], ['debtor', invoice.client, -62]);
+      const out = await bankLine(-62, `Rückzahlung ${randomUUID().slice(0, 6)}`);
+      const refund = await pay(h, credit, 62, { sourceType: 'bank_transaction', sourceId: out.id, partyId: invoice.client });
+      assert.equal(refund.status, 200, refund.text);
+      assert.deepEqual(shape((await journal(h)).find((entry) => entry.id === refund.body.journalEntryId)!), [['1400', 62, 0], ['1200', 0, 62]]);
+      assert.ok(!(await openItems(h)).some((item) => item.id === credit.id), 'the credit is paid out');
+      assert.equal((await reversePayment(over.body.id)).status, 409, 'the overpayment cannot be reversed while its refund stands');
+      assert.equal((await reversePayment(refund.body.id, 'Erstattung falsch')).status, 200);
+      assert.equal((await openItems(h)).find((item) => item.id === credit.id)!.residualAmount, -62, 'reversing the refund restores the credit');
+      await assertLedgerConsistent(h);
+    });
+
+    test('a Storno of a paid invoice leaves the customer a credit item, paid out by a refund on the invoice', async () => {
+      const invoice = await issue(h, { client: `Storno bezahlt ${randomUUID().slice(0, 6)}` });
+      assert.equal((await invoicePayment(invoice.id, { amount: GROSS })).status, 200);
+      const cancellation = await correction(h, invoice.id, 'cancellation_invoice');
+      const credit = (await openItems(h)).find((item) => item.sourceId === cancellation.id)!;
+      assert.ok(credit, 'the amount owed back is an open item');
+      assert.deepEqual([credit.partyId, credit.residualAmount], [invoice.client, -GROSS]);
+      const refund = await invoicePayment(invoice.id, { amount: -GROSS, method: 'Überweisung' }, 'Rückzahlung nach Storno');
+      assert.equal(refund.status, 200, refund.text);
+      const after = (await openItems(h)).find((item) => item.id === credit.id)!;
+      assert.deepEqual([after.status, after.residualAmount], ['paid', 0]);
+      assert.equal((await invoiceOf(h, invoice.id)).status, 'cancelled');
+      await assertLedgerConsistent(h);
     });
 
     test('a bank line allocated to an open item books the transaction once and needs the party', async () => {
@@ -1216,6 +1408,14 @@ describe('pro accounting: setup and posting of issued invoices', () => {
       const refused = await h.raw('POST', '/accounting/documents/reverse', { reason: 'Storno', documentType: 'incoming_invoice', documentId: id });
       assert.equal(refused.status, 409, 'a paid incoming invoice cannot be reversed');
       assert.match(refused.body.message, /DOCUMENT_HAS_ALLOCATIONS/);
+      // Zahlungsstorno on the supplier side: the creditor item and the incoming invoice are open again,
+      // after which the invoice itself can be reversed.
+      const reversed = await h.raw('POST', `/accounting/open-items/payments/${paid.body.id}/reverse`, { reason: 'Doppelt bezahlt erfasst' });
+      assert.equal(reversed.status, 200, reversed.text);
+      assert.deepEqual(shape((await journal(h)).find((entry) => entry.id === reversed.body.reversalEntryIds[0])!), [['1600', 0, 119], ['1200', 119, 0]]);
+      assert.equal((await listed(id)).status, 'open');
+      assert.equal((await openItems(h)).find((candidate) => candidate.sourceId === id)!.residualAmount, 119);
+      assert.equal((await h.raw('POST', '/accounting/documents/reverse', { reason: 'Storno', documentType: 'incoming_invoice', documentId: id })).status, 200);
     });
 
     test('an unpaid incoming invoice can be reversed once and its mirror neutralises the expense', async () => {

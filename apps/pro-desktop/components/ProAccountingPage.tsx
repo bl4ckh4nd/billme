@@ -724,6 +724,15 @@ export const ProAccountingPage: React.FC<{ view?: unknown; onViewChange?: (view:
       allocateRemainingOpenItemPayment(paymentId, allocations, allocationEventId, reason) {
         return ipc.pro.allocateRemainingPayment({ paymentId, allocations, allocationEventId, reason });
       },
+      listOpenItemPayments() {
+        return ipc.pro.listOpenItemPayments();
+      },
+      reverseOpenItemPayment(paymentId, reason) {
+        return ipc.pro.reverseOpenItemPayment({ paymentId, reason });
+      },
+      reallocateOpenItemPayment(paymentId, input) {
+        return ipc.pro.reallocateOpenItemPayment({ paymentId, ...input });
+      },
       listVendors() {
         return ipc.pro.listVendors();
       },

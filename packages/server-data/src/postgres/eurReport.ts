@@ -32,15 +32,22 @@ export interface ServerEurReportResult {
   rows: Array<EurCalculationLine & { total: number }>;
   summary: { incomeTotal: number; expenseTotal: number; surplus: number };
   unclassifiedCount: number;
+  /** Payments without a category: they are missing from the EÜR until classified (gross, per direction). */
+  unclassified: { incomeCount: number; incomeAmount: number; expenseCount: number; expenseAmount: number };
   warnings: string[];
   catalog: {
     id: string;
+    title: string;
     version: string;
     sourceHash: string;
     delivery: 'print-form-only' | 'elster-ready';
     elsterReady: boolean;
+    /** The year has no published form of its own; it is calculated with the newest one. */
+    provisional: boolean;
   };
 }
+
+export type CashPaymentMethod = 'bank' | 'cash' | 'non_cash';
 
 export interface ServerEurCashItem {
   sourceType: 'transaction' | 'invoice' | 'manual';
@@ -53,6 +60,8 @@ export interface ServerEurCashItem {
   amountNet: number;
   flowType: 'income' | 'expense';
   accountId?: string;
+  /** Manual entries only: Bank, Bar or nicht zahlungswirksam; missing on entries saved before migration 0046. */
+  paymentMethod?: CashPaymentMethod;
   linkedViaInvoice?: boolean;
   counterparty: string;
   purpose: string;
@@ -100,6 +109,7 @@ type CashSource = {
   amountGross: number;
   flowType: 'income' | 'expense';
   accountId?: string;
+  paymentMethod?: CashPaymentMethod;
   linkedViaInvoice?: boolean;
   counterparty: string;
   purpose: string;
@@ -207,7 +217,7 @@ const listCashSources = async (db: PostgresQueryable, scope: TenantScope, from: 
       const rates = Array.isArray(receipt?.taxBreakdown) ? receipt.taxBreakdown as Array<{ netAmountCents: number; vatAmountCents: number }> : [];
       const receiptNet = rates.reduce((sum, rate) => sum + Number(rate.netAmountCents) + (row.flow_type === 'expense' ? Number(rate.vatAmountCents) * (1 - Number(receipt?.deductiblePercent ?? 0) / 100) : 0), 0);
       const receiptGross = Number(receipt?.grossAmountCents);
-      result.push({ sourceType: 'manual', sourceId: String(row.id), date, amountGross: gross, flowType: row.flow_type === 'expense' ? 'expense' : 'income', accountId: row.account_id ? String(row.account_id) : undefined, counterparty: String(row.counterparty), purpose: `${String(row.purpose)}${yearOf(date) !== taxYear ? TEN_DAY_NOTE : ''}`, sourceNet: receipt?.reviewed && receiptGross !== 0 && Number.isFinite(receiptGross) ? round(gross * receiptNet / receiptGross) : undefined, transit: Boolean(row.bank_type) && row.bank_type !== row.flow_type });
+      result.push({ sourceType: 'manual', sourceId: String(row.id), date, amountGross: gross, flowType: row.flow_type === 'expense' ? 'expense' : 'income', accountId: row.account_id ? String(row.account_id) : undefined, paymentMethod: row.payment_method ? String(row.payment_method) as CashPaymentMethod : undefined, counterparty: String(row.counterparty), purpose: `${String(row.purpose)}${yearOf(date) !== taxYear ? TEN_DAY_NOTE : ''}`, sourceNet: receipt?.reviewed && receiptGross !== 0 && Number.isFinite(receiptGross) ? round(gross * receiptNet / receiptGross) : undefined, transit: Boolean(row.bank_type) && row.bank_type !== row.flow_type });
     }
     for (const bank of transactions) {
       if (representedManual.has(bank.id)) continue;
@@ -245,11 +255,11 @@ const listCashSources = async (db: PostgresQueryable, scope: TenantScope, from: 
 
   const representedBanks = new Set<string>();
   const payments = await q<Record<string, unknown>>(db, `
-    SELECT p.id,p.payment_date,p.amount,p.party_type,p.source_type,p.source_id,
+    SELECT p.id,p.payment_date,p.amount,p.party_type,p.source_type,p.source_id,p.refund,
            b.id AS bank_id,b.account_id,b.source_transaction_id,b.counterparty,b.purpose
     FROM open_item_payments p
     LEFT JOIN bank_transactions b ON b.tenant_id=p.tenant_id AND b.id=p.source_id AND p.source_type='bank_transaction'
-    WHERE p.tenant_id=$1 AND p.payment_date >= $2 AND p.payment_date <= $3
+    WHERE p.tenant_id=$1 AND p.payment_date >= $2 AND p.payment_date <= $3 AND p.status <> 'reversed'
       AND (p.source_type <> 'bank_transaction' OR b.status='booked')
     ORDER BY p.payment_date,p.id`, [t, from, to]);
   for (const payment of payments) {
@@ -261,13 +271,14 @@ const listCashSources = async (db: PostgresQueryable, scope: TenantScope, from: 
     let allocated = 0;
     if (payment.bank_id) representedBanks.add(String(payment.bank_id));
     for (const allocation of allocations) {
-      const gross = Math.max(0, Math.min(amountGross - allocated, Number(allocation.amount) || 0));
+      // A refund (Pro) takes money back: its allocations are negative and it counts against the flow.
+      const gross = Math.max(0, Math.min(amountGross - allocated, Math.abs(Number(allocation.amount) || 0)));
       if (gross <= 0) continue;
       allocated += gross;
       const sourceType = String(allocation.source_type);
       const invoiceType = sourceType === 'outgoing_invoice' || sourceType === 'incoming_invoice' ? sourceType : undefined;
       result.push({
-        sourceType: 'transaction', sourceId: `payment:${payment.id}:allocation:${allocation.id}`, date: String(payment.payment_date), amountGross: gross,
+        sourceType: 'transaction', sourceId: `payment:${payment.id}:allocation:${allocation.id}`, date: String(payment.payment_date), amountGross: payment.refund ? -gross : gross,
         accountId: payment.account_id ? String(payment.account_id) : undefined,
         linkedViaInvoice: Boolean(invoiceType),
         flowType: allocation.party_type === 'creditor' ? 'expense' : 'income', counterparty: String(payment.counterparty ?? ''), purpose: String(payment.purpose ?? 'OPOS Zahlung'), invoiceType, invoiceId: invoiceType ? String(allocation.source_id) : undefined,
@@ -276,7 +287,7 @@ const listCashSources = async (db: PostgresQueryable, scope: TenantScope, from: 
     }
     const residual = Math.max(0, amountGross - allocated);
     if (!allocations.length || residual > 0.005) result.push({
-      sourceType: 'transaction', sourceId: allocations.length ? `payment:${payment.id}:residual` : String(payment.bank_id ?? `payment:${payment.id}`), date: String(payment.payment_date), amountGross: allocations.length ? residual : amountGross,
+      sourceType: 'transaction', sourceId: allocations.length ? `payment:${payment.id}:residual` : String(payment.bank_id ?? `payment:${payment.id}`), date: String(payment.payment_date), amountGross: (allocations.length ? residual : amountGross) * (payment.refund ? -1 : 1),
       accountId: payment.account_id ? String(payment.account_id) : undefined,
       linkedViaInvoice: false,
       flowType: payment.party_type === 'creditor' ? 'expense' : 'income', counterparty: String(payment.counterparty ?? ''), purpose: String(payment.purpose ?? 'OPOS Zahlung'),
@@ -371,7 +382,7 @@ export const listServerEurCashItems = async (db: PostgresQueryable, scope: Tenan
       ?? (source.invoiceId ? facts.get(`invoice:${source.invoiceId}`) : undefined);
     const persistedClassification = classification ?? (fact ? { id: String(fact.id), source_type: source.sourceType, source_id: source.sourceId, eur_line_id: fact.eur_line_id ? String(fact.eur_line_id) : null, excluded: false, vat_mode: 'none', vat_rate: null, note: null, updated_at: '' } : undefined);
     const legacyInvoiceFact = product === 'lite' && fact && fact.source_type === 'invoice' && fact.source_id !== source.sourceId;
-    items.push({ sourceType: source.sourceType, sourceId: source.sourceId, date: source.date, taxYear, amountGross: source.amountGross, amountNet: source.transit ? Math.abs(source.amountGross) : fact && !legacyInvoiceFact ? Number(fact.amount_net) : net.amountNet, flowType: source.flowType, accountId: source.accountId, linkedViaInvoice: source.linkedViaInvoice, counterparty: basis.counterparty ?? source.counterparty, purpose: source.purpose?.endsWith(TEN_DAY_NOTE) && basis.purpose && !basis.purpose.endsWith(TEN_DAY_NOTE) ? `${basis.purpose}${TEN_DAY_NOTE}` : basis.purpose ?? source.purpose, vatWarning: source.warning ?? (legacyInvoiceFact ? `LEGACY_CASH_FACT_REVIEW_REQUIRED:${source.invoiceId}` : net.warning), kind: source.transit ? 'transit' : fact?.kind as ServerEurCashItem['kind'] | undefined, splits: fact?.splits_json && !legacyInvoiceFact ? parseJsonArray(fact.splits_json) as EurExpenseSplit[] : undefined, classification: persistedClassification ? { id: persistedClassification.id, sourceType: source.sourceType, sourceId: source.sourceId, taxYear, eurLineId: persistedClassification.eur_line_id ?? undefined, excluded: Boolean(persistedClassification.excluded), vatMode: persistedClassification.vat_mode === 'default' ? 'default' : 'none', vatRate: persistedClassification.vat_rate == null ? undefined : Number(persistedClassification.vat_rate), note: persistedClassification.note ?? undefined, updatedAt: persistedClassification.updated_at ?? '' } : undefined });
+    items.push({ sourceType: source.sourceType, sourceId: source.sourceId, date: source.date, taxYear, amountGross: source.amountGross, amountNet: source.transit ? Math.abs(source.amountGross) : fact && !legacyInvoiceFact ? Number(fact.amount_net) : net.amountNet, flowType: source.flowType, accountId: source.accountId, paymentMethod: source.paymentMethod, linkedViaInvoice: source.linkedViaInvoice, counterparty: basis.counterparty ?? source.counterparty, purpose: source.purpose?.endsWith(TEN_DAY_NOTE) && basis.purpose && !basis.purpose.endsWith(TEN_DAY_NOTE) ? `${basis.purpose}${TEN_DAY_NOTE}` : basis.purpose ?? source.purpose, vatWarning: source.warning ?? (legacyInvoiceFact ? `LEGACY_CASH_FACT_REVIEW_REQUIRED:${source.invoiceId}` : net.warning), kind: source.transit ? 'transit' : fact?.kind as ServerEurCashItem['kind'] | undefined, splits: fact?.splits_json && !legacyInvoiceFact ? parseJsonArray(fact.splits_json) as EurExpenseSplit[] : undefined, classification: persistedClassification ? { id: persistedClassification.id, sourceType: source.sourceType, sourceId: source.sourceId, taxYear, eurLineId: persistedClassification.eur_line_id ?? undefined, excluded: Boolean(persistedClassification.excluded), vatMode: persistedClassification.vat_mode === 'default' ? 'default' : 'none', vatRate: persistedClassification.vat_rate == null ? undefined : Number(persistedClassification.vat_rate), note: persistedClassification.note ?? undefined, updatedAt: persistedClassification.updated_at ?? '' } : undefined });
     items[items.length - 1].vatAmountCash = round(source.amountGross - net.amountNet);
   }
   if (product === 'lite') markTransitPairs(items);
@@ -450,8 +461,8 @@ export const getServerEurReport = async (db: PostgresQueryable, scope: TenantSco
       computedFromIds: parseJsonArray(row.computed_from_json)?.filter((id): id is string => typeof id === 'string'),
       computedTerms: parseJsonArray(row.computed_terms_json)?.filter((term): term is { id: string; sign: 1 | -1 } => Boolean(term && typeof term === 'object' && typeof (term as any).id === 'string' && ((term as any).sign === 1 || (term as any).sign === -1))),
     }))
-    : taxYear === 2026
-      ? getCatalogForYear(2026).map((line, sortOrder) => ({
+    : taxYear >= 2026
+      ? getCatalogForYear(taxYear).map((line, sortOrder) => ({
         id: line.id,
         kennziffer: line.kennziffer || undefined,
         providerPath: line.providerPath ?? 'main',
@@ -475,5 +486,11 @@ export const getServerEurReport = async (db: PostgresQueryable, scope: TenantSco
   }
   const calculation = calculateEurRows(catalogLines, items, { taxYear, from, to, requireCashDate: true });
   const manifest = getCatalogManifestForYear(taxYear);
-  return { taxYear, from, to, ...calculation, catalog: { id: manifest.id, version: manifest.version, sourceHash: manifest.sha256, delivery: manifest.delivery, elsterReady: manifest.elsterReady } };
+  const unclassified = { incomeCount: 0, incomeAmount: 0, expenseCount: 0, expenseAmount: 0 };
+  for (const source of sourceItems) {
+    if (source.classification?.eurLineId || source.classification?.excluded || source.splits?.length || ['private-withdrawal', 'private-contribution', 'pass-through', 'transit'].includes(source.kind ?? '')) continue;
+    if (source.flowType === 'income') { unclassified.incomeCount += 1; unclassified.incomeAmount = round(unclassified.incomeAmount + Math.abs(source.amountGross)); }
+    else { unclassified.expenseCount += 1; unclassified.expenseAmount = round(unclassified.expenseAmount + Math.abs(source.amountGross)); }
+  }
+  return { taxYear, from, to, ...calculation, unclassified, catalog: { id: manifest.id, title: manifest.title, version: manifest.version, sourceHash: manifest.sha256, delivery: manifest.delivery, elsterReady: manifest.elsterReady, provisional: manifest.provisional === true } };
 };

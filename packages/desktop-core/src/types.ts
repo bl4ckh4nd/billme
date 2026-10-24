@@ -102,6 +102,8 @@ export interface AppSettings {
     taxAccountingMethod: 'soll' | 'ist'; // Soll-/Ist-Versteuerung (default: soll)
     taxAccountingMethodSince?: string; // first day the method applies; set by the server on a change
     previousTaxAccountingMethod?: 'soll' | 'ist';
+    vatPermanentExtension?: boolean; // Dauerfristverlängerung (§ 46 UStDV)
+    vatSpecialPrepayment?: { year: number; amountCents: number }; // Sondervorauszahlung, Kz 39 in the last Voranmeldung
     paymentTermsDays: number;
     defaultIntroText: string;
     defaultFooterText: string;

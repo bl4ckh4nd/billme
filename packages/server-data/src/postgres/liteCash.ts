@@ -45,7 +45,7 @@ export const closeLitePeriod = (db: PostgresQueryable, scope: TenantScope, perio
 
 export const listLiteCashEntries = async (db: PostgresQueryable, scope: TenantScope) => {
   const result = await rows(db, `SELECT m.*,t.date AS bank_date,t.account_id FROM lite_cash_entries m LEFT JOIN transactions t ON t.tenant_id=m.tenant_id AND t.id=m.matched_transaction_id WHERE m.tenant_id=$1 AND m.deleted_at IS NULL ORDER BY COALESCE(t.date,m.cash_date) DESC,m.id`, [scope.tenantId]);
-  return result.map((row) => liteCashEntrySchema.parse({ id: row.id, cashDate: row.bank_date ?? row.cash_date, originalCashDate: row.cash_date, amountCents: Number(row.amount_cents), currency: row.currency, flowType: row.flow_type, counterparty: row.counterparty, purpose: row.purpose, receiptId: row.receipt_id ?? undefined, matchedTransactionId: row.matched_transaction_id ?? undefined, accountId: row.account_id ?? undefined, updatedAt: row.updated_at }));
+  return result.map((row) => liteCashEntrySchema.parse({ id: row.id, cashDate: row.bank_date ?? row.cash_date, originalCashDate: row.cash_date, amountCents: Number(row.amount_cents), currency: row.currency, flowType: row.flow_type, counterparty: row.counterparty, purpose: row.purpose, receiptId: row.receipt_id ?? undefined, paymentMethod: row.payment_method ?? undefined, matchedTransactionId: row.matched_transaction_id ?? undefined, accountId: row.account_id ?? undefined, updatedAt: row.updated_at }));
 };
 export const listLiteReceipts = async (db: PostgresQueryable, scope: TenantScope) =>
   (await rows(db, `SELECT r.*, (SELECT count(*)::int FROM lite_receipt_files f WHERE f.tenant_id=r.tenant_id AND f.receipt_id=r.id) AS file_count FROM lite_receipts r WHERE r.tenant_id=$1 ORDER BY r.updated_at DESC`, [scope.tenantId]))
@@ -97,13 +97,18 @@ export const saveLiteCashEntry = (db: PostgresQueryable, scope: TenantScope, inp
   await assertLitePeriodsOpen(client, scope, [entry.cashDate, before?.cash_date as string | undefined]);
   if (entry.receiptId && !(await rows(client, 'SELECT id FROM lite_receipts WHERE tenant_id=$1 AND id=$2', [scope.tenantId, entry.receiptId])).length) throw new Error('LITE_CASH_REFERENCE_INVALID');
   const stamp = changedAt(before?.updated_at as string | undefined);
-  const saved = await rows(client, `INSERT INTO lite_cash_entries (id,tenant_id,cash_date,amount_cents,currency,flow_type,counterparty,purpose,receipt_id,updated_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) ON CONFLICT (id) DO UPDATE SET cash_date=EXCLUDED.cash_date,amount_cents=EXCLUDED.amount_cents,currency=EXCLUDED.currency,flow_type=EXCLUDED.flow_type,counterparty=EXCLUDED.counterparty,purpose=EXCLUDED.purpose,receipt_id=EXCLUDED.receipt_id,updated_at=EXCLUDED.updated_at WHERE lite_cash_entries.tenant_id=EXCLUDED.tenant_id AND lite_cash_entries.deleted_at IS NULL RETURNING id`, [entry.id, scope.tenantId, entry.cashDate, entry.amountCents, entry.currency, entry.flowType, entry.counterparty, entry.purpose, entry.receiptId ?? null, stamp]);
+  const saved = await rows(client, `INSERT INTO lite_cash_entries (id,tenant_id,cash_date,amount_cents,currency,flow_type,counterparty,purpose,receipt_id,updated_at,payment_method) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) ON CONFLICT (id) DO UPDATE SET payment_method=EXCLUDED.payment_method, cash_date=EXCLUDED.cash_date,amount_cents=EXCLUDED.amount_cents,currency=EXCLUDED.currency,flow_type=EXCLUDED.flow_type,counterparty=EXCLUDED.counterparty,purpose=EXCLUDED.purpose,receipt_id=EXCLUDED.receipt_id,updated_at=EXCLUDED.updated_at WHERE lite_cash_entries.tenant_id=EXCLUDED.tenant_id AND lite_cash_entries.deleted_at IS NULL RETURNING id`, [entry.id, scope.tenantId, entry.cashDate, entry.amountCents, entry.currency, entry.flowType, entry.counterparty, entry.purpose, entry.receiptId ?? null, stamp, entry.paymentMethod ?? null]);
   if (!saved.length) throw new Error('LITE_CASH_REFERENCE_INVALID');
   await audit(client, scope, mutation, 'lite_cash_entry', entry.id, before ? 'lite.cash.update' : 'lite.cash.create', before ?? null, entry);
   return (await listLiteCashEntries(client, scope)).find((row) => row.id === entry.id)!;
 });
 
-export const matchLiteCashEntry = (db: PostgresQueryable, scope: TenantScope, entryId: string, transactionId: string | undefined, expectedCashDate: string | undefined, mutation: AccountingMutationContext) => runInTransaction(db, async (client) => {
+/**
+ * Ties a cash entry to its bank line. Same amount and direction for a card or bank payment entered by hand;
+ * with `transit` the opposite direction, for a Barabhebung (bank out, cash in) or Bareinzahlung (cash out,
+ * bank in): one Geldtransit, which the EÜR then counts nowhere.
+ */
+export const matchLiteCashEntry = (db: PostgresQueryable, scope: TenantScope, entryId: string, transactionId: string | undefined, expectedCashDate: string | undefined, mutation: AccountingMutationContext, transit = false) => runInTransaction(db, async (client) => {
   const current = (await rows(client, 'SELECT matched_transaction_id FROM lite_cash_entries WHERE tenant_id=$1 AND id=$2 AND deleted_at IS NULL', [scope.tenantId, entryId]))[0];
   if (!current) throw new Error('LITE_CASH_NOT_FOUND');
   const bankId = transactionId ?? current.matched_transaction_id;
@@ -111,13 +116,14 @@ export const matchLiteCashEntry = (db: PostgresQueryable, scope: TenantScope, en
   const before = (await rows(client, 'SELECT * FROM lite_cash_entries WHERE tenant_id=$1 AND id=$2 AND deleted_at IS NULL FOR UPDATE', [scope.tenantId, entryId]))[0]!;
   await assertLitePeriodsOpen(client, scope, [before.cash_date as string, bank?.date as string | undefined]);
   if (transactionId) {
-    if (!bank || bank.status !== 'booked' || bank.linked_invoice_id || Math.round(Number(bank.amount) * 100) !== Number(before.amount_cents) || before.currency !== 'EUR') throw new Error('LITE_CASH_MATCH_INVALID');
+    // A booking without money (Pauschale, AfA, Privatanteil) never has a bank line.
+    if (before.payment_method === 'non_cash' || !bank || bank.status !== 'booked' || bank.linked_invoice_id || Math.round(Number(bank.amount) * 100) !== (transit ? -1 : 1) * Number(before.amount_cents) || before.currency !== 'EUR') throw new Error('LITE_CASH_MATCH_INVALID');
     if (before.matched_transaction_id === transactionId) return (await listLiteCashEntries(client, scope)).find((row) => row.id === entryId)!;
     if (before.matched_transaction_id || before.cash_date !== expectedCashDate || (await rows(client, 'SELECT id FROM lite_cash_entries WHERE tenant_id=$1 AND matched_transaction_id=$2', [scope.tenantId, transactionId])).length) throw new Error('LITE_CASH_MATCH_INVALID');
   } else if (before.matched_transaction_id !== (current.matched_transaction_id ?? null)) throw new Error('LITE_CASH_STALE');
   await client.query('UPDATE lite_cash_entries SET matched_transaction_id=$1,updated_at=$2 WHERE tenant_id=$3 AND id=$4', [transactionId ?? null, changedAt(before.updated_at as string), scope.tenantId, entryId]);
   const after = (await listLiteCashEntries(client, scope)).find((row) => row.id === entryId)!;
-  await audit(client, scope, mutation, 'lite_cash_entry', entryId, transactionId ? 'lite.cash.match' : 'lite.cash.unmatch', before, after);
+  await audit(client, scope, mutation, 'lite_cash_entry', entryId, transactionId ? (transit ? 'lite.cash.match_transit' : 'lite.cash.match') : 'lite.cash.unmatch', before, after);
   return after;
 });
 

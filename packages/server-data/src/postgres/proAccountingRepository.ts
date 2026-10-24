@@ -288,8 +288,8 @@ const policy = async (db: PostgresQueryable, t: string): Promise<{ activeChart: 
   return { tenantId: t, activeChart: row?.active_chart === 'SKR04' ? 'SKR04' : 'SKR03', vatMethod: row?.vat_method === 'ist' ? 'ist' : 'soll', periodPolicy: 'calendar_month', updatedAt: row?.updated_at ?? '' };
 };
 const defaults: Record<'SKR03'|'SKR04', Record<string, string>> = {
-  SKR03: { accounts_receivable: '1400', accounts_payable: '1600', bank: '1200', revenue: '8400', expense: '4900', asset: '0480', output_vat: '1776', output_vat_deferred: '1780', input_vat: '1576' },
-  SKR04: { accounts_receivable: '1200', accounts_payable: '3300', bank: '1800', revenue: '4400', expense: '6300', asset: '0670', output_vat: '3806', output_vat_deferred: '3810', input_vat: '1406' },
+  SKR03: { accounts_receivable: '1400', accounts_payable: '1600', bank: '1200', revenue: '8400', expense: '4900', asset: '0480', output_vat: '1776', output_vat_deferred: '1780', input_vat: '1576', cash: '1000' },
+  SKR04: { accounts_receivable: '1200', accounts_payable: '3300', bank: '1800', revenue: '4400', expense: '6300', asset: '0670', output_vat: '3806', output_vat_deferred: '3810', input_vat: '1406', cash: '1600' },
 };
 const mappings = async (db: PostgresQueryable, t: string, chart: 'SKR03'|'SKR04'): Promise<Record<string, string>> => {
   const rows = await q<any>(db, `SELECT role,account_number FROM accounting_account_mappings WHERE tenant_id=$1 AND chart=$2`, [t, chart]);
@@ -554,7 +554,7 @@ const assertIncomingInvoiceDocumentInput = (input: IncomingInvoiceDocumentUpload
 };
 const isUniqueViolation = (error: unknown): boolean => typeof error === 'object' && error !== null && 'code' in error && (error as { code?: unknown }).code === '23505';
 const rowOpenItem = (row: any): OpenItemEntity => ({ id: row.id, tenantId: row.tenant_id, partyType: row.party_type, partyId: row.party_id, sourceType: row.source_type, sourceId: row.source_id, documentNumber: row.document_number, documentDate: row.document_date, dueDate: row.due_date, originalAmount: Number(row.original_amount), allocatedAmount: Number(row.allocated_amount), residualAmount: Number(row.residual_amount), status: row.status, journalEntryId: row.journal_entry_id ?? undefined, createdAt: row.created_at, updatedAt: row.updated_at });
-const rowPayment = (row: any): OpenItemPaymentEntity => ({ id: row.id, tenantId: row.tenant_id, partyType: row.party_type, partyId: row.party_id ?? undefined, paymentDate: row.payment_date, amount: Number(row.amount), bankAccountNumber: row.bank_account_number, method: row.method ?? undefined, sourceType: row.source_type, sourceId: row.source_id, allocatedAmount: Number(row.allocated_amount), residualAmount: Number(row.residual_amount), status: row.status, journalEntryId: row.journal_entry_id ?? undefined, createdAt: row.created_at });
+const rowPayment = (row: any): OpenItemPaymentEntity => ({ id: row.id, tenantId: row.tenant_id, partyType: row.party_type, partyId: row.party_id ?? undefined, paymentDate: row.payment_date, amount: Number(row.amount), bankAccountNumber: row.bank_account_number, method: row.method ?? undefined, sourceType: row.source_type, sourceId: row.source_id, allocatedAmount: Number(row.allocated_amount), residualAmount: Number(row.residual_amount), status: row.status, journalEntryId: row.journal_entry_id ?? undefined, createdAt: row.created_at, refund: row.refund === true || undefined, creditedPaymentId: row.credited_payment_id ?? undefined });
 const requireAllocationEventId = (value: unknown): string => {
   const normalized = typeof value === 'string' ? value.trim() : '';
   if (!normalized) throw new Error('ALLOCATION_EVENT_ID_REQUIRED');
@@ -572,8 +572,8 @@ const assertOpenItemSource = async (db: PostgresQueryable, t: string, item: any)
   }
 };
 
-const reverseEntryInTransaction = async (db: PostgresQueryable, scope: TenantScope, entryId: string, reason: string, options: ReverseJournalEntryOptions & { allowDocumentSource?: boolean } = {}): Promise<{ ok: true; reversalEntryId: string }> => {
-  const t = tenant(scope); const entry = (await q<any>(db, `SELECT * FROM journal_entries WHERE tenant_id=$1 AND id=$2 FOR UPDATE`, [t, entryId]))[0]; if (!entry) throw new Error('Journal entry not found'); if (!reason.trim()) throw new Error('Reversal reason is required'); if (!options.allowDocumentSource && (entry.source_type === 'outgoing_invoice' || entry.source_type === 'incoming_invoice')) throw new Error('DOCUMENT_REVERSAL_REQUIRED: reverseDocumentAccounting must be used for document-owned entries'); if (entry.source_type === 'asset_activation' || entry.source_type === 'asset_depreciation' || entry.source_type === 'asset_disposal') throw new Error('ASSET_REVERSAL_REQUIRED: use the asset-specific correction flow'); if (entry.source_type === 'payment' || entry.source_type === 'payment_vat') throw new Error('PAYMENT_REVERSAL_REQUIRED: use payment-specific reversal with allocation reversal'); if (['fiscal_close', 'carry_forward', 'provision', 'accrual', 'inventory_closing', 'fx_valuation', 'loan_schedule', 'payroll_batch', 'correction'].includes(entry.source_type) || (entry.source_type === 'standalone_source' && /^(correction|settlement):/.test(String(entry.source_key ?? '')))) throw new Error('AGGREGATE_REVERSAL_BLOCKED: use the source-specific correction flow'); if (entry.status === 'reversed' || entry.reversed_entry_id || entry.source_type === 'reversal') throw new Error('Journal entry cannot be reversed again');
+const reverseEntryInTransaction = async (db: PostgresQueryable, scope: TenantScope, entryId: string, reason: string, options: ReverseJournalEntryOptions & { allowDocumentSource?: boolean; allowPaymentSource?: boolean } = {}): Promise<{ ok: true; reversalEntryId: string }> => {
+  const t = tenant(scope); const entry = (await q<any>(db, `SELECT * FROM journal_entries WHERE tenant_id=$1 AND id=$2 FOR UPDATE`, [t, entryId]))[0]; if (!entry) throw new Error('Journal entry not found'); if (!reason.trim()) throw new Error('Reversal reason is required'); if (!options.allowDocumentSource && (entry.source_type === 'outgoing_invoice' || entry.source_type === 'incoming_invoice')) throw new Error('DOCUMENT_REVERSAL_REQUIRED: reverseDocumentAccounting must be used for document-owned entries'); if (entry.source_type === 'asset_activation' || entry.source_type === 'asset_depreciation' || entry.source_type === 'asset_disposal') throw new Error('ASSET_REVERSAL_REQUIRED: use the asset-specific correction flow'); if (!options.allowPaymentSource && (entry.source_type === 'payment' || entry.source_type === 'payment_vat')) throw new Error('PAYMENT_REVERSAL_REQUIRED: Zahlungen werden über den Zahlungsstorno im OPOS storniert'); if (['fiscal_close', 'carry_forward', 'provision', 'accrual', 'inventory_closing', 'fx_valuation', 'loan_schedule', 'payroll_batch', 'correction'].includes(entry.source_type) || (entry.source_type === 'standalone_source' && /^(correction|settlement):/.test(String(entry.source_key ?? '')))) throw new Error('AGGREGATE_REVERSAL_BLOCKED: use the source-specific correction flow'); if (entry.status === 'reversed' || entry.reversed_entry_id || entry.source_type === 'reversal') throw new Error('Journal entry cannot be reversed again');
   const postingDate = options.postingDate ?? now().slice(0, 10); if (!isoDate(postingDate)) throw new Error('Invalid reversal posting date'); const lines = await q<any>(db, `SELECT * FROM journal_lines WHERE tenant_id=$1 AND entry_id=$2 ORDER BY line_no`, [t, entryId]); if (!lines.length) throw new Error('Journal entry has no lines');
   const originalPairs = await q<any>(db, `SELECT jp.amount,jp.tax_case_key,jp.datev_bu_key,dl.account_number AS debit_account,cl.account_number AS credit_account FROM journal_posting_pairs jp JOIN journal_lines dl ON dl.id=jp.debit_line_id AND dl.tenant_id=jp.tenant_id JOIN journal_lines cl ON cl.id=jp.credit_line_id AND cl.tenant_id=jp.tenant_id WHERE jp.tenant_id=$1 AND jp.entry_id=$2`, [t, entryId]);
   const reversalLines = lines.map((line) => ({ ...mapLine(line), id: randomUUID(), debitAmount: Number(line.credit_amount), creditAmount: Number(line.debit_amount), netAmount: line.net_amount == null ? undefined : -Number(line.net_amount), taxAmount: line.tax_amount == null ? undefined : -Number(line.tax_amount), grossAmount: line.gross_amount == null ? undefined : -Number(line.gross_amount) }));
@@ -625,19 +625,28 @@ const recognizeIstVat = async (
     const previousRecognized = round((taxForBasis * Math.min(beforeAllocated, snapshot.grossAmount) * basisGross) / (snapshot.grossAmount * basisGross));
     const recognized = round((taxForBasis * Math.min(allocated, snapshot.grossAmount) * basisGross) / (snapshot.grossAmount * basisGross));
     const delta = round(recognized - previousRecognized);
-    if (delta <= 0) continue;
-    const grossShare = round((Math.min(allocationAmount, snapshot.grossAmount) * basisGross) / snapshot.grossAmount);
+    // A refund or Rücklastschrift takes back what a payment recognised: the VAT is not yet due again.
+    if (Math.abs(delta) < .005) continue;
+    const grossShare = round((Math.sign(allocationAmount) * Math.min(Math.abs(allocationAmount), snapshot.grossAmount) * basisGross) / snapshot.grossAmount);
     const netShare = round(grossShare - delta);
     const deferred = control?.accountNumber ?? m.output_vat_deferred;
     const output = await taxCaseAccount(db, tenant(scope), p.activeChart, taxCaseKey, 'output_tax', m.output_vat, paymentDate);
-    payableLines.push({ id: randomUUID(), accountNumber: deferred, debitAmount: delta, creditAmount: 0, taxCaseKey, netAmount: netShare, taxAmount: delta, grossAmount: grossShare });
-    payableLines.push({ id: randomUUID(), accountNumber: output, debitAmount: 0, creditAmount: delta });
+    if (delta > 0) {
+      payableLines.push({ id: randomUUID(), accountNumber: deferred, debitAmount: delta, creditAmount: 0, taxCaseKey, netAmount: netShare, taxAmount: delta, grossAmount: grossShare });
+      payableLines.push({ id: randomUUID(), accountNumber: output, debitAmount: 0, creditAmount: delta });
+    } else {
+      payableLines.push({ id: randomUUID(), accountNumber: output, debitAmount: -delta, creditAmount: 0, taxCaseKey, netAmount: netShare, taxAmount: delta, grossAmount: grossShare });
+      payableLines.push({ id: randomUUID(), accountNumber: deferred, debitAmount: 0, creditAmount: -delta });
+    }
   }
   if (payableLines.length) await insertEntry(db, scope, 'payment_vat', `payment-vat:${paymentId}:${allocationId}`, paymentDate, 'USt Vereinnahmung', payableLines, {});
 };
 
 export type ProAccountingReportRepository = Omit<ProAccountingRepository, 'getGuvReport' | 'getBilanzReport'> & ProAccountingAssetRepository & AccountingSourceRunRepository & {
   listAccountingPeriods(scope: TenantScope, year: number): Promise<AccountingPeriodRecord[]>;
+  listOpenItemPayments(scope: TenantScope): Promise<OpenItemPaymentEntity[]>;
+  reverseOpenItemPayment(scope: TenantScope, input: { paymentId: string; reason: string; postingDate?: string; mutation?: AccountingMutationContext }): Promise<OpenItemPaymentReversal>;
+  reallocateOpenItemPayment(scope: TenantScope, input: { paymentId: string; reason: string; partyId: string; allocations: Array<{ openItemId: string; amount: number }>; allocationEventId: string; mutation?: AccountingMutationContext }): Promise<{ reversal: OpenItemPaymentReversal; payment: OpenItemPaymentEntity }>;
   setAccountingPeriodStatus(scope: TenantScope, input: { period: string; status: AccountingPeriodStatus; mutation: AccountingMutationContext }): Promise<AccountingPeriodStatusChange>;
   getBwa01Report(scope: TenantScope, args?: { from?: string; to?: string; chart?: 'SKR03' | 'SKR04'; profile?: string }): Promise<ReportResult<Bwa01Report>>;
   getGuvReport(scope: TenantScope, args?: { from?: string; to?: string; chart?: 'SKR03' | 'SKR04'; profile?: 'guv' | 'management-guv' | 'hgb-guv' }): Promise<ReportResult<ManagementGuvReport | HgbGuvReport>>;
@@ -662,6 +671,23 @@ export type ProAccountingReportRepository = Omit<ProAccountingRepository, 'getGu
 export const createPostgresProAccountingRepository = (db: PostgresQueryable): ProAccountingReportRepository => ({
   ...createPostgresAccountingSourceRunRepository(db),
   listAccountingPeriods: (scope, year) => listAccountingPeriods(db, scope, year),
+  async listOpenItemPayments(scope) { return (await q<any>(db, `SELECT * FROM open_item_payments WHERE tenant_id=$1 ORDER BY payment_date DESC,created_at DESC,id`, [tenant(scope)])).map(rowPayment); },
+  reverseOpenItemPayment: (scope, input) => inTx(db, (tx) => reverseOpenItemPaymentInTransaction(tx, scope, input)),
+  // Umbuchung: Zahlungsstorno and the new allocation of the same money in one transaction, under one reason.
+  reallocateOpenItemPayment: (scope, input) => inTx(db, async (tx) => {
+    const original = (await q<any>(tx, `SELECT * FROM open_item_payments WHERE tenant_id=$1 AND id=$2 FOR UPDATE`, [tenant(scope), input.paymentId]))[0];
+    if (!original) throw new Error('OPEN_ITEM_PAYMENT_NOT_FOUND');
+    // A payment recorded on an invoice belongs to that invoice; it is reversed there and recorded on the other one.
+    if (original.source_type === 'invoice_payment') throw new Error('PAYMENT_REALLOCATION_UNSUPPORTED: Eine auf der Rechnung erfasste Zahlung wird dort storniert und auf der richtigen Rechnung neu erfasst.');
+    const reversal = await reverseOpenItemPaymentInTransaction(tx, scope, { paymentId: input.paymentId, reason: input.reason, mutation: input.mutation });
+    const payment = await allocatePayment(tx, scope, {
+      sourceType: original.source_type, sourceId: original.source_id, partyType: original.party_type, partyId: input.partyId,
+      paymentDate: original.payment_date, amount: Number(original.amount), bankAccountNumber: original.bank_account_number, method: original.method ?? undefined,
+      allocations: input.allocations, allocationEventId: input.allocationEventId, mutation: input.mutation, reason: input.reason,
+      bookingText: `Zahlung (Umbuchung): ${input.reason.trim()}`,
+    });
+    return { reversal, payment };
+  }),
   setAccountingPeriodStatus: (scope, input) => setAccountingPeriodStatus(db, scope, input),
   async listBankTransactions(scope) {
     const [rows, suggestionContext] = await Promise.all([
@@ -894,10 +920,20 @@ export const createPostgresProAccountingRepository = (db: PostgresQueryable): Pr
   async postOutgoingInvoice(scope, invoiceId, options = {}) { return inTx(db, (tx) => postDocument(tx, scope, 'outgoing_invoice', invoiceId, options)); },
   async previewIncomingInvoice(scope, invoiceId) { const row = (await q<any>(db, `SELECT * FROM incoming_invoices WHERE tenant_id=$1 AND id=$2`, [tenant(scope), invoiceId]))[0]; if (!row) throw new Error('INCOMING_INVOICE_NOT_FOUND'); return postingPreview(db, scope, row, 'incoming_invoice'); },
   async postIncomingInvoice(scope, invoiceId, options = {}) { return inTx(db, (tx) => postDocument(tx, scope, 'incoming_invoice', invoiceId, options)); },
-  async listOpenItems(scope) { return (await q<any>(db, `SELECT * FROM open_items WHERE tenant_id=$1 ORDER BY due_date,id`, [tenant(scope)])).map(rowOpenItem); },
+  async listOpenItems(scope) {
+    const items = (await q<any>(db, `SELECT * FROM open_items WHERE tenant_id=$1 ORDER BY due_date,id`, [tenant(scope)])).map(rowOpenItem);
+    // The unallocated rest of a payment is the partner's credit (Guthaben): listed as a negative open item
+    // with the partner, refundable or allocated later. It is a view of the payment, not a second record.
+    const credits = (await q<any>(db, `SELECT * FROM open_item_payments WHERE tenant_id=$1 AND status <> 'reversed' AND refund = FALSE AND residual_amount > 0.01 AND party_id IS NOT NULL ORDER BY payment_date,id`, [tenant(scope)])).map((row): OpenItemEntity => ({
+      id: `${PAYMENT_CREDIT_PREFIX}${row.id}`, tenantId: row.tenant_id, partyType: row.party_type, partyId: row.party_id, sourceType: 'payment', sourceId: row.id,
+      documentNumber: `Guthaben aus Zahlung vom ${row.payment_date}`, documentDate: row.payment_date, dueDate: row.payment_date,
+      originalAmount: -Number(row.residual_amount), allocatedAmount: 0, residualAmount: -Number(row.residual_amount), status: 'open', journalEntryId: row.journal_entry_id ?? undefined, createdAt: row.created_at, updatedAt: row.created_at,
+    }));
+    return [...items, ...credits].sort((left, right) => left.dueDate.localeCompare(right.dueDate) || left.id.localeCompare(right.id));
+  },
   async allocateOpenItemPayment(scope, input) { requireAllocationEventId(input.allocationEventId); return inTx(db, (tx) => allocatePayment(tx, scope, input)); },
   async allocateRemainingOpenItemPayment(scope, paymentId, allocations, allocationEventId, mutation) { const eventId = requireAllocationEventId(allocationEventId); return inTx(db, async (tx) => { const row = (await q<any>(tx, `SELECT * FROM open_item_payments WHERE tenant_id=$1 AND id=$2 FOR UPDATE`, [tenant(scope), paymentId]))[0]; if (!row) throw new Error('PAYMENT_NOT_FOUND'); return allocatePayment(tx, scope, { paymentId, partyType: row.party_type, partyId: row.party_id ?? undefined, paymentDate: row.payment_date, amount: Number(row.amount), bankAccountNumber: row.bank_account_number, method: row.method ?? undefined, sourceType: row.source_type, sourceId: row.source_id, allocations, allocationEventId: eventId, reason: mutation?.reason ?? 'Allocate remaining open item payment', mutation }); }); },
-  async reverseDocumentAccounting(scope, input) { return inTx(db, async (tx) => { const table = input.documentType === 'outgoing_invoice' ? 'invoices' : 'incoming_invoices'; const row = (await q<any>(tx, `SELECT * FROM ${table} WHERE tenant_id=$1 AND id=$2 FOR UPDATE`, [tenant(scope), input.documentId]))[0]; if (!row || row.accounting_status !== 'posted' || !row.accounting_journal_entry_id) throw new Error('DOCUMENT_NOT_POSTED'); if ((await q<any>(tx, `SELECT id FROM assets WHERE tenant_id=$1 AND (activation_journal_entry_id=$2 OR source_incoming_invoice_id=$3) LIMIT 1`, [tenant(scope), row.accounting_journal_entry_id, input.documentId]))[0]) throw new Error('ASSET_CORRECTION_REQUIRED: correct linked asset before reversing its source document'); const item = (await q<any>(tx, `SELECT * FROM open_items WHERE tenant_id=$1 AND source_type=$2 AND source_id=$3 FOR UPDATE`, [tenant(scope), input.documentType, input.documentId]))[0]; if (item && Number((await q<any>(tx, `SELECT COUNT(*)::int c FROM open_item_allocations WHERE tenant_id=$1 AND open_item_id=$2`, [tenant(scope), item.id]))[0]?.c)) throw new Error('DOCUMENT_HAS_ALLOCATIONS'); const reversal = await reverseEntryInTransaction(tx, scope, row.accounting_journal_entry_id, input.reason, { postingDate: input.postingDate, softLockOverride: input.softLockOverride, overrideReason: input.overrideReason, mutation: input.mutation, allowDocumentSource: true }); if (item) await q(tx, `UPDATE open_items SET status='unresolved',allocated_amount=original_amount,residual_amount=0,updated_at=$1 WHERE tenant_id=$2 AND id=$3`, [now(), tenant(scope), item.id]); await q(tx, `UPDATE ${table} SET accounting_status='reversed',status='cancelled',updated_at=$1 WHERE tenant_id=$2 AND id=$3`, [now(), tenant(scope), input.documentId]); return reversal; }); },
+  async reverseDocumentAccounting(scope, input) { return inTx(db, async (tx) => { const table = input.documentType === 'outgoing_invoice' ? 'invoices' : 'incoming_invoices'; const row = (await q<any>(tx, `SELECT * FROM ${table} WHERE tenant_id=$1 AND id=$2 FOR UPDATE`, [tenant(scope), input.documentId]))[0]; if (!row || row.accounting_status !== 'posted' || !row.accounting_journal_entry_id) throw new Error('DOCUMENT_NOT_POSTED'); if ((await q<any>(tx, `SELECT id FROM assets WHERE tenant_id=$1 AND (activation_journal_entry_id=$2 OR source_incoming_invoice_id=$3) LIMIT 1`, [tenant(scope), row.accounting_journal_entry_id, input.documentId]))[0]) throw new Error('ASSET_CORRECTION_REQUIRED: correct linked asset before reversing its source document'); const item = (await q<any>(tx, `SELECT * FROM open_items WHERE tenant_id=$1 AND source_type=$2 AND source_id=$3 FOR UPDATE`, [tenant(scope), input.documentType, input.documentId]))[0]; if (item && Number((await q<any>(tx, `SELECT COUNT(*)::int c FROM open_item_allocations a JOIN open_item_payments p ON p.tenant_id=a.tenant_id AND p.id=a.payment_id WHERE a.tenant_id=$1 AND a.open_item_id=$2 AND p.status <> 'reversed'`, [tenant(scope), item.id]))[0]?.c)) throw new Error('DOCUMENT_HAS_ALLOCATIONS'); const reversal = await reverseEntryInTransaction(tx, scope, row.accounting_journal_entry_id, input.reason, { postingDate: input.postingDate, softLockOverride: input.softLockOverride, overrideReason: input.overrideReason, mutation: input.mutation, allowDocumentSource: true }); if (item) await q(tx, `UPDATE open_items SET status='unresolved',allocated_amount=original_amount,residual_amount=0,updated_at=$1 WHERE tenant_id=$2 AND id=$3`, [now(), tenant(scope), item.id]); await q(tx, `UPDATE ${table} SET accounting_status='reversed',status='cancelled',updated_at=$1 WHERE tenant_id=$2 AND id=$3`, [now(), tenant(scope), input.documentId]); return reversal; }); },
   async previewAccountingBackfill(scope) { return inTx(db, async (tx) => { const candidates: AccountingBackfillPreview['candidates'] = []; const config = await backfillConfig(tx, tenant(scope)); const outgoing = await q<any>(tx, `SELECT i.* FROM invoices i JOIN number_reservations nr ON nr.tenant_id=i.tenant_id AND nr.kind='invoice' AND nr.status='finalized' AND nr.document_id=i.id AND nr.number=i.number WHERE i.tenant_id=$1 AND COALESCE(i.document_kind,'invoice') NOT IN ('order_confirmation','delivery_note') AND COALESCE(i.accounting_status,'unposted') NOT IN ('posted','reversed') AND i.status NOT IN ('draft','cancelled') ORDER BY i.id`, [tenant(scope)]); for (const row of outgoing) { const reservation = await finalizedInvoiceReservation(tx, tenant(scope), row); const preview = await postingPreview(tx, scope, row, 'outgoing_invoice'); const documentVersion = preview.snapshot?.sourceVersion ?? hash(row); candidates.push({ sourceType: 'outgoing_invoice', sourceId: row.id, status: preview.status, reason: preview.reason, sourceVersion: backfillOutgoingSourceVersion(row, documentVersion, reservation), snapshot: preview.snapshot ? { ...preview.snapshot, capturedAt: '' } : undefined }); } const incoming = await q<any>(tx, `SELECT * FROM incoming_invoices WHERE tenant_id=$1 AND accounting_status NOT IN ('posted','reversed') AND status NOT IN ('draft','cancelled') ORDER BY id`, [tenant(scope)]); for (const row of incoming) { const preview = await postingPreview(tx, scope, row, 'incoming_invoice'); const documentVersion = preview.snapshot?.sourceVersion ?? hash(row); candidates.push({ sourceType: 'incoming_invoice', sourceId: row.id, status: preview.status, reason: preview.reason, sourceVersion: incomingBackfillSourceVersion(row, documentVersion), snapshot: preview.snapshot ? { ...preview.snapshot, capturedAt: '' } : undefined }); } const legacy = await q<any>(tx, `SELECT id,date,amount,type,counterparty,purpose FROM transactions WHERE tenant_id=$1 ORDER BY id`, [tenant(scope)]); for (const row of legacy) candidates.push({ sourceType: 'legacy_transaction', sourceId: row.id, status: 'unresolved', reason: 'Legacy transaction requires explicit review.', sourceVersion: hash(row), snapshot: row }); const confirmationHash = hash({ tenantId: tenant(scope), config, candidates }); const runId = randomUUID(); await q(tx, `INSERT INTO accounting_backfill_runs (id,tenant_id,status,candidates_json,confirmation_hash,created_at,config_json) VALUES ($1,$2,'preview',$3,$4,$5,$6)`, [runId, tenant(scope), JSON.stringify(candidates), confirmationHash, now(), JSON.stringify(config)]); await audit(tx as PostgresTransactionClient, scope, 'accounting_backfill', runId, 'preview', 'dry-run accounting backfill', null, { confirmationHash }); return { runId, status: 'preview', candidates, readyCount: candidates.filter((x) => x.status === 'ready').length, unresolvedCount: candidates.filter((x) => x.status === 'unresolved').length, confirmationHash }; }); },
   async confirmAccountingBackfill(scope, input) { return inTx(db, async (tx) => { if (!input.reason.trim()) throw new Error('BACKFILL_REASON_REQUIRED'); const run = (await q<any>(tx, `SELECT * FROM accounting_backfill_runs WHERE tenant_id=$1 AND id=$2 FOR UPDATE`, [tenant(scope), input.runId]))[0]; if (!run) throw new Error('BACKFILL_RUN_NOT_FOUND'); if (run.status === 'completed') return parse<AccountingBackfillResult>(run.result_json, { runId: input.runId, postedCount: 0, unresolvedCount: 0, status: 'completed' }); if (run.confirmation_hash !== input.confirmationHash) throw new Error('BACKFILL_CONFIRMATION_HASH_MISMATCH'); const config = await backfillConfig(tx, tenant(scope)); if (hash(config) !== hash(parse(run.config_json, null))) throw new Error('BACKFILL_STALE_PREVIEW'); const candidates = parse<AccountingBackfillPreview['candidates']>(run.candidates_json, []); let postedCount = 0; let unresolvedCount = 0; for (const candidate of candidates) { if (candidate.status !== 'ready') { unresolvedCount += 1; continue; } if (candidate.sourceType === 'outgoing_invoice') { const row = await readInvoice(tx, scope, candidate.sourceId); const reservation = row ? await finalizedInvoiceReservation(tx, tenant(scope), row) : null; if (!row || row.status === 'draft' || row.status === 'cancelled' || row.accounting_status === 'reversed' || !reservation) throw new Error('BACKFILL_STALE_PREVIEW'); const preview = await postingPreview(tx, scope, row, 'outgoing_invoice'); const documentVersion = preview.snapshot?.sourceVersion ?? hash(row); if (backfillOutgoingSourceVersion(row, documentVersion, reservation) !== candidate.sourceVersion) throw new Error('BACKFILL_STALE_PREVIEW'); const result = await postDocument(tx, scope, 'outgoing_invoice', candidate.sourceId, { reservationId: reservation.id, mutation: input.mutation }); if (result.status === 'ready') postedCount += 1; else unresolvedCount += 1; continue; } const row = (await q<any>(tx, `SELECT * FROM incoming_invoices WHERE tenant_id=$1 AND id=$2`, [tenant(scope), candidate.sourceId]))[0]; const preview = row ? await postingPreview(tx, scope, row, 'incoming_invoice') : null; const documentVersion = preview?.snapshot?.sourceVersion ?? (row ? hash(row) : hash({ missing: candidate.sourceId })); if (!row || row.status === 'draft' || row.status === 'cancelled' || row.accounting_status === 'posted' || row.accounting_status === 'reversed' || incomingBackfillSourceVersion(row, documentVersion) !== candidate.sourceVersion) throw new Error('BACKFILL_STALE_PREVIEW'); const result = await postDocument(tx, scope, 'incoming_invoice', candidate.sourceId, { mutation: input.mutation }); if (result.status === 'ready') postedCount += 1; else unresolvedCount += 1; } const result = { runId: input.runId, postedCount, unresolvedCount, status: 'completed' as const }; await q(tx, `UPDATE accounting_backfill_runs SET status='completed',result_json=$1,confirmed_at=$2,completed_at=$2 WHERE tenant_id=$3 AND id=$4`, [JSON.stringify(result), now(), tenant(scope), input.runId]); await audit(tx as PostgresTransactionClient, scope, 'accounting_backfill', input.runId, 'confirm', input.reason, { status: 'preview' }, result, input.mutation); return result; }); },
   async listAssets(scope) {
@@ -1168,12 +1204,16 @@ const postDocument = async (db: PostgresQueryable, scope: TenantScope, type: 'ou
     // A correction settles the original receivable.  Lock and update that
     // item in the same transaction as the inverse journal entry, bounded by
     // the remaining amount so repeated/parallel corrections cannot overdraw.
-    const original = (await q<any>(db, `SELECT id,original_amount,allocated_amount,residual_amount FROM open_items WHERE tenant_id=$1 AND source_type='outgoing_invoice' AND source_id=$2 FOR UPDATE`, [t, row.source_document_id]))[0];
+    const original = (await q<any>(db, `SELECT id,party_id,original_amount,allocated_amount,residual_amount FROM open_items WHERE tenant_id=$1 AND source_type='outgoing_invoice' AND source_id=$2 FOR UPDATE`, [t, row.source_document_id]))[0];
     if (original) {
       const allocation = round(Math.min(Math.max(0, Number(original.residual_amount)), Math.abs(accountingSnapshot.grossAmount)));
       const allocated = round(Number(original.allocated_amount) + allocation);
       const residual = round(Math.max(0, Number(original.original_amount) - allocated));
       await q(db, `UPDATE open_items SET allocated_amount=$1,residual_amount=$2,status=$3,updated_at=$4 WHERE tenant_id=$5 AND id=$6`, [allocated, residual, residual <= .01 ? 'paid' : allocated > .01 ? 'partially_paid' : 'open', postedAt, t, original.id]);
+      // What the correction takes back beyond the open rest was already paid: the customer is owed it.
+      // It stays a credit item (negative residual) of this customer until it is refunded or offset.
+      const owed = round(Math.abs(accountingSnapshot.grossAmount) - allocation);
+      if (owed > .01) await q(db, `INSERT INTO open_items (id,tenant_id,party_type,party_id,source_type,source_id,document_number,document_date,due_date,original_amount,allocated_amount,residual_amount,status,journal_entry_id,created_at,updated_at) VALUES ($1,$2,'debtor',$3,'outgoing_invoice',$4,$5,$6,$6,$7,0,$7,'open',$8,$9,$9) ON CONFLICT (tenant_id,source_type,source_id) DO NOTHING`, [randomUUID(), t, original.party_id, id, row.number, row.date, -owed, entryId, postedAt]);
     }
   } else {
     const itemId = randomUUID();
@@ -1187,7 +1227,8 @@ const allocatePayment = async (db: PostgresQueryable, scope: TenantScope, input:
   const t = tenant(scope);
   const stamp = now();
   const allocationEventId = requireAllocationEventId(input.allocationEventId);
-  const duplicate = (await q<any>(db, `SELECT * FROM open_item_payments WHERE tenant_id=$1 AND source_type=$2 AND source_id=$3 FOR UPDATE`, [t, input.sourceType, input.sourceId]))[0];
+  // A reversed payment is history; its source can be allocated anew (Umbuchung).
+  const duplicate = (await q<any>(db, `SELECT * FROM open_item_payments WHERE tenant_id=$1 AND source_type=$2 AND source_id=$3 AND status <> 'reversed' FOR UPDATE`, [t, input.sourceType, input.sourceId]))[0];
   if (duplicate) {
     if (duplicate.party_type !== input.partyType || (input.partyId && duplicate.party_id !== input.partyId) || round(duplicate.amount) !== round(input.amount) || duplicate.payment_date !== input.paymentDate || duplicate.bank_account_number !== input.bankAccountNumber) throw new Error('PAYMENT_SOURCE_MISMATCH');
     if ((await q(db, `SELECT 1 FROM open_item_allocations WHERE tenant_id=$1 AND payment_id=$2 AND event_key = ANY($3::text[]) LIMIT 1`, [t, duplicate.id, input.allocations.map((allocation) => `${allocationEventId}:${allocation.openItemId}`)]))[0]) return rowPayment(duplicate);
@@ -1195,6 +1236,7 @@ const allocatePayment = async (db: PostgresQueryable, scope: TenantScope, input:
     const requestedTotal = round(input.allocations.reduce((sum, allocation) => sum + Number(allocation.amount), 0));
     if (requestedTotal > Number(duplicate.residual_amount) + .01) throw new Error('PAYMENT_ALLOCATION_EXCEEDS_RESIDUAL');
     if (!input.paymentId || input.paymentId !== duplicate.id) return rowPayment(duplicate);
+    if (duplicate.refund) throw new Error('PAYMENT_REFUND_REMAINING_UNSUPPORTED: Der Rest einer Erstattung wird nicht nachträglich zugeordnet.');
 
     // Group repeated allocations before changing any row.  Otherwise two
     // allocations of 80 against a 100 item each read the original residual
@@ -1227,6 +1269,7 @@ const allocatePayment = async (db: PostgresQueryable, scope: TenantScope, input:
       await q(db, `UPDATE open_items SET allocated_amount=$1,residual_amount=$2,status=$3,updated_at=$4 WHERE tenant_id=$5 AND id=$6`, [allocated, residual, residual <= .01 ? 'paid' : 'partially_paid', stamp, t, item.id]);
       if (item.source_type === 'outgoing_invoice') await q(db, `UPDATE invoices SET status=$1,updated_at=$2 WHERE tenant_id=$3 AND id=$4 AND accounting_status='posted'`, [residual <= .01 ? 'paid' : 'open', stamp, t, item.source_id]);
       if (item.source_type === 'incoming_invoice') await q(db, `UPDATE incoming_invoices SET status=$1,updated_at=$2 WHERE tenant_id=$3 AND id=$4 AND accounting_status='posted'`, [residual <= .01 ? 'paid' : 'open', stamp, t, item.source_id]);
+      if (item.source_type === 'outgoing_invoice') await projectInvoicePayment(db, t, duplicate, item.source_id, amount, stamp);
     }
     const totals = (await q<any>(db, `SELECT COALESCE(SUM(amount),0) allocated FROM open_item_allocations WHERE tenant_id=$1 AND payment_id=$2`, [t, duplicate.id]))[0];
     const allocatedTotal = round(totals.allocated);
@@ -1237,14 +1280,21 @@ const allocatePayment = async (db: PostgresQueryable, scope: TenantScope, input:
   }
 
   if (!isoDate(input.paymentDate) || !Number.isFinite(Number(input.amount)) || Number(input.amount) <= 0) throw new Error('INVALID_PAYMENT'); const total = round(input.amount); const allocTotal = round(input.allocations.reduce((sum, a) => sum + Number(a.amount), 0)); if (allocTotal > total + .01) throw new Error('PAYMENT_ALLOCATION_EXCEEDS_PAYMENT');
+  // A refund moves money the other way: to a customer (Rückzahlung, Rücklastschrift) or from a supplier.
+  // It books Forderungen an Bank (Bank an Verbindlichkeiten) and takes back what was paid on an item, or
+  // pays out a credit (negative open item, or the surplus of an earlier payment).
+  let refund = input.refund === true;
   if (input.sourceType === 'bank_transaction') {
     const source = (await q<any>(db, `SELECT * FROM bank_transactions WHERE tenant_id=$1 AND id=$2 FOR UPDATE`, [t, input.sourceId]))[0];
     if (!source) throw new Error('PAYMENT_SOURCE_NOT_FOUND');
     if (round(Math.abs(Number(source.amount))) !== total || source.date !== input.paymentDate) throw new Error('PAYMENT_SOURCE_MISMATCH');
     if (source.status === 'booked' || source.linked_invoice_id) throw new Error('PAYMENT_SOURCE_ALREADY_BOOKED');
     const expectedType = input.partyType === 'debtor' ? 'income' : 'expense';
-    if (source.type !== expectedType) throw new Error('PAYMENT_SOURCE_DIRECTION_MISMATCH');
+    if (input.refund === false && source.type !== expectedType) throw new Error('PAYMENT_SOURCE_DIRECTION_MISMATCH');
+    refund = source.type !== expectedType;
     if (!input.partyId) throw new Error('PAYMENT_PARTY_REQUIRED');
+    // The money moved on this bank account, so the entry books its ledger account and no other.
+    if (input.bankAccountNumber !== await bankLedgerAccount(db, t, source.account_id)) throw new Error('PAYMENT_BANK_ACCOUNT_MISMATCH');
   } else if (input.sourceType === 'invoice_payment') {
     const invoiceRows = await q<any>(db, `SELECT id,client_id,payments_json FROM invoices WHERE tenant_id=$1`, [t]);
     let payment: any;
@@ -1257,6 +1307,7 @@ const allocatePayment = async (db: PostgresQueryable, scope: TenantScope, input:
     if (round(Math.abs(Number(payment.amount))) !== total || payment.date !== input.paymentDate) throw new Error('PAYMENT_SOURCE_MISMATCH');
     if (payment.client_id && input.partyId && payment.client_id !== input.partyId) throw new Error('PAYMENT_PARTY_MISMATCH');
     if (!input.partyId && !payment.client_id) throw new Error('PAYMENT_PARTY_REQUIRED');
+    refund = Number(payment.amount) < 0;
   }
   const requestedByItem = new Map<string, number>();
   for (const allocation of input.allocations) {
@@ -1265,43 +1316,258 @@ const allocatePayment = async (db: PostgresQueryable, scope: TenantScope, input:
     requestedByItem.set(allocation.openItemId, round((requestedByItem.get(allocation.openItemId) ?? 0) + amount));
   }
   const items: any[] = [];
+  let credited: { payment: any; amount: number } | undefined;
   for (const [openItemId, amount] of requestedByItem) {
+    if (openItemId.startsWith(PAYMENT_CREDIT_PREFIX)) {
+      // The surplus of an earlier payment is the partner's credit; only a refund pays it out.
+      const creditPayment = (await q<any>(db, `SELECT * FROM open_item_payments WHERE tenant_id=$1 AND id=$2 AND status <> 'reversed' FOR UPDATE`, [t, openItemId.slice(PAYMENT_CREDIT_PREFIX.length)]))[0];
+      if (!creditPayment) throw new Error('OPEN_ITEM_NOT_FOUND');
+      if (creditPayment.party_type !== input.partyType || (input.partyId && creditPayment.party_id !== input.partyId)) throw new Error('PAYMENT_PARTY_MISMATCH');
+      if (!refund || credited || amount > Number(creditPayment.residual_amount) + .01) throw new Error('OPEN_ITEM_ALLOCATION_EXCEEDS_RESIDUAL');
+      credited = { payment: creditPayment, amount };
+      continue;
+    }
     const item = (await q<any>(db, `SELECT * FROM open_items WHERE tenant_id=$1 AND id=$2 FOR UPDATE`, [t, openItemId]))[0];
     if (!item) throw new Error('OPEN_ITEM_NOT_FOUND');
     if (item.party_type !== input.partyType || (input.partyId && item.party_id !== input.partyId)) throw new Error('PAYMENT_PARTY_MISMATCH');
     await assertOpenItemSource(db, t, item);
-    if (amount > Number(item.residual_amount) + .01) throw new Error('OPEN_ITEM_ALLOCATION_EXCEEDS_RESIDUAL');
-    items.push({ item, amount });
+    // A payment settles what is open; a refund takes back at most what was paid, or pays out a credit item.
+    const limit = !refund ? Number(item.residual_amount) : Number(item.original_amount) < 0 ? -Number(item.residual_amount) : Number(item.allocated_amount);
+    if (amount > limit + .01) throw new Error(refund ? 'OPEN_ITEM_REFUND_EXCEEDS_PAID' : 'OPEN_ITEM_ALLOCATION_EXCEEDS_RESIDUAL');
+    items.push({ item, amount: refund ? -amount : amount });
   }
   const p = await policy(db, t);
   const m = await mappings(db, t, p.activeChart);
   if (!(await accountExists(db, p.activeChart, input.bankAccountNumber))) throw new Error(`UNKNOWN_ACCOUNT:${input.bankAccountNumber}`);
-  const lines: JournalLineEntity[] = input.partyType === 'debtor'
-    ? [{ id: randomUUID(), accountNumber: input.bankAccountNumber, debitAmount: total, creditAmount: 0 }, { id: randomUUID(), accountNumber: m.accounts_receivable, debitAmount: 0, creditAmount: total }]
-    : [{ id: randomUUID(), accountNumber: m.accounts_payable, debitAmount: total, creditAmount: 0 }, { id: randomUUID(), accountNumber: input.bankAccountNumber, debitAmount: 0, creditAmount: total }];
-  const entryId = await insertEntry(db, scope, 'payment', `payment:${input.sourceType}:${input.sourceId}`, input.paymentDate, 'Zahlung', lines, { mutation: input.mutation });
+  const moneyIn = (input.partyType === 'debtor') !== refund;
+  const party = input.partyType === 'debtor' ? m.accounts_receivable : m.accounts_payable;
+  const lines: JournalLineEntity[] = moneyIn
+    ? [{ id: randomUUID(), accountNumber: input.bankAccountNumber, debitAmount: total, creditAmount: 0 }, { id: randomUUID(), accountNumber: party, debitAmount: 0, creditAmount: total }]
+    : [{ id: randomUUID(), accountNumber: party, debitAmount: total, creditAmount: 0 }, { id: randomUUID(), accountNumber: input.bankAccountNumber, debitAmount: 0, creditAmount: total }];
   const paymentId = input.paymentId ?? randomUUID();
-  await q(db, `INSERT INTO open_item_payments (id,tenant_id,party_type,party_id,payment_date,amount,bank_account_number,method,source_type,source_id,allocated_amount,residual_amount,status,journal_entry_id,created_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)`, [paymentId, t, input.partyType, input.partyId ?? items[0]?.item.party_id ?? null, input.paymentDate, total, input.bankAccountNumber, input.method ?? null, input.sourceType, input.sourceId, 0, total, 'open', entryId, stamp]);
+  // The first booking of a source keeps its historic key; a source booked again after a Zahlungsstorno gets its own.
+  const rebooked = (await q<any>(db, `SELECT 1 FROM open_item_payments WHERE tenant_id=$1 AND source_type=$2 AND source_id=$3 AND status='reversed' LIMIT 1`, [t, input.sourceType, input.sourceId]))[0];
+  const entryId = await insertEntry(db, scope, 'payment', `payment:${input.sourceType}:${input.sourceId}${rebooked ? `:${paymentId}` : ''}`, input.paymentDate, input.bookingText?.trim() || (refund ? 'Erstattung' : 'Zahlung'), lines, { mutation: input.mutation });
+  await q(db, `INSERT INTO open_item_payments (id,tenant_id,party_type,party_id,payment_date,amount,bank_account_number,method,source_type,source_id,allocated_amount,residual_amount,status,journal_entry_id,created_at,refund,credited_payment_id) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)`, [paymentId, t, input.partyType, input.partyId ?? items[0]?.item.party_id ?? credited?.payment.party_id ?? null, input.paymentDate, total, input.bankAccountNumber, input.method ?? null, input.sourceType, input.sourceId, 0, total, 'open', entryId, stamp, refund, credited?.payment.id ?? null]);
   for (const allocation of items) {
     const allocationId = randomUUID();
     const beforeAllocated = Number(allocation.item.allocated_amount);
     const allocated = round(beforeAllocated + allocation.amount);
-    const residual = round(Number(allocation.item.original_amount) - allocated);
+    const next = itemStatus(allocation.item, allocated);
     const eventKey = `${allocationEventId}:${allocation.item.id}`;
     if ((await q<any>(db, `SELECT id FROM open_item_allocations WHERE tenant_id=$1 AND payment_id=$2 AND event_key=$3 LIMIT 1`, [t, paymentId, eventKey]))[0]) continue;
     await q(db, `INSERT INTO open_item_allocations (id,tenant_id,payment_id,open_item_id,amount,created_at,event_key) VALUES ($1,$2,$3,$4,$5,$6,$7)`, [allocationId, t, paymentId, allocation.item.id, allocation.amount, stamp, eventKey]);
     await recognizeIstVat(db, scope, allocation.item, paymentId, `${allocationEventId}:${allocation.item.id}`, allocation.amount, beforeAllocated, allocated, input.paymentDate);
-    await q(db, `UPDATE open_items SET allocated_amount=$1,residual_amount=$2,status=$3,updated_at=$4 WHERE tenant_id=$5 AND id=$6`, [allocated, residual, residual <= .01 ? 'paid' : 'partially_paid', stamp, t, allocation.item.id]);
-    if (allocation.item.source_type === 'outgoing_invoice') await q(db, `UPDATE invoices SET status=$1,updated_at=$2 WHERE tenant_id=$3 AND id=$4 AND accounting_status='posted'`, [residual <= .01 ? 'paid' : 'open', stamp, t, allocation.item.source_id]);
-    if (allocation.item.source_type === 'incoming_invoice') await q(db, `UPDATE incoming_invoices SET status=$1,updated_at=$2 WHERE tenant_id=$3 AND id=$4 AND accounting_status='posted'`, [residual <= .01 ? 'paid' : 'open', stamp, t, allocation.item.source_id]);
+    await q(db, `UPDATE open_items SET allocated_amount=$1,residual_amount=$2,status=$3,updated_at=$4 WHERE tenant_id=$5 AND id=$6`, [allocated, next.residual, next.status, stamp, t, allocation.item.id]);
+    const documentStatus = next.status === 'paid' ? 'paid' : 'open';
+    if (allocation.item.source_type === 'outgoing_invoice') await q(db, `UPDATE invoices SET status=$1,updated_at=$2 WHERE tenant_id=$3 AND id=$4 AND accounting_status='posted' AND status <> 'cancelled'`, [documentStatus, stamp, t, allocation.item.source_id]);
+    if (allocation.item.source_type === 'incoming_invoice') await q(db, `UPDATE incoming_invoices SET status=$1,updated_at=$2 WHERE tenant_id=$3 AND id=$4 AND accounting_status='posted'`, [documentStatus, stamp, t, allocation.item.source_id]);
+    if (allocation.item.source_type === 'outgoing_invoice') await projectInvoicePayment(db, t, { id: paymentId, source_type: input.sourceType, source_id: input.sourceId, payment_date: input.paymentDate, method: input.method ?? (refund ? 'Erstattung' : undefined) }, allocation.item.source_id, allocation.amount, stamp);
   }
-  const allocated = round(items.reduce((sum, x) => sum + x.amount, 0));
+  if (credited) {
+    const allocatedCredit = round(Number(credited.payment.allocated_amount) + credited.amount);
+    const residualCredit = round(Number(credited.payment.amount) - allocatedCredit);
+    await q(db, `UPDATE open_item_payments SET allocated_amount=$1,residual_amount=$2,status=$3 WHERE tenant_id=$4 AND id=$5`, [allocatedCredit, residualCredit, residualCredit > .01 ? 'partially_allocated' : 'allocated', t, credited.payment.id]);
+  }
+  const allocated = round(items.reduce((sum, x) => sum + Math.abs(x.amount), 0) + (credited?.amount ?? 0));
   const residual = round(total - allocated);
   await q(db, `UPDATE open_item_payments SET allocated_amount=$1,residual_amount=$2,status=$3 WHERE tenant_id=$4 AND id=$5`, [allocated, residual, residual > .01 ? allocated ? 'partially_allocated' : 'overpaid' : 'allocated', t, paymentId]);
   if (input.sourceType === 'bank_transaction') {
     const linked = (await q<any>(db, `SELECT source_id FROM open_items oi JOIN open_item_allocations oa ON oa.open_item_id=oi.id WHERE oa.tenant_id=$1 AND oa.payment_id=$2 AND oi.source_type='outgoing_invoice' ORDER BY oa.created_at LIMIT 1`, [t, paymentId]))[0];
     await q(db, `UPDATE bank_transactions SET status='booked',linked_invoice_id=COALESCE($1,linked_invoice_id),updated_at=$2 WHERE tenant_id=$3 AND id=$4`, [linked?.source_id ?? null, stamp, t, input.sourceId]);
+    // The imported row behind the bank line shows the same link in the bank list.
+    if (linked?.source_id) await q(db, `UPDATE transactions SET linked_invoice_id=$1 WHERE tenant_id=$2 AND id=(SELECT source_transaction_id FROM bank_transactions WHERE tenant_id=$2 AND id=$3) AND (linked_invoice_id IS NULL OR linked_invoice_id='')`, [linked.source_id, t, input.sourceId]);
   }
   await audit(db as PostgresTransactionClient, scope, 'open_item_payment', paymentId, 'allocate', 'Payment allocation', null, { ...input, mutation: undefined }, input.mutation);
   return rowPayment((await q<any>(db, `SELECT * FROM open_item_payments WHERE tenant_id=$1 AND id=$2`, [t, paymentId]))[0]);
+};
+
+/** The ledger account of a bank account: its own SKR account, or the bank role of the chart. */
+const bankLedgerAccount = async (db: PostgresQueryable, t: string, accountId: unknown): Promise<string> => {
+  const own = accountId ? (await q<any>(db, `SELECT default_skr_account_number FROM accounts WHERE tenant_id=$1 AND id=$2`, [t, accountId]))[0]?.default_skr_account_number : undefined;
+  if (typeof own === 'string' && own.trim()) return own.trim();
+  const p = await policy(db, t);
+  return (await mappings(db, t, p.activeChart)).bank!;
+};
+
+/** The id under which an OPOS payment shows on the invoice (payments_json). */
+const invoicePaymentEntryId = async (db: PostgresQueryable, t: string, payment: { id: string; source_type: string; source_id: string }): Promise<string> => {
+  if (payment.source_type === 'invoice_payment') return String(payment.source_id);
+  if (payment.source_type === 'bank_transaction') {
+    const legacy = (await q<any>(db, `SELECT source_transaction_id FROM bank_transactions WHERE tenant_id=$1 AND id=$2`, [t, payment.source_id]))[0]?.source_transaction_id;
+    if (legacy) return `transaction-payment:${legacy}`;
+  }
+  return `open-item-payment:${payment.id}`;
+};
+
+/**
+ * Pro has one payment truth: the OPOS allocation and its journal entry. The invoice keeps the payments it
+ * shows (payments_json) in step, in the same transaction. A payment recorded on the invoice itself is
+ * already listed there, so only bank and OPOS payments are projected.
+ */
+const projectInvoicePayment = async (db: PostgresQueryable, t: string, payment: { id: string; source_type: string; source_id: string; payment_date: string; method?: string | null }, invoiceId: string, delta: number, stamp: string): Promise<void> => {
+  if (payment.source_type === 'invoice_payment' || Math.abs(delta) < .005) return;
+  const row = (await q<any>(db, `SELECT payments_json FROM invoices WHERE tenant_id=$1 AND id=$2 FOR UPDATE`, [t, invoiceId]))[0];
+  if (!row) return;
+  const id = await invoicePaymentEntryId(db, t, payment);
+  const payments = parse<any[]>(row.payments_json, []);
+  const index = payments.findIndex((entry) => entry?.id === id);
+  const amount = round((index >= 0 ? Number(payments[index].amount) : 0) + delta);
+  const entry = { ...(index >= 0 ? payments[index] : {}), id, date: payment.payment_date, amount, method: (index >= 0 ? payments[index].method : undefined) ?? payment.method ?? 'Überweisung' };
+  const next = index >= 0 ? payments.map((candidate, at) => at === index ? entry : candidate) : [...payments, entry];
+  await q(db, `UPDATE invoices SET payments_json=$1,updated_at=$2 WHERE tenant_id=$3 AND id=$4`, [JSON.stringify(next.filter((candidate) => Math.abs(Number(candidate.amount)) >= .005)), stamp, t, invoiceId]);
+};
+
+const PAYMENT_CREDIT_PREFIX = 'payment-credit:';
+const itemStatus = (item: { original_amount: unknown }, allocated: number): { residual: number; status: string } => {
+  const residual = round(Number(item.original_amount) - allocated);
+  return { residual, status: Math.abs(residual) <= .01 ? 'paid' : Math.abs(allocated) > .01 ? 'partially_paid' : 'open' };
+};
+
+export interface OpenItemPaymentReversal {
+  paymentId: string;
+  reversalEntryIds: string[];
+  reopenedItemIds: string[];
+}
+
+/**
+ * Zahlungsstorno: the payment entry and every Ist-VAT recognition of the payment get their mirror entry,
+ * each allocation is taken back by a counter-allocation (rows are never deleted), open items and invoice
+ * status follow, the invoice no longer lists the payment, and a bank line is open again for a new
+ * allocation. The reversal is dated like the payment unless a date is given; a closed month refuses it.
+ */
+export const reverseOpenItemPaymentInTransaction = async (db: PostgresQueryable, scope: TenantScope, input: { paymentId: string; reason: string; postingDate?: string; mutation?: AccountingMutationContext }): Promise<OpenItemPaymentReversal> => {
+  const t = tenant(scope);
+  const reason = input.reason?.trim();
+  if (!reason) throw new Error('ACCOUNTING_AUDIT_REASON_REQUIRED');
+  const payment = (await q<any>(db, `SELECT * FROM open_item_payments WHERE tenant_id=$1 AND id=$2 FOR UPDATE`, [t, input.paymentId]))[0];
+  if (!payment) throw new Error('OPEN_ITEM_PAYMENT_NOT_FOUND');
+  if (payment.status === 'reversed') throw new Error('ALREADY_REVERSED: Die Zahlung ist bereits storniert.');
+  const postingDate = input.postingDate ?? payment.payment_date;
+  if (!isoDate(postingDate)) throw new Error('INVALID_PAYMENT_REVERSAL_DATE');
+  // A refund that paid out the surplus of this payment has to be reversed first.
+  if ((await q<any>(db, `SELECT 1 FROM open_item_payments WHERE tenant_id=$1 AND credited_payment_id=$2 AND status <> 'reversed' LIMIT 1`, [t, payment.id]))[0]) throw new Error('ALREADY_REFUNDED: Ein Teil dieser Zahlung wurde erstattet; bitte zuerst die Erstattung stornieren.');
+  const stamp = now();
+  const reversalEntryIds: string[] = [];
+  const entries = await q<any>(db, `SELECT id FROM journal_entries WHERE tenant_id=$1 AND status='posted' AND ((source_type='payment' AND id=$2) OR (source_type='payment_vat' AND source_key LIKE $3)) ORDER BY entry_number`, [t, payment.journal_entry_id, `payment-vat:${payment.id}:%`]);
+  for (const entry of entries) {
+    reversalEntryIds.push((await reverseEntryInTransaction(db, scope, entry.id, reason, { postingDate, mutation: input.mutation, allowPaymentSource: true })).reversalEntryId);
+  }
+  const allocations = await q<any>(db, `SELECT open_item_id, SUM(amount) AS amount FROM open_item_allocations WHERE tenant_id=$1 AND payment_id=$2 GROUP BY open_item_id ORDER BY open_item_id`, [t, payment.id]);
+  const reopenedItemIds: string[] = [];
+  for (const allocation of allocations) {
+    const amount = round(allocation.amount);
+    if (Math.abs(amount) < .005) continue;
+    const item = (await q<any>(db, `SELECT * FROM open_items WHERE tenant_id=$1 AND id=$2 FOR UPDATE`, [t, allocation.open_item_id]))[0];
+    if (!item) continue;
+    await q(db, `INSERT INTO open_item_allocations (id,tenant_id,payment_id,open_item_id,amount,created_at,event_key) VALUES ($1,$2,$3,$4,$5,$6,$7)`, [randomUUID(), t, payment.id, item.id, -amount, stamp, `reversal:${item.id}`]);
+    const allocated = round(Number(item.allocated_amount) - amount);
+    // Paid back already (Rücklastschrift, Erstattung): that refund is reversed first, never the item below zero.
+    if (Number(item.original_amount) > 0 && allocated < -.01) throw new Error('ALREADY_REFUNDED: Diese Zahlung wurde schon erstattet; bitte zuerst die Erstattung stornieren.');
+    const next = itemStatus(item, allocated);
+    await q(db, `UPDATE open_items SET allocated_amount=$1,residual_amount=$2,status=$3,updated_at=$4 WHERE tenant_id=$5 AND id=$6`, [allocated, next.residual, next.status, stamp, t, item.id]);
+    const documentStatus = next.status === 'paid' ? 'paid' : 'open';
+    if (item.source_type === 'outgoing_invoice') {
+      await q(db, `UPDATE invoices SET status=$1,updated_at=$2 WHERE tenant_id=$3 AND id=$4 AND accounting_status='posted' AND status <> 'cancelled'`, [documentStatus, stamp, t, item.source_id]);
+      const id = await invoicePaymentEntryId(db, t, payment);
+      const invoice = (await q<any>(db, `SELECT payments_json FROM invoices WHERE tenant_id=$1 AND id=$2 FOR UPDATE`, [t, item.source_id]))[0];
+      if (invoice) {
+        const payments = parse<any[]>(invoice.payments_json, []);
+        const shown = payments.find((entry) => entry?.id === id);
+        const left = round(Number(shown?.amount ?? 0) - amount);
+        const kept = payments.flatMap((entry) => entry?.id !== id ? [entry] : Math.abs(left) >= .005 && payment.source_type !== 'invoice_payment' ? [{ ...entry, amount: left }] : []);
+        await q(db, `UPDATE invoices SET payments_json=$1,updated_at=$2 WHERE tenant_id=$3 AND id=$4`, [JSON.stringify(kept), stamp, t, item.source_id]);
+      }
+    }
+    if (item.source_type === 'incoming_invoice') await q(db, `UPDATE incoming_invoices SET status=$1,updated_at=$2 WHERE tenant_id=$3 AND id=$4 AND accounting_status='posted'`, [documentStatus, stamp, t, item.source_id]);
+    reopenedItemIds.push(item.id);
+  }
+  await q(db, `UPDATE open_item_payments SET status='reversed' WHERE tenant_id=$1 AND id=$2`, [t, payment.id]);
+  if (payment.credited_payment_id) {
+    // The credit this refund paid out is open again on the earlier payment.
+    const credit = (await q<any>(db, `SELECT * FROM open_item_payments WHERE tenant_id=$1 AND id=$2 FOR UPDATE`, [t, payment.credited_payment_id]))[0];
+    const creditItems = round(Number(payment.allocated_amount) - Math.abs(round((allocations as any[]).reduce((sum, row) => sum + Number(row.amount), 0))));
+    if (credit && creditItems > .005) {
+      const allocatedCredit = round(Number(credit.allocated_amount) - creditItems);
+      const residualCredit = round(Number(credit.amount) - allocatedCredit);
+      await q(db, `UPDATE open_item_payments SET allocated_amount=$1,residual_amount=$2,status=$3 WHERE tenant_id=$4 AND id=$5`, [allocatedCredit, residualCredit, residualCredit > .01 ? allocatedCredit > .01 ? 'partially_allocated' : 'overpaid' : 'allocated', t, credit.id]);
+    }
+  }
+  if (payment.source_type === 'bank_transaction') {
+    const bank = (await q<any>(db, `SELECT source_transaction_id FROM bank_transactions WHERE tenant_id=$1 AND id=$2 FOR UPDATE`, [t, payment.source_id]))[0];
+    await q(db, `UPDATE bank_transactions SET status='pending',linked_invoice_id=NULL,updated_at=$1 WHERE tenant_id=$2 AND id=$3`, [stamp, t, payment.source_id]);
+    if (bank?.source_transaction_id) await q(db, `UPDATE transactions SET linked_invoice_id=NULL WHERE tenant_id=$1 AND id=$2`, [t, bank.source_transaction_id]);
+  }
+  const after = { status: 'reversed', reversalEntryIds, reopenedItemIds, postingDate };
+  await audit(db as PostgresTransactionClient, scope, 'open_item_payment', payment.id, 'reverse', reason, rowPayment(payment), after, input.mutation);
+  return { paymentId: payment.id, reversalEntryIds, reopenedItemIds };
+};
+
+/** The active OPOS payment behind a source (an invoice payment id, a bank line id), if it was booked. */
+export const findActiveOpenItemPayment = async (db: PostgresQueryable, scope: TenantScope, sourceType: 'invoice_payment' | 'bank_transaction' | 'manual', sourceId: string): Promise<OpenItemPaymentEntity | undefined> => {
+  const row = (await q<any>(db, `SELECT * FROM open_item_payments WHERE tenant_id=$1 AND source_type=$2 AND source_id=$3 AND status <> 'reversed'`, [tenant(scope), sourceType, sourceId]))[0];
+  return row ? rowPayment(row) : undefined;
+};
+
+/** The credit a Storno or Gutschrift of a paid invoice left for the customer, while it is not paid out. */
+const correctionCreditOf = async (db: PostgresQueryable, t: string, invoiceId: string): Promise<any> =>
+  (await q<any>(db, `SELECT oi.* FROM open_items oi JOIN invoices c ON c.tenant_id=oi.tenant_id AND c.id=oi.source_id WHERE oi.tenant_id=$1 AND oi.source_type='outgoing_invoice' AND c.source_document_id=$2 AND oi.residual_amount < 0 ORDER BY oi.created_at LIMIT 1 FOR UPDATE OF oi`, [t, invoiceId]))[0];
+
+const debtorItemOfInvoice = async (db: PostgresQueryable, t: string, invoiceId: string): Promise<any> => {
+  const item = (await q<any>(db, `SELECT * FROM open_items WHERE tenant_id=$1 AND source_type='outgoing_invoice' AND source_id=$2 FOR UPDATE`, [t, invoiceId]))[0];
+  // An issued Pro invoice is posted with its open item; one without has not reached the books.
+  if (!item) throw new Error('DOCUMENT_NOT_POSTED: Die Rechnung ist nicht gebucht; eine Zahlung lässt sich erst nach der Buchung erfassen.');
+  return item;
+};
+
+/**
+ * A payment recorded on a Pro invoice (Zahlung erfassen) is a booking: Bank, or Kasse for a cash payment,
+ * against the receivable, allocated to the open item of the invoice, Ist-VAT recognised like any OPOS
+ * payment. The payment must already be listed on the invoice (payments_json).
+ */
+export const bookInvoicePaymentInTransaction = async (db: PostgresQueryable, scope: TenantScope, input: { invoiceId: string; payment: { id: string; date: string; amount: number; method?: string }; mutation: AccountingMutationContext }): Promise<OpenItemPaymentEntity> => {
+  const t = tenant(scope);
+  const item = await debtorItemOfInvoice(db, t, input.invoiceId);
+  const signed = round(input.payment.amount);
+  const amount = Math.abs(signed);
+  if (!(amount > 0)) throw new Error('INVALID_PAYMENT');
+  // A negative payment is a refund: it pays out the credit a correction left (Storno/Gutschrift of a paid
+  // invoice) or takes back what was paid on the invoice, never more.
+  const credit = signed < 0 ? await correctionCreditOf(db, t, input.invoiceId) : undefined;
+  const target = credit ?? item;
+  if (signed > 0 && amount > round(item.residual_amount) + .01) throw new Error('OPEN_ITEM_ALLOCATION_EXCEEDS_RESIDUAL: Die Zahlung ist höher als der offene Betrag.');
+  if (signed < 0 && amount > (credit ? -round(credit.residual_amount) : round(item.allocated_amount)) + .01) throw new Error('OPEN_ITEM_REFUND_EXCEEDS_PAID: Erstattet werden kann höchstens, was bezahlt wurde.');
+  const p = await policy(db, t);
+  const m = await mappings(db, t, p.activeChart);
+  const cash = /^(bar|cash|kasse)/i.test(String(input.payment.method ?? '').trim());
+  return allocatePayment(db, scope, {
+    sourceType: 'invoice_payment', sourceId: input.payment.id, partyType: 'debtor', partyId: item.party_id,
+    paymentDate: input.payment.date, amount, bankAccountNumber: cash ? m.cash! : m.bank!, method: input.payment.method,
+    allocations: [{ openItemId: target.id, amount }], allocationEventId: `invoice-payment:${input.payment.id}`, mutation: input.mutation, reason: input.mutation.reason,
+  });
+};
+
+/**
+ * Bank-Link in Pro (Rechnung zuordnen): the bank line is booked through OPOS on the ledger account of its
+ * bank account. What exceeds the open amount stays on the payment as the customer's credit.
+ */
+export const bookBankLinkInTransaction = async (db: PostgresQueryable, scope: TenantScope, input: { legacyTransactionId: string; invoiceId: string; appliedAmount?: number; mutation: AccountingMutationContext }): Promise<OpenItemPaymentEntity> => {
+  const t = tenant(scope);
+  const bank = (await q<any>(db, `SELECT * FROM bank_transactions WHERE tenant_id=$1 AND source_transaction_id=$2 FOR UPDATE`, [t, input.legacyTransactionId]))[0];
+  if (!bank) throw new Error('PAYMENT_ALLOCATION_INVALID');
+  const item = await debtorItemOfInvoice(db, t, input.invoiceId);
+  const cash = round(Math.abs(Number(bank.amount)));
+  // An outgoing line is a refund (Rückzahlung, Rücklastschrift): it pays out the credit a correction left,
+  // or takes back what was paid on the invoice and reopens it.
+  const refund = bank.type === 'expense';
+  const credit = refund ? await correctionCreditOf(db, t, input.invoiceId) : undefined;
+  const target = credit ?? item;
+  const room = !refund ? round(item.residual_amount) : credit ? -round(credit.residual_amount) : round(item.allocated_amount);
+  const applied = input.appliedAmount === undefined ? round(Math.min(cash, room)) : round(input.appliedAmount);
+  if (!(applied > 0) || applied > cash + .005 || applied > room + .005) throw new Error('PAYMENT_ALLOCATION_INVALID');
+  return allocatePayment(db, scope, {
+    sourceType: 'bank_transaction', sourceId: bank.id, partyType: 'debtor', partyId: item.party_id,
+    paymentDate: bank.date, amount: cash, bankAccountNumber: await bankLedgerAccount(db, t, bank.account_id), method: 'Überweisung',
+    allocations: [{ openItemId: target.id, amount: applied }], allocationEventId: `bank-link:${bank.id}`, mutation: input.mutation, reason: input.mutation.reason,
+  });
 };

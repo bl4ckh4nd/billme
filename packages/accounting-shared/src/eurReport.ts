@@ -134,13 +134,24 @@ export interface EurAnnexValueResult {
   facts: EurAnnexValueFact[];
 }
 
-/** Tax years for which a bundled EÜR catalog is available. */
+/** Tax years with their own bundled Anlage EÜR. */
 export const SUPPORTED_EUR_TAX_YEARS = [2025, 2026] as const;
-export type SupportedEurTaxYear = (typeof SUPPORTED_EUR_TAX_YEARS)[number];
+export type SupportedEurTaxYear = number;
 export const LATEST_SUPPORTED_EUR_TAX_YEAR = 2026 as const;
+const FIRST_EUR_TAX_YEAR = 2025;
 
+/** Every year from the first bundled form on; a year after the newest form is calculated with it (provisional). */
 export const isSupportedEurTaxYear = (year: number): year is SupportedEurTaxYear =>
-  Number.isInteger(year) && (SUPPORTED_EUR_TAX_YEARS as readonly number[]).includes(year);
+  Number.isInteger(year) && year >= FIRST_EUR_TAX_YEAR && year <= 2100;
+/** A year without its own published form, calculated with the newest one. */
+export const isProvisionalEurTaxYear = (year: number): boolean => isSupportedEurTaxYear(year) && year > LATEST_SUPPORTED_EUR_TAX_YEAR;
+/** The years to offer in a year picker: the bundled forms and, once later, the running year (newest first). */
+export const eurTaxYearOptions = (today: Date = new Date()): number[] => {
+  const last = Math.max(LATEST_SUPPORTED_EUR_TAX_YEAR, today.getFullYear());
+  return Array.from({ length: last - FIRST_EUR_TAX_YEAR + 1 }, (_, index) => last - index);
+};
+/** The year a report opens with: the running year, or the newest form before it exists. */
+export const defaultEurTaxYear = (today: Date = new Date()): number => Math.max(FIRST_EUR_TAX_YEAR, today.getFullYear());
 
 const DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
 const toCents = (value: number): number => Math.round((value + Number.EPSILON) * 100);
@@ -197,6 +208,22 @@ export const calculateEurRows = (
   const fullYear = options.taxYear !== undefined && from === `${options.taxYear}-01-01` && to === `${options.taxYear}-12-31`;
   const linesById = new Map(lines.map((line) => [line.id, line]));
   const totals = new Map(lines.map((line) => [line.id, 0]));
+  const termsOf = (line: EurCalculationLine) => line.computedTerms?.length
+    ? line.computedTerms
+    : (line.computedFromIds ?? []).map((childId) => ({ id: childId, sign: 1 as const }));
+  // The form sums (Kz 159 income, Kz 199 expense). A line outside them (a "davon" line, the non-deductible
+  // column of Geschenke/Bewirtung) is shown on the form but never changes the profit.
+  const incomeSum = lines.find((line) => line.kind === 'computed' && line.kennziffer === '159' && termsOf(line).length);
+  const expenseSum = lines.find((line) => line.kind === 'computed' && line.kennziffer === '199' && termsOf(line).length);
+  const counted = new Set<string>();
+  const collect = (id: string): void => {
+    if (counted.has(id)) return;
+    counted.add(id);
+    const line = linesById.get(id);
+    if (line?.kind === 'computed') for (const term of termsOf(line)) collect(term.id);
+  };
+  if (incomeSum) collect(incomeSum.id);
+  if (expenseSum) collect(expenseSum.id);
   const warnings: string[] = [];
   const splitClassifications: EurSplitClassification[] = [];
   let unclassifiedCount = 0;
@@ -249,6 +276,9 @@ export const calculateEurRows = (
         const amount = toCents(split.amountNet);
         if (split.deductibility === 'non-deductible') {
           nonDeductibleExpenseTotal += amount;
+          // Shown in its non-deductible column (e.g. Kz 165), never on a line that counts.
+          const column = split.lineId ? linesById.get(split.lineId) : undefined;
+          if (column && column.kind === 'expense' && expenseSum && !counted.has(column.id)) totals.set(column.id, (totals.get(column.id) ?? 0) + fromCents(amount));
           continue;
         }
         const splitLine = split.lineId ? linesById.get(split.lineId) : undefined;
@@ -288,7 +318,10 @@ export const calculateEurRows = (
       unclassifiedCount += 1;
       continue;
     }
-    if (flowType === 'expense') deductibleExpenseTotal += toCents(item.amountNet);
+    if (flowType === 'expense') {
+      if (!expenseSum || counted.has(line.id)) deductibleExpenseTotal += toCents(item.amountNet);
+      else nonDeductibleExpenseTotal += toCents(item.amountNet);
+    }
     totals.set(line.id, round2((totals.get(line.id) ?? 0) + item.amountNet));
   }
 
@@ -302,10 +335,7 @@ export const calculateEurRows = (
       resolved.set(id, total);
       return total;
     }
-    const terms = line.computedTerms?.length
-      ? line.computedTerms
-      : (line.computedFromIds ?? []).map((childId) => ({ id: childId, sign: 1 as const }));
-    const total = round2(terms.reduce((sum, term) => sum + term.sign * resolve(term.id), 0));
+    const total = round2(termsOf(line).reduce((sum, term) => sum + term.sign * resolve(term.id), 0));
     resolved.set(id, total);
     totals.set(id, total);
     return total;
@@ -313,8 +343,8 @@ export const calculateEurRows = (
 
   for (const line of lines) resolve(line.id);
   const rows = lines.map((line) => ({ ...line, total: round2(totals.get(line.id) ?? 0) }));
-  const incomeTotal = round2(rows.filter((row) => row.kind === 'income').reduce((sum, row) => sum + row.total, 0));
-  const expenseTotal = round2(rows.filter((row) => row.kind === 'expense').reduce((sum, row) => sum + row.total, 0));
+  const incomeTotal = incomeSum ? round2(totals.get(incomeSum.id) ?? 0) : round2(rows.filter((row) => row.kind === 'income').reduce((sum, row) => sum + row.total, 0));
+  const expenseTotal = expenseSum ? round2(totals.get(expenseSum.id) ?? 0) : round2(rows.filter((row) => row.kind === 'expense').reduce((sum, row) => sum + row.total, 0));
   return {
     rows,
     summary: { incomeTotal, expenseTotal, surplus: round2(incomeTotal - expenseTotal) },

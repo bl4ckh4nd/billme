@@ -202,7 +202,11 @@ test('overpayment closes the item and stays as payment residual', async () => {
     assert.equal(paid.allocatedAmount, 119);
     assert.equal(paid.residualAmount, 31);
     assert.equal(paid.status, 'partially_allocated');
-    const [after] = await repo.listOpenItems(scope);
+    const listed = await repo.listOpenItems(scope);
+    const after = listed.find((candidate) => candidate.sourceId === id);
+    // The surplus is the customer's credit, listed as a negative item with its partner.
+    const credit = listed.find((candidate) => candidate.sourceType === 'payment' && candidate.sourceId === paid.id);
+    assert.deepEqual([credit?.partyId, credit?.residualAmount], [item!.partyId, -31]);
     assert.equal(after?.status, 'paid');
     assert.equal(after?.residualAmount, 0);
     assert.equal((await one<{ status: string }>(database, `SELECT status FROM invoices WHERE id=$1`, [id])).status, 'paid');
@@ -260,7 +264,7 @@ test('retrying the same remaining-allocation event does not duplicate the alloca
     assert.equal(retry.allocatedAmount, 119);
     assert.equal(retry.residualAmount, 31);
     assert.equal(await count(database, `SELECT COUNT(*) c FROM open_item_allocations WHERE payment_id=$1`, [paid.id]), 2);
-    const [after] = await repo.listOpenItems(scope);
+    const after = (await repo.listOpenItems(scope)).find((candidate) => candidate.sourceId === id);
     assert.equal(after?.allocatedAmount, 119);
     assert.equal(after?.residualAmount, 0);
   });

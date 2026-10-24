@@ -1712,7 +1712,7 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
                                     >
                                       <div className="min-w-0">
                                         <p className="text-control font-semibold tabular-nums text-foreground">{formatDate(p.date)}</p>
-                                        <p className="text-caption text-muted">{p.method}{p.id.startsWith('transaction-payment:') || p.id.startsWith('tx:') ? ' · Änderungen im Bankabgleich' : ''}</p>
+                                        <p className="text-caption text-muted">{p.method}{p.id.startsWith('transaction-payment:') || p.id.startsWith('tx:') ? ' · Änderungen im Bankabgleich' : p.id.startsWith('open-item-payment:') ? ' · Änderungen in Offene Posten' : ''}</p>
                                       </div>
                                       <div className="flex items-center gap-1">
                                         <div className="mr-1 text-right text-control font-semibold tabular-nums text-foreground">
@@ -1721,7 +1721,7 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
                                         <IconButton
                                           size="sm"
                                           aria-label="Zahlung bearbeiten"
-                                          disabled={invoicePayment.isPending || p.id.startsWith('transaction-payment:') || p.id.startsWith('tx:')}
+                                          disabled={invoicePayment.isPending || p.id.startsWith('transaction-payment:') || p.id.startsWith('tx:') || p.id.startsWith('open-item-payment:')}
                                               onClick={() => {
                                                 setEditingPaymentId(p.id);
                                                 setPaymentForm({
@@ -1739,7 +1739,7 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
                                         <IconButton
                                           size="sm"
                                           aria-label="Zahlung löschen"
-                                          disabled={invoicePayment.isPending || p.id.startsWith('transaction-payment:') || p.id.startsWith('tx:')}
+                                          disabled={invoicePayment.isPending || p.id.startsWith('transaction-payment:') || p.id.startsWith('tx:') || p.id.startsWith('open-item-payment:')}
                                               onClick={() => {
                                                 setDeletingPaymentId(p.id);
                                                 setPaymentDeleteReason('');

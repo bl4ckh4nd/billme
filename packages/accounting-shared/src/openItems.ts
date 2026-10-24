@@ -3,6 +3,8 @@ export type VatAccountingMethod = 'soll' | 'ist';
 export type OpenItemPartyType = 'debtor' | 'creditor';
 export type OpenItemStatus = 'open' | 'partially_paid' | 'paid' | 'overpaid' | 'unresolved';
 export type AccountingDocumentSource = 'outgoing_invoice' | 'incoming_invoice' | 'legacy_transaction' | 'correction';
+/** Open item sources: documents, plus `payment` for the surplus of a payment (the partner's credit). */
+export type OpenItemSource = AccountingDocumentSource | 'payment';
 
 /** Caller supplied audit context for a server-side accounting mutation. */
 export interface AccountingMutationContext {
@@ -165,7 +167,7 @@ export interface OpenItemEntity {
   tenantId: string;
   partyType: OpenItemPartyType;
   partyId: string;
-  sourceType: AccountingDocumentSource;
+  sourceType: OpenItemSource;
   sourceId: string;
   documentNumber: string;
   documentDate: string;
@@ -192,9 +194,13 @@ export interface OpenItemPaymentEntity {
   sourceId: string;
   allocatedAmount: number;
   residualAmount: number;
-  status: 'open' | 'partially_allocated' | 'overpaid' | 'allocated';
+  status: 'open' | 'partially_allocated' | 'overpaid' | 'allocated' | 'reversed';
   journalEntryId?: string;
   createdAt: string;
+  /** Money to the customer or from the supplier (Rückzahlung, Rücklastschrift). */
+  refund?: boolean;
+  /** The earlier payment whose surplus (credit) this refund pays out. */
+  creditedPaymentId?: string;
 }
 
 export interface OpenItemPaymentInput {
@@ -213,6 +219,10 @@ export interface OpenItemPaymentInput {
   reason: string;
   /** Stable retry key for one allocation event (not the payment id). */
   allocationEventId: string;
+  /** Refund direction for a manual source; bank lines and invoice payments derive it from their sign. */
+  refund?: boolean;
+  /** Journal text of the payment entry; "Zahlung" by default. */
+  bookingText?: string;
 }
 
 export interface OpenItemAllocationEntity {

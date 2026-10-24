@@ -177,6 +177,15 @@ test('closed and soft-locked periods stop every posting path, and ledger, open i
     assert.equal((await payOpenItem(h, item, 50)).status, 200);
   });
 
+  await t.test('a payment recorded on the invoice into a closed month is refused and books nothing', async () => {
+    const invoice = await issue(h, { client: 'Rechnungszahlung Januar' });
+    const entries = (await journal(h)).length;
+    const refused = await h.raw('POST', `/invoices/${invoice.id}/payments`, { reason: 'Zahlung', payment: { id: randomUUID(), date: '2026-01-31', amount: 50, method: 'Überweisung' } });
+    assert.equal(refused.status, 409, refused.text);
+    assert.equal((await journal(h)).length, entries);
+    assert.deepEqual((await h.api.invoices.list()).find((candidate) => candidate.id === invoice.id)!.payments ?? [], [], 'the invoice does not list the refused payment');
+  });
+
   await t.test('a soft-locked period needs an override with a written reason, and the reason is audited', async () => {
     const tx = await bankTx(h, 'Februar Lieferant');
     const d = await getDraft(h, tx.id);
@@ -316,6 +325,25 @@ describe('SKR04 with Ist-VAT', () => {
     const recognised = (await journal(h)).filter((entry) => entry.sourceType === 'payment_vat');
     assert.equal(recognised.length, before + 1);
     assert.equal(recognised[0]!.lines.find((line) => line.accountNumber === '3806')!.creditAmount, 38);
+  });
+
+  test('a payment recorded on the invoice recognises the Ist-VAT, a refund and a Zahlungsstorno take it back', async () => {
+    const invoice = await issue(h, { client: 'Ist Rechnungszahlung' });
+    const vat = async () => money((await journal(h)).filter((entry) => entry.sourceType === 'payment_vat' || entry.sourceType === 'reversal')
+      .reduce((sum, entry) => sum + entry.lines.filter((line) => line.accountNumber === '3806').reduce((s, line) => s + line.creditAmount - line.debitAmount, 0), 0));
+    const before = await vat();
+    const paid = await h.raw('POST', `/invoices/${invoice.id}/payments`, { reason: 'Zahlung', payment: { id: randomUUID(), date: today(), amount: GROSS, method: 'Überweisung' } });
+    assert.equal(paid.status, 200, paid.text);
+    assert.deepEqual(shape((await entryFor(h, `payment:invoice_payment:${paid.body.payments[0].id}`))!), [['1800', GROSS, 0], ['1200', 0, GROSS]]);
+    assert.equal(money(await vat() - before), 38, 'the VAT is due once the invoice is paid');
+    const refund = await h.raw('POST', `/invoices/${invoice.id}/payments`, { reason: 'Teilerstattung', payment: { id: randomUUID(), date: today(), amount: -119, method: 'Überweisung' } });
+    assert.equal(refund.status, 200, refund.text);
+    assert.equal(money(await vat() - before), 19, 'a refund of half takes back half the VAT');
+    const payment = refund.body.payments.find((entry: { amount: number }) => entry.amount === -119);
+    const reversed = await h.raw('POST', `/invoices/${invoice.id}/payments/${payment.id}/reverse`, { reason: 'Erstattung storniert', expectedPayment: payment });
+    assert.equal(reversed.status, 200, reversed.text);
+    assert.equal(money(await vat() - before), 38);
+    await assertLedgerConsistent(h);
   });
 
   test('manual bookings and incoming invoices use the SKR04 roles; the chart is locked once something is posted', async () => {

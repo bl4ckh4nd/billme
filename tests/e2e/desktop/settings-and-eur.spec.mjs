@@ -123,7 +123,7 @@ test('categories, payment term and dunning fee are saved; the mail test, the aud
   await expect(page.getByRole('dialog', { name: 'Tastenkürzel' })).toHaveCount(0);
 });
 
-test('the EÜR worklist searches and filters, an expense is excluded as private and the undo removes it again', async () => {
+test('the EÜR worklist searches and filters, an expense is booked as Privatentnahme and the undo removes it again', async () => {
   const { page, baseUrl } = desktop;
   const shot = createShooter(page);
   await seedBankTransactions(page);
@@ -142,19 +142,25 @@ test('the EÜR worklist searches and filters, an expense is excluded as private 
   await page.getByRole('button', { name: /Adobe Systems/ }).first().click();
 
   const panel = page.getByRole('region', { name: 'Klassifizierung' });
-  await panel.getByRole('radiogroup', { name: 'Art des Vorgangs' }).getByRole('radio', { name: /ausschließen/ }).click();
+  const kinds = panel.getByRole('radiogroup', { name: 'Art des Vorgangs' });
+  // Lite separates Privatentnahme and Geldtransit; an outgoing payment offers no Privateinlage, and nothing is a blanket "exclude".
+  await expect(kinds.getByRole('radio', { name: 'Geldtransit' })).toBeVisible();
+  await expect(kinds.getByRole('radio', { name: /Privateinlage|ausschließen/ })).toHaveCount(0);
+  await kinds.getByRole('radio', { name: 'Privatentnahme' }).click();
+  await expect(panel.getByText(/keine Betriebsausgabe\. Zählt nicht in der EÜR/)).toBeVisible();
   await panel.getByRole('textbox', { name: 'Begründung für EÜR-Änderung' }).fill('Privat bezahlt');
   await panel.getByRole('button', { name: 'Klassifizierung speichern' }).click();
-  await expect.poll(async () => (await adobe()).classification?.excluded ?? null).toBe(true);
-  await shot('excluded');
+  await expect.poll(async () => (await adobe()).kind ?? null).toBe('private-withdrawal');
+  expect((await adobe()).classification?.excluded ?? false).toBe(false);
+  await shot('private-withdrawal');
 
   await page.getByLabel('Einträge durchsuchen').fill('');
-  await page.getByRole('button', { name: /^Ausgeschl/ }).click();
+  await page.getByRole('button', { name: /^Klassifiziert/ }).click();
   await expect(page.getByRole('button', { name: /Adobe Systems/ }).first()).toBeVisible();
   await page.getByRole('button', { name: 'Rückgängig' }).click();
-  // Undo writes the previous state back: no line, not excluded, i.e. open again.
+  // Undo writes the previous state back: no line, no kind, i.e. open again.
   await expect.poll(async () => (await invokeDesktopIpc(page, 'eur:listItems', { taxYear, sourceType: 'transaction', status: 'unclassified' })).some((item) => item.counterparty === 'Adobe Systems')).toBe(true);
-  expect((await adobe()).classification?.excluded ?? false).toBe(false);
+  expect((await adobe()).kind).toBeUndefined();
   await page.getByRole('button', { name: /^Offen/ }).click();
   await expect(page.getByRole('button', { name: /Adobe Systems/ }).first()).toBeVisible();
   await shot('undone');

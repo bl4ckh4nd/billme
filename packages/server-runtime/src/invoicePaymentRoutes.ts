@@ -1,12 +1,12 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { invoiceSchema, paymentSchema, type Payment } from '@billme/server-core';
-import { assertLitePeriodsOpen, createPostgresBillingDependencies, isSkontoPayment, periodClosedMessage, withSkontoSettlement } from '@billme/server-data';
+import { assertLitePeriodsOpen, bookInvoicePaymentInTransaction, findActiveOpenItemPayment, reverseOpenItemPaymentInTransaction, createPostgresBillingDependencies, creditedAmount, isSkontoPayment, periodClosedMessage, withSkontoSettlement } from '@billme/server-data';
 import { buildAuditEntry, withInvoiceHistory } from './auditHistory.js';
 import { settledInvoiceStatus } from './documentIssuance.js';
 import { isReceivableDocumentKind } from '@billme/server-core';
 import { ApiError, typedRoute } from './http.js';
-import { requireDatabase, requireMutationSessionFor } from './runtimeContext.js';
+import { createMutationContext, requireDatabase, requireMutationSessionFor } from './runtimeContext.js';
 
 const paymentCommandSchema = paymentSchema.refine(
   (payment) => payment.amount !== 0 && Number.isSafeInteger(Math.round(payment.amount * 100))
@@ -45,9 +45,12 @@ export const registerInvoicePaymentRoutes = (app: FastifyInstance, product: 'lit
           if (paymentId.startsWith('transaction-payment:') || paymentId.startsWith('tx:')) {
             throw new ApiError(409, 'Bankzahlungen bitte im Bankabgleich ändern.');
           }
+          if (paymentId.startsWith('open-item-payment:')) throw new ApiError(409, 'Diese Zahlung wurde in den offenen Posten gebucht und wird dort storniert.');
           if (isSkontoPayment({ id: paymentId })) throw new ApiError(409, 'Skonto ergibt sich aus den Zahlungen und wird nicht von Hand erfasst.');
           const current = before.payments.find((payment) => payment.id === paymentId);
-          if (operation === 'save' && current && body.payment && samePayment(current, body.payment)) return before;
+          // Pro books every payment: a repeat is only a no-op once the payment is in the books.
+          if (operation === 'save' && current && body.payment && samePayment(current, body.payment)
+            && (product !== 'pro' || await findActiveOpenItemPayment(transaction, session.scope, 'invoice_payment', current.id))) return before;
           if (operation === 'reverse' && !current) return before;
           if (current && (!body.expectedPayment || !samePayment(current, body.expectedPayment))) {
             throw new ApiError(409, 'Zahlung wurde inzwischen geändert. Bitte Rechnung neu laden.');
@@ -58,6 +61,31 @@ export const registerInvoicePaymentRoutes = (app: FastifyInstance, product: 'lit
             .catch((error: Error & { period?: string }) => { throw error.message === 'LITE_PERIOD_CLOSED' ? new ApiError(409, periodClosedMessage(error.period ?? '')) : error; });
           const payments = before.payments.filter((payment) => payment.id !== paymentId);
           if (operation === 'save') payments.push(body.payment!);
+          // A payment may settle at most what is open (amount less credit notes and other payments). More is a
+          // credit the customer is owed: record what is open and refund or offset the rest separately.
+          if (operation === 'save' && body.payment!.amount > 0) {
+            const cents = (value: number) => Math.round(Number(value) * 100);
+            const openCents = cents(before.amount) - cents(await creditedAmount(transaction, session.scope, before.id))
+              - payments.filter((payment) => payment.id !== paymentId && !isSkontoPayment(payment)).reduce((sum, payment) => sum + cents(payment.amount), 0);
+            if (cents(body.payment!.amount) > openCents) {
+              throw new ApiError(409, `Die Zahlung übersteigt den offenen Betrag von ${(Math.max(0, openCents) / 100).toFixed(2).replace('.', ',')} €. Bitte nur den offenen Betrag erfassen; der Rest ist ein Guthaben des Kunden und wird separat erstattet oder verrechnet.`);
+            }
+          }
+          if (product === 'pro') {
+            // Pro: a payment is a booking. The invoice lists it, then the booked payment that is changed or
+            // removed gets its Zahlungsstorno and the new one is booked (Bank or Kasse an Forderungen) and
+            // allocated to the open item, all in this transaction. Status follows the open item.
+            const mutation = createMutationContext(session, body.reason);
+            const booked = current ? await findActiveOpenItemPayment(transaction, session.scope, 'invoice_payment', current.id) : undefined;
+            if (booked) await reverseOpenItemPaymentInTransaction(transaction, session.scope, { paymentId: booked.id, reason: body.reason, mutation });
+            const reopened = (await repositories.invoiceRepo.getById(session.scope, before.id))!;
+            await repositories.invoiceRepo.save(session.scope, { ...reopened, status: reopened.status === 'paid' && !booked ? 'open' as const : reopened.status, payments, updatedAt: new Date().toISOString() }, { replacePayments: true });
+            if (operation === 'save') await bookInvoicePaymentInTransaction(transaction, session.scope, { invoiceId: before.id, payment: body.payment!, mutation });
+            const after = (await repositories.invoiceRepo.getById(session.scope, before.id))!;
+            await repositories.auditLog.append(session.scope, buildAuditEntry(session.scope, session, 'invoice', before.id,
+              operation === 'reverse' ? 'invoice.payment.reverse' : current ? 'invoice.payment.update' : 'invoice.payment.create', body.reason, before, after));
+            return after;
+          }
           const next = await withSkontoSettlement(transaction, session.scope, { ...before, status: before.status === 'paid' ? 'open' as const : before.status, payments, updatedAt: new Date().toISOString() });
           const after = await repositories.invoiceRepo.save(session.scope, { ...next, status: await settledInvoiceStatus(transaction, session.scope, next) }, { replacePayments: true });
           await repositories.auditLog.append(session.scope, buildAuditEntry(session.scope, session, 'invoice', before.id,

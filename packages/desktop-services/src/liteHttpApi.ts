@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { isSupportedEurTaxYear, SUPPORTED_EUR_TAX_YEARS } from '@billme/accounting-shared';
+import { isSupportedEurTaxYear } from '@billme/accounting-shared';
 import { createBillmeApi, type BillmeApi, type IpcInvoke } from '@billme/desktop-contracts/api';
 import { ipcRoutes, type IpcArgs, type IpcResult, type IpcRouteKey } from '@billme/desktop-contracts/contract';
 import type { EmbeddedConnection } from '@billme/desktop-contracts/embeddedConnection';
@@ -45,10 +45,7 @@ const parseResponseError = (status: number, payload: unknown): Error => {
   return new Error(`Anfrage fehlgeschlagen (HTTP ${status}).`);
 };
 
-const eurTaxYearSchema = z.union([
-  z.literal(SUPPORTED_EUR_TAX_YEARS[0]),
-  z.literal(SUPPORTED_EUR_TAX_YEARS[1]),
-]);
+const eurTaxYearSchema = z.number().int().refine(isSupportedEurTaxYear, 'Unsupported EÜR year');
 
 const serverEurClassificationSchema = z.object({
   id: z.string(),
@@ -60,6 +57,7 @@ const serverEurClassificationSchema = z.object({
   vatMode: z.enum(['none', 'default']),
   vatRate: z.number().optional(),
   note: z.string().optional(),
+  kind: z.enum(['private-withdrawal', 'private-contribution', 'transit']).optional(),
   updatedAt: z.string(),
 });
 
@@ -81,8 +79,9 @@ const serverEurReportSchema = z.object({
   })),
   summary: z.object({ incomeTotal: z.number(), expenseTotal: z.number(), surplus: z.number() }),
   unclassifiedCount: z.number().int().nonnegative(),
+  unclassified: z.object({ incomeCount: z.number().int(), incomeAmount: z.number(), expenseCount: z.number().int(), expenseAmount: z.number() }).optional(),
   warnings: z.array(z.string()),
-  catalog: z.object({ id: z.string(), version: z.string(), sourceHash: z.string().regex(/^[a-f0-9]{64}$/), delivery: z.enum(['print-form-only', 'elster-ready']), elsterReady: z.boolean() }),
+  catalog: z.object({ id: z.string(), title: z.string().optional(), version: z.string(), sourceHash: z.string().regex(/^[a-f0-9]{64}$/), delivery: z.enum(['print-form-only', 'elster-ready']), elsterReady: z.boolean(), provisional: z.boolean().optional() }),
 });
 
 const serverEurItemSchema = z.object({
@@ -101,6 +100,10 @@ const serverEurItemSchema = z.object({
   suggestedLineId: z.string().optional(),
   suggestionReason: z.string().optional(),
   suggestionLayer: z.enum(['rule', 'counterparty', 'bayes', 'keyword']).optional(),
+  suggestedKind: z.enum(['transit', 'private-withdrawal', 'private-contribution']).optional(),
+  kind: z.enum(['income', 'expense', 'private-withdrawal', 'private-contribution', 'pass-through', 'transit']).optional(),
+  transitHint: z.string().optional(),
+  splits: z.array(z.object({ amountNet: z.number(), deductibility: z.enum(['deductible', 'non-deductible']).optional(), lineId: z.string().optional(), reason: z.string().optional() })).optional(),
   classification: serverEurClassificationSchema.optional(),
   line: z.object({
     id: z.string(),

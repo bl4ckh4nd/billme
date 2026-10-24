@@ -932,6 +932,15 @@ export const createProWebClient = (config: ProWebClientConfig) => {
       if (!allocationEventId.trim()) throw new Error('Zuordnungs-ID fehlt.');
       return requestJson({ method: 'POST', body: { paymentId, allocations, reason, allocationEventId }, parser: (input) => input }, `/api/v1/pro/accounting/open-items/payments/${encodeURIComponent(paymentId)}/remaining`);
     },
+    listOpenItemPayments() {
+      return requestJson({ parser: (input) => input }, '/api/v1/pro/accounting/open-items/payments');
+    },
+    reverseOpenItemPayment(paymentId: string, reason: string, postingDate?: string) {
+      return requestJson({ method: 'POST', body: { reason, ...(postingDate ? { postingDate } : {}) }, parser: (input) => input }, `/api/v1/pro/accounting/open-items/payments/${encodeURIComponent(paymentId)}/reverse`);
+    },
+    reallocateOpenItemPayment(paymentId: string, input: { reason: string; partyId: string; allocations: unknown; allocationEventId: string }) {
+      return requestJson({ method: 'POST', body: input, parser: (payload) => payload }, `/api/v1/pro/accounting/open-items/payments/${encodeURIComponent(paymentId)}/reallocate`);
+    },
     reverseDocumentAccounting(input: unknown, reason: string) {
       return requestJson({ method: 'POST', body: { ...input as Record<string, unknown>, reason }, parser: (payload) => payload }, '/api/v1/pro/accounting/documents/reverse');
     },
@@ -1223,6 +1232,17 @@ export const createProHttpBillmeApi = ({ fallback, onInvoke, downloadBlob, ...cl
             parsedArgs.allocationEventId,
           );
           return ipcRoutes[key].result.parse(result) as IpcResult<K>;
+        }
+        case 'pro:listOpenItemPayments': {
+          return ipcRoutes[key].result.parse(await client.listOpenItemPayments()) as IpcResult<K>;
+        }
+        case 'pro:reverseOpenItemPayment': {
+          const parsedArgs = ipcRoutes[key].args.parse(args) as IpcArgs<'pro:reverseOpenItemPayment'>;
+          return ipcRoutes[key].result.parse(await client.reverseOpenItemPayment(parsedArgs.paymentId, parsedArgs.reason, parsedArgs.postingDate)) as IpcResult<K>;
+        }
+        case 'pro:reallocateOpenItemPayment': {
+          const { paymentId, ...input } = ipcRoutes[key].args.parse(args) as IpcArgs<'pro:reallocateOpenItemPayment'>;
+          return ipcRoutes[key].result.parse(await client.reallocateOpenItemPayment(paymentId, input)) as IpcResult<K>;
         }
         case 'pro:reverseDocumentAccounting': {
           const parsedArgs = ipcRoutes[key].args.parse(args) as IpcArgs<'pro:reverseDocumentAccounting'>;

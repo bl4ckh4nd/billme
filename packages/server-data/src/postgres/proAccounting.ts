@@ -1061,4 +1061,4 @@ export const createPostgresProAccountingCatalogRepository = (
   },
 });
 
-export { createPostgresProAccountingRepository } from "./proAccountingRepository.js";
+export { createPostgresProAccountingRepository, bookBankLinkInTransaction, bookInvoicePaymentInTransaction, findActiveOpenItemPayment, reverseOpenItemPaymentInTransaction, type OpenItemPaymentReversal } from "./proAccountingRepository.js";

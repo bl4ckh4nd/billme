@@ -318,7 +318,8 @@ test('embedded Lite finance import history is tenant scoped and rollback is audi
   }
 });
 
-test('embedded Pro transaction link and unlink update invoice, transaction, and audit atomically', async () => {
+// Pro books a link through OPOS and the journal; that path is covered in integration-tests pro-accounting.test.ts.
+test('embedded Lite transaction link and unlink update invoice, transaction, and audit atomically', async () => {
   const dataDir = await mkdtemp(join(tmpdir(), 'billme-embedded-transaction-link-'));
   const database = await PgliteServerDatabase.open(dataDir);
   const token = 'transaction-link-local-token';
@@ -326,7 +327,7 @@ test('embedded Pro transaction link and unlink update invoice, transaction, and 
   const app = await buildServerApi({
     database,
     runtime: 'embedded',
-    product: 'pro',
+    product: 'lite',
     logger: false,
     sessionSecret: 'embedded-transaction-link-test-secret-32-chars',
     localAuth: {
@@ -342,7 +343,7 @@ test('embedded Pro transaction link and unlink update invoice, transaction, and 
     const now = new Date().toISOString();
     await database.query(
       `INSERT INTO tenants (id, slug, display_name, product, deployment_mode, status, created_at, updated_at)
-       VALUES ($1, $2, $3, 'pro', 'single-tenant', 'active', $4, $4)`,
+       VALUES ($1, $2, $3, 'lite', 'single-tenant', 'active', $4, $4)`,
       [tenantId, tenantId, 'Transaction Link', now],
     );
     await database.query(
@@ -367,7 +368,7 @@ test('embedded Pro transaction link and unlink update invoice, transaction, and 
 
     const link = await app.inject({
       method: 'POST',
-      url: '/api/v1/pro/transactions/transaction-link-source/link',
+      url: '/api/v1/lite/transactions/transaction-link-source/link',
       headers,
       payload: { invoiceId: 'transaction-link-invoice', reason: 'Zahlung zugeordnet' },
     });
@@ -392,7 +393,7 @@ test('embedded Pro transaction link and unlink update invoice, transaction, and 
 
     const unlink = await app.inject({
       method: 'POST',
-      url: '/api/v1/pro/transactions/transaction-link-source/unlink',
+      url: '/api/v1/lite/transactions/transaction-link-source/unlink',
       headers,
       payload: { reason: 'Zahlungszuordnung aufgehoben' },
     });
@@ -421,7 +422,7 @@ test('transaction unlink removes only its stable payment when duplicate date and
   const app = await buildServerApi({
     database,
     runtime: 'embedded',
-    product: 'pro',
+    product: 'lite',
     logger: false,
     sessionSecret: 'embedded-transaction-payment-identity-secret-32-chars',
     localAuth: {
@@ -437,7 +438,7 @@ test('transaction unlink removes only its stable payment when duplicate date and
     const now = new Date().toISOString();
     await database.query(
       `INSERT INTO tenants (id, slug, display_name, product, deployment_mode, status, created_at, updated_at)
-       VALUES ($1, $2, $3, 'pro', 'single-tenant', 'active', $4, $4)`,
+       VALUES ($1, $2, $3, 'lite', 'single-tenant', 'active', $4, $4)`,
       [tenantId, tenantId, 'Payment Identity', now],
     );
     await database.query(
@@ -464,7 +465,7 @@ test('transaction unlink removes only its stable payment when duplicate date and
     for (const transactionId of ['transaction-payment-first', 'transaction-payment-second']) {
       const link = await app.inject({
         method: 'POST',
-        url: `/api/v1/pro/transactions/${transactionId}/link`,
+        url: `/api/v1/lite/transactions/${transactionId}/link`,
         headers,
         payload: { invoiceId: 'transaction-payment-invoice', reason: 'Zahlung zugeordnet' },
       });
@@ -472,7 +473,7 @@ test('transaction unlink removes only its stable payment when duplicate date and
     }
     const unlink = await app.inject({
       method: 'POST',
-      url: '/api/v1/pro/transactions/transaction-payment-first/unlink',
+      url: '/api/v1/lite/transactions/transaction-payment-first/unlink',
       headers,
       payload: { reason: 'Erste Zahlung entlinkt' },
     });

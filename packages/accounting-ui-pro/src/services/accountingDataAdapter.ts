@@ -147,6 +147,11 @@ export interface ProAccountingDataAdapter {
     allocationEventId: string,
     reason: string,
   ) => Promise<OpenItemPaymentEntity>;
+  listOpenItemPayments?: () => Promise<OpenItemPaymentEntity[]>;
+  /** Zahlungsstorno with a required reason; the server posts the mirror entries. */
+  reverseOpenItemPayment?: (paymentId: string, reason: string) => Promise<unknown>;
+  /** Umbuchung: Storno and new allocation of the same payment under one reason. */
+  reallocateOpenItemPayment?: (paymentId: string, input: { reason: string; partyId: string; allocations: Array<{ openItemId: string; amount: number }>; allocationEventId: string }) => Promise<unknown>;
   listVendors?: () => Promise<VendorEntity[]>;
   upsertVendor?: (vendor: Omit<VendorEntity, 'tenantId' | 'createdAt' | 'updatedAt'>, reason: string) => Promise<VendorEntity>;
   listIncomingInvoices?: () => Promise<IncomingInvoiceEntity[]>;

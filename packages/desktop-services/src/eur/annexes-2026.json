@@ -1,9 +1,9 @@
 {
   "year": 2026,
-  "sourceVersion": "BMF-2026-2026-08-14",
+  "sourceVersion": "BMF-2026-2026-09-01",
   "sourceName": "Bundesministerium der Finanzen",
-  "sourceUrl": "https://www.bundesfinanzministerium.de/Content/DE/Downloads/BMF_Schreiben/Steuerarten/Einkommensteuer/2026-08-14-anlage-EUER-2026.pdf?__blob=publicationFile&v=1",
-  "sourceSha256": "50d6c8c8d8c5fb7cab8c26f6255e7776f9bac6beac29562ccf3c741cb9d92f18",
+  "sourceUrl": "https://www.bundesfinanzministerium.de/Content/DE/Downloads/BMF_Schreiben/Steuerarten/Einkommensteuer/2026-09-01-anlage-EUER-2026.pdf?__blob=publicationFile&v=4",
+  "sourceSha256": "03d3033acc5c5a126729e58743128596ae39193759c55b207872da9432b83a8f",
   "validFrom": "2026-01-01",
   "validTo": "2026-12-31",
   "scope": "de-sole-proprietor",

@@ -5,10 +5,15 @@ import type { EurExpenseSplit } from '@billme/accounting-shared';
 import type { AccountingMutationContext, TenantScope } from '@billme/server-core';
 import { appendWithClient, createPostgresAuditLogPort } from './audit.js';
 import { runInTransaction, type PostgresQueryable, type PostgresTransactionClient } from './connection.js';
-import { assertServerEurCashSource, type ServerEurReportResult } from './eurReport.js';
+import { assertServerEurCashSource, assertServerEurProfile, type ServerEurReportResult } from './eurReport.js';
 import { assertLitePeriodsOpen } from './liteCash.js';
 
-type EurCashFactKind = 'income' | 'expense' | 'private-withdrawal' | 'private-contribution' | 'pass-through';
+type EurCashFactKind = 'income' | 'expense' | 'private-withdrawal' | 'private-contribution' | 'pass-through' | 'transit';
+/** Kinds the Lite classification sets instead of an EÜR line; each lives as a cash fact of the payment. */
+export type EurNeutralKind = 'private-withdrawal' | 'private-contribution' | 'transit';
+const NEUTRAL_KINDS = ['private-withdrawal', 'private-contribution', 'pass-through', 'transit'];
+/** The "nicht abziehbar" column of the limited-deduction lines (Geschenke, Bewirtung, Arbeitszimmer, sonstige). */
+const NON_DEDUCTIBLE_COLUMNS = ['164', '165', '162', '168'];
 type EurSourceType = 'transaction' | 'invoice' | 'manual';
 type EurActor = { id: string; displayName?: string };
 type EurProvenance = { catalogId: string; catalogVersion: string; catalogSourceHash: string; sourceSnapshotHash?: string };
@@ -96,7 +101,7 @@ const assertCashFact = async (db: PostgresQueryable, scope: TenantScope, input: 
   // Festschreibung (Lite): a fact changes what the payment of a closed month counts as.
   if (input.product === 'lite') await assertLitePeriodsOpen(db, scope, [source.date]);
   if (!Number.isFinite(input.amountNet) || input.amountNet < 0) throw new Error('EUR_FACT_AMOUNT_INVALID');
-  if (input.kind === 'private-withdrawal' || input.kind === 'private-contribution' || input.kind === 'pass-through') {
+  if (NEUTRAL_KINDS.includes(input.kind)) {
     if (input.eurLineId || input.splits?.length) throw new Error('EUR_NEUTRAL_FACT_MUST_NOT_HAVE_LINE');
     return { sourceSnapshotHash: hash(source), sourceType: source.sourceType as EurSourceType, sourceId: source.sourceId };
   }
@@ -118,6 +123,9 @@ const assertCashFact = async (db: PostgresQueryable, scope: TenantScope, input: 
         const line = split.lineId ? lines.get(split.lineId) : undefined;
         if (!line) throw new Error('EUR_SPLIT_LINE_NOT_FOUND');
         if (line.kind !== 'expense') throw new Error('EUR_SPLIT_LINE_FLOW_MISMATCH');
+      } else if (split.lineId && !NON_DEDUCTIBLE_COLUMNS.includes(lines.get(split.lineId)?.kennziffer ?? '')) {
+        // A non-deductible part is shown in a "nicht abziehbar" column, never on a line that lowers the profit.
+        throw new Error('EUR_SPLIT_NON_DEDUCTIBLE_LINE');
       }
       return sum + cents(split.amountNet);
     }, 0);
@@ -149,22 +157,39 @@ export interface SaveServerEurClassificationInput {
   vatMode?: 'none' | 'default';
   vatRate?: number;
   note?: string;
+  /** Lite: Privatentnahme, Privateinlage or Geldtransit instead of a line; stored as the payment's cash fact. */
+  kind?: EurNeutralKind;
+  /** Lite: the net amount split into deductible and non-deductible parts (Bewirtung 70/30); stored as the payment's cash fact. */
+  splits?: EurExpenseSplit[];
   product?: 'lite' | 'pro';
   mutation?: AccountingMutationContext;
 }
 
 /** EÜR-only classification adapter; the generic accounting repository remains 2025-compatible. */
-export const saveServerEurClassificationFact = async (db: PostgresQueryable, scope: TenantScope, input: SaveServerEurClassificationInput): Promise<Record<string, unknown>> => {
+export const saveServerEurClassificationFact = (db: PostgresQueryable, scope: TenantScope, input: SaveServerEurClassificationInput): Promise<Record<string, unknown>> =>
+  runInTransaction(db, (tx) => saveClassificationInTransaction(tx, scope, input));
+
+const saveClassificationInTransaction = async (db: PostgresTransactionClient, scope: TenantScope, input: SaveServerEurClassificationInput): Promise<Record<string, unknown>> => {
   const { reason, actor } = assertMutation(input.mutation);
   const source = await assertServerEurCashSource(db, scope, input.sourceType, input.sourceId.trim(), input.product ?? 'pro', input.taxYear);
   // Festschreibung (Lite): the category, exclusion and VAT split of a closed month's payment stay as they were.
   if (input.product === 'lite') await assertLitePeriodsOpen(db, scope, [source.date]);
+  // A cash entry matched against the bank in the other direction is money moved between bank and Kasse.
+  if (source.transit && (input.eurLineId || input.excluded || (input.kind && input.kind !== 'transit'))) throw new Error('EUR_TRANSIT_NOT_CLASSIFIABLE');
+  if (input.kind) {
+    if (input.eurLineId || input.excluded) throw new Error('EUR_NEUTRAL_FACT_MUST_NOT_HAVE_LINE');
+    // An Entnahme takes money out of the business, an Einlage brings it in.
+    if ((input.kind === 'private-withdrawal' && source.flowType !== 'expense') || (input.kind === 'private-contribution' && source.flowType !== 'income')) throw new Error('EUR_NEUTRAL_KIND_FLOW_MISMATCH');
+  }
   if (input.eurLineId) {
     const line = getCatalogForYear(input.taxYear).find((candidate) => candidate.id === input.eurLineId);
     if (!line) throw new Error('EUR_LINE_NOT_FOUND');
     if (line.kind === 'computed') throw new Error('EUR_COMPUTED_LINE_NOT_CLASSIFIABLE');
     if (!input.excluded && line.kind !== source.flowType) throw new Error('EUR_LINE_FLOW_MISMATCH');
+    // Geschenke über 50 €: not deductible, and § 15 Abs. 1a UStG takes the Vorsteuer with it.
+    if (!input.excluded && line.kennziffer === '164' && input.vatMode === 'default' && (input.vatRate ?? 0) > 0) throw new Error('EUR_GIFT_NO_INPUT_VAT');
   }
+  if (input.splits?.length && (input.kind || input.excluded || !input.eurLineId || source.flowType !== 'expense' || input.product !== 'lite')) throw new Error('EUR_SPLITS_EXPENSE_ONLY');
   const sourceType = source.sourceType;
   const sourceId = source.sourceId;
   const existing = (await q(db, 'SELECT * FROM eur_classifications WHERE tenant_id=$1 AND source_type=$2 AND source_id=$3 AND tax_year=$4 LIMIT 1', [scope.tenantId, sourceType, sourceId, input.taxYear]))[0];
@@ -173,7 +198,26 @@ export const saveServerEurClassificationFact = async (db: PostgresQueryable, sco
   const record = { id, tenant_id: scope.tenantId, source_type: sourceType, source_id: sourceId, tax_year: input.taxYear, eur_line_id: input.excluded ? null : input.eurLineId ?? null, excluded: input.excluded === true, vat_mode: input.vatMode ?? 'none', vat_rate: input.vatRate ?? null, note: input.note ?? null, updated_at: now };
   await db.query(`INSERT INTO eur_classifications (id,tenant_id,source_type,source_id,tax_year,eur_line_id,excluded,vat_mode,vat_rate,note,updated_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) ON CONFLICT (tenant_id,source_type,source_id,tax_year) DO UPDATE SET eur_line_id=EXCLUDED.eur_line_id,excluded=EXCLUDED.excluded,vat_mode=EXCLUDED.vat_mode,vat_rate=EXCLUDED.vat_rate,note=EXCLUDED.note,updated_at=EXCLUDED.updated_at`, [id, scope.tenantId, sourceType, sourceId, input.taxYear, record.eur_line_id, record.excluded, record.vat_mode, record.vat_rate, record.note, now]);
   const saved = (await q(db, 'SELECT * FROM eur_classifications WHERE tenant_id=$1 AND id=$2', [scope.tenantId, id]))[0] ?? record;
-  await createPostgresAuditLogPort(db as any).append(scope, { occurredAt: now, action: existing ? 'update' : 'create', reason, actor: { type: 'user', id: actor.id, displayName: actor.displayName }, subject: { entityType: 'eur_classification', entityId: `${sourceType}:${sourceId}:${input.taxYear}`, tenantId: scope.tenantId }, change: { before: existing ?? null, after: saved } });
+  await appendWithClient(db, scope, { occurredAt: now, action: existing ? 'update' : 'create', reason, actor: { type: 'user', id: actor.id, displayName: actor.displayName }, subject: { entityType: 'eur_classification', entityId: `${sourceType}:${sourceId}:${input.taxYear}`, tenantId: scope.tenantId }, change: { before: existing ?? null, after: saved } });
+  let kind: string | undefined;
+  if (input.product === 'lite' && !source.transit) {
+    // The neutral kind is the payment's cash fact: set it, or drop it when a line (or the old exclusion) is chosen.
+    if (input.kind) {
+      kind = (await saveServerEurCashFactInTransaction(db, scope, { sourceType, sourceId, taxYear: input.taxYear, kind: input.kind, amountNet: Math.abs(source.amountGross), product: 'lite', mutation: input.mutation })).kind;
+    } else if (input.splits?.length) {
+      // The parts split the net amount of the payment, as the report computes it from the chosen VAT rate.
+      const { smallBusiness } = await assertServerEurProfile(db, scope, { taxYear: input.taxYear });
+      const gross = Math.abs(source.amountGross);
+      const net = source.sourceNet !== undefined ? Math.abs(source.sourceNet) : smallBusiness || input.vatMode !== 'default' ? gross : gross / (1 + (input.vatRate ?? 0) / 100);
+      await saveServerEurCashFactInTransaction(db, scope, { sourceType, sourceId, taxYear: input.taxYear, kind: 'expense', flowType: 'expense', amountNet: amount(net), eurLineId: input.eurLineId, splits: input.splits, product: 'lite', mutation: input.mutation });
+    } else {
+      const neutral = (await q(db, 'SELECT * FROM eur_cash_facts WHERE tenant_id=$1 AND source_type=$2 AND source_id=$3 AND tax_year=$4 AND (kind = ANY($5::text[]) OR splits_json IS NOT NULL)', [scope.tenantId, sourceType, sourceId, input.taxYear, NEUTRAL_KINDS]))[0];
+      if (neutral) {
+        await db.query('DELETE FROM eur_cash_facts WHERE tenant_id=$1 AND id=$2', [scope.tenantId, neutral.id]);
+        await appendWithClient(db, scope, { occurredAt: now, action: 'delete', reason, actor: { type: 'user', id: actor.id, displayName: actor.displayName }, subject: { entityType: 'eur_cash_fact', entityId: `${sourceType}:${sourceId}:${input.taxYear}`, tenantId: scope.tenantId }, change: { before: neutral, after: null } });
+      }
+    }
+  } else if (source.transit) kind = 'transit';
   // Same shape as the 2025 repository path and the client schema (camelCase, optional fields omitted).
   return {
     id: String(saved.id),
@@ -185,6 +229,7 @@ export const saveServerEurClassificationFact = async (db: PostgresQueryable, sco
     vatMode: saved.vat_mode === 'default' ? 'default' : 'none',
     vatRate: saved.vat_rate == null ? undefined : Number(saved.vat_rate),
     note: saved.note ?? undefined,
+    ...(kind ? { kind } : {}),
     updatedAt: String(saved.updated_at),
   };
 };
@@ -321,4 +366,35 @@ export const listServerEurSnapshots = async (db: PostgresQueryable, scope: Tenan
 export const getServerEurSnapshot = async (db: PostgresQueryable, scope: TenantScope, id: string): Promise<ServerEurSnapshot | null> => {
   const row = (await q(db, 'SELECT * FROM eur_report_snapshots WHERE tenant_id=$1 AND id=$2 LIMIT 1', [scope.tenantId, id]))[0];
   return row ? rowSnapshot(row) : null;
+};
+
+/**
+ * Until migration 0046 the limited-deduction columns were labelled the wrong way round (Kz 164/165/162/168
+ * read "abziehbar"). Data written under those labels (SQLite imports) is swapped pairwise so the user's choice
+ * keeps its meaning: what was picked as "Bewirtung abziehbar" lands on Kz 175 again.
+ */
+const LEGACY_SWAPPED_COLUMNS: Array<[string, string]> = [['164', '174'], ['165', '175'], ['162', '172'], ['168', '177']];
+const swapColumn = (id: string | null | undefined): string | null | undefined => {
+  if (!id) return id;
+  for (const [a, b] of LEGACY_SWAPPED_COLUMNS) {
+    if (id.endsWith(`_KZ${a}`)) return `${id.slice(0, -a.length)}${b}`;
+    if (id.endsWith(`_KZ${b}`)) return `${id.slice(0, -b.length)}${a}`;
+  }
+  return id;
+};
+export const remapLegacyEurDeductionColumns = async (db: PostgresQueryable, tenantId: string): Promise<void> => {
+  for (const row of await q<{ id: string; eur_line_id: string }>(db, 'SELECT id, eur_line_id FROM eur_classifications WHERE tenant_id=$1 AND eur_line_id IS NOT NULL', [tenantId])) {
+    const next = swapColumn(row.eur_line_id);
+    if (next !== row.eur_line_id) await db.query('UPDATE eur_classifications SET eur_line_id=$1 WHERE tenant_id=$2 AND id=$3', [next, tenantId, row.id]);
+  }
+  for (const row of await q<{ id: string; target_eur_line_id: string }>(db, 'SELECT id, target_eur_line_id FROM eur_rules WHERE tenant_id=$1', [tenantId])) {
+    const next = swapColumn(row.target_eur_line_id);
+    if (next !== row.target_eur_line_id) await db.query('UPDATE eur_rules SET target_eur_line_id=$1 WHERE tenant_id=$2 AND id=$3', [next, tenantId, row.id]);
+  }
+  for (const row of await q<{ id: string; eur_line_id: string | null; splits_json: string | null }>(db, 'SELECT id, eur_line_id, splits_json FROM eur_cash_facts WHERE tenant_id=$1', [tenantId])) {
+    const splits = parse<EurExpenseSplit[] | null>(row.splits_json, null);
+    const nextSplits = splits ? JSON.stringify(splits.map((split) => ({ ...split, lineId: swapColumn(split.lineId) ?? undefined }))) : row.splits_json;
+    const nextLine = swapColumn(row.eur_line_id);
+    if (nextLine !== row.eur_line_id || nextSplits !== row.splits_json) await db.query('UPDATE eur_cash_facts SET eur_line_id=$1, splits_json=$2 WHERE tenant_id=$3 AND id=$4', [nextLine ?? null, nextSplits, tenantId, row.id]);
+  }
 };

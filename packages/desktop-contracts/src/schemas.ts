@@ -276,6 +276,8 @@ export const eurClassificationSchema = z.object({
   excluded: z.boolean(),
   vatMode: z.enum(['none', 'default']),
   note: z.string().optional(),
+  /** Lite: Privatentnahme, Privateinlage or Geldtransit instead of a line. */
+  kind: z.enum(['private-withdrawal', 'private-contribution', 'transit']).optional(),
   updatedAt: z.string(),
 });
 
@@ -301,13 +303,18 @@ export const eurReportResultSchema = z.object({
     surplus: z.number(),
   }),
   unclassifiedCount: z.number().int(),
+  /** Payments without a category, missing from the EÜR until classified (gross amounts). */
+  unclassified: z.object({ incomeCount: z.number().int(), incomeAmount: z.number(), expenseCount: z.number().int(), expenseAmount: z.number() }).optional(),
   warnings: z.array(z.string()),
   catalog: z.object({
     id: z.string().min(1),
+    title: z.string().optional(),
     version: z.string().min(1),
     sourceHash: z.string().regex(/^[a-f0-9]{64}$/),
     delivery: z.enum(['print-form-only', 'elster-ready']),
     elsterReady: z.boolean(),
+    /** No published form for the year yet; calculated with the newest one. */
+    provisional: z.boolean().optional(),
   }),
 });
 
@@ -341,6 +348,14 @@ export const eurListItemSchema = z.object({
   suggestedLineId: z.string().optional(),
   suggestionReason: z.string().optional(),
   suggestionLayer: z.enum(['rule', 'counterparty', 'bayes', 'keyword']).optional(),
+  /** A neutral kind suggested instead of a line (the other leg of a Geldtransit, a private tax payment). */
+  suggestedKind: z.enum(['transit', 'private-withdrawal', 'private-contribution']).optional(),
+  /** What the payment is when it is neither income nor expense (a cash fact). */
+  kind: z.enum(['income', 'expense', 'private-withdrawal', 'private-contribution', 'pass-through', 'transit']).optional(),
+  /** A Geldtransit leg without its counterpart. */
+  transitHint: z.string().optional(),
+  /** Lite: the parts of an aufgeteilte expense (deductible / non-deductible). */
+  splits: z.array(z.object({ amountNet: z.number(), deductibility: z.enum(['deductible', 'non-deductible']).optional(), lineId: z.string().optional(), reason: z.string().optional() })).optional(),
   classification: eurClassificationSchema.optional(),
   line: eurLineSchema.optional(),
 });
@@ -359,7 +374,11 @@ export const eurUpsertClassificationArgsSchema = z.object({
   eurLineId: z.string().optional(),
   excluded: z.boolean().optional(),
   vatMode: z.enum(['none', 'default']).optional(),
+  vatRate: z.number().min(0).max(100).optional(),
   note: z.string().optional(),
+  kind: z.enum(['private-withdrawal', 'private-contribution', 'transit']).optional(),
+  /** Aufteilung of the net amount; the parts add up to it (Lite). */
+  splits: z.array(z.object({ amountNet: z.number().nonnegative(), deductibility: z.enum(['deductible', 'non-deductible']), lineId: z.string().optional(), reason: z.string().trim().min(1) })).optional(),
 });
 
 export const eurExportCsvArgsSchema = z.object({
@@ -572,6 +591,10 @@ const appSettingsBaseSchema = z.object({
     /** First day the current method applies (YYYY-MM-01); earlier periods keep `previousTaxAccountingMethod`. */
     taxAccountingMethodSince: z.string().regex(/^\d{4}-\d{2}-01$/).optional(),
     previousTaxAccountingMethod: z.enum(['soll', 'ist']).optional(),
+    /** Dauerfristverlängerung (§ 46 UStDV): each Voranmeldung is due a month later. */
+    vatPermanentExtension: z.boolean().optional(),
+    /** Festgesetzte Sondervorauszahlung of a year; deducted as Kz 39 in its last Voranmeldung. */
+    vatSpecialPrepayment: z.object({ year: z.number().int().min(2025).max(2100), amountCents: z.number().int().min(0) }).optional(),
     paymentTermsDays: z.number().nonnegative(),
     defaultIntroText: z.string(),
     defaultFooterText: z.string(),

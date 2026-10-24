@@ -20,6 +20,8 @@ export type CatalogManifest = {
   scope: 'de-sole-proprietor';
   delivery: 'print-form-only' | 'elster-ready';
   elsterReady: boolean;
+  /** A year without its own published form, calculated with the newest one. */
+  provisional?: boolean;
 };
 
 export type EurLineDef = {
@@ -40,8 +42,8 @@ export type EurLineDef = {
 
 export const EUR_SOURCE_VERSION_2025 = 'BMF-2025-2025-08-29';
 export const EUR_SOURCE_URL_2025 = 'https://www.bundesfinanzministerium.de/Content/DE/Downloads/BMF_Schreiben/Steuerarten/Einkommensteuer/2025-08-29-anlage-EUER-2025.pdf?__blob=publicationFile&v=3';
-export const EUR_SOURCE_VERSION_2026 = 'BMF-2026-2026-08-14';
-export const EUR_SOURCE_URL_2026 = 'https://www.bundesfinanzministerium.de/Content/DE/Downloads/BMF_Schreiben/Steuerarten/Einkommensteuer/2026-08-14-anlage-EUER-2026.pdf?__blob=publicationFile&v=1';
+export const EUR_SOURCE_VERSION_2026 = 'BMF-2026-2026-09-01';
+export const EUR_SOURCE_URL_2026 = 'https://www.bundesfinanzministerium.de/Content/DE/Downloads/BMF_Schreiben/Steuerarten/Einkommensteuer/2026-09-01-anlage-EUER-2026.pdf?__blob=publicationFile&v=4';
 export const EUR_CATALOG_MANIFEST_2025: CatalogManifest = {
   id: 'anlage-euer-2025',
   title: 'Anlage EÜR 2025',
@@ -65,14 +67,20 @@ export const EUR_CATALOG_MANIFEST_2026: CatalogManifest = {
   validTo: '2026-12-31',
   sourceName: 'Bundesministerium der Finanzen',
   sourceUrl: EUR_SOURCE_URL_2026,
-  // SHA-256 of the immutable bundled 2026 print-form source snapshot.
-  sha256: '50d6c8c8d8c5fb7cab8c26f6255e7776f9bac6beac29562ccf3c741cb9d92f18',
+  // SHA-256 of the BMF source PDF (BMF-Schreiben vom 01.09.2026). Same Kennziffern as 2025; from form line 27
+  // on the line numbers are one higher (new LuF line 27).
+  sha256: '03d3033acc5c5a126729e58743128596ae39193759c55b207872da9432b83a8f',
   scope: 'de-sole-proprietor',
   delivery: 'print-form-only',
   elsterReady: false,
 };
 
-export const getCatalogForYear = (year: number): EurLineDef[] => {
+/** The newest bundled form; a later year without its own form is calculated with it, marked provisional. */
+export const LATEST_EUR_CATALOG_YEAR = 2026;
+const catalogYear = (year: number): number => (Number.isInteger(year) && year > LATEST_EUR_CATALOG_YEAR ? LATEST_EUR_CATALOG_YEAR : year);
+
+export const getCatalogForYear = (requested: number): EurLineDef[] => {
+  const year = catalogYear(requested);
   if (year === 2025) {
     const lines = lines2025 as EurLineDef[];
     validateEurLineCatalog(lines);
@@ -89,6 +97,10 @@ export const getCatalogForYear = (year: number): EurLineDef[] => {
 export const getCatalogManifestForYear = (year: number): CatalogManifest => {
   if (year === 2025) return EUR_CATALOG_MANIFEST_2025;
   if (year === 2026) return EUR_CATALOG_MANIFEST_2026;
+  if (catalogYear(year) !== year) {
+    const latest = EUR_CATALOG_MANIFEST_2026;
+    return { ...latest, title: `${latest.title} (vorläufig für ${year})`, validFrom: `${year}-01-01`, validTo: `${year}-12-31`, provisional: true };
+  }
   throw new Error(`EUR_CATALOG_UNAVAILABLE:${year}`);
 };
 

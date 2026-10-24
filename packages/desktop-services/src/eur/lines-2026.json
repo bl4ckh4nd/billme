@@ -299,7 +299,7 @@
     "year": 2026,
     "id": "E2026_KZ119",
     "kennziffer": "119",
-    "label": "Davon nicht steuerbare Umsaetze / Umsaetze nach § 19 Abs. 2 UStG",
+    "label": "Davon nicht steuerbare Umsätze sowie Umsätze nach § 19 Abs. 2 Satz 1 Nr. 1 und 2 sowie Satz 2 UStG (in Kz 111 enthalten)",
     "kind": "income",
     "exportable": true
   },
@@ -347,7 +347,7 @@
     "year": 2026,
     "id": "E2026_KZ102",
     "kennziffer": "102",
-    "label": "Veraeusserung oder Entnahme von Anlagevermoegen",
+    "label": "Veräußerung oder Entnahme von Anlagevermögen",
     "kind": "income",
     "exportable": true
   },
@@ -374,24 +374,50 @@
     "label": "Summe Betriebseinnahmen",
     "kind": "computed",
     "exportable": true,
-    "computedFromIds": [
-      "E2026_KZ111",
-      "E2026_KZ119",
-      "E2026_KZ104",
-      "E2026_KZ112",
-      "E2026_KZ103",
-      "E2026_KZ140",
-      "E2026_KZ141",
-      "E2026_KZ102",
-      "E2026_KZ106",
-      "E2026_KZ108"
+    "computedTerms": [
+      {
+        "id": "E2026_KZ111",
+        "sign": 1
+      },
+      {
+        "id": "E2026_KZ104",
+        "sign": 1
+      },
+      {
+        "id": "E2026_KZ112",
+        "sign": 1
+      },
+      {
+        "id": "E2026_KZ103",
+        "sign": 1
+      },
+      {
+        "id": "E2026_KZ140",
+        "sign": 1
+      },
+      {
+        "id": "E2026_KZ141",
+        "sign": 1
+      },
+      {
+        "id": "E2026_KZ102",
+        "sign": 1
+      },
+      {
+        "id": "E2026_KZ106",
+        "sign": 1
+      },
+      {
+        "id": "E2026_KZ108",
+        "sign": 1
+      }
     ]
   },
   {
     "year": 2026,
     "id": "E2026_KZ195",
     "kennziffer": "195",
-    "label": "Betriebsausgabenpauschale fuer bestimmte Berufsgruppen",
+    "label": "Betriebsausgabenpauschale für bestimmte Berufsgruppen",
     "kind": "expense",
     "exportable": true
   },
@@ -399,7 +425,7 @@
     "year": 2026,
     "id": "E2026_KZ100",
     "kennziffer": "100",
-    "label": "Waren, Rohstoffe und Hilfsstoffe einschliesslich Nebenkosten",
+    "label": "Waren, Rohstoffe und Hilfsstoffe einschließlich Nebenkosten",
     "kind": "expense",
     "exportable": true
   },
@@ -415,7 +441,7 @@
     "year": 2026,
     "id": "E2026_KZ120",
     "kennziffer": "120",
-    "label": "Ausgaben fuer eigenes Personal",
+    "label": "Ausgaben für eigenes Personal",
     "kind": "expense",
     "exportable": true
   },
@@ -423,7 +449,7 @@
     "year": 2026,
     "id": "E2026_KZ136",
     "kennziffer": "136",
-    "label": "AfA auf Grundstuecke/grundstuecksgleiche Rechte",
+    "label": "AfA auf Grundstücke/grundstücksgleiche Rechte",
     "kind": "expense",
     "exportable": true
   },
@@ -431,7 +457,7 @@
     "year": 2026,
     "id": "E2026_KZ131",
     "kennziffer": "131",
-    "label": "AfA auf immaterielle Wirtschaftsgueter",
+    "label": "AfA auf immaterielle Wirtschaftsgüter",
     "kind": "expense",
     "exportable": true
   },
@@ -439,7 +465,7 @@
     "year": 2026,
     "id": "E2026_KZ130",
     "kennziffer": "130",
-    "label": "AfA auf bewegliche Wirtschaftsgueter",
+    "label": "AfA auf bewegliche Wirtschaftsgüter",
     "kind": "expense",
     "exportable": true
   },
@@ -455,7 +481,7 @@
     "year": 2026,
     "id": "E2026_KZ138",
     "kennziffer": "138",
-    "label": "Herabsetzungsbetraege nach § 7g Abs. 2 Satz 3 EStG",
+    "label": "Herabsetzungsbeträge nach § 7g Abs. 2 Satz 3 EStG",
     "kind": "expense",
     "exportable": true
   },
@@ -463,7 +489,7 @@
     "year": 2026,
     "id": "E2026_KZ132",
     "kennziffer": "132",
-    "label": "Aufwendungen fuer geringwertige Wirtschaftsgueter nach § 6 Abs. 2 EStG",
+    "label": "Aufwendungen für geringwertige Wirtschaftsgüter nach § 6 Abs. 2 EStG",
     "kind": "expense",
     "exportable": true
   },
@@ -471,7 +497,7 @@
     "year": 2026,
     "id": "E2026_KZ137",
     "kennziffer": "137",
-    "label": "Aufloesung Sammelposten nach § 6 Abs. 2a EStG",
+    "label": "Auflösung Sammelposten nach § 6 Abs. 2a EStG",
     "kind": "expense",
     "exportable": true
   },
@@ -479,7 +505,7 @@
     "year": 2026,
     "id": "E2026_KZ135",
     "kennziffer": "135",
-    "label": "Restbuchwerte ausgeschiedener Anlagegueter",
+    "label": "Restbuchwerte ausgeschiedener Anlagegüter",
     "kind": "expense",
     "exportable": true
   },
@@ -487,7 +513,7 @@
     "year": 2026,
     "id": "E2026_KZ150",
     "kennziffer": "150",
-    "label": "Miete/Pacht fuer Geschaeftsraeume und betrieblich genutzte Grundstuecke",
+    "label": "Miete/Pacht für Geschäftsräume und betrieblich genutzte Grundstücke",
     "kind": "expense",
     "exportable": true
   },
@@ -495,7 +521,7 @@
     "year": 2026,
     "id": "E2026_KZ152",
     "kennziffer": "152",
-    "label": "Aufwendungen fuer doppelte Haushaltsfuehrung",
+    "label": "Aufwendungen für doppelte Haushaltsführung",
     "kind": "expense",
     "exportable": true
   },
@@ -503,7 +529,7 @@
     "year": 2026,
     "id": "E2026_KZ151",
     "kennziffer": "151",
-    "label": "Sonstige Aufwendungen fuer betrieblich genutzte Grundstuecke",
+    "label": "Sonstige Aufwendungen für betrieblich genutzte Grundstücke",
     "kind": "expense",
     "exportable": true
   },
@@ -511,7 +537,7 @@
     "year": 2026,
     "id": "E2026_KZ153",
     "kennziffer": "153",
-    "label": "In Zeile 151 enthaltene Erhaltungsaufwendungen",
+    "label": "In Kz 151 enthaltene Erhaltungsaufwendungen",
     "kind": "expense",
     "exportable": true
   },
@@ -519,7 +545,7 @@
     "year": 2026,
     "id": "E2026_KZ280",
     "kennziffer": "280",
-    "label": "Aufwendungen fuer Telekommunikation",
+    "label": "Aufwendungen für Telekommunikation",
     "kind": "expense",
     "exportable": true
   },
@@ -527,7 +553,7 @@
     "year": 2026,
     "id": "E2026_KZ221",
     "kennziffer": "221",
-    "label": "Uebernachtungs- und Reisenebenkosten bei Geschaeftsreisen",
+    "label": "Übernachtungs- und Reisenebenkosten bei Geschäftsreisen",
     "kind": "expense",
     "exportable": true
   },
@@ -543,7 +569,7 @@
     "year": 2026,
     "id": "E2026_KZ194",
     "kennziffer": "194",
-    "label": "Kosten fuer Rechts- und Steuerberatung, Buchfuehrung",
+    "label": "Kosten für Rechts- und Steuerberatung, Buchführung",
     "kind": "expense",
     "exportable": true
   },
@@ -551,7 +577,7 @@
     "year": 2026,
     "id": "E2026_KZ222",
     "kennziffer": "222",
-    "label": "Miete/Leasing fuer bewegliche Wirtschaftsgueter (ohne Kfz)",
+    "label": "Miete/Leasing für bewegliche Wirtschaftsgüter (ohne Kfz)",
     "kind": "expense",
     "exportable": true
   },
@@ -559,7 +585,7 @@
     "year": 2026,
     "id": "E2026_KZ225",
     "kennziffer": "225",
-    "label": "Erhaltungsaufwendungen (ohne Gebaeude und Kfz)",
+    "label": "Erhaltungsaufwendungen (ohne Gebäude und Kfz)",
     "kind": "expense",
     "exportable": true
   },
@@ -567,7 +593,7 @@
     "year": 2026,
     "id": "E2026_KZ223",
     "kennziffer": "223",
-    "label": "Beitraege, Gebuehren, Abgaben und Versicherungen (ohne Gebaeude und Kfz)",
+    "label": "Beiträge, Gebühren, Abgaben und Versicherungen (ohne Gebäude und Kfz)",
     "kind": "expense",
     "exportable": true
   },
@@ -591,7 +617,7 @@
     "year": 2026,
     "id": "E2026_KZ226",
     "kennziffer": "226",
-    "label": "Kosten fuer Abfallbeseitigung und Entsorgung",
+    "label": "Kosten für Abfallbeseitigung und Entsorgung",
     "kind": "expense",
     "exportable": true
   },
@@ -599,7 +625,7 @@
     "year": 2026,
     "id": "E2026_KZ227",
     "kennziffer": "227",
-    "label": "Kosten fuer Verpackung und Transport",
+    "label": "Kosten für Verpackung und Transport",
     "kind": "expense",
     "exportable": true
   },
@@ -615,7 +641,7 @@
     "year": 2026,
     "id": "E2026_KZ232",
     "kennziffer": "232",
-    "label": "Schuldzinsen fuer Anlagevermoegen",
+    "label": "Schuldzinsen für Anlagevermögen",
     "kind": "expense",
     "exportable": true
   },
@@ -623,7 +649,7 @@
     "year": 2026,
     "id": "E2026_KZ234",
     "kennziffer": "234",
-    "label": "Uebrige Schuldzinsen",
+    "label": "Übrige Schuldzinsen",
     "kind": "expense",
     "exportable": true
   },
@@ -631,7 +657,7 @@
     "year": 2026,
     "id": "E2026_KZ185",
     "kennziffer": "185",
-    "label": "Gezahlte und nach § 15 UStG abziehbare Vorsteuerbetraege",
+    "label": "Gezahlte und nach § 15 UStG abziehbare Vorsteuerbeträge",
     "kind": "expense",
     "exportable": true
   },
@@ -647,7 +673,7 @@
     "year": 2026,
     "id": "E2026_KZ183",
     "kennziffer": "183",
-    "label": "Uebrige unbeschraenkt abziehbare Betriebsausgaben",
+    "label": "Übrige unbeschränkt abziehbare Betriebsausgaben",
     "kind": "expense",
     "exportable": true
   },
@@ -655,7 +681,7 @@
     "year": 2026,
     "id": "E2026_KZ164",
     "kennziffer": "164",
-    "label": "Geschenke (abziehbarer Anteil)",
+    "label": "Geschenke (nicht abziehbar)",
     "kind": "expense",
     "exportable": true
   },
@@ -663,7 +689,7 @@
     "year": 2026,
     "id": "E2026_KZ174",
     "kennziffer": "174",
-    "label": "Geschenke (nicht abziehbar)",
+    "label": "Geschenke (abziehbar)",
     "kind": "expense",
     "exportable": true
   },
@@ -671,7 +697,7 @@
     "year": 2026,
     "id": "E2026_KZ165",
     "kennziffer": "165",
-    "label": "Bewirtungsaufwendungen (abziehbarer Anteil)",
+    "label": "Bewirtungsaufwendungen (nicht abziehbar)",
     "kind": "expense",
     "exportable": true
   },
@@ -679,7 +705,7 @@
     "year": 2026,
     "id": "E2026_KZ175",
     "kennziffer": "175",
-    "label": "Bewirtungsaufwendungen (nicht abziehbar)",
+    "label": "Bewirtungsaufwendungen (abziehbar)",
     "kind": "expense",
     "exportable": true
   },
@@ -695,7 +721,7 @@
     "year": 2026,
     "id": "E2026_KZ162",
     "kennziffer": "162",
-    "label": "Aufwendungen fuer ein haeusliches Arbeitszimmer (abziehbar)",
+    "label": "Aufwendungen für ein häusliches Arbeitszimmer (nicht abziehbar)",
     "kind": "expense",
     "exportable": true
   },
@@ -703,7 +729,7 @@
     "year": 2026,
     "id": "E2026_KZ172",
     "kennziffer": "172",
-    "label": "Aufwendungen fuer ein haeusliches Arbeitszimmer (nicht abziehbar)",
+    "label": "Aufwendungen für ein häusliches Arbeitszimmer (abziehbar)",
     "kind": "expense",
     "exportable": true
   },
@@ -711,7 +737,7 @@
     "year": 2026,
     "id": "E2026_KZ163",
     "kennziffer": "163",
-    "label": "Tagespauschale fuer die Taetigkeit in der haeuslichen Wohnung",
+    "label": "Tagespauschale für die Tätigkeit in der häuslichen Wohnung",
     "kind": "expense",
     "exportable": true
   },
@@ -719,7 +745,7 @@
     "year": 2026,
     "id": "E2026_KZ168",
     "kennziffer": "168",
-    "label": "Sonstige beschraenkt abziehbare Betriebsausgaben (abziehbar)",
+    "label": "Sonstige beschränkt abziehbare Betriebsausgaben (nicht abziehbar)",
     "kind": "expense",
     "exportable": true
   },
@@ -727,7 +753,7 @@
     "year": 2026,
     "id": "E2026_KZ177",
     "kennziffer": "177",
-    "label": "Sonstige beschraenkt abziehbare Betriebsausgaben (nicht abziehbar)",
+    "label": "Sonstige beschränkt abziehbare Betriebsausgaben (abziehbar)",
     "kind": "expense",
     "exportable": true
   },
@@ -751,7 +777,7 @@
     "year": 2026,
     "id": "E2026_KZ146",
     "kennziffer": "146",
-    "label": "Kfz-/Fahrtkosten sonstige tatsaechliche Kosten",
+    "label": "Kfz-/Fahrtkosten sonstige tatsächliche Kosten",
     "kind": "expense",
     "exportable": true
   },
@@ -759,7 +785,7 @@
     "year": 2026,
     "id": "E2026_KZ147",
     "kennziffer": "147",
-    "label": "Fahrtkosten fuer nicht zum Betriebsvermoegen gehoerende Fahrzeuge",
+    "label": "Fahrtkosten für nicht zum Betriebsvermögen gehörende Fahrzeuge",
     "kind": "expense",
     "exportable": true
   },
@@ -767,7 +793,7 @@
     "year": 2026,
     "id": "E2026_KZ142",
     "kennziffer": "142",
-    "label": "Fahrtkosten Wohnung-erste Betriebsstaette/Familienheimfahrten",
+    "label": "Fahrtkosten Wohnung-erste Betriebsstätte/Familienheimfahrten",
     "kind": "expense",
     "exportable": true
   },
@@ -775,7 +801,7 @@
     "year": 2026,
     "id": "E2026_KZ176",
     "kennziffer": "176",
-    "label": "Mindestens abziehbare Fahrtkosten Wohnung-erste Betriebsstaette/Familienheimfahrten",
+    "label": "Mindestens abziehbare Fahrtkosten Wohnung-erste Betriebsstätte/Familienheimfahrten",
     "kind": "expense",
     "exportable": true
   },
@@ -783,7 +809,7 @@
     "year": 2026,
     "id": "E2026_KZ139",
     "kennziffer": "139",
-    "label": "Nicht abziehbare Betraege",
+    "label": "Nicht abziehbare Beträge",
     "kind": "expense",
     "exportable": true
   },
@@ -794,57 +820,187 @@
     "label": "Summe Betriebsausgaben",
     "kind": "computed",
     "exportable": true,
-    "computedFromIds": [
-      "E2026_KZ195",
-      "E2026_KZ100",
-      "E2026_KZ110",
-      "E2026_KZ120",
-      "E2026_KZ136",
-      "E2026_KZ131",
-      "E2026_KZ130",
-      "E2026_KZ134",
-      "E2026_KZ138",
-      "E2026_KZ132",
-      "E2026_KZ137",
-      "E2026_KZ135",
-      "E2026_KZ150",
-      "E2026_KZ152",
-      "E2026_KZ151",
-      "E2026_KZ153",
-      "E2026_KZ280",
-      "E2026_KZ221",
-      "E2026_KZ281",
-      "E2026_KZ194",
-      "E2026_KZ222",
-      "E2026_KZ225",
-      "E2026_KZ223",
-      "E2026_KZ228",
-      "E2026_KZ229",
-      "E2026_KZ226",
-      "E2026_KZ227",
-      "E2026_KZ224",
-      "E2026_KZ232",
-      "E2026_KZ234",
-      "E2026_KZ185",
-      "E2026_KZ186",
-      "E2026_KZ183",
-      "E2026_KZ164",
-      "E2026_KZ174",
-      "E2026_KZ165",
-      "E2026_KZ175",
-      "E2026_KZ171",
-      "E2026_KZ162",
-      "E2026_KZ172",
-      "E2026_KZ163",
-      "E2026_KZ168",
-      "E2026_KZ177",
-      "E2026_KZ144",
-      "E2026_KZ145",
-      "E2026_KZ146",
-      "E2026_KZ147",
-      "E2026_KZ142",
-      "E2026_KZ176",
-      "E2026_KZ139"
+    "computedTerms": [
+      {
+        "id": "E2026_KZ195",
+        "sign": 1
+      },
+      {
+        "id": "E2026_KZ100",
+        "sign": 1
+      },
+      {
+        "id": "E2026_KZ110",
+        "sign": 1
+      },
+      {
+        "id": "E2026_KZ120",
+        "sign": 1
+      },
+      {
+        "id": "E2026_KZ136",
+        "sign": 1
+      },
+      {
+        "id": "E2026_KZ131",
+        "sign": 1
+      },
+      {
+        "id": "E2026_KZ130",
+        "sign": 1
+      },
+      {
+        "id": "E2026_KZ134",
+        "sign": 1
+      },
+      {
+        "id": "E2026_KZ138",
+        "sign": 1
+      },
+      {
+        "id": "E2026_KZ132",
+        "sign": 1
+      },
+      {
+        "id": "E2026_KZ137",
+        "sign": 1
+      },
+      {
+        "id": "E2026_KZ135",
+        "sign": 1
+      },
+      {
+        "id": "E2026_KZ150",
+        "sign": 1
+      },
+      {
+        "id": "E2026_KZ152",
+        "sign": 1
+      },
+      {
+        "id": "E2026_KZ151",
+        "sign": 1
+      },
+      {
+        "id": "E2026_KZ280",
+        "sign": 1
+      },
+      {
+        "id": "E2026_KZ221",
+        "sign": 1
+      },
+      {
+        "id": "E2026_KZ281",
+        "sign": 1
+      },
+      {
+        "id": "E2026_KZ194",
+        "sign": 1
+      },
+      {
+        "id": "E2026_KZ222",
+        "sign": 1
+      },
+      {
+        "id": "E2026_KZ225",
+        "sign": 1
+      },
+      {
+        "id": "E2026_KZ223",
+        "sign": 1
+      },
+      {
+        "id": "E2026_KZ228",
+        "sign": 1
+      },
+      {
+        "id": "E2026_KZ229",
+        "sign": 1
+      },
+      {
+        "id": "E2026_KZ226",
+        "sign": 1
+      },
+      {
+        "id": "E2026_KZ227",
+        "sign": 1
+      },
+      {
+        "id": "E2026_KZ224",
+        "sign": 1
+      },
+      {
+        "id": "E2026_KZ232",
+        "sign": 1
+      },
+      {
+        "id": "E2026_KZ234",
+        "sign": 1
+      },
+      {
+        "id": "E2026_KZ185",
+        "sign": 1
+      },
+      {
+        "id": "E2026_KZ186",
+        "sign": 1
+      },
+      {
+        "id": "E2026_KZ183",
+        "sign": 1
+      },
+      {
+        "id": "E2026_KZ174",
+        "sign": 1
+      },
+      {
+        "id": "E2026_KZ175",
+        "sign": 1
+      },
+      {
+        "id": "E2026_KZ171",
+        "sign": 1
+      },
+      {
+        "id": "E2026_KZ172",
+        "sign": 1
+      },
+      {
+        "id": "E2026_KZ163",
+        "sign": 1
+      },
+      {
+        "id": "E2026_KZ177",
+        "sign": 1
+      },
+      {
+        "id": "E2026_KZ144",
+        "sign": 1
+      },
+      {
+        "id": "E2026_KZ145",
+        "sign": 1
+      },
+      {
+        "id": "E2026_KZ146",
+        "sign": 1
+      },
+      {
+        "id": "E2026_KZ147",
+        "sign": 1
+      },
+      {
+        "id": "E2026_KZ142",
+        "sign": -1
+      },
+      {
+        "id": "E2026_KZ176",
+        "sign": 1
+      },
+      {
+        "id": "E2026_KZ139",
+        "sign": -1
+      }
     ]
   },
   {

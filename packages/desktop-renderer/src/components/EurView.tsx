@@ -28,7 +28,7 @@ import { Spinner } from '../ui/components/Spinner';
 import { EurRulesModal } from './EurRulesModal';
 import { useSettingsQuery } from '../hooks/useSettings';
 import { LiteCashPanel } from './eur/LiteCashPanel';
-import { isSimpleEurCategory, simpleEurCategoryLabel } from './eur/categories';
+import { isNeutralEurKind, isSimpleEurCategory, neutralEurKindLabels, neutralEurKindNotes, simpleEurCategoryLabel, type NeutralEurKind } from './eur/categories';
 
 const DEFAULT_YEAR = LATEST_SUPPORTED_EUR_TAX_YEAR;
 
@@ -36,6 +36,8 @@ type SourceType = 'transaction' | 'invoice' | 'manual';
 type VatMode = 'none' | 'default';
 type QueueStatus = 'all' | 'unclassified' | 'classified' | 'excluded';
 type QueueSort = 'date_desc' | 'amount_desc' | 'counterparty_asc';
+/** What the payment is: income/expense with a line, an old exclusion, or (Lite) a neutral kind. */
+type Decision = 'flow' | 'excluded' | NeutralEurKind;
 
 type SuggestionLayer = 'rule' | 'counterparty' | 'bayes' | 'keyword';
 
@@ -54,6 +56,9 @@ type EurItem = {
   suggestedLineId?: string;
   suggestionReason?: string;
   suggestionLayer?: SuggestionLayer;
+  suggestedKind?: NeutralEurKind;
+  kind?: string;
+  transitHint?: string;
   classification?: {
     eurLineId?: string;
     excluded: boolean;
@@ -95,6 +100,7 @@ type UndoChange = {
   taxYear: number;
   prevLineId?: string;
   prevExcluded: boolean;
+  prevKind?: NeutralEurKind;
   prevVatMode: VatMode;
   prevVatRate?: number;
 };
@@ -106,6 +112,11 @@ const formatCurrency = (amount: number): string =>
 
 const itemKey = (item: { sourceType: SourceType; sourceId: string }): string =>
   `${item.sourceType}:${item.sourceId}`;
+
+const neutralKindOf = (item: EurItem): NeutralEurKind | undefined => (isNeutralEurKind(item.kind) ? item.kind : undefined);
+/** Decided: a line, an exclusion, or any typed kind (cash fact), like the server's list filter. */
+const isDecided = (item: EurItem): boolean => Boolean(item.classification?.eurLineId || item.classification?.excluded || item.kind);
+const decisionOf = (item: EurItem): Decision => neutralKindOf(item) ?? (item.classification?.excluded ? 'excluded' : 'flow');
 
 const queryErrorDetail = (error: unknown): string =>
   error instanceof Error && error.message.trim().length > 0
@@ -127,12 +138,13 @@ const inYearEndWindow = (isoDate: string): boolean => {
 const EurEntryPreview: React.FC<{
   item: EurItem;
   line?: { lineId: string; kennziffer?: string; label: string };
-  excluded: boolean;
+  decision: Decision;
   vatMode: VatMode;
   vatRate?: number;
   chart: LedgerChart;
   showLedger: boolean;
-}> = ({ item, line, excluded, vatMode, vatRate, chart, showLedger }) => {
+}> = ({ item, line, decision, vatMode, vatRate, chart, showLedger }) => {
+  const excluded = decision !== 'flow';
   const flow = item.flowType === 'income' ? 'Zufluss' : 'Abfluss';
   const gross = item.amountGross;
   const rate = vatMode === 'default' ? vatRate : 0;
@@ -144,7 +156,7 @@ const EurEntryPreview: React.FC<{
     <section aria-label="Erfassung vor dem Speichern">
       <div className="text-eyebrow uppercase text-muted">Wird erfasst als</div>
       {excluded ? (
-        <p className="mt-1 text-control text-foreground">Nicht in der EÜR: privat oder Transfer.</p>
+        <p className="mt-1 text-control text-foreground">{decision === 'excluded' ? 'Nicht in der EÜR: privat oder Transfer.' : neutralEurKindNotes[decision as NeutralEurKind]}</p>
       ) : (
         <>
           <p className="mt-1 text-control text-foreground">
@@ -220,7 +232,8 @@ export const EurView: React.FC = () => {
   const [selectedLineId, setSelectedLineId] = React.useState<string>('');
   const [vatMode, setVatMode] = React.useState<VatMode>('none');
   const [vatRate, setVatRate] = React.useState<number | undefined>(undefined);
-  const [excluded, setExcluded] = React.useState<boolean>(false);
+  const [decision, setDecision] = React.useState<Decision>('flow');
+  const excluded = decision !== 'flow';
   const [taxNote, setTaxNote] = React.useState('');
   const [auditReason, setAuditReason] = React.useState('');
 
@@ -267,6 +280,7 @@ export const EurView: React.FC = () => {
       vatMode?: VatMode;
       vatRate?: number;
       note?: string;
+      kind?: NeutralEurKind;
       reason: string;
     }) => ipc.eur.upsertClassification(payload),
   });
@@ -299,9 +313,9 @@ export const EurView: React.FC = () => {
         queueStatus === 'all'
           ? true
           : queueStatus === 'unclassified'
-            ? !item.classification?.eurLineId && !item.classification?.excluded
+            ? !isDecided(item)
             : queueStatus === 'classified'
-              ? Boolean(item.classification?.eurLineId) && !item.classification?.excluded
+              ? isDecided(item) && !item.classification?.excluded
               : Boolean(item.classification?.excluded);
       const flowMatch = flowFilter === 'all' || item.flowType === flowFilter;
       const needle = query.trim().toLowerCase();
@@ -348,8 +362,8 @@ export const EurView: React.FC = () => {
     const all = (items as EurItem[]);
     return {
       all: all.length,
-      unclassified: all.filter((item) => !item.classification?.eurLineId && !item.classification?.excluded).length,
-      classified: all.filter((item) => item.classification?.eurLineId && !item.classification?.excluded).length,
+      unclassified: all.filter((item) => !isDecided(item)).length,
+      classified: all.filter((item) => isDecided(item) && !item.classification?.excluded).length,
       excluded: all.filter((item) => item.classification?.excluded).length,
     };
   }, [items]);
@@ -359,13 +373,14 @@ export const EurView: React.FC = () => {
     setSelectedLineId(activeItem.classification?.eurLineId ?? activeItem.suggestedLineId ?? '');
     setVatMode(activeItem.classification?.vatMode ?? 'none');
     setVatRate(activeItem.classification?.vatRate);
-    setExcluded(activeItem.classification?.excluded ?? false);
+    // Pro keeps its own fact workflow (Auswertungen); here it only knows a line or the exclusion.
+    setDecision(isProProduct ? (activeItem.classification?.excluded ? 'excluded' : 'flow') : decisionOf(activeItem));
     setTaxNote(activeItem.classification?.note ?? '');
   }, [activeItem]);
 
   const applyBulk = async (
     label: string,
-    resolver: (item: EurItem) => { eurLineId?: string; excluded?: boolean; vatMode?: VatMode; vatRate?: number },
+    resolver: (item: EurItem) => { eurLineId?: string; excluded?: boolean; kind?: NeutralEurKind; vatMode?: VatMode; vatRate?: number },
   ) => {
     if (selectedItems.length === 0) return;
     const reason = auditReason.trim();
@@ -380,6 +395,7 @@ export const EurView: React.FC = () => {
       taxYear,
       prevLineId: item.classification?.eurLineId,
       prevExcluded: item.classification?.excluded ?? false,
+      prevKind: neutralKindOf(item),
       prevVatMode: item.classification?.vatMode ?? 'none',
       prevVatRate: item.classification?.vatRate,
     }));
@@ -423,6 +439,7 @@ export const EurView: React.FC = () => {
         taxYear,
         prevLineId: activeItem.classification?.eurLineId,
         prevExcluded: activeItem.classification?.excluded ?? false,
+        prevKind: neutralKindOf(activeItem),
         prevVatMode: activeItem.classification?.vatMode ?? 'none',
         prevVatRate: activeItem.classification?.vatRate,
       },
@@ -434,8 +451,9 @@ export const EurView: React.FC = () => {
         sourceType: activeItem.sourceType,
         sourceId: activeItem.sourceId,
         taxYear,
-        eurLineId: selectedLineId || undefined,
-        excluded,
+        eurLineId: excluded ? undefined : selectedLineId || undefined,
+        excluded: decision === 'excluded',
+        kind: isNeutralEurKind(decision) ? decision : undefined,
         vatMode,
         vatRate: isProProduct ? vatRate : undefined,
         note: taxNote.trim() || undefined,
@@ -461,6 +479,7 @@ export const EurView: React.FC = () => {
             taxYear: change.taxYear,
             eurLineId: change.prevLineId,
             excluded: change.prevExcluded,
+            kind: change.prevKind,
             vatMode: change.prevVatMode,
             vatRate: isProProduct ? change.prevVatRate : undefined,
             reason: `Undo: ${lastUndo.label}; ursprüngliche Begründung: ${lastUndo.reason}`,
@@ -482,6 +501,7 @@ export const EurView: React.FC = () => {
         !excluded && !activeLine ? 'Noch keine Kategorie gewählt' : undefined,
         auditReason.trim().length === 0 ? 'Bitte eine Begründung für den Audit-Eintrag eingeben.' : undefined,
         isProProduct && vatMode === 'default' ? activeItem.vatWarning : undefined,
+        activeItem.transitHint,
       ].filter((text): text is string => Boolean(text))
     : [];
 
@@ -622,7 +642,8 @@ export const EurView: React.FC = () => {
                 size="sm"
                 onClick={() =>
                   void applyBulk('Bulk: Vorschlag anwenden', (item) => ({
-                    eurLineId: item.suggestedLineId,
+                    eurLineId: item.suggestedKind ? undefined : item.suggestedLineId,
+                    kind: item.suggestedKind,
                     excluded: false,
                     vatMode: item.classification?.vatMode ?? 'none',
                     vatRate: item.classification?.vatRate,
@@ -637,9 +658,10 @@ export const EurView: React.FC = () => {
                 variant="secondary"
                 size="sm"
                 onClick={() =>
-                  void applyBulk('Bulk: Als privat/Transfer markieren', () => ({
+                  void applyBulk(isProProduct ? 'Bulk: Als privat/Transfer markieren' : 'Bulk: Als Geldtransit markieren', () => ({
                     eurLineId: undefined,
-                    excluded: true,
+                    excluded: isProProduct,
+                    kind: isProProduct ? undefined : 'transit',
                     vatMode: 'none',
                     vatRate: undefined,
                   }))
@@ -647,7 +669,7 @@ export const EurView: React.FC = () => {
                 disabled={bulkDisabled}
               >
                 <Ban size={14} aria-hidden="true" />
-                Als privat/Transfer markieren
+                {isProProduct ? 'Als privat/Transfer markieren' : 'Als Geldtransit markieren'}
               </Button>
               <Button
                 variant="secondary"
@@ -734,14 +756,16 @@ export const EurView: React.FC = () => {
                         <span className="text-caption tabular-nums text-muted">{item.date}</span>
                         {item.classification?.excluded ? (
                           <Badge tone="error">Ausgeschlossen</Badge>
-                        ) : item.classification?.eurLineId ? (
+                        ) : neutralKindOf(item) ? (
+                          <Badge tone="neutral">{neutralKindOf(item) === 'transit' ? 'Geldtransit' : neutralEurKindLabels[neutralKindOf(item)!]}</Badge>
+                        ) : isDecided(item) ? (
                           <Badge tone="success">Klassifiziert</Badge>
                         ) : (
                           <Badge tone="warning">Offen</Badge>
                         )}
                         <Badge tone="neutral">{item.sourceType === 'transaction' ? 'Bank' : item.sourceType === 'manual' ? 'Manuell' : 'Rechnung'}</Badge>
                         <Badge tone="neutral">{item.flowType === 'income' ? 'Einnahme' : 'Ausgabe'}</Badge>
-                        {item.suggestionLayer && !item.classification?.eurLineId && !item.classification?.excluded && (
+                        {item.suggestionLayer && !isDecided(item) && (
                           <Badge tone={LAYER_TONES[item.suggestionLayer]}>{LAYER_LABELS[item.suggestionLayer]}</Badge>
                         )}
                       </span>
@@ -782,7 +806,7 @@ export const EurView: React.FC = () => {
                     <Info size={16} className="mt-px shrink-0" aria-hidden="true" />
                     <div className="min-w-0 flex-1">
                       <strong className="font-semibold">Einnahmen-Überschuss-Rechnung.</strong> Erfasst wird die Zahlung, nicht die Rechnung.
-                      {activeItem.suggestedLineId && (activeItem.suggestionLayer || activeItem.suggestionReason) && (
+                      {(activeItem.suggestedLineId || activeItem.suggestedKind || activeItem.suggestionReason) && (
                         <div className="mt-1 flex flex-wrap items-center gap-1.5 text-caption">
                           {activeItem.suggestionLayer && (
                             <Badge tone={LAYER_TONES[activeItem.suggestionLayer]}>{LAYER_LABELS[activeItem.suggestionLayer]}</Badge>
@@ -791,13 +815,14 @@ export const EurView: React.FC = () => {
                         </div>
                       )}
                     </div>
-                    {activeItem.suggestedLineId && (
+                    {(activeItem.suggestedLineId || (!isProProduct && activeItem.suggestedKind)) && (
                       <Button
                         variant="secondary"
                         size="sm"
                         onClick={() => {
+                          if (activeItem.suggestedKind) { setDecision(activeItem.suggestedKind); return; }
                           setSelectedLineId(activeItem.suggestedLineId!);
-                          setExcluded(false);
+                          setDecision('flow');
                         }}
                       >
                         <Check size={14} aria-hidden="true" />
@@ -808,13 +833,22 @@ export const EurView: React.FC = () => {
 
                   <div>
                     <div className="mb-1.5 text-eyebrow uppercase text-muted">Art des Vorgangs</div>
-                    <SegmentedControl
+                    <SegmentedControl<Decision>
                       aria-label="Art des Vorgangs"
-                      value={excluded ? 'excluded' : 'flow'}
-                      onChange={(value) => setExcluded(value === 'excluded')}
+                      value={decision}
+                      onChange={(value) => setDecision(value as Decision)}
                       options={[
                         { value: 'flow', label: activeItem.flowType === 'income' ? 'Einnahme' : 'Ausgabe' },
-                        { value: 'excluded', label: 'Privat/Transfer ausschließen' },
+                        ...(isProProduct
+                          ? [{ value: 'excluded' as const, label: 'Privat/Transfer ausschließen' }]
+                          : [
+                            activeItem.flowType === 'expense'
+                              ? { value: 'private-withdrawal' as const, label: 'Privatentnahme' }
+                              : { value: 'private-contribution' as const, label: 'Privateinlage' },
+                            { value: 'transit' as const, label: 'Geldtransit' },
+                            // Exclusions saved before Privat and Geldtransit existed stay visible until reassigned.
+                            ...(activeItem.classification?.excluded ? [{ value: 'excluded' as const, label: 'Ausgeschlossen (alt)' }] : []),
+                          ]),
                       ]}
                     />
                   </div>
@@ -902,7 +936,7 @@ export const EurView: React.FC = () => {
                   <EurEntryPreview
                     item={activeItem}
                     line={activeLine}
-                    excluded={excluded}
+                    decision={decision}
                     vatMode={vatMode}
                     vatRate={vatRate}
                     // ponytail: Lite has no accounting policy row; the profile chart (default SKR03) only labels the preview.
@@ -915,7 +949,7 @@ export const EurView: React.FC = () => {
                       variant="secondary"
                       onClick={() => {
                         setSelectedLineId('');
-                        setExcluded(false);
+                        setDecision('flow');
                         setVatMode('none');
                       }}
                     >

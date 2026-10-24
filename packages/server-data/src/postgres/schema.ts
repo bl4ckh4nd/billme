@@ -14,7 +14,7 @@ import { pgSchema } from "drizzle-orm/pg-core";
 const bytea = customType<{ data: Uint8Array; driverData: Uint8Array }>({ dataType: () => "bytea" });
 
 export const liteReceipts = pgTable('lite_receipts', { id: text('id'), tenantId: text('tenant_id'), receiptJson: jsonb('receipt_json'), updatedAt: text('updated_at') });
-export const liteCashEntries = pgTable('lite_cash_entries', { id: text('id'), tenantId: text('tenant_id'), cashDate: text('cash_date'), amountCents: bigint('amount_cents', { mode: 'number' }), currency: text('currency'), flowType: text('flow_type'), counterparty: text('counterparty'), purpose: text('purpose'), receiptId: text('receipt_id'), matchedTransactionId: text('matched_transaction_id'), updatedAt: text('updated_at'), deletedAt: text('deleted_at') });
+export const liteCashEntries = pgTable('lite_cash_entries', { id: text('id'), tenantId: text('tenant_id'), cashDate: text('cash_date'), amountCents: bigint('amount_cents', { mode: 'number' }), currency: text('currency'), flowType: text('flow_type'), paymentMethod: text('payment_method'), counterparty: text('counterparty'), purpose: text('purpose'), receiptId: text('receipt_id'), matchedTransactionId: text('matched_transaction_id'), updatedAt: text('updated_at'), deletedAt: text('deleted_at') });
 export const liteReceiptFiles = pgTable('lite_receipt_files', { id: text('id'), tenantId: text('tenant_id'), receiptId: text('receipt_id'), originalFilename: text('original_filename'), mimeType: text('mime_type'), byteLength: integer('byte_length'), sha256: text('sha256'), contentBytes: bytea('content_bytes'), createdAt: text('created_at') });
 
 export const offerInvoiceConversions = pgTable('offer_invoice_conversions', { tenantId: text('tenant_id'), product: text('product'), offerId: text('offer_id'), invoiceId: text('invoice_id') });
@@ -527,7 +527,7 @@ export const openItems = pgTable("open_items", {
 });
 
 export const openItemPayments = pgTable("open_item_payments", {
-  id: text("id"), tenantId: text("tenant_id"), partyType: text("party_type"), partyId: text("party_id"), paymentDate: text("payment_date"), amount: numeric("amount"), bankAccountNumber: text("bank_account_number"), method: text("method"), sourceType: text("source_type"), sourceId: text("source_id"), allocatedAmount: numeric("allocated_amount"), residualAmount: numeric("residual_amount"), status: text("status"), journalEntryId: text("journal_entry_id"), createdAt: text("created_at"),
+  id: text("id"), tenantId: text("tenant_id"), partyType: text("party_type"), partyId: text("party_id"), paymentDate: text("payment_date"), amount: numeric("amount"), bankAccountNumber: text("bank_account_number"), method: text("method"), sourceType: text("source_type"), sourceId: text("source_id"), allocatedAmount: numeric("allocated_amount"), residualAmount: numeric("residual_amount"), status: text("status"), journalEntryId: text("journal_entry_id"), createdAt: text("created_at"), refund: boolean("refund"), creditedPaymentId: text("credited_payment_id"),
 });
 
 export const openItemAllocations = pgTable("open_item_allocations", {

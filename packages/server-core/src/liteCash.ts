@@ -6,8 +6,12 @@ const cents = z.number().int().safe();
 const cashEntryFields = z.object({
   id: z.string().min(1), cashDate, amountCents: cents.refine((value) => value !== 0), currency: z.literal('EUR'),
   flowType: z.enum(['income', 'expense']), counterparty: z.string().trim().min(1), purpose: z.string().trim().min(1), receiptId: z.string().min(1).optional(),
+  /** Bank, Bar (Kasse) or nicht zahlungswirksam (Pauschale, AfA, Privatanteil). Missing on entries saved before 0046. */
+  paymentMethod: z.enum(['bank', 'cash', 'non_cash']).optional(),
 });
-export const liteCashEntryInputSchema = cashEntryFields.refine(cashFlowSignMatches, 'Vorzeichen und Zahlungsrichtung stimmen nicht überein.');
+export const liteCashEntryInputSchema = cashEntryFields
+  .refine(cashFlowSignMatches, 'Vorzeichen und Zahlungsrichtung stimmen nicht überein.')
+  .refine((entry) => !(entry.paymentMethod === 'non_cash' && entry.receiptId), 'Eine Buchung ohne Geldfluss hat keinen Zahlungsbeleg.');
 
 function cashFlowSignMatches(entry: { flowType: 'income' | 'expense'; amountCents: number }): boolean {
   return entry.flowType === 'income' ? entry.amountCents > 0 : entry.amountCents < 0;

@@ -8,6 +8,7 @@ import { Link2, Unlink, CheckCircle2, Search, X, Layers, Check, Ban, TriangleAle
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { getRendererProduct, ipc } from '../runtime-api';
 import { Spinner } from '../ui/components/Spinner';
+import { isNeutralEurKind, neutralEurKindLabels, type NeutralEurKind } from './eur/categories';
 import type { Transaction, Invoice as InvoiceType } from '@billme/desktop-core/types';
 
 interface InvoiceMatchSuggestion {
@@ -39,6 +40,9 @@ type EurTxItem = {
   vatWarning?: string;
   suggestedLineId?: string;
   suggestionReason?: string;
+  suggestedKind?: NeutralEurKind;
+  kind?: string;
+  transitHint?: string;
   classification?: {
     eurLineId?: string;
     excluded: boolean;
@@ -48,12 +52,18 @@ type EurTxItem = {
   };
 };
 
+/** Lite: Privatentnahme, Privateinlage or Geldtransit instead of a line; 'excluded' is the old exclusion. */
+type EurDecision = 'flow' | 'excluded' | NeutralEurKind;
+const eurKindOf = (item: EurTxItem): NeutralEurKind | undefined => (isNeutralEurKind(item.kind) ? item.kind : undefined);
+const eurDecided = (item: EurTxItem): boolean => Boolean(item.classification?.eurLineId || item.classification?.excluded || item.kind);
+
 type EurUndo = {
   sourceType: 'transaction' | 'invoice' | 'manual';
   sourceId: string;
   taxYear: number;
   prevLineId?: string;
   prevExcluded: boolean;
+  prevKind?: NeutralEurKind;
   prevVatMode: 'none' | 'default';
   prevVatRate?: number;
 };
@@ -189,7 +199,8 @@ export const TransactionMatchingView: React.FC<{ initialTab?: MatchingTab }> = (
   const [eurLineId, setEurLineId] = useState('');
   const [eurVatMode, setEurVatMode] = useState<'none' | 'default'>('none');
   const [eurVatRate, setEurVatRate] = useState<number | undefined>(undefined);
-  const [eurExcluded, setEurExcluded] = useState(false);
+  const [eurDecision, setEurDecision] = useState<EurDecision>('flow');
+  const eurExcluded = eurDecision !== 'flow';
   const [eurReason, setEurReason] = useState('');
   const [eurUndo, setEurUndo] = useState<{ label: string; reason: string; changes: EurUndo[] } | null>(null);
   const [eurPending, setEurPending] = useState(false);
@@ -221,6 +232,7 @@ export const TransactionMatchingView: React.FC<{ initialTab?: MatchingTab }> = (
       taxYear: number;
       eurLineId?: string;
       excluded?: boolean;
+      kind?: NeutralEurKind;
       vatMode?: 'none' | 'default';
       vatRate?: number;
       reason: string;
@@ -243,8 +255,8 @@ export const TransactionMatchingView: React.FC<{ initialTab?: MatchingTab }> = (
       .filter((item) => (eurFlow === 'all' ? true : item.flowType === eurFlow))
       .filter((item) => {
         if (eurStatus === 'all') return true;
-        if (eurStatus === 'unclassified') return !item.classification?.eurLineId && !item.classification?.excluded;
-        if (eurStatus === 'classified') return Boolean(item.classification?.eurLineId) && !item.classification?.excluded;
+        if (eurStatus === 'unclassified') return !eurDecided(item);
+        if (eurStatus === 'classified') return eurDecided(item) && !item.classification?.excluded;
         return Boolean(item.classification?.excluded);
       })
       .filter((item) => {
@@ -267,8 +279,8 @@ export const TransactionMatchingView: React.FC<{ initialTab?: MatchingTab }> = (
     const all = eurItemsRaw as EurTxItem[];
     return {
       all: all.length,
-      unclassified: all.filter((item) => !item.classification?.eurLineId && !item.classification?.excluded).length,
-      classified: all.filter((item) => item.classification?.eurLineId && !item.classification?.excluded).length,
+      unclassified: all.filter((item) => !eurDecided(item)).length,
+      classified: all.filter((item) => eurDecided(item) && !item.classification?.excluded).length,
       excluded: all.filter((item) => item.classification?.excluded).length,
     };
   }, [eurItemsRaw]);
@@ -288,7 +300,7 @@ export const TransactionMatchingView: React.FC<{ initialTab?: MatchingTab }> = (
     setEurLineId(eurActive.classification?.eurLineId ?? eurActive.suggestedLineId ?? '');
     setEurVatMode(eurActive.classification?.vatMode ?? 'none');
     setEurVatRate(eurActive.classification?.vatRate);
-    setEurExcluded(eurActive.classification?.excluded ?? false);
+    setEurDecision((isProProduct ? undefined : eurKindOf(eurActive)) ?? (eurActive.classification?.excluded ? 'excluded' : 'flow'));
   }, [eurActive]);
 
   const applyEurSingle = async () => {
@@ -304,6 +316,7 @@ export const TransactionMatchingView: React.FC<{ initialTab?: MatchingTab }> = (
       taxYear,
       prevLineId: eurActive.classification?.eurLineId,
       prevExcluded: eurActive.classification?.excluded ?? false,
+      prevKind: eurKindOf(eurActive),
       prevVatMode: eurActive.classification?.vatMode ?? 'none',
       prevVatRate: eurActive.classification?.vatRate,
     };
@@ -314,8 +327,9 @@ export const TransactionMatchingView: React.FC<{ initialTab?: MatchingTab }> = (
         sourceType: eurActive.sourceType,
         sourceId: eurActive.sourceId,
         taxYear,
-        eurLineId: eurLineId || undefined,
-        excluded: eurExcluded,
+        eurLineId: eurExcluded ? undefined : eurLineId || undefined,
+        excluded: eurDecision === 'excluded',
+        kind: isNeutralEurKind(eurDecision) ? eurDecision : undefined,
         vatMode: eurVatMode,
         vatRate: isProProduct ? eurVatRate : undefined,
         reason,
@@ -335,7 +349,7 @@ export const TransactionMatchingView: React.FC<{ initialTab?: MatchingTab }> = (
 
   const applyEurBulk = async (
     label: string,
-    resolver: (item: EurTxItem) => { eurLineId?: string; excluded?: boolean; vatMode?: 'none' | 'default'; vatRate?: number },
+    resolver: (item: EurTxItem) => { eurLineId?: string; excluded?: boolean; kind?: NeutralEurKind; vatMode?: 'none' | 'default'; vatRate?: number },
   ) => {
     if (selectedEurItems.length === 0) return;
     const reason = eurReason.trim();
@@ -350,6 +364,7 @@ export const TransactionMatchingView: React.FC<{ initialTab?: MatchingTab }> = (
       taxYear,
       prevLineId: item.classification?.eurLineId,
       prevExcluded: item.classification?.excluded ?? false,
+      prevKind: eurKindOf(item),
       prevVatMode: item.classification?.vatMode ?? 'none',
       prevVatRate: item.classification?.vatRate,
     }));
@@ -390,6 +405,7 @@ export const TransactionMatchingView: React.FC<{ initialTab?: MatchingTab }> = (
             taxYear: item.taxYear,
             eurLineId: item.prevLineId,
             excluded: item.prevExcluded,
+            kind: item.prevKind,
             vatMode: item.prevVatMode,
             vatRate: isProProduct ? item.prevVatRate : undefined,
             reason: `Undo: ${eurUndo.label}; ursprüngliche Begründung: ${eurUndo.reason}`,
@@ -654,7 +670,11 @@ export const TransactionMatchingView: React.FC<{ initialTab?: MatchingTab }> = (
                               0,
                             ) || 0;
                             const remaining = suggestion.invoice.amount - alreadyPaid;
-                            const maximum = Math.min(remaining, selectedTransaction.amount);
+                            // Lite: an outgoing line is a refund or Rücklastschrift of at most the money received.
+                            const refund = !isProProduct && selectedTransaction.amount < 0;
+                            const received = (suggestion.invoice.payments ?? []).filter((p) => !p.id.startsWith('skonto:')).reduce((sum, p) => sum + p.amount, 0);
+                            const lineAmount = Math.abs(selectedTransaction.amount);
+                            const maximum = refund ? Math.min(received, lineAmount) : Math.min(remaining, selectedTransaction.amount);
                             const allocationValue = allocationInputs[suggestion.invoice.id] ?? String(maximum);
                             const allocationAmount = Number(allocationValue.replace(',', '.'));
                             const appliedAmountCents = Math.round(allocationAmount * 100);
@@ -674,7 +694,7 @@ export const TransactionMatchingView: React.FC<{ initialTab?: MatchingTab }> = (
                                   </div>
                                   <div className="shrink-0 text-right">
                                     <div className="text-label tabular-nums text-foreground">
-                                      {formatCurrency(remaining)} <span className="text-caption font-normal text-muted">offen</span>
+                                      {formatCurrency(refund ? received : remaining)} <span className="text-caption font-normal text-muted">{refund ? 'erhalten' : 'offen'}</span>
                                     </div>
                                     {getConfidenceBadge(suggestion.confidence)}
                                   </div>
@@ -688,8 +708,10 @@ export const TransactionMatchingView: React.FC<{ initialTab?: MatchingTab }> = (
                                   ))}
                                 </ul>
                                 <div className="mt-2.25">
-                                  <Input label={`Zuordnungsbetrag ${suggestion.invoice.number} in EUR`} inputMode="decimal" value={allocationValue} onChange={(event) => setAllocationInputs({ ...allocationInputs, [suggestion.invoice.id]: event.target.value })} />
-                                  <p className="my-2 text-caption text-muted">Rest aus dieser Bankzahlung: {formatCurrency(selectedTransaction.amount - allocationAmount)}</p>
+                                  <Input label={`${refund ? 'Erstattungsbetrag' : 'Zuordnungsbetrag'} ${suggestion.invoice.number} in EUR`} inputMode="decimal" value={allocationValue} onChange={(event) => setAllocationInputs({ ...allocationInputs, [suggestion.invoice.id]: event.target.value })} />
+                                  <p className="my-2 text-caption text-muted">
+                                    {refund ? 'Die Rechnung wird um diesen Betrag wieder offen. ' : ''}Rest aus dieser Bankzahlung: {formatCurrency((refund ? lineAmount : selectedTransaction.amount) - allocationAmount)}
+                                  </p>
                                   <Button
                                     size="sm"
                                     onClick={() => linkMutation.mutate({
@@ -700,7 +722,7 @@ export const TransactionMatchingView: React.FC<{ initialTab?: MatchingTab }> = (
                                     disabled={linkMutation.isPending || !Number.isFinite(allocationAmount) || allocationAmount <= 0 || allocationAmount > maximum}
                                   >
                                     <Link2 size={14} aria-hidden="true" />
-                                    Zahlung zuordnen
+                                    {refund ? 'Als Erstattung zuordnen' : 'Zahlung zuordnen'}
                                   </Button>
                                 </div>
                               </Card>
@@ -756,7 +778,8 @@ export const TransactionMatchingView: React.FC<{ initialTab?: MatchingTab }> = (
                     size="sm"
                     onClick={() =>
                       void applyEurBulk('Bulk: Vorschlag anwenden', (item) => ({
-                        eurLineId: item.suggestedLineId,
+                        eurLineId: item.suggestedKind ? undefined : item.suggestedLineId,
+                        kind: item.suggestedKind,
                         excluded: false,
                         vatMode: item.classification?.vatMode ?? 'none',
                         vatRate: item.classification?.vatRate,
@@ -771,9 +794,10 @@ export const TransactionMatchingView: React.FC<{ initialTab?: MatchingTab }> = (
                     variant="secondary"
                     size="sm"
                     onClick={() =>
-                      void applyEurBulk('Bulk: Als privat/Transfer markieren', () => ({
+                      void applyEurBulk(isProProduct ? 'Bulk: Als privat/Transfer markieren' : 'Bulk: Als Geldtransit markieren', () => ({
                         eurLineId: undefined,
-                        excluded: true,
+                        excluded: isProProduct,
+                        kind: isProProduct ? undefined : 'transit',
                         vatMode: 'none',
                         vatRate: undefined,
                       }))
@@ -781,7 +805,7 @@ export const TransactionMatchingView: React.FC<{ initialTab?: MatchingTab }> = (
                     disabled={eurSelected.size === 0 || eurPending || eurReason.trim().length === 0}
                   >
                     <Ban size={14} aria-hidden="true" />
-                    Als privat/Transfer markieren
+                    {isProProduct ? 'Als privat/Transfer markieren' : 'Als Geldtransit markieren'}
                   </Button>
                 </div>
               </div>
@@ -839,12 +863,14 @@ export const TransactionMatchingView: React.FC<{ initialTab?: MatchingTab }> = (
                             <span className="text-caption text-muted">{item.flowType === 'income' ? 'Einnahme' : 'Ausgabe'}</span>
                             {item.classification?.excluded ? (
                               <Badge tone="error">Ausgeschlossen</Badge>
-                            ) : item.classification?.eurLineId ? (
+                            ) : eurKindOf(item) ? (
+                              <Badge tone="neutral">{eurKindOf(item) === 'transit' ? 'Geldtransit' : neutralEurKindLabels[eurKindOf(item)!]}</Badge>
+                            ) : eurDecided(item) ? (
                               <Badge tone="success">Klassifiziert</Badge>
                             ) : (
                               <Badge tone="warning">Offen</Badge>
                             )}
-                            {item.suggestedLineId && !item.classification?.eurLineId && !item.classification?.excluded && (
+                            {(item.suggestedLineId || item.suggestedKind) && !eurDecided(item) && (
                               <Badge tone="info">Vorschlag</Badge>
                             )}
                           </span>
@@ -886,15 +912,23 @@ export const TransactionMatchingView: React.FC<{ initialTab?: MatchingTab }> = (
                       </div>
                     )}
 
-                    {eurActive.suggestedLineId && (
+                    {eurActive.transitHint && (
+                      <div className={`${banner} border-warning-border bg-warning-bg text-warning-text`}>
+                        <TriangleAlert size={16} className="mt-px shrink-0" aria-hidden="true" />
+                        <span className="min-w-0 flex-1">{eurActive.transitHint}</span>
+                      </div>
+                    )}
+
+                    {(eurActive.suggestedLineId || (!isProProduct && eurActive.suggestedKind)) && (
                       <div className={`${banner} items-center border-info-border bg-info-bg text-info-text`}>
                         <span className="min-w-0 flex-1">{eurActive.suggestionReason ?? 'Automatischer Vorschlag'}</span>
                         <Button
                           variant="secondary"
                           size="sm"
                           onClick={() => {
+                            if (eurActive.suggestedKind) { setEurDecision(eurActive.suggestedKind); return; }
                             setEurLineId(eurActive.suggestedLineId ?? '');
-                            setEurExcluded(false);
+                            setEurDecision('flow');
                           }}
                         >
                           Vorschlag übernehmen
@@ -948,11 +982,28 @@ export const TransactionMatchingView: React.FC<{ initialTab?: MatchingTab }> = (
                       </div>
                     )}
 
-                    <Checkbox
-                      label="Privat/Transfer ausschließen"
-                      checked={eurExcluded}
-                      onChange={(e) => setEurExcluded(e.target.checked)}
-                    />
+                    {isProProduct ? (
+                      <Checkbox
+                        label="Privat/Transfer ausschließen"
+                        checked={eurExcluded}
+                        onChange={(e) => setEurDecision(e.target.checked ? 'excluded' : 'flow')}
+                      />
+                    ) : (
+                      <Select
+                        id="tm-eur-kind"
+                        label="Art"
+                        value={eurDecision}
+                        onChange={(e) => setEurDecision(e.target.value as EurDecision)}
+                        fullWidth
+                      >
+                        <option value="flow">{eurActive.flowType === 'income' ? 'Betriebseinnahme' : 'Betriebsausgabe'} (Kategorie oben)</option>
+                        {eurActive.flowType === 'expense'
+                          ? <option value="private-withdrawal">{neutralEurKindLabels['private-withdrawal']}</option>
+                          : <option value="private-contribution">{neutralEurKindLabels['private-contribution']}</option>}
+                        <option value="transit">{neutralEurKindLabels.transit}</option>
+                        {eurActive.classification?.excluded && <option value="excluded">Ausgeschlossen (alt): bitte neu zuordnen</option>}
+                      </Select>
+                    )}
 
                     {reasonInput}
 
@@ -964,7 +1015,7 @@ export const TransactionMatchingView: React.FC<{ initialTab?: MatchingTab }> = (
                         variant="secondary"
                         onClick={() => {
                           setEurLineId('');
-                          setEurExcluded(false);
+                          setEurDecision('flow');
                           setEurVatMode('none');
                           setEurVatRate(undefined);
                         }}

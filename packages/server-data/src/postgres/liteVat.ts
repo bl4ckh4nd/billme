@@ -15,7 +15,7 @@ const taxCodes: Record<string, string> = { '46': '47', '84': '85' };
 const maxDate = (a: string, b: string) => a > b ? a : b;
 type Part = { rate: number; net: number; vat: number };
 type Cash = { id: string; date: string; amount: number };
-const labels: Record<string, string> = { '81': 'Umsätze 19 %', '86': 'Umsätze 7 %', '87': 'Umsätze 0 %', '41': 'Innergemeinschaftliche Lieferungen', '43': 'Ausfuhr und weitere steuerfreie Umsätze mit Vorsteuerabzug', '48': 'Steuerfreie Umsätze ohne Vorsteuerabzug', '60': 'Umsätze mit Steuerschuld des Leistungsempfängers', '21': 'Nicht steuerbare EU-Dienstleistungen', '45': 'Übrige nicht steuerbare Umsätze', '89': 'Innergemeinschaftlicher Erwerb 19 %', '93': 'Innergemeinschaftlicher Erwerb 7 %', '90': 'Innergemeinschaftlicher Erwerb 0 %', '46': 'EU-Dienstleistung: eigene Steuerschuld (§ 13b)', '84': 'Andere Leistungen: eigene Steuerschuld (§ 13b)', '66': 'Vorsteuer aus inländischen Rechnungen', '61': 'Vorsteuer aus innergemeinschaftlichem Erwerb', '62': 'Einfuhrumsatzsteuer', '67': 'Vorsteuer aus § 13b' };
+const labels: Record<string, string> = { '81': 'Umsätze 19 %', '86': 'Umsätze 7 %', '87': 'Steuerpflichtige Umsätze zum Steuersatz von 0 % (§ 12 Abs. 3 UStG)', '41': 'Innergemeinschaftliche Lieferungen', '43': 'Ausfuhr und weitere steuerfreie Umsätze mit Vorsteuerabzug', '48': 'Steuerfreie Umsätze ohne Vorsteuerabzug', '60': 'Umsätze mit Steuerschuld des Leistungsempfängers', '21': 'Nicht steuerbare EU-Dienstleistungen', '45': 'Übrige nicht steuerbare Umsätze', '89': 'Innergemeinschaftlicher Erwerb 19 %', '93': 'Innergemeinschaftlicher Erwerb 7 %', '90': 'Steuerpflichtige innergemeinschaftliche Erwerbe zum Steuersatz von 0 %', '46': 'EU-Dienstleistung: eigene Steuerschuld (§ 13b)', '84': 'Andere Leistungen: eigene Steuerschuld (§ 13b)', '66': 'Vorsteuer aus inländischen Rechnungen', '61': 'Vorsteuer aus innergemeinschaftlichem Erwerb', '62': 'Einfuhrumsatzsteuer', '67': 'Vorsteuer aus § 13b' };
 const outgoingCodes = { reverse_charge_13b: '60', intra_eu_supply_6a: '41', intra_eu_service_reverse_charge: '21', export_third_country: '43', vat_exempt_4_ustg: '48', non_taxable_outside_scope: '45' } as const;
 
 export const getServerLiteVatReport = (database: PostgresQueryable, scope: TenantScope, period: { from: string; to: string }): Promise<LiteVatReport> => runInTransaction(database, async (db) => {
@@ -31,7 +31,7 @@ export const getServerLiteVatReport = (database: PostgresQueryable, scope: Tenan
   const invoices = await createPostgresInvoiceRepository(db).list(scope);
   const entries = await listLiteCashEntries(db, scope);
   const receipts = await listLiteReceipts(db, scope);
-  const report: LiteVatReport = { from, to, method, smallBusiness, generatedAt: new Date().toISOString(), sourceHash: '', preparationComplete: false, submissionReady: false, positions: [], sources: [], issues: [], outputVatCents: 0, inputVatCents: 0, payableCents: 0, reconciliation: { paymentCashCents: 0, paymentRecognizedCents: 0, paymentResidualCents: 0 } };
+  const report: LiteVatReport = { from, to, method, smallBusiness, generatedAt: new Date().toISOString(), sourceHash: '', preparationComplete: false, submissionReady: false, positions: [], sources: [], issues: [], outputVatCents: 0, inputVatCents: 0, payableCents: 0, reconciliation: { paymentCashCents: 0, paymentRecognizedCents: 0, paymentResidualCents: 0 }, specialPrepaymentCents: 0, remainingCents: 0, permanentExtension: false, filingRequired: true };
   const inPeriod = (date: string) => date >= from && date <= to;
   const NEVER = '9999-12-31';
   const advanceIds = new Set(invoices.filter((invoice) => invoice.documentKind === 'advance_invoice').map((invoice) => invoice.id));
@@ -181,9 +181,12 @@ export const getServerLiteVatReport = (database: PostgresQueryable, scope: Tenan
     } else emitInput(date, 0, 1);
     if (cash.some((entry) => entry.flowType !== 'expense')) issue('RECEIPT_DIRECTION_REVIEW', 'Ein Beleg ist Einnahmen und Ausgaben zugeordnet. Bitte die Zuordnung prüfen.', receipt.id);
   }
-  const unmatched = await db.query<{ id: string }>(`SELECT t.id FROM transactions t WHERE t.tenant_id=$1 AND t.status='booked' AND t.deleted_at IS NULL AND t.date BETWEEN $2 AND $3 AND (t.linked_invoice_id IS NULL OR t.linked_invoice_id='') AND NOT EXISTS (SELECT 1 FROM lite_cash_entries m WHERE m.tenant_id=t.tenant_id AND m.matched_transaction_id=t.id AND m.deleted_at IS NULL) AND NOT EXISTS (SELECT 1 FROM eur_classifications c WHERE c.tenant_id=t.tenant_id AND c.source_type='transaction' AND c.source_id=t.id AND c.excluded=TRUE) AND NOT EXISTS (SELECT 1 FROM eur_cash_facts f WHERE f.tenant_id=t.tenant_id AND f.source_type='transaction' AND f.source_id=t.id AND f.kind IN ('private-withdrawal','private-contribution','pass-through'))`, [scope.tenantId, from, to]);
+  const unmatched = await db.query<{ id: string }>(`SELECT t.id FROM transactions t WHERE t.tenant_id=$1 AND t.status='booked' AND t.deleted_at IS NULL AND t.date BETWEEN $2 AND $3 AND (t.linked_invoice_id IS NULL OR t.linked_invoice_id='') AND NOT EXISTS (SELECT 1 FROM lite_cash_entries m WHERE m.tenant_id=t.tenant_id AND m.matched_transaction_id=t.id AND m.deleted_at IS NULL) AND NOT EXISTS (SELECT 1 FROM eur_classifications c WHERE c.tenant_id=t.tenant_id AND c.source_type='transaction' AND c.source_id=t.id AND c.excluded=TRUE) AND NOT EXISTS (SELECT 1 FROM eur_cash_facts f WHERE f.tenant_id=t.tenant_id AND f.source_type='transaction' AND f.source_id=t.id AND f.kind IN ('private-withdrawal','private-contribution','pass-through','transit'))`, [scope.tenantId, from, to]);
   for (const row of unmatched.rows) issue('BANK_TAX_EVIDENCE_REQUIRED', 'Bankzahlung benötigt einen Rechnungs-/Belegbezug oder eine geprüfte private/neutrale Zuordnung.', row.id);
-  for (const entry of entries) if (!entry.receiptId && inPeriod(entry.cashDate)) issue('CASH_RECEIPT_REQUIRED', 'Manuelle Zahlung benötigt einen Beleg für die Steuervorbereitung.', entry.id);
+  // A Barabhebung/Bareinzahlung (cash entry matched to a bank line of the other direction) is Geldtransit and needs no receipt.
+  const transit = new Set((await db.query<{ id: string }>(`SELECT m.id FROM lite_cash_entries m JOIN transactions t ON t.tenant_id=m.tenant_id AND t.id=m.matched_transaction_id WHERE m.tenant_id=$1 AND m.deleted_at IS NULL AND t.type <> m.flow_type`, [scope.tenantId])).rows.map((row) => row.id));
+  // A booking without money (Pauschale, AfA, Privatanteil) carries no Vorsteuer and no payment receipt.
+  for (const entry of entries) if (!entry.receiptId && entry.paymentMethod !== 'non_cash' && !transit.has(entry.id) && inPeriod(entry.cashDate)) issue('CASH_RECEIPT_REQUIRED', 'Manuelle Zahlung benötigt einen Beleg für die Steuervorbereitung.', entry.id);
   if (settings.businessReportingProfile?.jurisdiction !== 'DE') issue('DE_PROFILE_REQUIRED', 'Die Umsatzsteuer-Vorbereitung benötigt ein deutsches Unternehmensprofil.');
   const positions = new Map<string, LiteVatReport['positions'][number]>();
   for (const source of report.sources) {
@@ -195,6 +198,34 @@ export const getServerLiteVatReport = (database: PostgresQueryable, scope: Tenan
   report.outputVatCents = report.positions.filter((position) => position.direction === 'output').reduce((sum, position) => sum + position.taxCents, 0);
   report.inputVatCents = report.positions.filter((position) => position.direction === 'input').reduce((sum, position) => sum + position.taxCents, 0);
   report.payableCents = report.outputVatCents - report.inputVatCents;
+  // Dauerfristverlängerung (§§ 46–48 UStDV): the Sondervorauszahlung of the year is deducted as Kz 39 in its last
+  // Voranmeldung (December, or the fourth quarter); Kz 83 is what remains. A whole year is no Voranmeldung.
+  const months = (Number(to.slice(0, 4)) - Number(from.slice(0, 4))) * 12 + Number(to.slice(5, 7)) - Number(from.slice(5, 7)) + 1;
+  const extension = settings.legal?.vatPermanentExtension === true;
+  const prepayment = settings.legal?.vatSpecialPrepayment as { year?: number; amountCents?: number } | undefined;
+  const lastOfYear = to.endsWith('-12-31') && months < 12;
+  report.permanentExtension = extension;
+  report.specialPrepaymentCents = extension && lastOfYear && !smallBusiness && prepayment?.year === Number(from.slice(0, 4)) ? Math.max(0, Math.trunc(Number(prepayment.amountCents) || 0)) : 0;
+  report.remainingCents = report.payableCents - report.specialPrepaymentCents;
+  if (months < 12) {
+    const due = new Date(Date.UTC(Number(to.slice(0, 4)), Number(to.slice(5, 7)) - 1 + (extension ? 2 : 1), 10));
+    report.dueDate = due.toISOString().slice(0, 10);
+  }
+  // A Kleinunternehmer files only when a tax of its own arises (§ 13b, innergemeinschaftlicher Erwerb, …).
+  report.filingRequired = !smallBusiness || report.positions.some((position) => position.direction === 'output' && position.taxCents !== 0);
+  if (smallBusiness) {
+    const year = Number(from.slice(0, 4));
+    // ponytail: § 19 Gesamtumsatz approximated by issued invoices (gross = net for a Kleinunternehmer) by invoice date.
+    const turnover = (of: number) => invoices.reduce((sum, raw) => {
+      const invoice = invoiceSchema.parse(raw);
+      if (invoice.status === 'draft' || invoice.status === 'cancelled' || !invoice.date.startsWith(`${of}-`) || ['order_confirmation', 'delivery_note'].includes(invoice.documentKind ?? 'invoice')) return sum;
+      const sign = ['credit_note', 'cancellation_invoice'].includes(invoice.documentKind ?? 'invoice') ? -1 : 1;
+      return sum + sign * cents(Math.abs(invoice.taxSnapshot?.netAmount ?? invoice.amount));
+    }, 0);
+    report.smallBusinessLimits = { previousYear: year - 1, previousYearCents: turnover(year - 1), previousLimitCents: 2_500_000, currentYear: year, currentYearCents: turnover(year), currentLimitCents: 10_000_000 };
+    if (report.smallBusinessLimits.previousYearCents > 2_500_000) issue('KU_LIMIT_EXCEEDED', `Umsatz ${year - 1} über 25.000 €: Die Kleinunternehmerregelung gilt ${year} nicht mehr (§ 19 Abs. 1 UStG). Bitte mit der Steuerberatung prüfen.`);
+    if (report.smallBusinessLimits.currentYearCents > 10_000_000) issue('KU_LIMIT_EXCEEDED', `Umsatz ${year} über 100.000 €: Ab dem Umsatz, mit dem die Grenze überschritten wird, gilt die Kleinunternehmerregelung nicht mehr (§ 19 Abs. 1 UStG). Bitte sofort mit der Steuerberatung prüfen.`);
+  }
   report.reconciliation.paymentResidualCents = report.reconciliation.paymentCashCents - report.reconciliation.paymentRecognizedCents;
   report.preparationComplete = report.issues.length === 0;
   report.sourceHash = createHash('sha256').update(JSON.stringify({ invoices, entries, receipts, from, to, method, smallBusiness })).digest('hex');

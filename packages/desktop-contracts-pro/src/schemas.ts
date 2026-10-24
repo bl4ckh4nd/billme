@@ -381,7 +381,7 @@ export const incomingInvoiceDocumentReviewSchema = z.object({
   reviewStatus: z.enum(['accepted', 'rejected']),
   reason: z.string().trim().min(1),
 });
-export const openItemSchema = z.object({ id: z.string(), tenantId: z.string(), partyType: z.enum(['debtor', 'creditor']), partyId: z.string(), sourceType: accountingDocumentSourceTypeSchema, sourceId: z.string(), documentNumber: z.string(), documentDate: z.string(), dueDate: z.string(), originalAmount: z.number(), allocatedAmount: z.number(), residualAmount: z.number(), status: z.enum(['open', 'partially_paid', 'paid', 'overpaid', 'unresolved']), journalEntryId: z.string().optional(), createdAt: z.string(), updatedAt: z.string() });
+export const openItemSchema = z.object({ id: z.string(), tenantId: z.string(), partyType: z.enum(['debtor', 'creditor']), partyId: z.string(), sourceType: z.union([accountingDocumentSourceTypeSchema, z.literal('payment')]), sourceId: z.string(), documentNumber: z.string(), documentDate: z.string(), dueDate: z.string(), originalAmount: z.number(), allocatedAmount: z.number(), residualAmount: z.number(), status: z.enum(['open', 'partially_paid', 'paid', 'overpaid', 'unresolved']), journalEntryId: z.string().optional(), createdAt: z.string(), updatedAt: z.string() });
 const accountingCandidateSchema = z.object({ sourceType: accountingDocumentSourceTypeSchema, sourceId: z.string(), status: z.enum(['ready', 'unresolved']), reason: z.string().optional(), sourceVersion: z.string(), snapshot: z.unknown().optional() });
 export const accountingBackfillPreviewSchema = z.object({ runId: z.string(), status: z.enum(['preview', 'confirmed', 'completed']), candidates: z.array(accountingCandidateSchema), readyCount: z.number().int(), unresolvedCount: z.number().int(), confirmationHash: z.string() });
 export const accountingBackfillResultSchema = z.object({ runId: z.string(), postedCount: z.number().int(), unresolvedCount: z.number().int(), status: z.literal('completed') });
@@ -681,6 +681,10 @@ const appSettingsBaseSchema = z.object({
     /** First day the current method applies (YYYY-MM-01); earlier periods keep `previousTaxAccountingMethod`. */
     taxAccountingMethodSince: z.string().regex(/^\d{4}-\d{2}-01$/).optional(),
     previousTaxAccountingMethod: z.enum(['soll', 'ist']).optional(),
+    /** Dauerfristverlängerung (§ 46 UStDV): each Voranmeldung is due a month later. */
+    vatPermanentExtension: z.boolean().optional(),
+    /** Festgesetzte Sondervorauszahlung of a year; deducted as Kz 39 in its last Voranmeldung. */
+    vatSpecialPrepayment: z.object({ year: z.number().int().min(2025).max(2100), amountCents: z.number().int().min(0) }).optional(),
     paymentTermsDays: z.number(),
     defaultIntroText: z.string(),
     defaultFooterText: z.string(),

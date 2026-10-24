@@ -36,9 +36,9 @@ export const registerLiteCashRoutes = (app: FastifyInstance) => {
     const session = await requireMutationSessionFor(app, 'lite', request.headers.authorization); return guard(() => deleteLiteCashEntry(requireDatabase(app), session.scope, params.id, body.expectedUpdatedAt, createMutationContext(session, body.reason)));
   } });
   for (const operation of ['match', 'unmatch'] as const) {
-    typedRoute(app, { method: 'POST', url: `${prefix}/entries/:id/${operation}`, params: idParams, body: z.object({ transactionId: z.string().optional(), expectedCashDate: z.string().optional(), reason }), response: liteCashEntrySchema, async handler({ request, params, body }) {
+    typedRoute(app, { method: 'POST', url: `${prefix}/entries/:id/${operation}`, params: idParams, body: z.object({ transactionId: z.string().optional(), expectedCashDate: z.string().optional(), transit: z.boolean().optional(), reason }), response: liteCashEntrySchema, async handler({ request, params, body }) {
       if (operation === 'match' && (!body.transactionId || !body.expectedCashDate)) throw new ApiError(400, 'Bankzahlung und bisheriges Zahlungsdatum fehlen.');
-      const session = await requireMutationSessionFor(app, 'lite', request.headers.authorization); return guard(() => matchLiteCashEntry(requireDatabase(app), session.scope, params.id, operation === 'match' ? body.transactionId : undefined, body.expectedCashDate, createMutationContext(session, body.reason)));
+      const session = await requireMutationSessionFor(app, 'lite', request.headers.authorization); return guard(() => matchLiteCashEntry(requireDatabase(app), session.scope, params.id, operation === 'match' ? body.transactionId : undefined, body.expectedCashDate, createMutationContext(session, body.reason), body.transit === true));
     } });
   }
   typedRoute(app, { method: 'GET', url: `${prefix}/periods`, response: z.array(z.object({ period: z.string(), closedAt: z.string() })), async handler({ request }) {

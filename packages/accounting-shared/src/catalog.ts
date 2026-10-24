@@ -16,6 +16,7 @@ export const CANONICAL_TAX_CASES: readonly TaxCaseDefinition[] = [
   ['EU_IGE_GOODS_RC', 'Innergemeinschaftlicher Erwerb RC', 'reverse_charge', 19, true, true, true],
   ['NON_EU_EXPORT_0', 'Ausfuhrlieferung Drittland 0%', 'zero_rate', 0, false, true, true],
   ['NON_EU_SERVICE_RC', 'Drittland Dienstleistungsbezug RC', 'reverse_charge', 19, false, true, true],
+  ['NON_EU_SERVICE_OUTSIDE_SCOPE', 'Drittland sonstige Leistung, im Inland nicht steuerbar', 'exempt', 0, false, true, true],
 ].map(([key, label, mechanism, defaultRate, requiresCounterpartyVatId, requiresCountry, requiresEvidence]) => ({
   key,
   label,

@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { createHash, randomUUID } from 'node:crypto';
 import { after, before, describe, test } from 'node:test';
 import { startPro, type ProHarness } from './harness.js';
-import { addDays, asSmallBusiness, today } from './fixtures.js';
+import { addDays, asSmallBusiness, draftOffer, today } from './fixtures.js';
 import {
   addBankAccount, approveDraft, assertBalanced, assertLedgerConsistent, bankCsv, bankTransactions, bankTx, draft, draftAction, entryFor, get,
   getDraft, importCsv, invoiceEntry, issue, journal, money, openItems, payOpenItem, postDraft, saveDraft, shape,
@@ -23,6 +23,12 @@ import {
  *   a tax case without its evidence (Kleinunternehmer, §13b, EU supply), a
  *   second posting when an issued invoice is saved again, a draft posted
  *   straight into the ledger
+ * - revenue per tax case: 7 %, Kleinunternehmer, §13b, EU supply, EU service,
+ *   export, §4-exempt and non-taxable (Drittland) sales all booked as "Erlöse
+ *   19 %" (8400), a tenant mapping for such an account ignored, a non-taxable
+ *   Drittland service booked as a reverse-charge purchase (NON_EU_SERVICE_RC),
+ *   a foreign rate (20 %) booked as German 19 % VAT, 1-cent rounding between
+ *   line VAT and invoice VAT failing the posting
  * - atomicity: a posting that fails after the invoice was already issued
  *   (half-issued: number gone, no entry), a lost number after the failure, a
  *   half-written audit trail
@@ -52,11 +58,21 @@ import {
  *   itself, to the wrong party, to an item that is not there, a retry that
  *   books twice, an overpayment that disappears, a bank line booked twice,
  *   the invoice status not following the open item
+ * - Skonto: a payment within the Skonto days less the Skonto leaving the rest
+ *   open, the Skonto booked against revenue instead of gewährte Skonti or
+ *   without its VAT, a Skonto for a late or short payment, a Skonto that stays
+ *   when its payment is reversed, a Skonto typed by hand
+ * - advance invoices: the advance booked as revenue, its VAT due on issue under
+ *   Soll although §13 Abs. 1 Nr. 1a S. 4 makes it due with the payment, the
+ *   advance never released at the final invoice (revenue short or 1718 left
+ *   standing), a Storno of the advance booking other accounts than the advance
  * - bank workbench: an import that double-books, a rolled-back batch that
  *   stays bookable, a suggestion rule that outranks a better one, ignores its
  *   flow/chart/active flag, or is credited for a booking it did not decide
  * - incoming invoices and receipts: a posting with the wrong accounts or
- *   balance, amounts that do not add up posted anyway, a posted document or its
+ *   balance, the vendor's default expense account ignored, Bewirtung booked
+ *   100 % deductible (no 70/30 split), 7 % input VAT on the
+ *   19 % account (1576 instead of 1571), amounts that do not add up posted anyway, a posted document or its
  *   vendor edited afterwards, an archived original that changes, a spoofed file
  *   type, a duplicate or a path in the file name accepted
  * - workflow entries (CLI): a malformed entry stored, a second save duplicating
@@ -235,16 +251,16 @@ describe('pro accounting: setup and posting of issued invoices', () => {
       const entry = (await invoiceEntry(h, invoice.id))!;
       assert.equal(entry.lines[0]!.accountNumber, '1400');
       assert.equal(entry.lines[0]!.debitAmount, 172.5);
-      const revenue = entry.lines.filter((line) => line.accountNumber === '8400');
-      assert.deepEqual(revenue.map((line) => [line.taxCaseKey, line.netAmount, line.taxAmount, line.grossAmount]), [['DE_STD_19', 100, 19, 119], ['DE_STD_7', 50, 3.5, 53.5]]);
+      const revenue = entry.lines.filter((line) => line.taxCaseKey);
+      assert.deepEqual(revenue.map((line) => [line.accountNumber, line.taxCaseKey, line.netAmount, line.taxAmount, line.grossAmount]), [['8400', 'DE_STD_19', 100, 19, 119], ['8300', 'DE_STD_7', 50, 3.5, 53.5]], 'each rate on its own revenue account');
       assert.deepEqual(entry.lines.filter((line) => line.memo?.startsWith('USt ')).map((line) => [line.memo, line.creditAmount]), [['USt DE_STD_19', 19], ['USt DE_STD_7', 3.5]]);
       assertBalanced([entry]);
     });
 
-    test('7 % output VAT lands on the 7 % output-tax account without any setup', async () => {
+    test('7 % revenue and output VAT land on the 7 % accounts without any setup', async () => {
       const invoice = await issue(h, { client: 'Sieben Prozent', items: [{ kind: 'item', description: 'Buch', quantity: 1, price: 50, total: 50, taxRate: 7 }] });
       const entry = (await invoiceEntry(h, invoice.id))!;
-      assert.deepEqual(shape(entry), [['1400', 53.5, 0], ['8400', 0, 50], ['1771', 0, 3.5]]);
+      assert.deepEqual(shape(entry), [['1400', 53.5, 0], ['8300', 0, 50], ['1771', 0, 3.5]]);
     });
 
     test('a tax-case account mapping routes 7 % VAT to 1771 and carries the DATEV BU key', async () => {
@@ -255,9 +271,9 @@ describe('pro accounting: setup and posting of issued invoices', () => {
       assert.equal((await h.raw('POST', '/accounting/tax-case-account-mappings', { reason: 'x', chart: 'SKR03', taxCaseKey: 'DE_STD_7', role: 'vat_magic', accountNumber: '1771' })).status, 400, 'unknown role');
       assert.equal((await h.raw('POST', '/accounting/tax-case-account-mappings', { reason: 'x', chart: 'SKR03', taxCaseKey: 'NOT_A_CASE', role: 'output_tax', accountNumber: '1771' })).status, 400, 'unknown tax case');
       const invoice = await issue(h, { client: 'Sieben konfiguriert', items: [{ kind: 'item', description: 'Buch', quantity: 1, price: 50, total: 50, taxRate: 7 }] });
-      assert.deepEqual(shape((await invoiceEntry(h, invoice.id))!), [['1400', 53.5, 0], ['8400', 0, 50], ['1771', 0, 3.5]]);
+      assert.deepEqual(shape((await invoiceEntry(h, invoice.id))!), [['1400', 53.5, 0], ['8300', 0, 50], ['1771', 0, 3.5]]);
       const rows = await get<Array<{ konto: string; gegenkonto: string; buSchluessel?: string; umsatz: number }>>(h, '/accounting/datev/rows');
-      assert.ok(rows.some((row) => row.gegenkonto === '8400' && row.buSchluessel === '0002' && row.umsatz === 50), 'the revenue pair carries BU key 2');
+      assert.ok(rows.some((row) => row.gegenkonto === '8300' && row.buSchluessel === '0002' && row.umsatz === 50), 'the revenue pair carries BU key 2');
     });
 
     test('Kleinunternehmer and §13b invoices post without VAT lines and keep their evidence; without it issuing is refused', async () => {
@@ -275,15 +291,70 @@ describe('pro accounting: setup and posting of issued invoices', () => {
 
         const ku = await issue(h, { client: 'KU mit Nachweis', taxMode: 'small_business_19_ustg', taxMeta: { datevEvidenceType: 'exemption', datevEvidenceReference: '§19 UStG' }, items });
         kuEntry = (await invoiceEntry(h, ku.id))!;
-        assert.deepEqual(shape(kuEntry), [['1400', 100, 0], ['8400', 0, 100]]);
+        assert.deepEqual(shape(kuEntry), [['1400', 100, 0], ['8195', 0, 100]], 'Erlöse als Kleinunternehmer');
         assert.deepEqual([kuEntry.lines[1]!.taxCaseKey, kuEntry.lines[1]!.evidenceType, kuEntry.lines[1]!.evidenceReference], ['DE_KU19', 'exemption', '§19 UStG']);
       });
 
       const rc = await issue(h, { client: 'RC mit Nachweis', taxMode: 'reverse_charge_13b', taxMeta: { buyerVatId: 'DE123456789', datevEvidenceType: 'reverse_charge', datevEvidenceReference: '13' }, items: [{ kind: 'item', description: 'Bau', quantity: 1, price: 100, total: 100 }] });
       const rcEntry = (await invoiceEntry(h, rc.id))!;
-      assert.deepEqual(shape(rcEntry), [['1400', 100, 0], ['8400', 0, 100]]);
+      assert.deepEqual(shape(rcEntry), [['1400', 100, 0], ['8337', 0, 100]], 'Erlöse aus Leistungen nach §13b');
       assert.equal(rcEntry.lines[1]!.taxCaseKey, 'DE_RC_13B_DOMESTIC');
       assertBalanced([kuEntry, rcEntry]);
+    });
+  });
+
+  describe('revenue and VAT accounts per tax case', () => {
+    const item = (price = 100) => [{ kind: 'item' as const, description: 'Leistung', quantity: 1, price, total: price }];
+    const revenueOf = async (invoiceId: string) => (await invoiceEntry(h, invoiceId))!.lines.filter((line) => line.creditAmount > 0).map((line) => [line.accountNumber, line.taxCaseKey ?? null, line.creditAmount]);
+
+    test('each tax case books its own revenue account and no VAT line', async () => {
+      const cases: Array<[string, Record<string, unknown>, string, string]> = [
+        ['intra_eu_service_reverse_charge', { buyerCountryCode: 'AT', buyerVatId: 'ATU12345678', destinationVatRate: 20, datevEvidenceType: 'Rechnung', datevEvidenceReference: 'N-1', datevSachverhaltLl: '1' }, '8336', 'EU_B2B_SERVICE_RC'],
+        ['export_third_country', { buyerCountryCode: 'CH', datevEvidenceType: 'ausfuhrnachweis', datevEvidenceReference: 'MRN-1', taxRuleConfirmed: true }, '8120', 'NON_EU_EXPORT_0'],
+        ['vat_exempt_4_ustg', { datevEvidenceType: 'Rechnung', datevEvidenceReference: '§4 Nr. 14 UStG', taxRuleConfirmed: true }, '8100', 'DE_ZERO_EXEMPT'],
+        ['non_taxable_outside_scope', { buyerCountryCode: 'CH', datevEvidenceType: 'Rechnung', datevEvidenceReference: '§3a Abs. 2 UStG', taxRuleConfirmed: true }, '8338', 'NON_EU_SERVICE_OUTSIDE_SCOPE'],
+      ];
+      for (const [taxMode, taxMeta, account, taxCaseKey] of cases) {
+        const invoice = await issue(h, { client: `Steuerfall ${taxMode}`, taxMode: taxMode as never, taxMeta: taxMeta as never, items: item() });
+        assert.deepEqual(await revenueOf(invoice.id), [[account, taxCaseKey, 100]], taxMode);
+      }
+    });
+
+    test('a non-taxable Drittland service is a sale, never the reverse-charge purchase case', async () => {
+      const invoice = await issue(h, { client: 'Drittland Leistung', taxMode: 'non_taxable_outside_scope', taxMeta: { buyerCountryCode: 'US', datevEvidenceType: 'Rechnung', datevEvidenceReference: 'US-1', taxRuleConfirmed: true } as never, items: item() });
+      const keys = (await invoiceEntry(h, invoice.id))!.lines.map((line) => line.taxCaseKey).filter(Boolean);
+      assert.ok(!keys.includes('NON_EU_SERVICE_RC'), JSON.stringify(keys));
+    });
+
+    test('a tenant mapping moves the revenue of one tax case and leaves the others alone', async () => {
+      const saved = await map(h, 'revenue_7', '8200');
+      assert.equal(saved.status, 200, saved.text);
+      try {
+        const invoice = await issue(h, { client: 'Sieben gemappt', items: [{ kind: 'item', description: 'Buch', quantity: 1, price: 50, total: 50, taxRate: 7 }, { kind: 'item', description: 'Beratung', quantity: 1, price: 100, total: 100, taxRate: 19 }] });
+        assert.deepEqual(await revenueOf(invoice.id), [['8200', 'DE_STD_7', 50], ['1771', null, 3.5], ['8400', 'DE_STD_19', 100], ['1776', null, 19]]);
+      } finally {
+        assert.equal((await map(h, 'revenue_7', '8300')).status, 200);
+      }
+    });
+
+    test('a foreign VAT rate is refused instead of being booked as German 19 %', async () => {
+      const unposted = await draft(h, { client: 'Zwanzig Prozent', items: [{ kind: 'item', description: 'Leistung', quantity: 1, price: 100, total: 100, taxRate: 20 }] });
+      const before = (await journal(h)).length;
+      const refused = await h.raw('POST', '/invoices', { reason: 'stellen', invoice: { ...unposted, status: 'open', kind: 'invoice' } });
+      assert.equal(refused.status, 422, refused.text);
+      assert.match(refused.body.message, /TAX_RATE_UNSUPPORTED/);
+      assert.equal((await journal(h)).length, before, 'nothing posted');
+      assert.equal((await invoiceOf(h, unposted.id)).status, 'draft');
+    });
+
+    test('line VAT that differs from the VAT on the total by a cent still posts a balanced entry', async () => {
+      const lines = Array.from({ length: 3 }, (_, index) => ({ kind: 'item' as const, description: `Kleinteil ${index + 1}`, quantity: 1, price: 0.33, total: 0.33, taxRate: 19 }));
+      const invoice = await issue(h, { client: 'Rundung', items: lines });
+      const entry = (await invoiceEntry(h, invoice.id));
+      assert.ok(entry, 'the invoice was posted');
+      assertBalanced([entry!]);
+      assert.equal(entry!.lines[0]!.debitAmount, invoice.amount, 'the receivable is the invoice amount');
+      assert.equal(money(entry!.lines.filter((line) => line.accountNumber === '1776').reduce((sum, line) => sum + line.creditAmount, 0)), money(invoice.amount - 0.99), 'the VAT line takes the cent');
     });
   });
 
@@ -308,7 +379,7 @@ describe('pro accounting: setup and posting of issued invoices', () => {
       assert.equal(issued.status, 'open');
       assert.equal(issued.number, unposted.number, 'the number reserved for the failed attempt is the one that gets issued');
       const entry = (await invoiceEntry(h, issued.id))!;
-      assert.equal(entry.lines.find((line) => line.accountNumber === '8400')!.taxCaseKey, 'EU_IGL_GOODS_0');
+      assert.equal(entry.lines.find((line) => line.accountNumber === '8125')!.taxCaseKey, 'EU_IGL_GOODS_0', 'steuerfreie innergemeinschaftliche Lieferung');
       assert.equal((await posted(h)).postedCount, before.posted + 1);
     });
 
@@ -718,6 +789,8 @@ describe('pro accounting: setup and posting of issued invoices', () => {
       await importCsv(h, own, [{ date: '2026-03-12', amount: -119, counterparty, purpose: 'Eingangsrechnung' }]);
       const tx = await bankTx(h, counterparty);
       const d = await getDraft(h, tx.id);
+      assert.equal(d.lines.find((line) => line.creditAmount === 119)?.accountNumber, '1240', 'the default draft books the money on the bank account\'s own ledger account');
+      assert.equal(bankIssue(d), undefined, 'the default draft is not blocked as a bank mismatch');
       assert.ok(bankIssue((await saveDraft(h, d, lines(d, 119))).body)?.blocking, 'the bank role 1200 is not this bank account');
       await approveDraft(h, d, lines(d, 119, 119, { creditAccount: '1240' }));
       const posted = await postDraft(h, d.id, { postingDate: '2026-03-12' });
@@ -1477,6 +1550,111 @@ describe('pro accounting: setup and posting of issued invoices', () => {
     });
   });
 
+  describe('Skonto derived from the payment', () => {
+    const withSkonto = async (date = today()) => {
+      const plain = await draft(h, { client: `Skonto ${randomUUID().slice(0, 4)}`, date, dueDate: addDays(date, 30) });
+      return h.api.invoices.upsert({ reason: 'stellen', invoice: { ...plain, skonto: { percent: 2, days: 10 }, status: 'open' } as never });
+    };
+    const pay = (invoiceId: string, amount: number, date = today()) => h.raw('POST', `/invoices/${invoiceId}/payments`, { reason: 'Zahlung', payment: { id: randomUUID(), date, amount, method: 'Überweisung' } });
+    const skontoEntries = async (number: string) => (await journal(h)).filter((entry) => entry.sourceType === 'skonto' && entry.reference === number);
+
+    test('paid within the days less the Skonto: the rest is booked as gewährte Skonti with its VAT and the invoice is paid', async () => {
+      const invoice = await withSkonto();
+      const paid = await pay(invoice.id, 233.24);
+      assert.equal(paid.status, 200, paid.text);
+      assert.equal(paid.body.status, 'paid');
+      assert.equal(paid.body.payments.find((payment: { method: string }) => payment.method === 'Skonto')?.amount, 4.76);
+      const [entry] = await skontoEntries(invoice.number);
+      assert.ok(entry, 'a Skonto entry');
+      assert.deepEqual(shape(entry!), [['8736', 4, 0], ['1776', 0.76, 0], ['1400', 0, 4.76]]);
+      assert.deepEqual([entry!.lines[0]!.taxCaseKey, entry!.lines[0]!.netAmount, entry!.lines[0]!.taxAmount], ['DE_STD_19', -4, -0.76], 'the VAT report sees the reduction');
+      const item = (await openItems(h)).find((candidate) => candidate.sourceId === invoice.id)!;
+      assert.deepEqual([item.status, item.residualAmount], ['paid', 0]);
+      const typed = paid.body.payments.find((payment: { method: string }) => payment.method === 'Skonto');
+      assert.equal((await h.raw('POST', `/invoices/${invoice.id}/payments`, { payment: { ...typed, amount: 1 }, reason: 'von Hand' })).status, 409, 'Skonto is derived, never typed');
+      await assertLedgerConsistent(h);
+    });
+
+    test('a late or a short payment earns no Skonto and leaves the rest open', async () => {
+      const late = await withSkonto(addDays(today(), -20));
+      assert.equal((await pay(late.id, 233.24)).body.status, 'open');
+      assert.deepEqual(await skontoEntries(late.number), []);
+      const short = await withSkonto();
+      assert.equal((await pay(short.id, 230.86)).body.status, 'open', '3 % less than billed is more than the 2 % Skonto');
+      assert.deepEqual(await skontoEntries(short.number), []);
+    });
+
+    test('reversing the payment reverses the Skonto too and reopens the whole invoice', async () => {
+      const invoice = await withSkonto();
+      const paid = await pay(invoice.id, 233.24);
+      const cash = paid.body.payments.find((payment: { method: string }) => payment.method === 'Überweisung');
+      const reversed = await h.raw('POST', `/invoices/${invoice.id}/payments/${cash.id}/reverse`, { reason: 'Rücklastschrift', expectedPayment: cash });
+      assert.equal(reversed.status, 200, reversed.text);
+      assert.equal(reversed.body.status, 'open');
+      assert.ok(!reversed.body.payments.some((payment: { method: string }) => payment.method === 'Skonto'), 'no money, no Skonto');
+      const [entry] = await skontoEntries(invoice.number);
+      assert.equal(entry!.status, 'reversed');
+      const item = (await openItems(h)).find((candidate) => candidate.sourceId === invoice.id)!;
+      assert.deepEqual([item.allocatedAmount, item.residualAmount], [0, GROSS]);
+      assert.ok((await journal(h)).some((e) => e.sourceType === 'reversal' && e.reference === entry!.reference), 'the Skonto has its Storno entry');
+      await assertLedgerConsistent(h);
+    });
+  });
+
+  describe('advance invoices (Mindest-Ist) and the final invoice', () => {
+    const chain = (body: Record<string, unknown>) => h.api.documents.chainIssue({ id: randomUUID(), date: today(), reason: 'Test', ...body } as never) as unknown as Promise<{ id: string; number: string; amount: number }>;
+    /** An accepted offer of 200 EUR net (238 EUR gross) with its order confirmation. */
+    const order = async (client: string) => {
+      const offer = await draftOffer(h.api as never, { client });
+      await h.api.offers.upsert({ reason: 'Angebot angenommen', offer: { ...offer, shareDecision: 'accepted', acceptedAt: new Date().toISOString() } } as never);
+      return chain({ operation: 'order_confirmation', offerId: offer.id, reason: 'Auftragsbestätigung' });
+    };
+    const settle = (orderId: string, kind: 'advance_invoice' | 'final_invoice', amount: number) => chain({ operation: 'settlement_invoice', orderId, kind, amount, reason: kind });
+    const pay = (invoiceId: string, amount: number) => h.raw('POST', `/invoices/${invoiceId}/payments`, { reason: 'Zahlung', payment: { id: randomUUID(), date: today(), amount, method: 'Überweisung' } });
+    const balances = async (accounts: string[]) => { const entries = await journal(h); return accounts.map((account) => ledgerNet(entries, account)); };
+
+    test('an advance invoice books Erhaltene Anzahlungen, its VAT is due on payment even under Soll, and the final invoice releases it into revenue', async () => {
+      const accounts = ['1718', '1765', '1776', '8400'];
+      const before = await balances(accounts);
+      const moved = async () => (await balances(accounts)).map((value, index) => money(value - before[index]!));
+      /** What the UStVA basis (VAT summary of DE_STD_19) moved since the start: [net, VAT]. */
+      const vat19 = async () => { const row = (await get<{ rows: Array<{ taxCaseKey: string; netAmount: number; taxAmount: number }> }>(h, '/accounting/vat/summary')).rows.find((candidate) => candidate.taxCaseKey === 'DE_STD_19'); return [row?.netAmount ?? 0, row?.taxAmount ?? 0]; };
+      const vatBefore = await vat19();
+      const vatMoved = async () => (await vat19()).map((value, index) => money(value - vatBefore[index]!));
+      const confirmation = await order('Anzahlung GmbH');
+      const advance = await settle(confirmation.id, 'advance_invoice', 119);
+      const advanceEntry = (await invoiceEntry(h, advance.id))!;
+      assert.deepEqual(shape(advanceEntry), [['1400', 119, 0], ['1718', 0, 100], ['1765', 0, 19]], 'not revenue, and the VAT waits');
+      assert.ok(!advanceEntry.lines.some((line) => line.taxAmount), 'nothing for the VAT return before the money comes in');
+      assert.deepEqual(await moved(), [-100, -19, 0, 0]);
+      assert.deepEqual(await vatMoved(), [0, 0], 'the UStVA does not see an unpaid advance');
+
+      assert.equal((await pay(advance.id, 119)).status, 200);
+      const recognised = (await journal(h)).filter((entry) => entry.sourceType === 'payment_vat').at(-1)!;
+      assert.deepEqual(shape(recognised), [['1765', 19, 0], ['1776', 0, 19]], 'Mindest-Ist: due with the payment');
+      assert.deepEqual([recognised.lines[0]!.taxCaseKey, recognised.lines[0]!.netAmount, recognised.lines[0]!.taxAmount], ['DE_STD_19', 100, 19]);
+      assert.deepEqual(await vatMoved(), [100, 19], 'the UStVA reports the advance in the month it was paid');
+
+      const final = await settle(confirmation.id, 'final_invoice', 119);
+      const finalEntry = (await invoiceEntry(h, final.id))!;
+      assert.deepEqual(finalEntry.lines.filter((line) => line.memo?.startsWith('Auflösung')).map((line) => [line.accountNumber, line.debitAmount, line.creditAmount]), [['1718', 100, 0], ['8400', 0, 100]]);
+      assert.deepEqual(await moved(), [0, 0, -38, -200], 'the advance is released, revenue and VAT are the whole order');
+      assert.deepEqual(await vatMoved(), [200, 38], 'the UStVA reports the whole order once');
+      await assertLedgerConsistent(h);
+    });
+
+    test('an unpaid advance invoice cancelled by Storno leaves nothing on Erhaltene Anzahlungen or the VAT accounts', async () => {
+      const accounts = ['1718', '1765', '1776', '8400'];
+      const before = await balances(accounts);
+      const confirmation = await order('Anzahlung Storno GmbH');
+      const advance = await settle(confirmation.id, 'advance_invoice', 119);
+      const storno = await chain({ operation: 'correction', kind: 'cancellation_invoice', invoiceId: advance.id, reason: 'Storno' });
+      const entry = (await entryFor(h, `outgoing-correction:${storno.id}`))!;
+      assert.deepEqual(shape(entry), [['1400', 0, 119], ['1718', 100, 0], ['1765', 19, 0]]);
+      assert.deepEqual((await balances(accounts)).map((value, index) => money(value - before[index]!)), [0, 0, 0, 0]);
+    });
+  });
+
   describe('vendors, incoming invoices and the receipts archive', () => {
     const vendorId = `v-${randomUUID().slice(0, 6)}`;
     const vendor = (id: string = vendorId, extra: Record<string, unknown> = {}) => ({ reason: 'Lieferant gespeichert', vendor: { id, name: `Lieferant ${id}`, vendorNumber: `K-${id}`, ...extra } });
@@ -1504,6 +1682,35 @@ describe('pro accounting: setup and posting of issued invoices', () => {
       assert.equal(all.filter((candidate) => candidate.id === id).length, 1);
       const names = all.map((candidate) => candidate.name);
       assert.deepEqual(names, [...names].sort((a, b) => a.localeCompare(b)), 'sorted by name');
+    });
+
+    test('a line without its own account books the vendor\'s default expense account; a line account still wins', async () => {
+      const id = `v-${randomUUID().slice(0, 6)}`;
+      assert.equal((await h.raw('POST', '/accounting/vendors', vendor(id, { defaultExpenseAccount: '4930' }))).status, 200);
+      const plain = `in-${randomUUID().slice(0, 6)}`;
+      await h.raw('POST', '/accounting/incoming-invoices', incoming(plain, {}, id));
+      assert.equal((await post(plain)).status, 200);
+      assert.deepEqual(shape((await entryFor(h, `incoming-invoice:${plain}`))!), [['4930', 100, 0], ['1576', 19, 0], ['1600', 0, 119]]);
+      const own = `in-${randomUUID().slice(0, 6)}`;
+      await h.raw('POST', '/accounting/incoming-invoices', incoming(own, { lines: [{ id: `l-${own}`, incomingInvoiceId: own, position: 0, description: 'Miete', quantity: 1, unitPrice: 100, netAmount: 100, taxRate: 19, taxAmount: 19, grossAmount: 119, accountNumber: '4210' }] }, id));
+      assert.equal((await post(own)).status, 200);
+      assert.equal((await entryFor(h, `incoming-invoice:${own}`))!.lines[0]!.accountNumber, '4210');
+    });
+
+    test('Bewirtung books 70 % as deductible expense and 30 % as nicht abzugsfähig, the input VAT stays whole', async () => {
+      const id = `in-${randomUUID().slice(0, 6)}`;
+      await h.raw('POST', '/accounting/incoming-invoices', incoming(id, { lines: [{ id: `l-${id}`, incomingInvoiceId: id, position: 0, description: 'Geschäftsessen', quantity: 1, unitPrice: 100, netAmount: 100, taxRate: 19, taxAmount: 19, grossAmount: 119, accountNumber: '4650' }] }));
+      assert.equal((await post(id)).status, 200);
+      const entry = (await entryFor(h, `incoming-invoice:${id}`))!;
+      assert.deepEqual(shape(entry), [['4650', 70, 0], ['4654', 30, 0], ['1576', 19, 0], ['1600', 0, 119]]);
+      assert.deepEqual(entry.lines.slice(0, 2).map((line) => [line.netAmount, line.taxAmount]), [[70, 13.3], [30, 5.7]], 'the VAT return still sees 100 net and 19 input VAT');
+    });
+
+    test('non-deductible input VAT can be marked on an incoming invoice', { todo: 'BUG: incoming invoices have no field for non-deductible input VAT (§15 Abs. 1a UStG, e.g. unangemessene Bewirtung, Geschenke über 50 €); the VAT is always booked as Vorsteuer' }, async () => {
+      const id = `in-${randomUUID().slice(0, 6)}`;
+      await h.raw('POST', '/accounting/incoming-invoices', incoming(id, { lines: [{ id: `l-${id}`, incomingInvoiceId: id, position: 0, description: 'Geschenk', quantity: 1, unitPrice: 100, netAmount: 100, taxRate: 19, taxAmount: 19, grossAmount: 119, accountNumber: '4930', inputVatDeductible: false }] }));
+      assert.equal((await post(id)).status, 200);
+      assert.ok(!(await entryFor(h, `incoming-invoice:${id}`))!.lines.some((line) => line.accountNumber === '1576'), 'no Vorsteuer for a non-deductible line');
     });
 
     test('an incoming invoice needs its vendor, and amounts that do not add up cannot be posted', async () => {
@@ -1559,7 +1766,7 @@ describe('pro accounting: setup and posting of issued invoices', () => {
       await h.raw('POST', '/accounting/incoming-invoices', incoming(id, { netAmount: 200, taxAmount: 26, grossAmount: 226, lines }));
       assert.equal((await post(id)).body.status, 'ready');
       const entry = (await entryFor(h, `incoming-invoice:${id}`))!;
-      assert.deepEqual(entry.lines.filter((line) => line.debitAmount > 0).map((line) => [line.accountNumber, line.debitAmount]), [['4930', 100], ['4940', 100], ['1576', 19], ['1576', 7]]);
+      assert.deepEqual(entry.lines.filter((line) => line.debitAmount > 0).map((line) => [line.accountNumber, line.debitAmount]), [['4930', 100], ['4940', 100], ['1576', 19], ['1571', 7]], '7 % Vorsteuer on 1571');
       assert.equal(entry.lines.at(-1)!.accountNumber, '1600');
       assert.equal(entry.lines.at(-1)!.creditAmount, 226);
       assertBalanced([entry]);

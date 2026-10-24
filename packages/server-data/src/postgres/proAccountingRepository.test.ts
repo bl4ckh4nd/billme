@@ -319,7 +319,8 @@ test('real Postgres permits only OPOS status projection and rejects repeated ove
     assert.equal(mixedLines.find((line) => line.accountNumber === line19Account)?.debitAmount, 100);
     assert.equal(mixedLines.find((line) => line.accountNumber === line7Account)?.debitAmount, 100);
     assert.equal(mixedLines.filter((line) => line.accountNumber === mappedInputVatAccount).reduce((sum, line) => sum + line.debitAmount, 0), 19);
-    assert.equal(mixedLines.filter((line) => line.accountNumber === inputVatAccount).reduce((sum, line) => sum + line.debitAmount, 0), 7);
+    // 7 % input VAT has its own role (input_vat_7, SKR03 1571); the tenant's general input VAT account is 19 % only.
+    assert.equal(mixedLines.filter((line) => line.accountNumber === '1571').reduce((sum, line) => sum + line.debitAmount, 0), 7);
     assert.equal(mixedLines.find((line) => line.accountNumber === payableAccount)?.creditAmount, 226);
     await repository.postIncomingInvoice(scope, incomingInvoiceId);
     await assert.rejects(() => pool.query(`UPDATE incoming_invoice_lines SET description='tampered' WHERE tenant_id=$1 AND id=$2`, [tenantId, `incoming-line19-${suffix}`]), /posted incoming invoice lines are immutable/);

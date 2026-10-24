@@ -168,7 +168,8 @@ export type TaxCaseKey =
   | 'EU_IGL_GOODS_0'
   | 'EU_IGE_GOODS_RC'
   | 'NON_EU_EXPORT_0'
-  | 'NON_EU_SERVICE_RC';
+  | 'NON_EU_SERVICE_RC'
+  | 'NON_EU_SERVICE_OUTSIDE_SCOPE';
 
 export interface JournalEntry {
   id: string;

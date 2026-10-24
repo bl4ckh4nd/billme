@@ -320,6 +320,7 @@ const mockTaxCases = [
   { key: 'EU_IGE_GOODS_RC', label: 'Innergemeinschaftlicher Erwerb RC', mechanism: 'reverse_charge', defaultRate: 19, requiresCounterpartyVatId: true, requiresCountry: true, requiresEvidence: true, active: true },
   { key: 'NON_EU_EXPORT_0', label: 'Ausfuhrlieferung Drittland 0%', mechanism: 'zero_rate', defaultRate: 0, requiresCounterpartyVatId: false, requiresCountry: true, requiresEvidence: true, active: true },
   { key: 'NON_EU_SERVICE_RC', label: 'Drittland Dienstleistungsbezug RC', mechanism: 'reverse_charge', defaultRate: 19, requiresCounterpartyVatId: false, requiresCountry: true, requiresEvidence: true, active: true },
+  { key: 'NON_EU_SERVICE_OUTSIDE_SCOPE', label: 'Drittland sonstige Leistung, im Inland nicht steuerbar', mechanism: 'exempt', defaultRate: 0, requiresCounterpartyVatId: false, requiresCountry: true, requiresEvidence: true, active: true },
 ] as const;
 const mockTaxCaseMappings: Array<{
   id: string;
@@ -488,11 +489,19 @@ let mockAccountingPolicyUpdatedAt = now;
 const mockAccountingRoleDefaults: Record<'SKR03' | 'SKR04', Record<MockAccountingAccountMapping['role'], string>> = {
   SKR03: {
     accounts_receivable: '1400', accounts_payable: '1600', bank: '1200', revenue: '8400',
-    expense: '4900', asset: '0480', output_vat: '1776', output_vat_deferred: '1780', input_vat: '1576',
+    expense: '4900', asset: '0480', output_vat: '1776', output_vat_deferred: '1765', input_vat: '1576', cash: '1000',
+    output_vat_7: '1771', output_vat_deferred_7: '1760', input_vat_7: '1571',
+    revenue_7: '8300', revenue_small_business: '8195', revenue_exempt: '8100', revenue_rc_13b: '8337', revenue_eu_supply: '8125',
+    revenue_eu_service: '8336', revenue_export: '8120', revenue_outside_scope: '8338',
+    cash_discount_granted: '8736', cash_discount_granted_7: '8731', customer_advances: '1718', customer_advances_7: '1711', dunning_fees: '2700', late_interest: '2650',
   },
   SKR04: {
     accounts_receivable: '1200', accounts_payable: '3300', bank: '1800', revenue: '4400',
-    expense: '6300', asset: '0670', output_vat: '3806', output_vat_deferred: '3810', input_vat: '1406',
+    expense: '6300', asset: '0670', output_vat: '3806', output_vat_deferred: '3815', input_vat: '1406', cash: '1600',
+    output_vat_7: '3801', output_vat_deferred_7: '3810', input_vat_7: '1401',
+    revenue_7: '4300', revenue_small_business: '4185', revenue_exempt: '4100', revenue_rc_13b: '4337', revenue_eu_supply: '4125',
+    revenue_eu_service: '4336', revenue_export: '4120', revenue_outside_scope: '4338',
+    cash_discount_granted: '4736', cash_discount_granted_7: '4731', customer_advances: '3272', customer_advances_7: '3260', dunning_fees: '4830', late_interest: '7100',
   },
 };
 const mockAccountingAccountMappings: MockAccountingAccountMapping[] = [];

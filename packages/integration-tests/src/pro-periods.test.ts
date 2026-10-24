@@ -31,6 +31,12 @@ import {
  *   before it is paid, VAT recognised without a payment or beyond the invoice
  *   (overpayment), a chart switch after the first posting, a report of the other
  *   chart
+ * - Ist-VAT accounts and corrections: not-yet-due VAT on the USt-Vorauszahlungen
+ *   account (1780) or all rates on one account; a Skonto, a Forderungsausfall or
+ *   a Storno of a paid invoice reducing the due VAT (1776) that was never due, or
+ *   leaving a rest on the not-yet-due account, in either order of payment and
+ *   correction; a Skonto derived from the payment that survives the reversal of
+ *   that payment
  */
 
 const GROSS = 238;
@@ -320,7 +326,7 @@ describe('SKR04 with Ist-VAT', () => {
   test('an issued invoice posts the SKR04 accounts and defers its VAT until it is paid', async () => {
     const invoice = await issue(h, { client: 'Ist GmbH' });
     const entry = (await invoiceEntry(h, invoice.id))!;
-    assert.deepEqual(shape(entry), [['1200', GROSS, 0], ['4400', 0, 200], ['3810', 0, 38]]);
+    assert.deepEqual(shape(entry), [['1200', GROSS, 0], ['4400', 0, 200], ['3815', 0, 38]], 'Umsatzsteuer nicht fällig 19 %');
     assert.equal(entry.lines[1]!.memo, 'UStBasis DE_STD_19');
     const vat = (await get<{ rows: Array<{ taxCaseKey: string; taxAmount: number }> }>(h, '/accounting/vat/summary')).rows;
     assert.equal(vat.reduce((sum, row) => sum + row.taxAmount, 0), 0, 'no output VAT reported before payment (Ist)');
@@ -332,7 +338,7 @@ describe('SKR04 with Ist-VAT', () => {
     assert.deepEqual(shape(entries.find((candidate) => candidate.id === partial.body.journalEntryId)!), [['1800', 100, 0], ['1200', 0, 100]]);
     const recognised = entries.filter((candidate) => candidate.sourceType === 'payment_vat');
     assert.equal(recognised.length, 1);
-    assert.deepEqual(shape(recognised[0]!), [['3810', 15.97, 0], ['3806', 0, 15.97]], 'VAT is recognised pro rata: 38 × 100 / 238');
+    assert.deepEqual(shape(recognised[0]!), [['3815', 15.97, 0], ['3806', 0, 15.97]], 'VAT is recognised pro rata: 38 × 100 / 238');
     assert.equal((await payOpenItem(h, item, 138, { bankAccountNumber: '1800' })).status, 200);
     const all = (await journal(h)).filter((candidate) => candidate.sourceType === 'payment_vat');
     assert.equal(money(all.reduce((sum, entry) => sum + entry.lines.filter((line) => line.accountNumber === '3806').reduce((s, line) => s + line.creditAmount, 0), 0)), 38, 'the full VAT is recognised once the invoice is paid');
@@ -391,3 +397,100 @@ describe('SKR04 with Ist-VAT', () => {
   });
 });
 
+
+describe('SKR03 with Ist-VAT: not-yet-due VAT per rate, Skonto, Forderungsausfall and Storno', () => {
+  let h: ProHarness;
+  before(async () => {
+    h = await startPro(null, 'pro-ist-skr03');
+    const saved = await h.raw('PUT', '/accounting/policy', { reason: 'Ist-Versteuerung', activeChart: 'SKR03', vatMethod: 'ist' });
+    assert.equal(saved.status, 200, saved.text);
+  });
+  after(async () => { await h.close(); });
+  const net = async (account: string) => money((await journal(h)).reduce((sum, entry) => sum + entry.lines.filter((line) => line.accountNumber === account).reduce((s, line) => s + line.debitAmount - line.creditAmount, 0), 0));
+  /** What a step moved on the not-yet-due (1765) and the due (1776) VAT account. */
+  const vatMoves = async (step: () => Promise<unknown>) => {
+    const before = [await net('1765'), await net('1776')];
+    await step();
+    return [money(await net('1765') - before[0]!), money(await net('1776') - before[1]!)];
+  };
+  const pay = async (invoiceId: string, amount: number, date = today()) => {
+    const response = await h.raw('POST', `/invoices/${invoiceId}/payments`, { reason: 'Zahlung', payment: { id: randomUUID(), date, amount, method: 'Überweisung' } });
+    assert.equal(response.status, 200, response.text);
+    return response.body;
+  };
+  const closing = async (body: Record<string, unknown>) => {
+    const response = await h.raw('POST', '/accounting/closing', { reason: 'Abschlussbuchung', ...body });
+    assert.equal(response.status, 200, response.text);
+    return response.body;
+  };
+  const breakdown = (gross: number) => [{ rate: 19, netAmount: money(gross / 1.19), taxAmount: money(gross - gross / 1.19), grossAmount: gross }];
+  const skonto = (invoiceId: string, amount: number) => { const id = `skonto-${randomUUID()}`; const date = today(); return closing({ commandType: 'skonto', sourceId: id, sourceRevision: 'v1', idempotencyKey: `${id}:v1`, input: { effectiveDate: date, postingDate: date, period: date.slice(0, 7), fiscalYear: Number(date.slice(0, 4)), currency: 'EUR', taxBreakdown: breakdown(GROSS), skontoAmount: amount, originalDocumentId: invoiceId } }); };
+  const itemOf = async (invoiceId: string) => (await openItems(h)).find((candidate) => candidate.sourceId === invoiceId)!;
+
+  test('19 % and 7 % VAT wait on their own not-yet-due accounts and move to 1776 / 1771 when paid', async () => {
+    const invoice = await issue(h, { client: 'Ist Mischsatz', items: [
+      { kind: 'item', description: 'Beratung', quantity: 1, price: 100, total: 100, taxRate: 19 },
+      { kind: 'item', description: 'Buch', quantity: 1, price: 50, total: 50, taxRate: 7 },
+    ] });
+    const entry = (await invoiceEntry(h, invoice.id))!;
+    assert.deepEqual(entry.lines.filter((line) => line.memo?.startsWith('USt ')).map((line) => [line.accountNumber, line.creditAmount]), [['1765', 19], ['1760', 3.5]]);
+    assert.ok(!entry.lines.some((line) => line.accountNumber === '1780'), '1780 is the USt-Vorauszahlungen account');
+    await pay(invoice.id, invoice.amount);
+    const recognised = (await journal(h)).filter((candidate) => candidate.sourceType === 'payment_vat').at(-1)!;
+    assert.deepEqual(shape(recognised).sort(), [['1760', 3.5, 0], ['1765', 19, 0], ['1771', 0, 3.5], ['1776', 0, 19]]);
+  });
+
+  test('a Skonto after the payment books the not-yet-due VAT, nothing stays on 1765 and 1776 carries the VAT of the money received', async () => {
+    let invoice!: Awaited<ReturnType<typeof issue>>;
+    const moved = await vatMoves(async () => { invoice = await issue(h, { client: 'Ist Skonto danach' }); await pay(invoice.id, 226.1); await skonto(invoice.id, 11.9); });
+    assert.deepEqual(moved, [0, -36.1]);
+    assert.equal((await itemOf(invoice.id)).status, 'paid');
+  });
+
+  test('a Skonto before the payment ends the same', async () => {
+    assert.deepEqual(await vatMoves(async () => { const invoice = await issue(h, { client: 'Ist Skonto vorher' }); await skonto(invoice.id, 11.9); await pay(invoice.id, 226.1); }), [0, -36.1]);
+  });
+
+  test('a Forderungsausfall writes off the VAT that was never due, the paid half stays due', async () => {
+    const moved = await vatMoves(async () => {
+      const invoice = await issue(h, { client: 'Ist Ausfall' });
+      await pay(invoice.id, 119);
+      const id = `baddebt-${randomUUID()}`; const date = today();
+      await closing({ commandType: 'bad_debt', sourceId: id, sourceRevision: 'v1', idempotencyKey: `${id}:v1`, input: { effectiveDate: date, postingDate: date, period: date.slice(0, 7), fiscalYear: Number(date.slice(0, 4)), currency: 'EUR', taxBreakdown: breakdown(119), writeOffGrossAmount: 119, originalDocumentId: invoice.id, badDebtExpenseAccount: '2400', facts: { legalBasis: '§17 UStG', reason: 'bad_debt', originalDocumentId: invoice.id, originalDocumentNumber: invoice.number, originalTaxEffectiveDate: invoice.date, adjustmentDate: date, evidenceReference: 'Insolvenz 1' } } });
+    });
+    assert.deepEqual(moved, [0, -19]);
+  });
+
+  test('a Storno of a paid invoice keeps the VAT due until the money goes back; the refund takes it back', async () => {
+    const invoice = await issue(h, { client: 'Ist Storno bezahlt' });
+    await pay(invoice.id, GROSS);
+    const cancelled = await vatMoves(async () => { await h.api.documents.chainIssue({ id: randomUUID(), date: today(), dueDate: today(), operation: 'correction', invoiceId: invoice.id, kind: 'cancellation_invoice', reason: 'Storno' } as never); });
+    assert.deepEqual(cancelled, [38, 0], 'the reduction waits on 1765 until the refund (§17 with Ist-Versteuerung)');
+    const refunded = await vatMoves(async () => { await pay(invoice.id, -GROSS); });
+    assert.deepEqual(refunded, [-38, 38], 'the refund moves the reduction into the due VAT');
+    await assertLedgerConsistent(h);
+  });
+
+  test('a payment within the Skonto days with the Skonto deducted settles the invoice and books the Skonto with its not-yet-due VAT', async () => {
+    const plain = await draft(h, { client: 'Ist Skonto aus Zahlung' });
+    let invoice!: Awaited<ReturnType<typeof issue>>;
+    const moved = await vatMoves(async () => { invoice = await h.api.invoices.upsert({ reason: 'stellen', invoice: { ...plain, skonto: { percent: 2, days: 10 }, status: 'open' } as never }); await pay(invoice.id, 233.24); });
+    assert.deepEqual(moved, [0, -37.24]);
+    const listed = (await h.api.invoices.list()).find((candidate) => candidate.id === invoice.id)!;
+    assert.equal(listed.status, 'paid');
+    assert.equal(listed.payments?.find((payment) => payment.method === 'Skonto')?.amount, 4.76);
+    const skontoEntry = (await journal(h)).find((entry) => entry.sourceType === 'skonto' && entry.reference === invoice.number)!;
+    assert.deepEqual(shape(skontoEntry), [['8736', 4, 0], ['1765', 0.76, 0], ['1400', 0, 4.76]]);
+    const cash = listed.payments!.find((payment) => payment.method === 'Überweisung')!;
+    const back = await vatMoves(async () => {
+      const reversed = await h.raw('POST', `/invoices/${invoice.id}/payments/${cash.id}/reverse`, { reason: 'Rücklastschrift', expectedPayment: cash });
+      assert.equal(reversed.status, 200, reversed.text);
+    });
+    assert.deepEqual(back, [-38, 37.24], 'no money, no Skonto: the whole VAT waits again on 1765');
+    const reopened = (await h.api.invoices.list()).find((candidate) => candidate.id === invoice.id)!;
+    assert.equal(reopened.status, 'open');
+    assert.ok(!reopened.payments?.some((payment) => payment.method === 'Skonto'));
+    assert.deepEqual([(await itemOf(invoice.id)).allocatedAmount, (await itemOf(invoice.id)).residualAmount], [0, GROSS]);
+    await assertLedgerConsistent(h);
+  });
+});

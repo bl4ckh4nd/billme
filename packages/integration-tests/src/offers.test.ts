@@ -1568,7 +1568,7 @@ describe('Pro: the order chain posts to the journal', () => {
     assert.equal(replay.id, advance.id);
     assert.equal((await journalFor(advance.id)).length, 1, 'a replay posts nothing');
     assert.equal(((await api().pro.listOpenItems()) as Array<Record<string, any>>).filter((entry) => entry.sourceId === advance.id).length, 1);
-    assert.equal(entries[0]!.lines.some((line: Record<string, any>) => line.accountNumber === '1776'), true, 'output VAT is booked');
+    assert.equal(entries[0]!.lines.some((line: Record<string, any>) => line.accountNumber === '1765'), true, 'the VAT waits on the not-yet-due account until paid (Mindest-Ist)');
   });
 
   test('the posting of an advance invoice matches its gross amount and VAT', async () => {
@@ -1576,9 +1576,9 @@ describe('Pro: the order chain posts to the journal', () => {
     const advance = await issueP({ operation: 'settlement_invoice', kind: 'advance_invoice', orderId: order.id, amount: 357, reason: 'Abschlag' });
     const [entry] = await journalFor(advance.id);
     assert.equal(sum(entry!.lines, 'debitAmount'), cents(357), 'receivable debit');
-    assert.equal(sum(entry!.lines, 'creditAmount'), cents(357), 'revenue plus VAT credit');
-    const vat = entry!.lines.find((line: Record<string, any>) => line.accountNumber === '1776');
-    assert.equal(vat.creditAmount, 57, 'output VAT');
+    assert.equal(sum(entry!.lines, 'creditAmount'), cents(357), 'advance plus VAT credit');
+    assert.equal(entry!.lines.find((line: Record<string, any>) => line.accountNumber === '1718')?.creditAmount, 300, 'Erhaltene Anzahlungen, not revenue');
+    assert.equal(entry!.lines.find((line: Record<string, any>) => line.accountNumber === '1765')?.creditAmount, 57, 'VAT not yet due (Mindest-Ist)');
     assert.equal((await openItemFor(advance.id))!.originalAmount, 357, 'open item = invoice amount');
   });
 

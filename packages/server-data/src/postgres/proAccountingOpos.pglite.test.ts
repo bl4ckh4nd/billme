@@ -166,8 +166,8 @@ test('vatBreakdown posts one tax case, VAT account and DATEV BU key per rate', a
 
     const lines = await entryLines(database, id);
     assert.deepEqual(
-      lines.filter((l) => l.account_number === '8400').map((l) => [l.tax_case_key, Number(l.net_amount), Number(l.tax_amount), Number(l.gross_amount)]),
-      [['DE_STD_19', 100, 19, 119], ['DE_STD_7', 50, 3.5, 53.5]],
+      lines.filter((l) => l.tax_case_key && Number(l.credit_amount) > 0).map((l) => [l.account_number, l.tax_case_key, Number(l.net_amount), Number(l.tax_amount), Number(l.gross_amount)]),
+      [['8400', 'DE_STD_19', 100, 19, 119], ['8300', 'DE_STD_7', 50, 3.5, 53.5]],
     );
     assert.deepEqual(
       lines.filter((l) => l.memo?.startsWith('USt ')).map((l) => [l.account_number, Number(l.credit_amount)]),
@@ -187,9 +187,10 @@ test('zero-tax invoice modes map to their legal tax cases instead of standard 19
     assert.equal((await repo.postOutgoingInvoice(scope, ku.id, { reservationId: ku.reservationId })).status, 'ready');
     assert.equal((await repo.postOutgoingInvoice(scope, rc.id, { reservationId: rc.reservationId })).status, 'ready');
 
-    const key = async (id: string) => (await entryLines(database, id)).find((l) => l.account_number === '8400')?.tax_case_key;
-    assert.equal(await key(ku.id), 'DE_KU19');
-    assert.equal(await key(rc.id), 'DE_RC_13B_DOMESTIC');
+    // Each case books its own revenue account (8195 Kleinunternehmer, 8337 §13b).
+    const key = async (id: string) => (await entryLines(database, id)).filter((l) => l.tax_case_key && Number(l.credit_amount) > 0).map((l) => [l.account_number, l.tax_case_key]);
+    assert.deepEqual(await key(ku.id), [['8195', 'DE_KU19']]);
+    assert.deepEqual(await key(rc.id), [['8337', 'DE_RC_13B_DOMESTIC']]);
   });
 });
 
@@ -274,7 +275,7 @@ test('Ist VAT is recognized only for allocated debtor amounts, never for overpay
   await withOpos(async (database, repo) => {
     const { id, reservationId } = await seedInvoice(database, { id: 'inv-ist' });
     await repo.postOutgoingInvoice(scope, id, { reservationId });
-    assert.deepEqual((await entryLines(database, id)).map((l) => l.account_number), ['1400', '8400', '1780']);
+    assert.deepEqual((await entryLines(database, id)).map((l) => l.account_number), ['1400', '8400', '1765']);
 
     const [item] = await repo.listOpenItems(scope);
     const paid = await repo.allocateOpenItemPayment(scope, payment(item!.id, 150, 50, 'pay-ist'));

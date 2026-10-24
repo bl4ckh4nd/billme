@@ -90,7 +90,9 @@ export const registerInvoicePaymentRoutes = (app: FastifyInstance, product: 'lit
             const booked = current ? await findActiveOpenItemPayment(transaction, session.scope, 'invoice_payment', current.id) : undefined;
             if (booked) await reverseOpenItemPaymentInTransaction(transaction, session.scope, { paymentId: booked.id, reason: body.reason, mutation });
             const reopened = (await repositories.invoiceRepo.getById(session.scope, before.id))!;
-            await repositories.invoiceRepo.save(session.scope, { ...reopened, status: reopened.status === 'paid' && !booked ? 'open' as const : reopened.status, payments, updatedAt: new Date().toISOString() }, { replacePayments: true });
+            // The Skonto line is derived by the booking (Pro: allocatePayment), never carried over from the old list.
+            const listed = [...payments.filter((payment) => !isSkontoPayment(payment)), ...reopened.payments.filter(isSkontoPayment)];
+            await repositories.invoiceRepo.save(session.scope, { ...reopened, status: reopened.status === 'paid' && !booked ? 'open' as const : reopened.status, payments: listed, updatedAt: new Date().toISOString() }, { replacePayments: true });
             if (operation === 'save') await bookInvoicePaymentInTransaction(transaction, session.scope, { invoiceId: before.id, payment: body.payment!, mutation });
             const after = (await repositories.invoiceRepo.getById(session.scope, before.id))!;
             await repositories.auditLog.append(session.scope, buildAuditEntry(session.scope, session, 'invoice', before.id,

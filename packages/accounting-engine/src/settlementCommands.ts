@@ -26,6 +26,13 @@ export interface SettlementJournalAccounts {
   advanceClearingPayable?: string;
   outputVat: string;
   inputVat: string;
+  /**
+   * Accounts per tax case (7 % has its own VAT and Skonto accounts). Under Ist-Versteuerung `outputVat` of a case is
+   * its not-yet-due account: a Skonto or write-off reduces VAT that was never due.
+   */
+  byCase?: Partial<Record<string, { revenue?: string; outputVat?: string; inputVat?: string; cashDiscount?: string }>>;
+  /** Ist-Versteuerung: the reduced output VAT was never reported, so the base line carries no VAT figures. */
+  istVat?: boolean;
 }
 
 export interface SettlementJournalSource {
@@ -124,16 +131,18 @@ const settlementLines = (
     const gross = euros(allocation.grossAmount);
     if (gross <= 0) continue;
     const taxCaseKey = taxCaseForRate(allocation.rate);
+    // A Skonto or write-off reduces the VAT base: negative figures, like a Storno line.
     const base = {
       taxCaseKey,
       taxRate: allocation.rate,
-      netAmount: net,
-      taxAmount: tax,
-      grossAmount: gross,
+      netAmount: -net,
+      taxAmount: -tax,
+      grossAmount: -gross,
       evidenceType,
       evidenceReference,
       memo: `${kind} ${taxCaseKey}`,
     } satisfies Partial<JournalLine>;
+    const outgoingBase = accounts.istVat ? { evidenceType, evidenceReference, memo: `${kind} ${taxCaseKey}` } : base;
     if (kind === 'advance_settlement') {
       // Applying an advance only clears the advance balance against the
       // document open item. It must not recreate revenue or VAT from the
@@ -148,12 +157,14 @@ const settlementLines = (
     } else if (incoming) {
       lines.push({ id: `${kind}:base:${index + 1}`, accountNumber: accounts.expense, debitAmount: 0, creditAmount: net, ...base });
       // VAT control lines intentionally carry no economic tax metadata.
-      if (tax > 0) lines.push({ id: `${kind}:tax:${index + 1}`, accountNumber: accounts.inputVat, debitAmount: 0, creditAmount: tax, memo: `${kind} VAT ${taxCaseKey}` });
+      if (tax > 0) lines.push({ id: `${kind}:tax:${index + 1}`, accountNumber: accounts.byCase?.[taxCaseKey]?.inputVat ?? accounts.inputVat, debitAmount: 0, creditAmount: tax, memo: `${kind} VAT ${taxCaseKey}` });
       lines.push({ id: `${kind}:payable:${index + 1}`, accountNumber: accounts.accountsPayable, debitAmount: gross, creditAmount: 0, evidenceType: 'opos', evidenceReference, memo: `${kind} payable` });
     } else {
-      lines.push({ id: `${kind}:base:${index + 1}`, accountNumber: kind === 'bad_debt' ? accounts.badDebtExpenseAccount! : accounts.revenue, debitAmount: net, creditAmount: 0, ...base });
+      // A granted Skonto is an Erlösschmälerung (gewährte Skonti), not a debit on the revenue account itself.
+      const baseAccount = kind === 'bad_debt' ? accounts.badDebtExpenseAccount! : (accounts.byCase?.[taxCaseKey]?.cashDiscount ?? accounts.byCase?.[taxCaseKey]?.revenue ?? accounts.revenue);
+      lines.push({ id: `${kind}:base:${index + 1}`, accountNumber: baseAccount, debitAmount: net, creditAmount: 0, ...outgoingBase });
       // VAT control lines intentionally carry no economic tax metadata.
-      if (tax > 0) lines.push({ id: `${kind}:tax:${index + 1}`, accountNumber: accounts.outputVat, debitAmount: tax, creditAmount: 0, memo: `${kind} VAT ${taxCaseKey}` });
+      if (tax > 0) lines.push({ id: `${kind}:tax:${index + 1}`, accountNumber: accounts.byCase?.[taxCaseKey]?.outputVat ?? accounts.outputVat, debitAmount: tax, creditAmount: 0, memo: `${kind} VAT ${taxCaseKey}` });
       lines.push({ id: `${kind}:receivable:${index + 1}`, accountNumber: accounts.accountsReceivable, debitAmount: 0, creditAmount: gross, evidenceType: 'opos', evidenceReference, memo: `${kind} receivable` });
     }
   }

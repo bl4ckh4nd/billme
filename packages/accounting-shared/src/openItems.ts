@@ -3,8 +3,8 @@ export type VatAccountingMethod = 'soll' | 'ist';
 export type OpenItemPartyType = 'debtor' | 'creditor';
 export type OpenItemStatus = 'open' | 'partially_paid' | 'paid' | 'overpaid' | 'unresolved';
 export type AccountingDocumentSource = 'outgoing_invoice' | 'incoming_invoice' | 'legacy_transaction' | 'correction';
-/** Open item sources: documents, plus `payment` for the surplus of a payment (the partner's credit). */
-export type OpenItemSource = AccountingDocumentSource | 'payment';
+/** Open item sources: documents, `payment` for the surplus of a payment (the partner's credit), `dunning_fee` for a Mahngebühr. */
+export type OpenItemSource = AccountingDocumentSource | 'payment' | 'dunning_fee';
 
 /** Caller supplied audit context for a server-side accounting mutation. */
 export interface AccountingMutationContext {
@@ -238,7 +238,9 @@ export interface AccountingAccountMapping {
   id: string;
   tenantId: string;
   chart: 'SKR03' | 'SKR04';
-  role: 'accounts_receivable' | 'accounts_payable' | 'bank' | 'revenue' | 'expense' | 'asset' | 'output_vat' | 'output_vat_deferred' | 'input_vat';
+  role: 'accounts_receivable' | 'accounts_payable' | 'bank' | 'revenue' | 'expense' | 'asset' | 'output_vat' | 'output_vat_deferred' | 'input_vat' | 'cash'
+    | 'output_vat_7' | 'output_vat_deferred_7' | 'input_vat_7' | 'revenue_7' | 'revenue_small_business' | 'revenue_exempt' | 'revenue_rc_13b' | 'revenue_eu_supply'
+    | 'revenue_eu_service' | 'revenue_export' | 'revenue_outside_scope' | 'cash_discount_granted' | 'cash_discount_granted_7' | 'customer_advances' | 'customer_advances_7' | 'dunning_fees' | 'late_interest';
   accountNumber: string;
   updatedAt: string;
 }

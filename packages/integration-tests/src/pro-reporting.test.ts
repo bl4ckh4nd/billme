@@ -261,6 +261,8 @@ describe('pro reporting', () => {
     const pnl: Array<[string, string, string, string]> = [
       // account, hgb-guv position, bwa01 position, management-guv position
       ['8400', 'revenue', 'revenue', 'revenue'],
+      // The EU supply of the ZM test (2025) books its own revenue account (steuerfreie ig. Lieferung).
+      ['8125', 'revenue', 'revenue', 'revenue'],
       ['4900', 'other-operating-expense', 'other-operating-expense', 'fixed-costs'],
       ['4930', 'other-operating-expense', 'space-expense', 'fixed-costs'],
     ];
@@ -530,7 +532,7 @@ describe('pro reporting', () => {
       const seven = await issue(h, { client: 'Sieben DATEV', date: '2026-05-10', dueDate: '2026-05-24', items: [{ kind: 'item', description: 'Buch', quantity: 1, price: 50, total: 50, taxRate: 7 }] });
       assert.ok(seven.id);
       const may = dataRows((await exportCsv({ from: '2026-05-01', to: '2026-05-31' })).bytes);
-      const revenueRow = may.find((fields) => fields[6] === '1400' && fields[7] === '8400' && fields[0] === '50,00')!;
+      const revenueRow = may.find((fields) => fields[6] === '1400' && fields[7] === '8300' && fields[0] === '50,00')!;
       assert.equal(revenueRow[8], '"0002"', 'BU key 2 for 7 %');
     });
 
@@ -868,7 +870,7 @@ describe('pro reporting', () => {
       assert.equal((await get<any[]>(h, '/accounting/source-runs')).filter((run) => run.status === 'posted').length, runs, 'no run was posted by the refused facts');
     });
 
-    test('a discount (Skonto) reduces revenue, VAT and the open item by the discount; a discount above the balance is refused', async () => {
+    test('a discount (Skonto) books gewährte Skonti, reduces VAT and the open item by the discount; a discount above the balance is refused', async () => {
       const invoice = await issue(h, { client: 'Skonto GmbH', date: '2026-03-02', dueDate: '2026-03-16' });
       const skonto = (amount: number, id = `skonto-${key()}`) => closing({ commandType: 'skonto', sourceId: id, sourceRevision: 'v1', idempotencyKey: `${id}:v1`, input: { effectiveDate: '2026-03-20', postingDate: '2026-03-20', period: '2026-03', fiscalYear: 2026, currency: 'EUR', taxBreakdown: breakdown(GROSS), skontoAmount: amount, originalDocumentId: invoice.id } });
       const response = await skonto(11.9);
@@ -876,7 +878,8 @@ describe('pro reporting', () => {
       const entry = (await journal(h)).find((candidate) => candidate.id === response.body.run.journalEntryId)!;
       assertBalanced([entry]);
       assert.equal(entry.lines.reduce((sum, line) => sum + (line.accountNumber === '1400' ? line.creditAmount : 0), 0), 11.9, 'the receivable is reduced by the gross discount');
-      assert.equal(money(entry.lines.reduce((sum, line) => sum + (line.accountNumber === '8400' ? line.debitAmount : 0), 0) + entry.lines.reduce((sum, line) => sum + (line.accountNumber === '1776' ? line.debitAmount : 0), 0)), 11.9, 'revenue and output VAT take the other side');
+      assert.equal(money(entry.lines.reduce((sum, line) => sum + (line.accountNumber === '8736' ? line.debitAmount : 0), 0) + entry.lines.reduce((sum, line) => sum + (line.accountNumber === '1776' ? line.debitAmount : 0), 0)), 11.9, 'gewährte Skonti and output VAT take the other side');
+      assert.ok(!entry.lines.some((line) => line.accountNumber === '8400'), 'the revenue account itself stays untouched');
       const item = await itemOf(invoice.id);
       assert.deepEqual([item.status, item.allocatedAmount, item.residualAmount], ['partially_paid', 11.9, 226.1]);
       const entries = (await journal(h)).length;

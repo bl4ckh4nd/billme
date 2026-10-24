@@ -43,6 +43,7 @@ import { getServerEurReport, type ServerEurReportResult } from './eurReport.js';
 import { assertServerEurCashSource, assertServerEurProfile, listServerEurCashItems, type ServerEurCashItem } from './eurReport.js';
 import { saveServerEurClassification, type ServerEurClassificationRecord } from './proAccounting.js';
 import { createPostgresAccountingSourceRunRepository, type AccountingSourceRunRepository } from './accountingSourceRuns.js';
+import { ACCOUNT_ROLE_DEFAULTS, accountRoleMappings, taxCaseAccount } from './taxAccounts.js';
 import { listAccountingPeriods, lockPeriodRow, reportingFiscalYear, setAccountingPeriodStatus, type AccountingPeriodRecord, type AccountingPeriodStatus, type AccountingPeriodStatusChange } from './accountingPeriods.js';
 
 const q = async <T = any>(db: PostgresQueryable, text: string, values: unknown[] = []): Promise<T[]> => (await db.query(text, values)).rows as T[];
@@ -167,11 +168,9 @@ const eurBalanceAccounts = async (db: PostgresQueryable, scope: TenantScope, cha
   const row = (await q<any>(db, `SELECT settings_json FROM server_settings WHERE tenant_id=$1`, [tenant(scope)]))[0];
   if (parse<any>(row?.settings_json, {}).businessReportingProfile?.profitDetermination !== 'eur') return new Set();
   const roles = await mappings(db, tenant(scope), chart);
-  const accounts = new Set(['accounts_receivable', 'accounts_payable', 'bank', 'asset', 'output_vat', 'output_vat_deferred', 'input_vat'].map((role) => roles[role]));
+  const accounts = new Set(['accounts_receivable', 'accounts_payable', 'bank', 'asset', 'output_vat', 'output_vat_deferred', 'input_vat', 'output_vat_7', 'output_vat_deferred_7', 'input_vat_7', 'customer_advances', 'customer_advances_7'].map((role) => roles[role]));
   const taxAccounts = await q<any>(db, `SELECT account_number FROM tax_case_account_mappings WHERE (tenant_id=$1 OR tenant_id IS NULL) AND chart=$2 AND role IN ('output_tax','input_tax')`, [tenant(scope), chart]);
   for (const row of taxAccounts) accounts.add(String(row.account_number));
-  accounts.add(chart === 'SKR04' ? '3801' : '1771');
-  accounts.add(chart === 'SKR04' ? '1401' : '1571');
   return accounts;
 };
 
@@ -287,20 +286,10 @@ const policy = async (db: PostgresQueryable, t: string): Promise<{ activeChart: 
   const rows = await q<any>(db, `SELECT * FROM accounting_policies WHERE tenant_id=$1`, [t]); const row = rows[0];
   return { tenantId: t, activeChart: row?.active_chart === 'SKR04' ? 'SKR04' : 'SKR03', vatMethod: row?.vat_method === 'ist' ? 'ist' : 'soll', periodPolicy: 'calendar_month', updatedAt: row?.updated_at ?? '' };
 };
-const defaults: Record<'SKR03'|'SKR04', Record<string, string>> = {
-  SKR03: { accounts_receivable: '1400', accounts_payable: '1600', bank: '1200', revenue: '8400', expense: '4900', asset: '0480', output_vat: '1776', output_vat_deferred: '1780', input_vat: '1576', cash: '1000' },
-  SKR04: { accounts_receivable: '1200', accounts_payable: '3300', bank: '1800', revenue: '4400', expense: '6300', asset: '0670', output_vat: '3806', output_vat_deferred: '3810', input_vat: '1406', cash: '1600' },
-};
-const mappings = async (db: PostgresQueryable, t: string, chart: 'SKR03'|'SKR04'): Promise<Record<string, string>> => {
-  const rows = await q<any>(db, `SELECT role,account_number FROM accounting_account_mappings WHERE tenant_id=$1 AND chart=$2`, [t, chart]);
-  const out = { ...defaults[chart] }; for (const row of rows) if (row.role in out) out[row.role] = row.account_number; return out;
-};
-const taxCaseAccount = async (db: PostgresQueryable, t: string, chart: string, taxCaseKey: string | undefined, role: 'output_tax' | 'input_tax', fallback: string, date?: string): Promise<string> => {
-  if (!taxCaseKey) return fallback;
-  const rows = await q<any>(db, `SELECT account_number FROM tax_case_account_mappings WHERE (tenant_id=$1 OR tenant_id IS NULL) AND chart=$2 AND tax_case_key=$3 AND role=$4 AND (valid_from IS NULL OR valid_from <= COALESCE($5,CURRENT_DATE::text)) AND (valid_to IS NULL OR valid_to >= COALESCE($5,CURRENT_DATE::text)) ORDER BY (tenant_id IS NULL) ASC, valid_from DESC NULLS LAST, updated_at DESC LIMIT 1`, [t, chart, taxCaseKey, role, date ?? null]);
-  const reducedAccount = chart === 'SKR04' ? '3801' : '1771';
-  return rows[0]?.account_number ?? (taxCaseKey === 'DE_STD_7' && role === 'output_tax' ? reducedAccount : fallback);
-};
+const defaults = ACCOUNT_ROLE_DEFAULTS;
+const mappings = accountRoleMappings;
+// The tax account resolver lives in taxAccounts.ts; re-exported for the bank draft path (taxCaseAccount(db, t, chart, case, role, fallback, date)).
+export { taxCaseAccount };
 const backfillConfig = async (db: PostgresQueryable, t: string): Promise<unknown> => {
   const p = await policy(db, t);
   const rows = await q<any>(db, `SELECT chart,role,account_number FROM accounting_account_mappings WHERE tenant_id=$1 ORDER BY chart,role,account_number`, [t]);
@@ -393,13 +382,18 @@ const taxCaseFor = (row: any, rate: number, category?: string): string => {
   if (mode === 'intra_eu_service_reverse_charge') return 'EU_B2B_SERVICE_RC';
   if (mode === 'export_third_country') return 'NON_EU_EXPORT_0';
   if (mode === 'vat_exempt_4_ustg') return 'DE_ZERO_EXEMPT';
-  if (mode === 'non_taxable_outside_scope') return 'NON_EU_SERVICE_RC';
+  // A service to a Drittland customer is not taxable in Germany (§3a Abs. 2): a sale, never the reverse-charge purchase case.
+  if (mode === 'non_taxable_outside_scope') return 'NON_EU_SERVICE_OUTSIDE_SCOPE';
   if (category === 'K') return 'EU_IGL_GOODS_0';
   if (category === 'G') return 'NON_EU_EXPORT_0';
   if (category === 'AE') return 'DE_RC_13B_DOMESTIC';
   if (category === 'E' || category === 'O' || rate === 0) return 'DE_ZERO_EXEMPT';
-  return Math.abs(rate - 7) < .01 ? 'DE_STD_7' : 'DE_STD_19';
+  if (Math.abs(rate - 7) < .01) return 'DE_STD_7';
+  if (Math.abs(rate - 19) < .01) return 'DE_STD_19';
+  // 20 % (AT), 16 %, 5 %: no German tax case; posting it as DE_STD_19 would report foreign VAT as German.
+  return UNSUPPORTED_TAX_RATE;
 };
+const UNSUPPORTED_TAX_RATE = 'TAX_RATE_UNSUPPORTED';
 type TaxBreakdown = { rate: number; net: number; tax: number; gross: number; taxCaseKey: string };
 const taxSnapshot = (row: any, incoming = false, sourceLines: any[] = []): { net: number; tax: number; gross: number; rate: number; breakdown: TaxBreakdown[] } | null => {
   const snap = parse<any>(row.tax_snapshot_json ?? row.accounting_snapshot_json, null);
@@ -482,6 +476,7 @@ const backfillOutgoingSourceVersion = (row: any, documentVersion: string, reserv
   hash({ documentVersion, eligibility: { status: row.status, accountingStatus: row.accounting_status, reservation: reservation && { id: reservation.id, kind: reservation.kind, number: reservation.number, status: reservation.status, documentId: reservation.document_id } } });
 const incomingBackfillSourceVersion = (row: any, documentVersion: string): string =>
   hash({ documentVersion, eligibility: { status: row.status, accountingStatus: row.accounting_status } });
+const BEWIRTUNG_ACCOUNTS: Record<'SKR03' | 'SKR04', [string, string]> = { SKR03: ['4650', '4654'], SKR04: ['6640', '6644'] };
 const postingPreview = async (db: PostgresQueryable, scope: TenantScope, row: any, type: 'outgoing_invoice'|'incoming_invoice'): Promise<AccountingPostingPreview> => {
   if (type === 'outgoing_invoice' && isNonBillingInvoice(row)) {
     return {
@@ -494,6 +489,8 @@ const postingPreview = async (db: PostgresQueryable, scope: TenantScope, row: an
   }
   const t = tenant(scope); const p = await policy(db, t); const m = await mappings(db, t, p.activeChart); const category = parse<any>(row.tax_snapshot_json ?? row.accounting_snapshot_json, null)?.einvoiceCategoryCode ?? parse<any>(row.tax_meta_json, null)?.einvoiceCategoryCode; const incomingLines = type === 'incoming_invoice' ? (row.__incomingLines ?? await q<any>(db, `SELECT * FROM incoming_invoice_lines WHERE tenant_id=$1 AND incoming_invoice_id=$2 ORDER BY position`, [t, row.id])) : []; const tax = taxSnapshot(row, type === 'incoming_invoice', incomingLines); const id = row.id;
   if (!tax) return { sourceType: type, sourceId: id, status: 'unresolved', reason: 'AMBIGUOUS_TAX_SNAPSHOT', issues: [{ code: 'AMBIGUOUS_TAX_SNAPSHOT', message: 'Netto, Steuer und Brutto konnten nicht sicher ermittelt werden.', blocking: true }] };
+  const unsupported = [...tax.breakdown.filter((entry) => entry.taxCaseKey === UNSUPPORTED_TAX_RATE).map((entry) => entry.rate), ...incomingLines.map((line: any) => Number(line.tax_rate ?? 0)).filter((rate: number) => taxCaseFor(row, rate, category) === UNSUPPORTED_TAX_RATE)];
+  if (unsupported.length) return { sourceType: type, sourceId: id, status: 'unresolved', reason: UNSUPPORTED_TAX_RATE, issues: [{ code: UNSUPPORTED_TAX_RATE, message: `Steuersatz ${unsupported[0]} % ist kein deutscher Umsatzsteuersatz (0, 7 oder 19 %); bitte Steuerart oder Satz korrigieren.`, blocking: true }] };
   const evidenceByCase = new Map<string, DatevPostingEvidence>();
   for (const entry of tax.breakdown) {
     const resolved = await datevPostingEvidence(db, entry.taxCaseKey, row, type === 'incoming_invoice', entry.rate);
@@ -501,18 +498,48 @@ const postingPreview = async (db: PostgresQueryable, scope: TenantScope, row: an
     if (resolved.evidence) evidenceByCase.set(entry.taxCaseKey, resolved.evidence);
   }
   const basisEvidence = (entry: TaxBreakdown): DatevPostingEvidence | undefined => evidenceByCase.get(entry.taxCaseKey);
-  const lines: AccountingSnapshot['lines'] = [{ accountNumber: type === 'outgoing_invoice' ? m.accounts_receivable : (incomingLines[0]?.account_number ?? incomingLines[0]?.asset_account_number ?? m.expense), debitAmount: type === 'outgoing_invoice' ? tax.gross : tax.net, creditAmount: 0 }];
+  // A line without its own account books the vendor's default expense account, then the expense role.
+  const vendorExpense = type === 'incoming_invoice' && row.vendor_id ? (await q<any>(db, `SELECT default_expense_account FROM vendors WHERE tenant_id=$1 AND id=$2`, [t, row.vendor_id]))[0]?.default_expense_account || undefined : undefined;
+  const expenseAccount: string = vendorExpense ?? m.expense;
+  const lines: AccountingSnapshot['lines'] = [{ accountNumber: type === 'outgoing_invoice' ? m.accounts_receivable : (incomingLines[0]?.account_number ?? incomingLines[0]?.asset_account_number ?? expenseAccount), debitAmount: type === 'outgoing_invoice' ? tax.gross : tax.net, creditAmount: 0 }];
+  // Anzahlungsrechnung (§13 Abs. 1 Nr. 1a S. 4 UStG, Mindest-Ist): the VAT is due when the money comes in, also
+  // under Soll, and the net is a received advance (Erhaltene Anzahlungen) until the final invoice releases it.
+  // A Storno or credit note of an advance invoice books the same accounts the other way round.
+  const correctionKind = type === 'outgoing_invoice' && (row.document_kind === 'credit_note' || row.document_kind === 'cancellation_invoice');
+  const chainKind = correctionKind && row.source_document_id
+    ? (await q<any>(db, `SELECT document_kind FROM invoices WHERE tenant_id=$1 AND id=$2`, [t, row.source_document_id]))[0]?.document_kind
+    : row.document_kind;
+  const advance = type === 'outgoing_invoice' && chainKind === 'advance_invoice';
+  const vatMethod: 'soll' | 'ist' = advance ? 'ist' : p.vatMethod;
   if (type === 'outgoing_invoice') {
     for (const entry of tax.breakdown) {
-      const outputAccount = p.vatMethod === 'ist' ? m.output_vat_deferred : await taxCaseAccount(db, t, p.activeChart, entry.taxCaseKey, 'output_tax', m.output_vat, row.date);
+      // Under Ist the VAT waits on the not-yet-due account of its rate until the money comes in.
+      const outputAccount = vatMethod === 'ist'
+        ? await taxCaseAccount(db, t, p.activeChart, entry.taxCaseKey, 'output_tax_deferred', undefined, row.date)
+        : await taxCaseAccount(db, t, p.activeChart, entry.taxCaseKey, 'output_tax', m.output_vat, row.date);
+      const revenueAccount = await taxCaseAccount(db, t, p.activeChart, entry.taxCaseKey, advance ? 'customer_advance' : 'revenue', undefined, row.date);
       // Ist VAT is deferred and must not appear in the initial VAT report.
       // Preserve the case only in the stable basis memo for payment-time
       // recognition; the control line itself remains unkeyed.
       const evidence = basisEvidence(entry);
-      lines.push(p.vatMethod === 'ist'
-        ? { accountNumber: m.revenue, debitAmount: 0, creditAmount: entry.net, taxCaseKey: entry.taxCaseKey, taxRate: evidence?.taxRate, countryCode: evidence?.countryCode, counterpartyVatId: evidence?.counterpartyVatId, evidenceType: evidence?.evidenceType, evidenceReference: evidence?.evidenceReference, datevSachverhaltLl: evidence?.datevSachverhaltLl, memo: `UStBasis ${entry.taxCaseKey}` }
-        : { accountNumber: m.revenue, debitAmount: 0, creditAmount: entry.net, taxCaseKey: entry.taxCaseKey, taxRate: evidence?.taxRate ?? entry.rate, netAmount: entry.net, taxAmount: entry.tax, grossAmount: entry.gross, countryCode: evidence?.countryCode, counterpartyVatId: evidence?.counterpartyVatId, evidenceType: evidence?.evidenceType, evidenceReference: evidence?.evidenceReference, datevSachverhaltLl: evidence?.datevSachverhaltLl });
+      lines.push(vatMethod === 'ist'
+        ? { accountNumber: revenueAccount, debitAmount: 0, creditAmount: entry.net, taxCaseKey: entry.taxCaseKey, taxRate: evidence?.taxRate, countryCode: evidence?.countryCode, counterpartyVatId: evidence?.counterpartyVatId, evidenceType: evidence?.evidenceType, evidenceReference: evidence?.evidenceReference, datevSachverhaltLl: evidence?.datevSachverhaltLl, memo: `UStBasis ${entry.taxCaseKey}` }
+        : { accountNumber: revenueAccount, debitAmount: 0, creditAmount: entry.net, taxCaseKey: entry.taxCaseKey, taxRate: evidence?.taxRate ?? entry.rate, netAmount: entry.net, taxAmount: entry.tax, grossAmount: entry.gross, countryCode: evidence?.countryCode, counterpartyVatId: evidence?.counterpartyVatId, evidenceType: evidence?.evidenceType, evidenceReference: evidence?.evidenceReference, datevSachverhaltLl: evidence?.datevSachverhaltLl });
       if (entry.tax > 0) lines.push({ accountNumber: outputAccount, debitAmount: 0, creditAmount: entry.tax, memo: `USt ${entry.taxCaseKey}` });
+    }
+    // The final invoice (or its Storno) releases the advances of its order into revenue. Its own lines only carry
+    // the rest of the order, so revenue ends at the order's net. No tax figures: the advance's VAT was reported
+    // when it was paid.
+    if (chainKind === 'final_invoice' && (row.document_kind === 'final_invoice' || row.document_kind === 'cancellation_invoice')) {
+      const finalRow = row.document_kind === 'final_invoice' ? row : (await q<any>(db, `SELECT id,root_document_id FROM invoices WHERE tenant_id=$1 AND id=$2`, [t, row.source_document_id]))[0];
+      const advances = finalRow?.root_document_id ? await q<any>(db, `SELECT i.number,i.accounting_snapshot_json FROM invoices i WHERE i.tenant_id=$1 AND i.root_document_id=$2 AND i.document_kind='advance_invoice' AND i.accounting_status='posted' AND NOT EXISTS (SELECT 1 FROM invoices c WHERE c.tenant_id=i.tenant_id AND c.source_document_id=i.id AND c.document_kind='cancellation_invoice' AND c.status<>'draft') ORDER BY i.date,i.number`, [t, finalRow.root_document_id]) : [];
+      for (const advanceRow of advances) {
+        for (const basis of parse<AccountingSnapshot | undefined>(advanceRow.accounting_snapshot_json, undefined)?.lines.filter((line) => line.creditAmount > 0 && line.memo?.startsWith('UStBasis ')) ?? []) {
+          const memo = `Auflösung Anzahlung ${advanceRow.number}`;
+          lines.push({ accountNumber: basis.accountNumber, debitAmount: basis.creditAmount, creditAmount: 0, memo });
+          lines.push({ accountNumber: await taxCaseAccount(db, t, p.activeChart, basis.memo!.slice('UStBasis '.length), 'revenue', undefined, row.date), debitAmount: 0, creditAmount: basis.creditAmount, memo });
+        }
+      }
     }
   } else {
     // Incoming expense/asset lines are independent debit bases.  The first
@@ -526,14 +553,22 @@ const postingPreview = async (db: PostgresQueryable, scope: TenantScope, row: an
         const taxAmount = Number(line.tax_amount ?? (gross - net));
         const entry = tax.breakdown.find((candidate) => Math.abs(candidate.rate - rate) < .01);
         const taxCaseKey = entry?.taxCaseKey ?? taxCaseFor(row, rate, category); const evidence = evidenceByCase.get(taxCaseKey);
-        return { accountNumber: line.asset_account_number ?? line.account_number ?? m.expense, debitAmount: round(net), creditAmount: 0, taxCaseKey, netAmount: round(net), taxRate: evidence?.taxRate ?? rate, taxAmount: round(taxAmount), grossAmount: round(gross || net + taxAmount), countryCode: evidence?.countryCode, counterpartyVatId: evidence?.counterpartyVatId, evidenceType: evidence?.evidenceType, evidenceReference: evidence?.evidenceReference, datevSachverhaltLl: evidence?.datevSachverhaltLl, memo: line.description };
+        return { accountNumber: line.asset_account_number ?? line.account_number ?? expenseAccount, debitAmount: round(net), creditAmount: 0, taxCaseKey, netAmount: round(net), taxRate: evidence?.taxRate ?? rate, taxAmount: round(taxAmount), grossAmount: round(gross || net + taxAmount), countryCode: evidence?.countryCode, counterpartyVatId: evidence?.counterpartyVatId, evidenceType: evidence?.evidenceType, evidenceReference: evidence?.evidenceReference, datevSachverhaltLl: evidence?.datevSachverhaltLl, memo: line.description };
       })
-      : tax.breakdown.map((entry) => { const evidence = basisEvidence(entry); return { accountNumber: m.expense, debitAmount: entry.net, creditAmount: 0, taxCaseKey: entry.taxCaseKey, netAmount: entry.net, taxRate: evidence?.taxRate ?? entry.rate, taxAmount: entry.tax, grossAmount: entry.gross, countryCode: evidence?.countryCode, counterpartyVatId: evidence?.counterpartyVatId, evidenceType: evidence?.evidenceType, evidenceReference: evidence?.evidenceReference, datevSachverhaltLl: evidence?.datevSachverhaltLl }; });
-    lines.splice(0, lines.length, ...expenseLines);
+      : tax.breakdown.map((entry) => { const evidence = basisEvidence(entry); return { accountNumber: expenseAccount, debitAmount: entry.net, creditAmount: 0, taxCaseKey: entry.taxCaseKey, netAmount: entry.net, taxRate: evidence?.taxRate ?? entry.rate, taxAmount: entry.tax, grossAmount: entry.gross, countryCode: evidence?.countryCode, counterpartyVatId: evidence?.counterpartyVatId, evidenceType: evidence?.evidenceType, evidenceReference: evidence?.evidenceReference, datevSachverhaltLl: evidence?.datevSachverhaltLl }; });
+    // Bewirtung (§4 Abs. 5 Nr. 2 EStG): 70 % is a deductible expense, 30 % goes to "nicht abzugsfähige
+    // Bewirtungskosten". The input VAT stays fully deductible; the VAT figures follow the split so the sum is unchanged.
+    const [entertainment, nonDeductible] = BEWIRTUNG_ACCOUNTS[p.activeChart];
+    const thirty = (value: number | undefined) => round((value ?? 0) * 0.3);
+    lines.splice(0, lines.length, ...expenseLines.flatMap((line: AccountingSnapshot['lines'][number]) => {
+      if (line.accountNumber !== entertainment || !line.debitAmount) return [line];
+      const rest = { ...line, accountNumber: nonDeductible, debitAmount: thirty(line.debitAmount), netAmount: thirty(line.netAmount), taxAmount: thirty(line.taxAmount), grossAmount: thirty(line.grossAmount) };
+      return [{ ...line, debitAmount: round(line.debitAmount - rest.debitAmount), netAmount: round((line.netAmount ?? 0) - rest.netAmount), taxAmount: round((line.taxAmount ?? 0) - rest.taxAmount), grossAmount: round((line.grossAmount ?? 0) - rest.grossAmount) }, rest];
+    }));
     for (const entry of tax.breakdown) if (entry.tax > 0) lines.push({ accountNumber: await taxCaseAccount(db, t, p.activeChart, entry.taxCaseKey, 'input_tax', m.input_vat, row.invoice_date), debitAmount: entry.tax, creditAmount: 0, memo: `Vorsteuer ${entry.taxCaseKey}` });
     lines.push({ accountNumber: m.accounts_payable, debitAmount: 0, creditAmount: tax.gross });
   }
-  const snapshot: AccountingSnapshot = { sourceType: type, sourceId: id, sourceVersion: sourceVersion(row, type === 'incoming_invoice' ? incomingLines : invoiceLines(row)), chart: p.activeChart, vatMethod: p.vatMethod, netAmount: tax.net, taxAmount: tax.tax, grossAmount: tax.gross, lines, capturedAt: now() };
+  const snapshot: AccountingSnapshot = { sourceType: type, sourceId: id, sourceVersion: sourceVersion(row, type === 'incoming_invoice' ? incomingLines : invoiceLines(row)), chart: p.activeChart, vatMethod, netAmount: tax.net, taxAmount: tax.tax, grossAmount: tax.gross, lines, capturedAt: now() };
   const accounts = [...new Set(lines.map((line) => line.accountNumber))]; const missing: string[] = []; for (const account of accounts) if (!(await accountExists(db, p.activeChart, account))) missing.push(account); if (missing.length) return { sourceType: type, sourceId: id, status: 'unresolved', reason: 'UNKNOWN_ACCOUNT', snapshot, issues: [{ code: 'UNKNOWN_ACCOUNT', message: `Konten fehlen: ${missing.join(', ')}`, blocking: true }] };
   return { sourceType: type, sourceId: id, status: 'ready', snapshot, issues: [] };
 };
@@ -585,7 +620,7 @@ const assertOpenItemSource = async (db: PostgresQueryable, t: string, item: any)
 };
 
 const reverseEntryInTransaction = async (db: PostgresQueryable, scope: TenantScope, entryId: string, reason: string, options: ReverseJournalEntryOptions & { allowDocumentSource?: boolean; allowPaymentSource?: boolean } = {}): Promise<{ ok: true; reversalEntryId: string }> => {
-  const t = tenant(scope); const entry = (await q<any>(db, `SELECT * FROM journal_entries WHERE tenant_id=$1 AND id=$2 FOR UPDATE`, [t, entryId]))[0]; if (!entry) throw new Error('Journal entry not found'); if (!reason.trim()) throw new Error('Reversal reason is required'); if (!options.allowDocumentSource && (entry.source_type === 'outgoing_invoice' || entry.source_type === 'incoming_invoice')) throw new Error('DOCUMENT_REVERSAL_REQUIRED: reverseDocumentAccounting must be used for document-owned entries'); if (entry.source_type === 'asset_activation' || entry.source_type === 'asset_depreciation' || entry.source_type === 'asset_disposal') throw new Error('ASSET_REVERSAL_REQUIRED: use the asset-specific correction flow'); if (!options.allowPaymentSource && (entry.source_type === 'payment' || entry.source_type === 'payment_vat')) throw new Error('PAYMENT_REVERSAL_REQUIRED: Zahlungen werden über den Zahlungsstorno im OPOS storniert'); if (['fiscal_close', 'carry_forward', 'provision', 'accrual', 'inventory_closing', 'fx_valuation', 'loan_schedule', 'payroll_batch', 'correction'].includes(entry.source_type) || (entry.source_type === 'standalone_source' && /^(correction|settlement):/.test(String(entry.source_key ?? '')))) throw new Error('AGGREGATE_REVERSAL_BLOCKED: use the source-specific correction flow'); if (entry.status === 'reversed' || entry.reversed_entry_id || entry.source_type === 'reversal') throw new Error('Journal entry cannot be reversed again');
+  const t = tenant(scope); const entry = (await q<any>(db, `SELECT * FROM journal_entries WHERE tenant_id=$1 AND id=$2 FOR UPDATE`, [t, entryId]))[0]; if (!entry) throw new Error('Journal entry not found'); if (!reason.trim()) throw new Error('Reversal reason is required'); if (!options.allowDocumentSource && (entry.source_type === 'outgoing_invoice' || entry.source_type === 'incoming_invoice')) throw new Error('DOCUMENT_REVERSAL_REQUIRED: reverseDocumentAccounting must be used for document-owned entries'); if (entry.source_type === 'asset_activation' || entry.source_type === 'asset_depreciation' || entry.source_type === 'asset_disposal') throw new Error('ASSET_REVERSAL_REQUIRED: use the asset-specific correction flow'); if (!options.allowPaymentSource && (entry.source_type === 'payment' || entry.source_type === 'payment_vat' || entry.source_type === 'skonto')) throw new Error('PAYMENT_REVERSAL_REQUIRED: Zahlungen werden über den Zahlungsstorno im OPOS storniert'); if (['fiscal_close', 'carry_forward', 'provision', 'accrual', 'inventory_closing', 'fx_valuation', 'loan_schedule', 'payroll_batch', 'correction'].includes(entry.source_type) || (entry.source_type === 'standalone_source' && /^(correction|settlement):/.test(String(entry.source_key ?? '')))) throw new Error('AGGREGATE_REVERSAL_BLOCKED: use the source-specific correction flow'); if (entry.status === 'reversed' || entry.reversed_entry_id || entry.source_type === 'reversal') throw new Error('Journal entry cannot be reversed again');
   const postingDate = options.postingDate ?? now().slice(0, 10); if (!isoDate(postingDate)) throw new Error('Invalid reversal posting date'); const lines = await q<any>(db, `SELECT * FROM journal_lines WHERE tenant_id=$1 AND entry_id=$2 ORDER BY line_no`, [t, entryId]); if (!lines.length) throw new Error('Journal entry has no lines');
   const originalPairs = await q<any>(db, `SELECT jp.amount,jp.tax_case_key,jp.datev_bu_key,dl.account_number AS debit_account,cl.account_number AS credit_account FROM journal_posting_pairs jp JOIN journal_lines dl ON dl.id=jp.debit_line_id AND dl.tenant_id=jp.tenant_id JOIN journal_lines cl ON cl.id=jp.credit_line_id AND cl.tenant_id=jp.tenant_id WHERE jp.tenant_id=$1 AND jp.entry_id=$2`, [t, entryId]);
   const reversalLines = lines.map((line) => ({ ...mapLine(line), id: randomUUID(), debitAmount: Number(line.credit_amount), creditAmount: Number(line.debit_amount), netAmount: line.net_amount == null ? undefined : -Number(line.net_amount), taxAmount: line.tax_amount == null ? undefined : -Number(line.tax_amount), grossAmount: line.gross_amount == null ? undefined : -Number(line.gross_amount) }));
@@ -615,10 +650,10 @@ const recognizeIstVat = async (
 ): Promise<void> => {
   if (item.source_type !== 'outgoing_invoice') return;
   const p = await policy(db, tenant(scope));
-  if (p.vatMethod !== 'ist') return;
   const source = (await q<any>(db, `SELECT accounting_snapshot_json FROM invoices WHERE tenant_id=$1 AND id=$2`, [tenant(scope), item.source_id]))[0];
   const snapshot = parse<AccountingSnapshot | undefined>(source?.accounting_snapshot_json, undefined);
-  if (!snapshot || snapshot.grossAmount <= 0) return;
+  // The invoice's own snapshot says whether its VAT waits for the money (Ist, or an advance invoice under Soll).
+  if (!snapshot || snapshot.vatMethod !== 'ist' || snapshot.grossAmount <= 0) return;
   const m = await mappings(db, tenant(scope), p.activeChart);
   const basisLines = snapshot.lines.filter((line) => line.creditAmount > 0 && line.memo?.startsWith('UStBasis '));
   const taxByCase = new Map<string, { accountNumber: string; taxAmount: number }>();
@@ -741,7 +776,7 @@ export const createPostgresProAccountingRepository = (db: PostgresQueryable): Pr
       };
     });
   },
-  async getDraftByTransactionId(scope, transactionId) { return inTx(db, async (tx) => { const existing = await getDraft(tx, scope, transactionId); if (existing) return existing; const row = (await q<any>(tx, `SELECT * FROM bank_transactions WHERE tenant_id=$1 AND id=$2`, [tenant(scope), transactionId]))[0]; if (!row) return null; const p = await policy(tx, tenant(scope)); const m = await mappings(tx, tenant(scope), p.activeChart); const amount = round(Math.abs(row.amount)); const suggestion = row.status === 'booked' ? {} : suggestAccountForTransaction(await loadAccountSuggestionContext(tx, scope), { flowType: row.type === 'income' ? 'income' : 'expense', counterparty: row.counterparty ?? '', purpose: row.purpose ?? '' }); const suggested = suggestion.layer && suggestion.layer !== 'fallback' ? suggestion.accountNumber : undefined; const draft: BookingDraftEntity = { id: `draft-${row.id}`, tenantId: tenant(scope), transactionId: row.id, workflowStatus: row.status === 'booked' ? 'posted' : suggested ? 'suggested' : 'imported', postingDate: row.date, documentDate: row.date, bookingText: row.purpose || (row.type === 'income' ? 'Einnahme' : 'Ausgabe'), reference: row.id, period: period(row.date), fiscalYear: await reportingFiscalYear(tx, tenant(scope), row.date), lines: [{ id: `draft-${row.id}-1`, accountNumber: row.type === 'income' ? m.bank : suggested ?? m.expense, debitAmount: amount, creditAmount: 0 }, { id: `draft-${row.id}-2`, accountNumber: row.type === 'income' ? suggested ?? m.revenue : m.bank, debitAmount: 0, creditAmount: amount }], validationIssues: [], updatedAt: now() }; if (row.status !== 'booked') return saveDraftTarget(tx, scope, draft); const postedSourceDraft = (await q<any>(tx, `SELECT id FROM journal_entries WHERE tenant_id=$1 AND source_draft_id=$2 AND status='posted' LIMIT 1`, [tenant(scope), draft.id]))[0]; return postedSourceDraft ? draft : { ...draft, isVirtualProjection: true }; }); },
+  async getDraftByTransactionId(scope, transactionId) { return inTx(db, async (tx) => { const existing = await getDraft(tx, scope, transactionId); if (existing) return existing; const row = (await q<any>(tx, `SELECT * FROM bank_transactions WHERE tenant_id=$1 AND id=$2`, [tenant(scope), transactionId]))[0]; if (!row) return null; const p = await policy(tx, tenant(scope)); const m = await mappings(tx, tenant(scope), p.activeChart); const bankAccount = await bankLedgerAccount(tx, tenant(scope), row.account_id); const amount = round(Math.abs(row.amount)); const suggestion = row.status === 'booked' ? {} : suggestAccountForTransaction(await loadAccountSuggestionContext(tx, scope), { flowType: row.type === 'income' ? 'income' : 'expense', counterparty: row.counterparty ?? '', purpose: row.purpose ?? '' }); const suggested = suggestion.layer && suggestion.layer !== 'fallback' ? suggestion.accountNumber : undefined; const draft: BookingDraftEntity = { id: `draft-${row.id}`, tenantId: tenant(scope), transactionId: row.id, workflowStatus: row.status === 'booked' ? 'posted' : suggested ? 'suggested' : 'imported', postingDate: row.date, documentDate: row.date, bookingText: row.purpose || (row.type === 'income' ? 'Einnahme' : 'Ausgabe'), reference: row.id, period: period(row.date), fiscalYear: await reportingFiscalYear(tx, tenant(scope), row.date), lines: [{ id: `draft-${row.id}-1`, accountNumber: row.type === 'income' ? bankAccount : suggested ?? m.expense, debitAmount: amount, creditAmount: 0 }, { id: `draft-${row.id}-2`, accountNumber: row.type === 'income' ? suggested ?? m.revenue : bankAccount, debitAmount: 0, creditAmount: amount }], validationIssues: [], updatedAt: now() }; if (row.status !== 'booked') return saveDraftTarget(tx, scope, draft); const postedSourceDraft = (await q<any>(tx, `SELECT id FROM journal_entries WHERE tenant_id=$1 AND source_draft_id=$2 AND status='posted' LIMIT 1`, [tenant(scope), draft.id]))[0]; return postedSourceDraft ? draft : { ...draft, isVirtualProjection: true }; }); },
   async saveDraft(scope, draft) { return inTx(db, (tx) => saveDraftTarget(tx, scope, draft, draft.mutation)); },
   async dispatchDraftAction(scope, args) { return inTx(db, async (tx) => { const draft = await getDraft(tx, scope, args.transactionId); if (!draft) throw new Error('Draft not found'); const transitions: Record<string, string[]> = { imported: ['suggested','incomplete','pending_approval'], suggested: ['suggested','incomplete','pending_approval'], incomplete: ['suggested','incomplete','pending_approval'], ready_for_review: ['pending_approval'], pending_approval: ['approved','incomplete'], approved: ['approved'], posted: ['reversed'], reversed: ['corrected'], corrected: ['suggested','incomplete'], period_locked: ['incomplete','suggested'], integration_error: ['incomplete','suggested'] }; const targets: Record<string, string> = { save_draft: 'suggested', submit_for_review: 'pending_approval', approve: 'approved', reject: 'incomplete', post: 'approved', reverse: 'reversed', create_correction: 'corrected', request_receipt: 'incomplete' }; const target = targets[args.action]; if (!transitions[draft.workflowStatus]?.includes(target)) throw new Error(`Invalid workflow transition: ${draft.workflowStatus} -> ${target}`); return saveDraftTarget(tx, scope, { ...draft, workflowStatus: target as BookingDraftEntity['workflowStatus'], validationIssues: args.action === 'reject' && args.rejectReason ? [{ id: randomUUID(), code: 'MANUAL_REVIEW_REJECTED', severity: 'warning', message: args.rejectReason, blocking: false, source: 'user' }] : draft.validationIssues }, args.mutation); }); },
   async validateTaxCompliance(scope, args) { const draft = args.draftId ? (await q<any>(db, `SELECT * FROM booking_drafts WHERE tenant_id=$1 AND id=$2`, [tenant(scope), args.draftId]))[0] : args.transactionId ? await getDraft(db, scope, args.transactionId) : null; if (!draft) throw new Error('Draft not found'); if ('draft_json' in draft) { const lines = await q<any>(db, `SELECT * FROM booking_draft_lines WHERE tenant_id=$1 AND draft_id=$2 ORDER BY line_no`, [tenant(scope), draft.id]); const issues = await q<any>(db, `SELECT * FROM draft_validation_issues WHERE tenant_id=$1 AND draft_id=$2`, [tenant(scope), draft.id]); const parsed = draftFromRows(draft, lines, issues, scope); const saved = await inTx(db, (tx) => saveDraftTarget(tx, scope, parsed, args.mutation)); return { ok: !saved.validationIssues.some((x) => x.blocking), issues: saved.validationIssues }; } return { ok: !(draft as BookingDraftEntity).validationIssues.some((x) => x.blocking), issues: (draft as BookingDraftEntity).validationIssues }; },
@@ -1259,6 +1294,114 @@ const postDocument = async (db: PostgresQueryable, scope: TenantScope, type: 'ou
   return { ...preview, snapshot: postedSnapshot };
 };
 
+/**
+ * Mahngebühr (§288 Abs. 4/5 BGB): damages, not a taxable supply. In Pro it is a receivable of the customer from
+ * the moment the reminder went out, booked against sonstige Erträge without a tax case and kept as an open item of
+ * its own, so OPOS shows it and a payment can settle it. The issued invoice and its open item stay untouched.
+ * Only for an invoice that is in the journal and a reminder date in an open month; idempotent per invoice and level.
+ */
+export const postDunningFeeInTransaction = async (db: PostgresQueryable, scope: TenantScope, input: { invoiceId: string; level: number; fee: number; date: string; mutation?: AccountingMutationContext }): Promise<void> => {
+  if (scope.product !== 'pro' || !(input.fee > 0)) return;
+  const t = tenant(scope);
+  const invoice = (await q<any>(db, `SELECT id,number,accounting_status FROM invoices WHERE tenant_id=$1 AND id=$2`, [t, input.invoiceId]))[0];
+  const item = (await q<any>(db, `SELECT party_id FROM open_items WHERE tenant_id=$1 AND source_type='outgoing_invoice' AND source_id=$2`, [t, input.invoiceId]))[0];
+  if (!invoice || invoice.accounting_status !== 'posted' || !item) return;
+  // A locked month must not undo the record that the reminder went out: the fee then stays in the dunning history
+  // only and is booked by hand.
+  if (await ensurePeriod(db, scope, period(input.date), input.date) !== 'open') return;
+  const p = await policy(db, t); const m = await mappings(db, t, p.activeChart);
+  const fee = round(input.fee); const sourceId = `${invoice.id}:${input.level}`;
+  const entryId = await insertEntry(db, scope, 'dunning_fee', `dunning-fee:${sourceId}`, input.date, `Mahngebühr ${invoice.number} Stufe ${input.level}`, [
+    { id: randomUUID(), accountNumber: m.accounts_receivable, debitAmount: fee, creditAmount: 0 },
+    { id: randomUUID(), accountNumber: m.dunning_fees, debitAmount: 0, creditAmount: fee },
+  ], { reference: invoice.number, mutation: input.mutation });
+  const stamp = now();
+  await q(db, `INSERT INTO open_items (id,tenant_id,party_type,party_id,source_type,source_id,document_number,document_date,due_date,original_amount,allocated_amount,residual_amount,status,journal_entry_id,created_at,updated_at) VALUES ($1,$2,'debtor',$3,'dunning_fee',$4,$5,$6,$6,$7,0,$7,'open',$8,$9,$9) ON CONFLICT (tenant_id,source_type,source_id) DO NOTHING`, [randomUUID(), t, item.party_id, sourceId, invoice.number, input.date, fee, entryId, stamp]);
+};
+
+const SKONTO_PAYMENT_ID = 'skonto:';
+const standingSkonto = async (db: PostgresQueryable, t: string, invoiceId: string): Promise<any> =>
+  (await q<any>(db, `SELECT * FROM journal_entries WHERE tenant_id=$1 AND source_type='skonto' AND source_key LIKE $2 AND status='posted' ORDER BY entry_number DESC LIMIT 1`, [t, `skonto:${invoiceId}:%`]))[0];
+const projectSkonto = async (db: PostgresQueryable, t: string, invoiceId: string, skonto: { date: string; amount: number } | null, stamp: string): Promise<void> => {
+  const row = (await q<any>(db, `SELECT payments_json FROM invoices WHERE tenant_id=$1 AND id=$2 FOR UPDATE`, [t, invoiceId]))[0];
+  if (!row) return;
+  const id = `${SKONTO_PAYMENT_ID}${invoiceId}`;
+  const kept = parse<any[]>(row.payments_json, []).filter((entry) => entry?.id !== id);
+  await q(db, `UPDATE invoices SET payments_json=$1,updated_at=$2 WHERE tenant_id=$3 AND id=$4`, [JSON.stringify(skonto ? [...kept, { id, date: skonto.date, amount: skonto.amount, method: 'Skonto' }] : kept), stamp, t, invoiceId]);
+};
+
+/**
+ * Skonto in Pro, derived from the money like in Lite: received within the Skonto days and covering the open
+ * amount less the Skonto, the rest is booked as gewährte Skonti (Erlösschmälerung) with its VAT (§17 UStG) and
+ * the open item is settled. Under Ist the VAT part comes off the not-yet-due account, because the payment only
+ * recognised the VAT of the money received. The invoice lists it as a payment "Skonto" (no money).
+ */
+const settleSkontoInTransaction = async (db: PostgresQueryable, scope: TenantScope, itemId: string, paymentDate: string, paymentId: string, mutation?: AccountingMutationContext): Promise<void> => {
+  const t = tenant(scope);
+  const item = (await q<any>(db, `SELECT * FROM open_items WHERE tenant_id=$1 AND id=$2 FOR UPDATE`, [t, itemId]))[0];
+  if (!item || item.source_type !== 'outgoing_invoice' || Number(item.original_amount) <= 0) return;
+  const invoice = (await q<any>(db, `SELECT id,number,date,status,skonto_json,accounting_snapshot_json FROM invoices WHERE tenant_id=$1 AND id=$2`, [t, item.source_id]))[0];
+  const terms = parse<{ percent?: number; days?: number } | null>(invoice?.skonto_json, null);
+  if (!invoice || !terms?.percent || !terms.days || invoice.status === 'cancelled' || await standingSkonto(db, t, invoice.id)) return;
+  const residual = Math.round(Number(item.residual_amount) * 100);
+  if (residual <= 0) return;
+  // Money on the item (payments less refunds and their reversals); the rest of the allocation is credit notes.
+  const paid = Math.round(Number((await q<any>(db, `SELECT COALESCE(SUM(amount),0) AS paid FROM open_item_allocations WHERE tenant_id=$1 AND open_item_id=$2`, [t, item.id]))[0]?.paid ?? 0) * 100);
+  const open = Math.round(Number(item.original_amount) * 100) - (Math.round(Number(item.allocated_amount) * 100) - paid);
+  const deadline = new Date(Date.parse(`${String(invoice.date).slice(0, 10)}T00:00:00Z`) + terms.days * 86_400_000).toISOString().slice(0, 10);
+  if (paymentDate > deadline || paid < Math.round(open * (1 - terms.percent / 100)) || paid >= open || residual !== open - paid) return;
+  const snapshot = parse<AccountingSnapshot | undefined>(invoice.accounting_snapshot_json, undefined);
+  const bases = (snapshot?.lines ?? []).filter((line) => line.creditAmount > 0 && line.taxCaseKey);
+  if (!snapshot || !bases.length) return;
+  const ist = snapshot.vatMethod === 'ist';
+  const p = await policy(db, t);
+  const m = await mappings(db, t, p.activeChart);
+  const parts = bases.map((line) => {
+    const control = snapshot.lines.find((candidate) => candidate.creditAmount > 0 && candidate.memo === `USt ${line.taxCaseKey}`);
+    const tax = Math.round(Number(control?.creditAmount ?? 0) * 100);
+    return { key: String(line.taxCaseKey), rate: line.taxRate, tax, gross: Math.round(line.creditAmount * 100) + tax, deferred: control?.accountNumber };
+  });
+  const total = parts.reduce((sum, part) => sum + part.gross, 0);
+  if (total <= 0) return;
+  const lines: JournalLineEntity[] = [];
+  let left = residual;
+  for (const [index, part] of parts.entries()) {
+    const share = index === parts.length - 1 ? left : Math.round(residual * part.gross / total);
+    left -= share;
+    if (share <= 0) continue;
+    const tax = part.gross ? Math.round(share * part.tax / part.gross) : 0;
+    const net = share - tax;
+    const discount = await taxCaseAccount(db, t, p.activeChart, part.key, 'cash_discount', undefined, paymentDate);
+    // Under Ist this VAT was never reported (only the money received was): no VAT figures on the line.
+    lines.push({ id: randomUUID(), accountNumber: discount, debitAmount: net / 100, creditAmount: 0, ...(ist ? {} : { taxCaseKey: part.key as TaxCaseKey, taxRate: part.rate, netAmount: -net / 100, taxAmount: -tax / 100, grossAmount: -share / 100 }), memo: `Skonto ${part.key}` });
+    if (tax > 0) lines.push({ id: randomUUID(), accountNumber: ist ? part.deferred ?? await taxCaseAccount(db, t, p.activeChart, part.key, 'output_tax_deferred', undefined, paymentDate) : await taxCaseAccount(db, t, p.activeChart, part.key, 'output_tax', m.output_vat, paymentDate), debitAmount: tax / 100, creditAmount: 0, memo: `USt Skonto ${part.key}` });
+  }
+  lines.push({ id: randomUUID(), accountNumber: m.accounts_receivable, debitAmount: 0, creditAmount: residual / 100 });
+  await insertEntry(db, scope, 'skonto', `skonto:${invoice.id}:${paymentId}`, paymentDate, `Skonto ${invoice.number}`, lines, { reference: invoice.number, mutation });
+  const stamp = now();
+  await q(db, `UPDATE open_items SET allocated_amount=original_amount,residual_amount=0,status='paid',updated_at=$1 WHERE tenant_id=$2 AND id=$3`, [stamp, t, item.id]);
+  await q(db, `UPDATE invoices SET status='paid',updated_at=$1 WHERE tenant_id=$2 AND id=$3 AND accounting_status='posted' AND status <> 'cancelled'`, [stamp, t, invoice.id]);
+  await projectSkonto(db, t, invoice.id, { date: paymentDate, amount: residual / 100 }, stamp);
+};
+
+/** No money, no Skonto: reversing a payment of the invoice reverses its Skonto and reopens that amount. */
+const reverseSkontoInTransaction = async (db: PostgresQueryable, scope: TenantScope, itemId: string, reason: string, postingDate: string, mutation?: AccountingMutationContext): Promise<string | undefined> => {
+  const t = tenant(scope);
+  const item = (await q<any>(db, `SELECT * FROM open_items WHERE tenant_id=$1 AND id=$2 FOR UPDATE`, [t, itemId]))[0];
+  if (!item || item.source_type !== 'outgoing_invoice') return undefined;
+  const entry = await standingSkonto(db, t, item.source_id);
+  if (!entry) return undefined;
+  const amount = round((await q<any>(db, `SELECT COALESCE(SUM(credit_amount),0) AS amount FROM journal_lines WHERE tenant_id=$1 AND entry_id=$2 AND credit_amount > 0`, [t, entry.id]))[0]?.amount);
+  const { reversalEntryId } = await reverseEntryInTransaction(db, scope, entry.id, reason, { postingDate: postingDate < entry.posting_date ? entry.posting_date : postingDate, mutation, allowPaymentSource: true });
+  const allocated = round(Number(item.allocated_amount) - amount);
+  const next = itemStatus(item, allocated);
+  const stamp = now();
+  await q(db, `UPDATE open_items SET allocated_amount=$1,residual_amount=$2,status=$3,updated_at=$4 WHERE tenant_id=$5 AND id=$6`, [allocated, next.residual, next.status, stamp, t, item.id]);
+  await q(db, `UPDATE invoices SET status=$1,updated_at=$2 WHERE tenant_id=$3 AND id=$4 AND accounting_status='posted' AND status <> 'cancelled'`, [next.status === 'paid' ? 'paid' : 'open', stamp, t, item.source_id]);
+  await projectSkonto(db, t, item.source_id, null, stamp);
+  return reversalEntryId;
+};
+
 const allocatePayment = async (db: PostgresQueryable, scope: TenantScope, input: OpenItemPaymentInput): Promise<OpenItemPaymentEntity> => {
   const t = tenant(scope);
   const stamp = now();
@@ -1306,6 +1449,7 @@ const allocatePayment = async (db: PostgresQueryable, scope: TenantScope, input:
       if (item.source_type === 'outgoing_invoice') await q(db, `UPDATE invoices SET status=$1,updated_at=$2 WHERE tenant_id=$3 AND id=$4 AND accounting_status='posted'`, [residual <= .01 ? 'paid' : 'open', stamp, t, item.source_id]);
       if (item.source_type === 'incoming_invoice') await q(db, `UPDATE incoming_invoices SET status=$1,updated_at=$2 WHERE tenant_id=$3 AND id=$4 AND accounting_status='posted'`, [residual <= .01 ? 'paid' : 'open', stamp, t, item.source_id]);
       if (item.source_type === 'outgoing_invoice') await projectInvoicePayment(db, t, duplicate, item.source_id, amount, stamp);
+      if (!duplicate.refund) await settleSkontoInTransaction(db, scope, item.id, input.paymentDate, duplicate.id, input.mutation);
     }
     const totals = (await q<any>(db, `SELECT COALESCE(SUM(amount),0) allocated FROM open_item_allocations WHERE tenant_id=$1 AND payment_id=$2`, [t, duplicate.id]))[0];
     const allocatedTotal = round(totals.allocated);
@@ -1399,6 +1543,7 @@ const allocatePayment = async (db: PostgresQueryable, scope: TenantScope, input:
     if (allocation.item.source_type === 'outgoing_invoice') await q(db, `UPDATE invoices SET status=$1,updated_at=$2 WHERE tenant_id=$3 AND id=$4 AND accounting_status='posted' AND status <> 'cancelled'`, [documentStatus, stamp, t, allocation.item.source_id]);
     if (allocation.item.source_type === 'incoming_invoice') await q(db, `UPDATE incoming_invoices SET status=$1,updated_at=$2 WHERE tenant_id=$3 AND id=$4 AND accounting_status='posted'`, [documentStatus, stamp, t, allocation.item.source_id]);
     if (allocation.item.source_type === 'outgoing_invoice') await projectInvoicePayment(db, t, { id: paymentId, source_type: input.sourceType, source_id: input.sourceId, payment_date: input.paymentDate, method: input.method ?? (refund ? 'Erstattung' : undefined) }, allocation.item.source_id, allocation.amount, stamp);
+    if (!refund) await settleSkontoInTransaction(db, scope, allocation.item.id, input.paymentDate, paymentId, input.mutation);
   }
   if (credited) {
     const allocatedCredit = round(Number(credited.payment.allocated_amount) + credited.amount);
@@ -1485,6 +1630,10 @@ export const reverseOpenItemPaymentInTransaction = async (db: PostgresQueryable,
   if ((await q<any>(db, `SELECT 1 FROM open_item_payments WHERE tenant_id=$1 AND credited_payment_id=$2 AND status <> 'reversed' LIMIT 1`, [t, payment.id]))[0]) throw new Error('ALREADY_REFUNDED: Ein Teil dieser Zahlung wurde erstattet; bitte zuerst die Erstattung stornieren.');
   const stamp = now();
   const reversalEntryIds: string[] = [];
+  for (const row of await q<any>(db, `SELECT DISTINCT open_item_id FROM open_item_allocations WHERE tenant_id=$1 AND payment_id=$2`, [t, payment.id])) {
+    const skontoReversal = await reverseSkontoInTransaction(db, scope, row.open_item_id, reason, postingDate, input.mutation);
+    if (skontoReversal) reversalEntryIds.push(skontoReversal);
+  }
   const entries = await q<any>(db, `SELECT id FROM journal_entries WHERE tenant_id=$1 AND status='posted' AND ((source_type='payment' AND id=$2) OR (source_type='payment_vat' AND source_key LIKE $3)) ORDER BY entry_number`, [t, payment.journal_entry_id, `payment-vat:${payment.id}:%`]);
   for (const entry of entries) {
     reversalEntryIds.push((await reverseEntryInTransaction(db, scope, entry.id, reason, { postingDate, mutation: input.mutation, allowPaymentSource: true })).reversalEntryId);
@@ -1691,10 +1840,9 @@ export const postManualJournalEntryInTransaction = async (db: PostgresQueryable,
     const rate = Number(taxCase?.default_rate ?? 0);
     if (!taxCase || !taxCase.active || taxCase.mechanism !== 'standard_vat' || !(rate > 0) || taxCase.requires_country) throw new Error(`TAX_CASE_NOT_AUTOMATIC: Steuerschlüssel ${line.taxCaseKey} lässt sich in der freien Buchung nicht automatisch aufteilen; Steuerzeile bitte als eigene Zeile buchen.`);
     const net = Math.round(gross * 100 / (100 + rate)); const tax = gross - net;
-    // 7 % Vorsteuer has its own account (SKR03 1571, SKR04 1401), like the 7 % Umsatzsteuer.
-    const reducedInput = line.taxCaseKey === 'DE_STD_7' ? (p.activeChart === 'SKR04' ? '1401' : '1571') : m.input_vat!;
+    // 7 % Vorsteuer/Umsatzsteuer have their own accounts (SKR03 1571/1771, SKR04 1401/3801): taxCaseAccount knows them.
     const taxAccount = debitSide
-      ? await taxCaseAccount(db, t, p.activeChart, line.taxCaseKey, 'input_tax', reducedInput, postingDate)
+      ? await taxCaseAccount(db, t, p.activeChart, line.taxCaseKey, 'input_tax', m.input_vat!, postingDate)
       : await taxCaseAccount(db, t, p.activeChart, line.taxCaseKey, 'output_tax', m.output_vat!, postingDate);
     if (!(await accountExists(db, p.activeChart, taxAccount))) throw new Error(`UNKNOWN_ACCOUNT:${taxAccount} (Steuerkonto) ist im Kontenrahmen ${p.activeChart} nicht vorhanden.`);
     lines.push({ id: randomUUID(), accountNumber, debitAmount: debitSide ? net / 100 : 0, creditAmount: debitSide ? 0 : net / 100, taxCaseKey: line.taxCaseKey as TaxCaseKey, taxRate: rate, netAmount: net / 100, taxAmount: tax / 100, grossAmount: gross / 100, memo: line.memo });

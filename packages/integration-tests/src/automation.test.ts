@@ -31,7 +31,7 @@ import { addDays, asSmallBusiness, draftInvoice, issueInvoice, newClient, today 
  * - dunning: invoices dunned that are not overdue, paid, still a draft, not
  *   receivables or already settled by a Stornorechnung/full credit note; the wrong level; a fee charged twice or for a mail that was
  *   never sent, or added to the issued invoice's amount (it is the customer's own debt, not taxable
- *   revenue); a reminder whose %A demands what was already paid or credited; the
+ *   revenue); in Pro a fee missing from the journal and OPOS, booked with VAT or twice; a reminder whose %A demands what was already paid or credited; the
  *   40 € Pauschale charged to a consumer or on top of fees it replaces; one level mailed twice; the same invoice escalated twice in
  *   one day; a rejected mail recorded as sent; a run that silently does
  *   nothing when automation, levels or the mail provider are missing
@@ -677,12 +677,34 @@ for (const product of PRODUCTS) describe(`automation (${product})`, () => {
       });
     });
 
-    if (product === 'pro') test('the dunning fee is recorded for a posted invoice too', async () => {
+    if (product === 'pro') test('the dunning fee of a posted invoice is the customer\'s receivable in the journal, not taxable, with its own open item', async () => {
       const invoice = await overdueInvoice(15, 'Gebuehr Pro');
+      type Line = { accountNumber: string; debitAmount: number; creditAmount: number; taxCaseKey?: string };
+      const feeEntries = async () => ((await h.raw('GET', '/accounting/journal?limit=5000')).body as Array<{ sourceType: string; reference?: string; lines: Line[] }>).filter((entry) => entry.sourceType === 'dunning_fee' && entry.reference === invoice.number);
+      const items = async () => ((await h.raw('GET', '/accounting/open-items')).body as Array<{ id: string; partyId: string; partyType: string; sourceType: string; sourceId: string; residualAmount: number; status: string }>);
       await withSettings(dunningSetup([level(1, 7, 0), level(2, 14, 5)]), async () => {
         await h.api.dunning.manualRun();
         assert.equal((await statusOf(invoice.id)).totalFeesApplied, 5);
+        await h.api.dunning.manualRun();
       });
+      const entries = await feeEntries();
+      assert.equal(entries.length, 1, 'one entry per level, a second run books nothing');
+      assert.deepEqual(entries[0]!.lines.map((line) => [line.accountNumber, line.debitAmount, line.creditAmount, line.taxCaseKey ?? null]), [['1400', 5, 0, null], ['2700', 0, 5, null]], 'sonstige Erträge, no VAT');
+      const all = await items();
+      const fee = all.find((item) => item.sourceType === 'dunning_fee' && item.sourceId === `${invoice.id}:2`)!;
+      const own = all.find((item) => item.sourceType === 'outgoing_invoice' && item.sourceId === invoice.id)!;
+      assert.deepEqual([fee.residualAmount, fee.status, fee.partyId], [5, 'open', own.partyId], 'an open item of the same customer');
+      assert.equal(own.residualAmount, invoice.amount, 'the invoice keeps its amount');
+      const paid = await h.raw('POST', '/accounting/open-items/payments', { reason: 'Gebühr bezahlt', payment: { sourceType: 'manual', sourceId: `pay-${randomUUID()}`, partyType: 'debtor', paymentDate: today(), amount: 5, bankAccountNumber: '1200', allocations: [{ openItemId: fee.id, amount: 5 }], allocationEventId: `event-${randomUUID()}` } });
+      assert.equal(paid.status, 200, paid.text);
+      assert.equal((await items()).find((item) => item.id === fee.id)!.status, 'paid');
+    });
+
+    if (product === 'pro') test('Verzugszinsen claimed in a letter reach the journal', { todo: 'BUG: the interest is computed for the letter only (dunningDocument.lateInterest) and never stored in the dunning history, so nothing can be booked (Zinserträge SKR03 2650 / SKR04 7100)' }, async () => {
+      const invoice = await overdueInvoice(40, 'Zinsen Pro');
+      await withSettings(dunningSetup([Object.assign(level(1, 7, 0), { chargeInterest: true })]), async () => { await h.api.dunning.manualRun(); });
+      const journal = (await h.raw('GET', '/accounting/journal?limit=5000')).body as Array<{ reference?: string; lines: Array<{ accountNumber: string; creditAmount: number }> }>;
+      assert.ok(journal.some((entry) => entry.reference === invoice.number && entry.lines.some((line) => line.accountNumber === '2650' && line.creditAmount > 0)));
     });
 
     test('the reminder demands the open balance: %A subtracts payments and issued credit notes, the invoice keeps its amount', async () => {

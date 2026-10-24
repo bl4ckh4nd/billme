@@ -36,6 +36,7 @@ import {
 import type { TenantScope } from '@billme/server-core';
 import { appendWithClient } from './audit.js';
 import { lockPeriodRow, periodsBetween, softLockPeriods } from './accountingPeriods.js';
+import { accountRoleMappings, taxCaseAccount } from './taxAccounts.js';
 import {
   runInTransaction,
   type PostgresQueryable,
@@ -215,12 +216,22 @@ const assertAccounts = async (db: PostgresQueryable, scope: TenantScope, account
 
 const chartAndMappings = async (db: PostgresQueryable, scope: TenantScope): Promise<{ chart: string; mappings: Record<string, string> }> => {
   const chart = await activeChart(db, scope);
-  const defaults = chart === 'SKR04'
-    ? { accounts_receivable: '1200', accounts_payable: '3300', revenue: '4400', expense: '6300', output_vat: '3806', input_vat: '1406' }
-    : { accounts_receivable: '1400', accounts_payable: '1600', revenue: '8400', expense: '4900', output_vat: '1776', input_vat: '1576' };
-  const rows = await q<any>(db, `SELECT role,account_number FROM accounting_account_mappings WHERE tenant_id=$1 AND chart=$2`, [tenant(scope), chart]);
-  for (const row of rows) if (row.role in defaults) defaults[row.role as keyof typeof defaults] = String(row.account_number);
-  return { chart, mappings: defaults };
+  return { chart, mappings: await accountRoleMappings(db, tenant(scope), chart) };
+};
+
+/** Per tax case accounts of a settlement; under Ist the output VAT of a case is its not-yet-due account. */
+const settlementCaseAccounts = async (db: PostgresQueryable, scope: TenantScope, chart: string, date: string): Promise<SettlementJournalAccounts['byCase']> => {
+  const ist = (await q<any>(db, `SELECT vat_method FROM accounting_policies WHERE tenant_id=$1`, [tenant(scope)]))[0]?.vat_method === 'ist';
+  const byCase: NonNullable<SettlementJournalAccounts['byCase']> = {};
+  for (const key of ['DE_STD_19', 'DE_STD_7', 'DE_ZERO_EXEMPT']) {
+    byCase[key] = {
+      revenue: await taxCaseAccount(db, tenant(scope), chart, key, 'revenue', undefined, date),
+      outputVat: await taxCaseAccount(db, tenant(scope), chart, key, ist ? 'output_tax_deferred' : 'output_tax', undefined, date),
+      inputVat: await taxCaseAccount(db, tenant(scope), chart, key, 'input_tax', undefined, date),
+      cashDiscount: await taxCaseAccount(db, tenant(scope), chart, key, 'cash_discount', undefined, date),
+    };
+  }
+  return byCase;
 };
 
 const createRun = async (
@@ -294,10 +305,12 @@ export const taxCaseForCorrectionRate = (rate: number): 'DE_STD_19' | 'DE_STD_7'
 };
 
 const correctionLines = async (db: PostgresQueryable, scope: TenantScope, document: LinkedCorrectionDocument, documentType: 'outgoing_invoice' | 'incoming_invoice'): Promise<any[]> => {
-  const { mappings } = await chartAndMappings(db, scope);
+  const { chart, mappings: roles } = await chartAndMappings(db, scope);
   const lines: any[] = [];
   for (const [index, delta] of document.deltas.entries()) {
     const taxCaseKey = taxCaseForCorrectionRate(delta.rate);
+    // 7 % corrections reverse the 7 % revenue and VAT accounts, not the 19 % ones.
+    const mappings: Record<string, string> = { ...roles, revenue: await taxCaseAccount(db, tenant(scope), chart, taxCaseKey, 'revenue'), output_vat: await taxCaseAccount(db, tenant(scope), chart, taxCaseKey, 'output_tax'), input_vat: await taxCaseAccount(db, tenant(scope), chart, taxCaseKey, 'input_tax') };
     if (documentType === 'incoming_invoice') {
       lines.push({ id: `${document.id}:expense:${index}`, accountNumber: mappings.expense, debitAmount: 0, creditAmount: Math.abs(delta.netAmount), taxCaseKey, netAmount: delta.netAmount, taxRate: delta.rate, taxAmount: delta.taxAmount, grossAmount: delta.grossAmount, memo: 'Linked correction' });
       if (delta.taxAmount) lines.push({ id: `${document.id}:tax:${index}`, accountNumber: mappings.input_vat, debitAmount: 0, creditAmount: Math.abs(delta.taxAmount), taxCaseKey, taxRate: delta.rate, taxAmount: delta.taxAmount, grossAmount: delta.grossAmount, memo: 'Linked correction VAT' });
@@ -678,7 +691,7 @@ export const createPostgresAccountingSourceRunRepository = (db: PostgresQueryabl
               currency: String(sourceInput.currency ?? 'EUR'),
               reference: textValue(sourceInput.reference),
             },
-            accounts: settlementAccounts(mappings.mappings, sourceInput),
+            accounts: { ...settlementAccounts(mappings.mappings, sourceInput), byCase: await settlementCaseAccounts(tx, scope, mappings.chart, date), istVat: (await q<any>(tx, `SELECT vat_method FROM accounting_policies WHERE tenant_id=$1`, [tenant(scope)]))[0]?.vat_method === 'ist' },
           });
           return { status: 'ready', value: { command: settlement.command, result: settlement.result } };
         })()

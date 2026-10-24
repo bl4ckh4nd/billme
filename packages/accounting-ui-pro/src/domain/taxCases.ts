@@ -125,6 +125,14 @@ export const TAX_CASE_OPTIONS: UiTaxCaseOption[] = [
     requiresCountry: true,
     requiresEvidence: true,
   },
+  {
+    key: 'NON_EU_SERVICE_OUTSIDE_SCOPE',
+    label: 'Drittland sonstige Leistung, im Inland nicht steuerbar',
+    defaultRate: 0,
+    requiresCounterpartyVatId: false,
+    requiresCountry: true,
+    requiresEvidence: true,
+  },
 ];
 
 const TAX_CASE_BY_KEY = new Map(TAX_CASE_OPTIONS.map((item) => [item.key, item]));

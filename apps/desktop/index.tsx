@@ -65,7 +65,9 @@ const boot = async () => {
   if (import.meta.env.DEV && !(globalThis as { billmeApi?: unknown }).billmeApi) {
     (await import('@billme/desktop-renderer/dev-mock')).installDevMockApi('lite');
   }
-  await mountRendererApp(rootElement, async () => ({ default: App }));
+  // Lite declares its product: the renderer's fallback follows the last getRendererApi(product) call,
+  // which a double-entry profile on the dashboard switches to 'pro'.
+  await mountRendererApp(rootElement, async () => ({ default: App }), { runtime: { shell: 'desktop', product: 'lite' } });
 };
 
 void boot();

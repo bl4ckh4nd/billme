@@ -3,9 +3,11 @@ import fs from 'node:fs';
 import path from 'node:path';
 import {
   appUrl,
+  getDesktopSettings,
   invokeDesktopIpc,
   launchDesktopApp,
   seedDesktopData,
+  setDesktopSettings,
 } from '../support.mjs';
 
 const SCREENSHOT_DIR = path.resolve(
@@ -27,6 +29,13 @@ const screenshot = async (page, name) => {
 };
 
 const listInvoices = (page) => invokeDesktopIpc(page, 'invoices:list');
+
+/** The seed issues Kleinunternehmer invoices (Erlöse § 19 UStG), so it runs under KU; the chain then charges 19 % VAT. */
+export const seedUnderRegularVat = async (page) => {
+  await seedDesktopData(page, { app: 'pro' });
+  const settings = await getDesktopSettings(page);
+  await setDesktopSettings(page, { ...settings, legal: { ...settings.legal, smallBusinessRule: false, defaultVatRate: 19 } });
+};
 
 export const configureOutgoingPosting = async (page) => {
   const policy = await invokeDesktopIpc(page, 'pro:getAccountingPolicy');
@@ -147,6 +156,8 @@ export const runProDesktopOutgoingDocumentChainScenario = async (page, baseUrl) 
     offer: {
       ...seeded,
       id: 'offer-chain-1',
+      // The seeded offer has no address; the invoices of the chain copy it and §14 UStG requires one.
+      clientAddress: 'Torstrasse 5\n10119 Berlin',
       number: reservation.number,
       numberReservationId: reservation.reservationId,
       status: 'draft',
@@ -156,7 +167,8 @@ export const runProDesktopOutgoingDocumentChainScenario = async (page, baseUrl) 
       acceptedEmail: null,
       acceptedUserAgent: null,
       taxMode: 'standard_vat',
-      amount: 120,
+      // Gross: 120 € net plus 19 % USt. The chain copies it and refuses a total its lines cannot reach to the cent.
+      amount: 142.8,
       items: [
         { kind: 'item', description: 'Konzeption', quantity: 1, price: 80, total: 80, taxRate: 19 },
         { kind: 'item', description: 'Umsetzung', quantity: 1, price: 40, total: 40, taxRate: 19 },
@@ -218,9 +230,25 @@ export const runProDesktopOutgoingDocumentChainScenario = async (page, baseUrl) 
     rootDocumentId,
     action: 'Schlussrechnung',
     kind: 'final_invoice',
-    amount: 50,
+    amount: 72.8,
   });
   await screenshot(page, '06-final-invoice');
+
+  // While the Schlussrechnung settles the Abschlag, the Abschlag is not corrected on its own:
+  // the Schlussrechnung is cancelled first.
+  await selectChainDocument(page, advance);
+  await expect(page.getByRole('button', { name: 'Gutschrift', exact: true })).toHaveCount(0);
+
+  await selectChainDocument(page, finalInvoice);
+  const cancellation = await completeChainAction({
+    page,
+    rootDocumentId,
+    action: 'Storno',
+    kind: 'cancellation_invoice',
+    amount: 72.8,
+  });
+  expect(cancellation.sourceDocumentId).toBe(finalInvoice.id);
+  await screenshot(page, '07-cancellation-invoice');
 
   await selectChainDocument(page, advance);
   const creditNote = await completeChainAction({
@@ -231,29 +259,19 @@ export const runProDesktopOutgoingDocumentChainScenario = async (page, baseUrl) 
     amount: 40,
   });
   expect(creditNote.sourceDocumentId).toBe(advance.id);
-  await screenshot(page, '07-credit-note');
+  await screenshot(page, '08-credit-note');
 
-  await selectChainDocument(page, finalInvoice);
-  const cancellation = await completeChainAction({
-    page,
-    rootDocumentId,
-    action: 'Storno',
-    kind: 'cancellation_invoice',
-    amount: 50,
-  });
-  expect(cancellation.sourceDocumentId).toBe(finalInvoice.id);
-  await screenshot(page, '08-cancellation-invoice');
-
-  await selectChainDocument(page, finalInvoice);
+  // A cancelled invoice gets no revision; the unpaid Teilrechnung does, now that no Schlussrechnung settles it.
+  await selectChainDocument(page, partial);
   const revision = await completeChainAction({
     page,
     rootDocumentId,
     action: 'Revision',
-    kind: 'final_invoice',
-    knownIds: [finalInvoice.id],
+    kind: 'partial_invoice',
+    knownIds: [partial.id],
   });
-  expect(revision.sourceDocumentId).toBe(finalInvoice.id);
-  expect(revision.revisionOfId).toBe(finalInvoice.id);
+  expect(revision.sourceDocumentId).toBe(partial.id);
+  expect(revision.revisionOfId).toBe(partial.id);
   expect(revision.revisionNumber).toBe(1);
   await screenshot(page, '09-revision');
 
@@ -273,11 +291,11 @@ export const runProDesktopOutgoingDocumentChainScenario = async (page, baseUrl) 
       expect.objectContaining({ id: advance.id, documentKind: 'advance_invoice', amount: 40, status: 'paid' }),
       expect.objectContaining({ id: partial.id, documentKind: 'partial_invoice', amount: 30, status: 'open' }),
       // Replaced by its Stornorechnung.
-      expect.objectContaining({ id: finalInvoice.id, documentKind: 'final_invoice', amount: 50, status: 'cancelled' }),
+      expect.objectContaining({ id: finalInvoice.id, documentKind: 'final_invoice', amount: 72.8, status: 'cancelled' }),
       expect.objectContaining({ id: creditNote.id, documentKind: 'credit_note', sourceDocumentId: advance.id, status: 'open' }),
       expect.objectContaining({ id: cancellation.id, documentKind: 'cancellation_invoice', sourceDocumentId: finalInvoice.id, status: 'open' }),
       // A revision starts as a draft: it is edited before it replaces the issued document.
-      expect.objectContaining({ id: revision.id, revisionOfId: finalInvoice.id, revisionNumber: 1, status: 'draft' }),
+      expect.objectContaining({ id: revision.id, revisionOfId: partial.id, revisionNumber: 1, status: 'draft' }),
     ]),
   );
 
@@ -310,12 +328,7 @@ export const runProDesktopOutgoingDocumentChainScenario = async (page, baseUrl) 
 if (!directRunner) {
   test.beforeEach(async () => {
     desktop = await launchDesktopApp({ app: 'pro' });
-    await seedDesktopData(desktop.page, {
-      app: 'pro',
-      settingsOverrides: {
-        legal: { smallBusinessRule: false, defaultVatRate: 19 },
-      },
-    });
+    await seedUnderRegularVat(desktop.page);
     await configureOutgoingPosting(desktop.page);
     await desktop.page.reload();
     await desktop.page.waitForFunction(() => Boolean(window.billmeApi));

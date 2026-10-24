@@ -73,6 +73,8 @@ const boot = async () => {
   if (import.meta.env.DEV && !(globalThis as { billmeApi?: unknown }).billmeApi) {
     (await import('@billme/desktop-renderer/dev-mock')).installDevMockApi('pro');
   }
+  // Same as mountRendererApp in the shells: the shared renderer reads the product from here.
+  (globalThis as { billmeRuntime?: { shell: 'desktop'; product: 'pro' } }).billmeRuntime = { shell: 'desktop', product: 'pro' };
   ReactDOM.createRoot(rootElement).render(
     <React.StrictMode>
       <QueryClientProvider client={queryClient}>

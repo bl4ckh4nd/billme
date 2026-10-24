@@ -70,7 +70,7 @@ test('DATEV numbers are set in the settings, a classified bank expense is export
   await page.getByLabel('Einträge durchsuchen').fill('Adobe');
   await page.getByRole('button', { name: /Adobe Systems/ }).first().click();
   const panel = page.getByRole('region', { name: 'Klassifizierung' });
-  await panel.getByLabel('Kategorie').selectOption({ label: 'Software und IT' });
+  await panel.getByLabel('Kategorie', { exact: true }).selectOption({ label: 'Software und IT' });
   await panel.getByRole('textbox', { name: 'Begründung für EÜR-Änderung' }).fill('Abo-Rechnung geprüft');
   await panel.getByRole('button', { name: 'Klassifizierung speichern' }).click();
   await expect.poll(async () => (await adobe()).classification?.eurLineId ?? null).toBe(`E${taxYear}_KZ228`);

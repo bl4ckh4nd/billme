@@ -31,6 +31,12 @@ import {
  * - EÜR rules and PDF: a rule without value, line or reason accepted, a deleted
  *   rule still suggesting, a PDF faked when no printer is attached
  * - filing operations: an unknown, stale or anonymous filing validated or submitted
+ * - UStVA: running numbers instead of the Kennzahlen of the form, a sale,
+ *   purchase or free entry in the wrong Kennzahl (81/86, 41/21, 46/47, 84/85,
+ *   89/93, 61/66/67), Kz 83 not output minus input, the live view and the
+ *   prepared return disagreeing, the live view locking the month, 2026 or
+ *   2027 refused, years before 2025 accepted; ZM with an EU purchase in it;
+ *   a tax case without a Kennzahl (§ 25a) dropped silently or frozen into a prepared return
  * - year-end: a fiscal-year close or carry-forward that changes SuSa, BWA, GuV
  *   or Bilanz of the closed or the next year (result zeroed, balances counted
  *   twice), closing entries exported to DATEV, a closed year or a prepared
@@ -590,7 +596,8 @@ describe('pro reporting', () => {
       assert.equal(first.body.replayed, false);
       const artifact = first.body.artifact;
       assert.deepEqual([artifact.kind, artifact.period.period, artifact.period.from, artifact.period.to], ['ustva', '2025-06', '2025-06-01', '2025-06-30']);
-      assert.deepEqual(artifact.rows.map((line: any) => [line.taxCaseKey, line.direction, line.netAmount, line.taxAmount, line.lineCount]), [['DE_STD_19', 'output', 500, 95, 1]], 'the June 2025 invoice: base 500, VAT 95');
+      assert.deepEqual(artifact.rows.map((line: any) => [line.kennziffer, line.direction, line.netAmount, line.taxAmount, line.lineCount]), [['81', 'output', 500, 95, 1], ['83', 'total', 0, 95, 0]], 'the June 2025 invoice in Kz 81: base 500, VAT 95; Kz 83 is the Zahllast');
+      assert.deepEqual([artifact.catalog.taxYear, artifact.catalog.official, artifact.catalog.provisional], [2025, true, false], 'the Kennzahlen of the official form, no running numbers');
       assert.deepEqual([artifact.submissionReady, artifact.exportable, artifact.providerValidation, artifact.operation], [false, true, 'unavailable', 'preparation'], 'never claims to be a submission');
       assert.match(artifact.sourceHash, /^[a-f0-9]{64}$/);
       assert.equal(await statusOf(h, '2025-06'), 'soft_locked', 'preparing the UStVA soft-locks its month');
@@ -634,13 +641,99 @@ describe('pro reporting', () => {
     });
 
     test('unsupported years, periods and kinds, missing keys and reasons are refused', async () => {
-      assert.equal((await prepare({ period: '2026-03', year: 2026 })).status, 422, 'no catalogue for 2026');
+      assert.equal((await prepare({ period: '2024-12', year: 2024 })).status, 422, 'no Kennzahlen before 2025');
       assert.equal((await prepare({ period: '2025-13' })).status, 422);
       assert.equal((await prepare({ kind: 'gwg' })).status, 400);
       assert.equal((await prepare({ idempotencyKey: '' })).status, 400);
       assert.equal((await prepare({ reason: ' ' })).status, 400);
       assert.equal((await h.raw('GET', '/accounting/tax-exports/ustva/does-not-exist')).status, 404);
       assert.equal((await h.raw('GET', '/accounting/tax-exports/vat/abc')).status, 400);
+    });
+  });
+
+  describe('UStVA Kennzahlen from the ledger (own tenant)', () => {
+    let u: ProHarness;
+    const vendorId = 'v-ustva';
+    const purchase = async (id: string, net: number, rate: number, taxCaseKey?: string, taxMeta?: Record<string, unknown>) => {
+      const tax = taxCaseKey ? 0 : money(net * rate / 100);
+      const saved = await u.raw('POST', '/accounting/incoming-invoices', { reason: 'Eingang', invoice: { id, vendorId, number: `ER-${id}`, invoiceDate: '2026-08-12', dueDate: '2026-09-12', netAmount: net, taxAmount: tax, grossAmount: money(net + tax), status: 'open', taxRate: rate, ...(taxCaseKey ? { taxCaseKey, taxMeta } : {}), lines: [{ id: `l-${id}`, incomingInvoiceId: id, position: 0, description: 'Einkauf', quantity: 1, unitPrice: net, netAmount: net, taxRate: rate, taxAmount: tax, grossAmount: money(net + tax) }] } });
+      assert.equal(saved.status, 200, saved.text);
+      const posted = await u.raw('POST', '/accounting/incoming-invoices/post', { invoiceId: id, reason: 'gebucht' });
+      assert.equal(posted.body.status, 'ready', posted.text);
+    };
+    const ustva = (from: string, to: string) => get<any>(u, `/accounting/vat/summary?from=${from}&to=${to}`);
+    const prepareFor = (over: Record<string, unknown>) => u.raw('POST', '/accounting/tax-exports/prepare', { kind: 'ustva', idempotencyKey: `ustva-${randomUUID()}`, reason: 'UStVA vorbereitet', ...over });
+    const kz = (positions: Array<{ kennziffer: string; netAmount: number; taxAmount: number }>) => Object.fromEntries(positions.map((row) => [row.kennziffer, [row.netAmount, row.taxAmount]]));
+    const AUGUST = { '81': [1000, 190], '86': [100, 7], '41': [200, 0], '21': [300, 0], '46': [500, 95], '84': [1000, 190], '89': [400, 76], '66': [200, 38], '67': [1500, 285], '61': [400, 76], '83': [0, 159] };
+    before(async () => {
+      u = await startPro(null, 'pro-ustva');
+      await u.raw('POST', '/accounting/vendors', { reason: 'Lieferant', vendor: { id: vendorId, name: 'UStVA Lieferant' } });
+      const august = { date: '2026-08-10', dueDate: '2026-08-24' };
+      await issue(u, { client: 'Inland 19', ...august, items: [{ kind: 'item', description: 'Beratung', quantity: 1, price: 1000, total: 1000, taxRate: 19 }] });
+      await issue(u, { client: 'Inland 7', ...august, items: [{ kind: 'item', description: 'Buch', quantity: 1, price: 100, total: 100, taxRate: 7 }] });
+      await issue(u, { client: 'EU Ware', ...august, taxMode: 'intra_eu_supply_6a', taxMeta: { buyerCountryCode: 'FR', buyerVatId: 'FR12345678901', destinationVatRate: 20, datevEvidenceType: 'gelangensbestaetigung', datevEvidenceReference: 'GB-1' }, items: [{ kind: 'item', description: 'Ware', quantity: 1, price: 200, total: 200 }] });
+      await issue(u, { client: 'EU Dienst', ...august, taxMode: 'intra_eu_service_reverse_charge', taxMeta: { buyerCountryCode: 'AT', buyerVatId: 'ATU12345678', destinationVatRate: 20, datevEvidenceType: 'Rechnung', datevEvidenceReference: 'N-1', datevSachverhaltLl: '1' }, items: [{ kind: 'item', description: 'Beratung', quantity: 1, price: 300, total: 300 }] });
+      await purchase('in-inland', 100, 19);
+      await purchase('in-bau', 1000, 19, 'DE_RC_13B_DOMESTIC', { vendorCountryCode: 'DE', evidenceType: 'rechnung', evidenceReference: 'Bauleistung' });
+      await purchase('in-eu-dienst', 500, 19, 'EU_B2B_SERVICE_RC', { vendorCountryCode: 'IE', vendorVatId: 'IE9999999W', evidenceType: 'rechnung', evidenceReference: 'Software-Lizenz' });
+      await purchase('in-erwerb', 400, 19, 'EU_IGE_GOODS_RC', { vendorCountryCode: 'NL', vendorVatId: 'NL123456789B01', evidenceType: 'rechnung', evidenceReference: 'Warenlieferung' });
+      const manual = await u.raw('POST', '/accounting/journal', { reason: 'Barkauf', reference: 'KB-UStVA', documentDate: '2026-08-15', postingDate: '2026-08-15', bookingText: 'Barkauf Büro', idempotencyKey: randomUUID(), lines: [{ accountNumber: '4930', debitAmount: 119, creditAmount: 0, taxCaseKey: 'DE_STD_19' }, { accountNumber: '1000', debitAmount: 0, creditAmount: 119 }] });
+      assert.equal(manual.status, 200, manual.text);
+    });
+    after(async () => { await u?.close(); });
+
+    test('the live UStVA puts every sale, purchase and free entry into its Kennzahl, with Kz 83 and a drilldown to the entries, and locks nothing', async () => {
+      const summary = await ustva('2026-08-01', '2026-08-31');
+      const view = summary.kennzahlen;
+      assert.deepEqual(kz(view.rows), AUGUST);
+      assert.deepEqual(view.rows.filter((row: any) => row.taxKennziffer).map((row: any) => [row.kennziffer, row.taxKennziffer]), [['46', '47'], ['84', '85']]);
+      assert.deepEqual([view.outputTaxAmount, view.inputTaxAmount, view.payableAmount], [558, 399, 159]);
+      assert.deepEqual(view.issues, []);
+      assert.equal(view.rows.find((row: any) => row.kennziffer === '67').label, 'Vorsteuer aus § 13b');
+      const bau = (await journal(u)).find((entry) => entry.sourceKey === 'incoming-invoice:in-bau')!;
+      const drill = view.sources.filter((source: any) => source.kennziffer === '84');
+      assert.deepEqual(drill.map((source: any) => [source.entryId, source.netAmount, source.taxAmount]), [[bau.id, 1000, 190]]);
+      assert.ok(view.sources.some((source: any) => source.kennziffer === '66' && source.reference === 'KB-UStVA'), 'the free entry is in Kz 66');
+      assert.equal(summary.rows.length > 0, true, 'the tax-case rows stay');
+      assert.equal(await statusOf(u, '2026-08'), 'open', 'looking does not lock');
+      assert.deepEqual((await ustva('2026-07-01', '2026-07-31')).kennzahlen.rows, [], 'an empty month');
+    });
+
+    test('the prepared UStVA has the same Kennzahlen; 2026 is supported and 2027 runs on the latest form, marked as provisional', async () => {
+      const prepared = await prepareFor({ period: '2026-08', year: 2026 });
+      assert.equal(prepared.status, 200, prepared.text);
+      assert.deepEqual(kz(prepared.body.artifact.rows.map((row: any) => ({ ...row, kennziffer: row.kennziffer }))), AUGUST);
+      assert.deepEqual([prepared.body.artifact.catalog.taxYear, prepared.body.artifact.catalog.provisional, prepared.body.artifact.submissionReady], [2026, false, false]);
+      const later = await prepareFor({ period: '2027-01', year: 2027 });
+      assert.equal(later.status, 200, later.text);
+      assert.deepEqual([later.body.artifact.catalog.taxYear, later.body.artifact.catalog.provisional, later.body.artifact.catalog.official], [2027, true, false]);
+      assert.match(later.body.artifact.catalog.label, /2026.*vorläufig.*2027/);
+      assert.equal((await u.raw('POST', '/accounting/tax-exports/prepare', { kind: 'zm', period: '2027-Q1', idempotencyKey: `zm-${randomUUID()}`, reason: 'ZM' })).status, 200, 'ZM 2027');
+      assert.equal((await u.raw('POST', '/accounting/tax-exports/prepare', { kind: 'oss', period: '2026-Q3', idempotencyKey: `oss-${randomUUID()}`, reason: 'OSS' })).status, 200, 'OSS 2026');
+    });
+
+    test('a tax case without a Kennzahl (§ 25a) is shown as an issue in the live view, and the UStVA is not frozen without it', async () => {
+      // A bank receipt booked by hand with the § 25a tax case (the bank workbench lets the user pick any case).
+      await importCsv(u, await addBankAccount(u), [{ date: '2026-09-05', amount: 500, counterparty: 'Gebrauchtwagen Käufer', purpose: 'Differenzbesteuerung' }]);
+      const tx = await bankTx(u, 'Gebrauchtwagen Käufer');
+      const d = await getDraft(u, tx.id);
+      await approveDraft(u, d, [{ id: `${d.id}-1`, accountNumber: '1200', debitAmount: 500, creditAmount: 0 }, { id: `${d.id}-2`, accountNumber: '8200', debitAmount: 0, creditAmount: 500, taxCaseKey: 'DE_MARGIN_25A', taxRate: 0, netAmount: 500, taxAmount: 0, grossAmount: 500, evidenceType: 'rechnung', evidenceReference: 'Gebrauchtgegenstand § 25a' }]);
+      const margin = await postDraft(u, d.id, { postingDate: d.postingDate });
+      assert.ok(margin.body.entry?.id, margin.text);
+      const view = (await ustva('2026-09-01', '2026-09-30')).kennzahlen;
+      assert.deepEqual(view.issues.map((issue: any) => [issue.code, issue.taxCaseKey]), [['USTVA_KENNZAHL_MISSING', 'DE_MARGIN_25A']]);
+      const runs = (await get<any[]>(u, '/accounting/source-runs')).length;
+      const refused = await prepareFor({ period: '2026-09', year: 2026 });
+      assert.equal(refused.status, 422, refused.text);
+      assert.match(refused.body.message, /USTVA_KENNZAHL_MISSING/);
+      assert.equal((await get<any[]>(u, '/accounting/source-runs')).length, runs, 'no frozen preparation');
+      assert.equal(await statusOf(u, '2026-09'), 'open', 'and no soft lock');
+    });
+
+    test('the ZM lists the own EU sales by buyer VAT ID, split into Lieferungen and sonstige Leistungen, never an EU purchase', async () => {
+      const zm = await u.raw('POST', '/accounting/tax-exports/prepare', { kind: 'zm', period: '2026-08', idempotencyKey: `zm-${randomUUID()}`, reason: 'ZM' });
+      assert.equal(zm.status, 200, zm.text);
+      assert.deepEqual(zm.body.artifact.rows.map((row: any) => [row.counterpartyVatId, row.taxCaseKey, row.kind, row.netAmount]), [['ATU12345678', 'EU_B2B_SERVICE_RC', 'sonstige_leistung', 300], ['FR12345678901', 'EU_IGL_GOODS_0', 'lieferung', 200]]);
     });
   });
 

@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { OUTGOING_TAX_MODE_KZ, USTVA_LABELS, USTVA_TAX_KZ, inputTaxKz, outputRateKz, selfAssessedKz } from '@billme/accounting-shared';
 import { invoiceSchema, liteReceiptSchema, liteVatPeriodSchema, liteVatReportSchema, serviceDateOf, type Invoice, type LiteReceipt, type LiteVatReport, type TenantScope } from '@billme/server-core';
 import { createPostgresInvoiceRepository } from './billing.js';
 import { listLiteCashEntries, listLiteReceipts } from './liteCash.js';
@@ -11,12 +12,12 @@ const cappedInvoiceDate = (issued: string, performance: string) => {
   const nextMonth = new Date(`${performance}T00:00:00Z`); nextMonth.setUTCMonth(nextMonth.getUTCMonth() + 2, 0);
   return maxDate(performance, issued < nextMonth.toISOString().slice(0, 10) ? issued : nextMonth.toISOString().slice(0, 10));
 };
-const taxCodes: Record<string, string> = { '46': '47', '84': '85' };
+const taxCodes = USTVA_TAX_KZ;
 const maxDate = (a: string, b: string) => a > b ? a : b;
 type Part = { rate: number; net: number; vat: number };
 type Cash = { id: string; date: string; amount: number };
-const labels: Record<string, string> = { '81': 'Umsätze 19 %', '86': 'Umsätze 7 %', '87': 'Steuerpflichtige Umsätze zum Steuersatz von 0 % (§ 12 Abs. 3 UStG)', '41': 'Innergemeinschaftliche Lieferungen', '43': 'Ausfuhr und weitere steuerfreie Umsätze mit Vorsteuerabzug', '48': 'Steuerfreie Umsätze ohne Vorsteuerabzug', '60': 'Umsätze mit Steuerschuld des Leistungsempfängers', '21': 'Nicht steuerbare EU-Dienstleistungen', '45': 'Übrige nicht steuerbare Umsätze', '89': 'Innergemeinschaftlicher Erwerb 19 %', '93': 'Innergemeinschaftlicher Erwerb 7 %', '90': 'Steuerpflichtige innergemeinschaftliche Erwerbe zum Steuersatz von 0 %', '46': 'EU-Dienstleistung: eigene Steuerschuld (§ 13b)', '84': 'Andere Leistungen: eigene Steuerschuld (§ 13b)', '66': 'Vorsteuer aus inländischen Rechnungen', '61': 'Vorsteuer aus innergemeinschaftlichem Erwerb', '62': 'Einfuhrumsatzsteuer', '67': 'Vorsteuer aus § 13b' };
-const outgoingCodes = { reverse_charge_13b: '60', intra_eu_supply_6a: '41', intra_eu_service_reverse_charge: '21', export_third_country: '43', vat_exempt_4_ustg: '48', non_taxable_outside_scope: '45' } as const;
+const labels = USTVA_LABELS;
+const outgoingCodes = OUTGOING_TAX_MODE_KZ;
 
 export const getServerLiteVatReport = (database: PostgresQueryable, scope: TenantScope, period: { from: string; to: string }): Promise<LiteVatReport> => runInTransaction(database, async (db) => {
   const { from, to } = liteVatPeriodSchema.parse(period);
@@ -92,7 +93,7 @@ export const getServerLiteVatReport = (database: PostgresQueryable, scope: Tenan
       // A Kleinunternehmer files no Voranmeldung; its §19 turnover belongs in no Kennziffer.
       if (mode === 'small_business_19_ustg') return;
       for (const part of amounts) {
-        const code = mode === 'standard_vat' ? (part.rate === 19 ? '81' : part.rate === 7 ? '86' : '87') : outgoingCodes[mode];
+        const code = mode === 'standard_vat' ? outputRateKz(part.rate) : outgoingCodes[mode];
         add(type, invoice.id, invoice.number, date, code, mode === 'standard_vat' ? 'output' : 'information', { ...part, net: sign * part.net, vat: mode === 'standard_vat' ? sign * part.vat : 0 });
       }
     };
@@ -144,8 +145,8 @@ export const getServerLiteVatReport = (database: PostgresQueryable, scope: Tenan
     const emitInput = (at: string, before: number, after: number) => {
       for (const line of receipt.taxBreakdown) {
         const part = { rate: line.rate, net: Math.round(line.netAmountCents * after) - Math.round(line.netAmountCents * before), vat: Math.round(line.vatAmountCents * after) - Math.round(line.vatAmountCents * before) };
-        if (selfAssessed) add('receipt', receipt.id, receipt.number, at, receipt.taxMode === 'eu_service' ? '46' : receipt.taxMode === 'reverse_charge' ? '84' : line.rate === 19 ? '89' : line.rate === 7 ? '93' : '90', 'output', part);
-        const inputCode = receipt.taxMode === 'import' ? '62' : selfAssessed ? receipt.taxMode === 'intra_eu_acquisition' ? '61' : '67' : '66';
+        if (selfAssessed) add('receipt', receipt.id, receipt.number, at, selfAssessedKz(receipt.taxMode, line.rate), 'output', part);
+        const inputCode = inputTaxKz(receipt.taxMode);
         if (!['exempt', 'small_business'].includes(receipt.taxMode)) add('receipt', receipt.id, receipt.number, at, inputCode, 'input', { ...part, vat: Math.round(line.vatAmountCents * fraction * after) - Math.round(line.vatAmountCents * fraction * before) });
       }
     };

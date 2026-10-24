@@ -42,7 +42,7 @@ import { addDays, draftOffer, issueInvoice, newClient, today } from './fixtures.
  * - maintenance: a number that was finalized or is still reserved deleted, recent
  *   rows deleted, another tenant's rows deleted, the deletion not audited
  * - tax filing job: a queued filing never claimed, claimed twice, a provider that
- *   is not installed reported as accepted, a self-approved filing getting there
+ *   is not installed reported as accepted, a self-approved filing getting there, a later tax year (2026) validated without a provider
  * - task queue: a duplicate job running in parallel, one failing job stopping the rest
  * - process: the worker binary exiting non-zero on a healthy database or zero on
  *   an unmigrated one
@@ -822,7 +822,10 @@ describe('server worker', () => {
       assert.equal(validate.status, 422);
       assert.match(validate.body.message, /EÜR ELSTER catalog\/provider is unavailable/);
       const wrongYear = await draftFiling(tenant, { taxYear: 2024 });
-      assert.match((await step(tenant, wrongYear, 'validate')).body.message, /Only the 2025 tax filing contract/);
+      assert.match((await step(tenant, wrongYear, 'validate')).body.message, /tax year from 2025 on/);
+      // 2026 is accepted as a tax year, but the provider is still missing: no simulated validation.
+      const nextYear = await step(tenant, await draftFiling(tenant, { taxYear: 2026 }), 'validate');
+      assert.deepEqual([nextYear.status, /provider is unavailable/.test(nextYear.body.message)], [422, true], nextYear.text);
       for (const action of ['freeze', 'request-second-approval', 'approve', 'queue']) {
         assert.equal((await step(tenant, id, action)).status, 409, `${action} on a draft`);
       }

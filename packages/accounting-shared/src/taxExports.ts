@@ -23,6 +23,11 @@ export type TaxExportEntry = {
   postingDate: string;
   status: 'posted' | 'reversed';
   lines: TaxExportLine[];
+  /** Journal identity for the drilldown from a Kennzahl to its entries. */
+  entryId?: string;
+  entryNumber?: number;
+  reference?: string;
+  sourceType?: string;
 };
 
 export type TaxExportPeriod = {
@@ -72,23 +77,54 @@ export type TaxReportSnapshotBinding = {
   snapshot?: ReportSnapshot;
 };
 
+/** One Kennzahl of the UStVA; Kz 83 (direction `total`) is the Zahllast, output tax minus input tax. */
 export type UstvaRow = {
-  taxCaseKey: TaxCaseKey;
   kennziffer: string;
-  direction: TaxExportDirection;
+  /** The Kennzahl of the tax next to a basis Kennzahl (46 → 47, 84 → 85). */
+  taxKennziffer?: string;
+  label: string;
+  direction: 'output' | 'input' | 'information' | 'total';
   netAmount: number;
   taxAmount: number;
   lineCount: number;
+  taxCaseKeys: TaxCaseKey[];
 };
 
-export type UstvaArtifact = TaxExportArtifactBase & {
-  kind: 'ustva';
-  catalog: TaxCatalogProvenance;
+/** A journal line behind a Kennzahl. */
+export type UstvaSource = {
+  kennziffer: string;
+  direction: 'output' | 'input' | 'information';
+  entryId?: string;
+  entryNumber?: number;
+  postingDate: string;
+  reference?: string;
+  sourceType?: string;
+  taxCaseKey: TaxCaseKey;
+  netAmount: number;
+  taxAmount: number;
+};
+
+/** The Kennzahlen of the official form of a year; a later year runs on the latest form, marked provisional. */
+export type UstvaKennzahlCatalog = TaxCatalogProvenance & { formYear: number; provisional: boolean; label: string };
+
+export type UstvaComputation = {
   rows: UstvaRow[];
+  sources: UstvaSource[];
+  issues: Array<{ code: string; message: string; taxCaseKey?: string; entryId?: string }>;
+  outputTaxAmount: number;
+  inputTaxAmount: number;
+  payableAmount: number;
+};
+
+export type UstvaArtifact = TaxExportArtifactBase & UstvaComputation & {
+  kind: 'ustva';
+  catalog: UstvaKennzahlCatalog;
 };
 
 export type ZmRow = {
   taxCaseKey: Extract<TaxCaseKey, 'EU_IGL_GOODS_0' | 'EU_B2B_SERVICE_RC'>;
+  /** ZM column: innergemeinschaftliche Lieferung or sonstige Leistung (§ 18a UStG). */
+  kind: 'lieferung' | 'sonstige_leistung';
   countryCode: string;
   counterpartyVatId: string;
   netAmount: number;
@@ -142,6 +178,7 @@ export type TaxExportErrorCode =
   | 'MISSING_TAX_CASE'
   | 'TAXONOMY_MISMATCH'
   | 'CATALOG_MISMATCH'
+  | 'USTVA_KENNZAHL_MISSING'
   | 'CATALOG_PROVENANCE_INVALID'
   | 'MISSING_EVIDENCE'
   | 'INVALID_COUNTRY'

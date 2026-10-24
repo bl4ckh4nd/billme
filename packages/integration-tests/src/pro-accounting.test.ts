@@ -74,7 +74,12 @@ import {
  *   100 % deductible (no 70/30 split), 7 % input VAT on the
  *   19 % account (1576 instead of 1571), amounts that do not add up posted anyway, a posted document or its
  *   vendor edited afterwards, an archived original that changes, a spoofed file
- *   type, a duplicate or a path in the file name accepted
+ *   type, a duplicate or a path in the file name accepted; a 0 % purchase
+ *   refused for missing evidence, a § 13b or EU purchase that cannot be posted
+ *   or posts without the self-assessed USt and Vorsteuer (1577/1787, ig. Erwerb
+ *   1574/1774 and 1572/1772), the supplier owed the self-assessed tax, a
+ *   self-assessed purchase posted without its evidence, with billed VAT or with
+ *   a sales-only tax case
  * - workflow entries (CLI): a malformed entry stored, a second save duplicating
  *   the entry instead of replacing it, a write without the token
  * The period locks, the restart and the SKR04/Ist-VAT mode live in
@@ -1809,6 +1814,95 @@ describe('pro accounting: setup and posting of issued invoices', () => {
       assert.equal((await get<JournalEntry>(h, `/accounting/journal/${original.id}`)).status, 'reversed');
       assert.equal((await h.raw('POST', '/accounting/documents/reverse', { reason: 'nochmal', documentType: 'incoming_invoice', documentId: id })).status, 409);
       assert.equal((await post(id)).status, 409, 'a reversed document cannot be posted again');
+    });
+
+    describe('tax-free and self-assessed purchases (0 %, § 13b, innergemeinschaftlicher Erwerb)', () => {
+      const evidence = { vendorCountryCode: 'AT', vendorVatId: 'ATU12345678', evidenceType: 'rechnung', evidenceReference: 'Steuerschuldnerschaft des Leistungsempfängers' };
+      /** The supplier bills net: the line carries the rate the buyer owes, but no VAT amount. */
+      const selfAssessed = (id: string, taxCaseKey: string, rate = 19, over: Record<string, unknown> = {}) => incoming(id, {
+        netAmount: 1000, taxAmount: 0, grossAmount: 1000, taxRate: rate, taxCaseKey, taxMeta: evidence,
+        lines: [{ id: `l-${id}`, incomingInvoiceId: id, position: 0, description: 'Leistung', quantity: 1, unitPrice: 1000, netAmount: 1000, taxRate: rate, taxAmount: 0, grossAmount: 1000 }],
+        ...over,
+      });
+      const sorted = (entry: JournalEntry) => shape(entry).sort((a, b) => a[0].localeCompare(b[0]));
+      const postedEntry = async (id: string) => {
+        const result = await post(id);
+        assert.equal(result.body.status, 'ready', result.text);
+        const entry = (await entryFor(h, `incoming-invoice:${id}`))!;
+        assertBalanced([entry]);
+        return entry;
+      };
+
+      test('a 0 % purchase (Kleinunternehmer, Versicherung, Porto) posts without evidence and without tax lines', async () => {
+        const id = `in-${randomUUID().slice(0, 6)}`;
+        await h.raw('POST', '/accounting/incoming-invoices', incoming(id, { netAmount: 100, taxAmount: 0, grossAmount: 100, taxRate: 0, lines: [{ id: `l-${id}`, incomingInvoiceId: id, position: 0, description: 'Porto', quantity: 1, unitPrice: 100, netAmount: 100, taxRate: 0, taxAmount: 0, grossAmount: 100 }] }));
+        const entry = await postedEntry(id);
+        assert.deepEqual(shape(entry), [['4900', 100, 0], ['1600', 0, 100]]);
+        assert.equal(entry.lines[0]!.taxCaseKey, 'DE_ZERO_EXEMPT');
+      });
+
+      test('a § 13b Bauleistung books expense, Vorsteuer 1577 and USt 1787 in one entry; the creditor gets the net amount', async () => {
+        const id = `in-${randomUUID().slice(0, 6)}`;
+        const saved = await h.raw('POST', '/accounting/incoming-invoices', selfAssessed(id, 'DE_RC_13B_DOMESTIC', 19, { taxMeta: { vendorCountryCode: 'DE', evidenceType: 'rechnung', evidenceReference: 'Bauleistung § 13b' } }));
+        assert.equal(saved.status, 200, saved.text);
+        assert.deepEqual(saved.body.taxMeta, { vendorCountryCode: 'DE', evidenceType: 'rechnung', evidenceReference: 'Bauleistung § 13b' }, 'the evidence is stored with the invoice');
+        const entry = await postedEntry(id);
+        assert.deepEqual(sorted(entry), [['1577', 190, 0], ['1600', 0, 1000], ['1787', 0, 190], ['4900', 1000, 0]]);
+        const base = entry.lines.find((line) => line.taxCaseKey)!;
+        assert.deepEqual([base.taxCaseKey, base.netAmount, base.taxRate, base.taxAmount], ['DE_RC_13B_DOMESTIC', 1000, 19, 190]);
+        assert.equal((await openItems(h)).find((item) => item.sourceId === id)!.originalAmount, 1000, 'the supplier is owed the net amount only');
+      });
+
+      test('an EU service (§ 13b Abs. 1) and a Drittland service post on the § 13b accounts', async () => {
+        const eu = `in-${randomUUID().slice(0, 6)}`;
+        await h.raw('POST', '/accounting/incoming-invoices', selfAssessed(eu, 'EU_B2B_SERVICE_RC'));
+        assert.deepEqual(sorted(await postedEntry(eu)), [['1577', 190, 0], ['1600', 0, 1000], ['1787', 0, 190], ['4900', 1000, 0]]);
+        const us = `in-${randomUUID().slice(0, 6)}`;
+        await h.raw('POST', '/accounting/incoming-invoices', selfAssessed(us, 'NON_EU_SERVICE_RC', 19, { taxMeta: { vendorCountryCode: 'US', evidenceType: 'rechnung', evidenceReference: 'Cloud-Abo' } }));
+        assert.deepEqual(sorted(await postedEntry(us)), [['1577', 190, 0], ['1600', 0, 1000], ['1787', 0, 190], ['4900', 1000, 0]]);
+      });
+
+      test('an innergemeinschaftlicher Erwerb books 1574/1774 at 19 % and 1572/1772 at 7 %', async () => {
+        const full = `in-${randomUUID().slice(0, 6)}`;
+        await h.raw('POST', '/accounting/incoming-invoices', selfAssessed(full, 'EU_IGE_GOODS_RC'));
+        assert.deepEqual(sorted(await postedEntry(full)), [['1574', 190, 0], ['1600', 0, 1000], ['1774', 0, 190], ['4900', 1000, 0]]);
+        const reduced = `in-${randomUUID().slice(0, 6)}`;
+        await h.raw('POST', '/accounting/incoming-invoices', selfAssessed(reduced, 'EU_IGE_GOODS_RC', 7));
+        assert.deepEqual(sorted(await postedEntry(reduced)), [['1572', 70, 0], ['1600', 0, 1000], ['1772', 0, 70], ['4900', 1000, 0]]);
+      });
+
+      test('a self-assessed purchase without its evidence, with billed VAT, at an unsupported rate or with a sales-only tax case is not posted', async () => {
+        const entries = (await journal(h)).length;
+        const cases: Array<[string, Record<string, unknown>, string]> = [
+          ['EU service without the supplier VAT ID', selfAssessed('x', 'EU_B2B_SERVICE_RC', 19, { taxMeta: { vendorCountryCode: 'AT', evidenceType: 'rechnung', evidenceReference: 'x' } }), 'MISSING_COUNTERPARTY_VAT_ID'],
+          ['Erwerb without any evidence', selfAssessed('x', 'EU_IGE_GOODS_RC', 19, { taxMeta: undefined }), 'MISSING_TAX_COUNTRY'],
+          ['§ 13b with VAT on the invoice', selfAssessed('x', 'DE_RC_13B_DOMESTIC', 19, { taxAmount: 190, grossAmount: 1190, lines: [{ id: 'l-x', incomingInvoiceId: 'x', position: 0, description: 'Bau', quantity: 1, unitPrice: 1000, netAmount: 1000, taxRate: 19, taxAmount: 190, grossAmount: 1190 }] }), 'SELF_ASSESSED_VAT_BILLED'],
+          ['§ 13b at 7 %', selfAssessed('x', 'DE_RC_13B_DOMESTIC', 7), 'SELF_ASSESSED_RATE_UNSUPPORTED'],
+          ['a sales case on a purchase', selfAssessed('x', 'EU_IGL_GOODS_0'), 'INCOMING_TAX_CASE_UNSUPPORTED'],
+        ];
+        for (const [label, body, code] of cases) {
+          const id = `in-${randomUUID().slice(0, 6)}`;
+          const invoice = { ...(body as { invoice: Record<string, unknown> }).invoice, id, number: `ER-${id}`, lines: ((body as { invoice: { lines: Array<Record<string, unknown>> } }).invoice.lines).map((line) => ({ ...line, id: `l-${id}`, incomingInvoiceId: id })) };
+          const saved = await h.raw('POST', '/accounting/incoming-invoices', { ...body, invoice });
+          assert.equal(saved.status, 200, `${label}: ${saved.text.slice(0, 200)}`);
+          const preview = await h.raw('POST', '/accounting/incoming-invoices/preview', { invoiceId: id, reason: 'Vorschau' });
+          assert.deepEqual([preview.body.status, preview.body.reason], ['unresolved', code], `${label}: ${preview.text.slice(0, 200)}`);
+          assert.equal((await post(id)).body.status, 'unresolved', label);
+        }
+        assert.equal((await journal(h)).length, entries, 'nothing posted');
+        const bad = `in-${randomUUID().slice(0, 6)}`;
+        assert.equal((await h.raw('POST', '/accounting/incoming-invoices', selfAssessed(bad, 'DE_RC_13B_DOMESTIC', 19, { taxMeta: { vendorCountryCode: 'Deutschland' } }))).status, 400, 'a malformed country code');
+      });
+
+      test('a reversal of a § 13b purchase takes back expense, Vorsteuer and USt', async () => {
+        const id = `in-${randomUUID().slice(0, 6)}`;
+        await h.raw('POST', '/accounting/incoming-invoices', selfAssessed(id, 'EU_B2B_SERVICE_RC'));
+        await postedEntry(id);
+        const reversed = await h.raw('POST', '/accounting/documents/reverse', { reason: 'Falsch erfasst', documentType: 'incoming_invoice', documentId: id });
+        assert.equal(reversed.status, 200, reversed.text);
+        const mirror = (await journal(h)).find((entry) => entry.id === reversed.body.reversalEntryId)!;
+        assert.deepEqual(sorted(mirror), [['1577', 0, 190], ['1600', 1000, 0], ['1787', 190, 0], ['4900', 0, 1000]]);
+      });
     });
 
     describe('documents', () => {

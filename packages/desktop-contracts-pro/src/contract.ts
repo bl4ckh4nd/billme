@@ -153,6 +153,9 @@ const proListLedgerAccountsArgsSchema = z.object({
   offset: z.number().int().min(0).optional(),
 });
 
+const proPrepareTaxExportArgsSchema = z.object({ kind: z.enum(['ustva', 'zm', 'oss']), period: z.string().min(1), year: z.number().int().optional(), idempotencyKey: z.string().min(1), reason: z.string().trim().min(1) });
+const proTaxExportArtifactSchema = z.object({ kind: z.enum(['ustva', 'zm', 'oss']), status: z.enum(['prepared', 'blocked']), submissionReady: z.literal(false), providerValidation: z.literal('unavailable'), exportable: z.literal(true), sourceHash: z.string(), warnings: z.array(z.string()), rows: z.array(z.record(z.unknown())) }).passthrough();
+
 const proGetVatSummaryArgsSchema = z.object({
   from: z.string().optional(),
   to: z.string().optional(),
@@ -170,6 +173,15 @@ const proGetVatSummaryResultSchema = z.object({
       lineCount: z.number().int(),
     }),
   ),
+  /** UStVA Kennzahlen of the range (same computation as the prepared UStVA), with the journal lines behind each. */
+  kennzahlen: z.object({
+    rows: z.array(z.object({ kennziffer: z.string(), taxKennziffer: z.string().optional(), label: z.string(), direction: z.enum(['output', 'input', 'information', 'total']), netAmount: z.number(), taxAmount: z.number(), lineCount: z.number().int(), taxCaseKeys: z.array(taxCaseKeySchema) })),
+    sources: z.array(z.object({ kennziffer: z.string(), direction: z.enum(['output', 'input', 'information']), entryId: z.string().optional(), entryNumber: z.number().int().optional(), postingDate: z.string(), reference: z.string().optional(), sourceType: z.string().optional(), taxCaseKey: taxCaseKeySchema, netAmount: z.number(), taxAmount: z.number() })),
+    issues: z.array(z.object({ code: z.string(), message: z.string(), taxCaseKey: z.string().optional(), entryId: z.string().optional() })),
+    outputTaxAmount: z.number(),
+    inputTaxAmount: z.number(),
+    payableAmount: z.number(),
+  }).optional(),
 });
 
 const proLedgerStatsSchema = z.object({
@@ -401,7 +413,7 @@ const proSetAccountingPolicyArgsSchema = z.object({ activeChart: ledgerChartSche
 const proListAccountingPeriodsArgsSchema = z.object({ year: z.number().int().min(2000).max(2100) });
 const proSetAccountingPeriodStatusArgsSchema = z.object({ period: accountingPeriodKeySchema, status: accountingPeriodStatusSchema, reason: z.string().trim().min(1) });
 const proListAccountingAccountMappingsArgsSchema = z.object({ chart: ledgerChartSchema.optional() });
-const proUpsertAccountingAccountMappingArgsSchema = z.object({ id: z.string().optional(), chart: ledgerChartSchema, role: z.enum(['accounts_receivable', 'accounts_payable', 'bank', 'revenue', 'expense', 'asset', 'output_vat', 'output_vat_deferred', 'input_vat', 'cash', 'output_vat_7', 'output_vat_deferred_7', 'input_vat_7', 'revenue_7', 'revenue_small_business', 'revenue_exempt', 'revenue_rc_13b', 'revenue_eu_supply', 'revenue_eu_service', 'revenue_export', 'revenue_outside_scope', 'cash_discount_granted', 'cash_discount_granted_7', 'customer_advances', 'customer_advances_7', 'dunning_fees', 'late_interest']), accountNumber: z.string().min(1) });
+const proUpsertAccountingAccountMappingArgsSchema = z.object({ id: z.string().optional(), chart: ledgerChartSchema, role: z.enum(['accounts_receivable', 'accounts_payable', 'bank', 'revenue', 'expense', 'asset', 'output_vat', 'output_vat_deferred', 'input_vat', 'cash', 'output_vat_7', 'output_vat_deferred_7', 'input_vat_7', 'revenue_7', 'revenue_small_business', 'revenue_exempt', 'revenue_rc_13b', 'revenue_eu_supply', 'revenue_eu_service', 'revenue_export', 'revenue_outside_scope', 'cash_discount_granted', 'cash_discount_granted_7', 'customer_advances', 'customer_advances_7', 'dunning_fees', 'late_interest', 'input_vat_rc_13b', 'output_vat_rc_13b', 'input_vat_ige', 'output_vat_ige', 'input_vat_ige_7', 'output_vat_ige_7']), accountNumber: z.string().min(1) });
 const proUpsertVendorArgsSchema = z.object({ vendor: vendorSchema, reason: z.string().trim().min(1) });
 const proUpsertIncomingInvoiceArgsSchema = z.object({ invoice: incomingInvoiceSchema, reason: z.string().trim().min(1) });
 const proInvoiceAccountingArgsBaseSchema = z.object({ invoiceId: z.string().min(1), softLockOverride: z.boolean().optional(), overrideReason: z.string().min(1).optional() });
@@ -676,6 +688,9 @@ export const ipcRoutes = {
   'pro:reverseOpenItemPayment': { channel: 'pro:reverseOpenItemPayment', args: proReverseOpenItemPaymentArgsSchema, result: proOpenItemPaymentReversalSchema },
   'pro:postManualJournalEntry': { channel: 'pro:postManualJournalEntry', args: proPostManualJournalEntryArgsSchema, result: journalEntryEntitySchema },
   'pro:getBankLedgerReconciliation': { channel: 'pro:getBankLedgerReconciliation', args: z.undefined(), result: z.array(proBankLedgerReconciliationRowSchema) },
+  /** UStVA / ZM / OSS preparation (a frozen, export-only artifact; the UStVA soft-locks its months). Never a submission. */
+  'pro:prepareTaxExport': { channel: 'pro:prepareTaxExport', args: proPrepareTaxExportArgsSchema, result: z.object({ run: z.object({ id: z.string() }).passthrough(), artifact: proTaxExportArtifactSchema, replayed: z.boolean() }) },
+  'pro:getTaxExportArtifact': { channel: 'pro:getTaxExportArtifact', args: z.object({ kind: z.enum(['ustva', 'zm', 'oss']), id: z.string().min(1) }), result: proTaxExportArtifactSchema },
   'pro:reallocateOpenItemPayment': { channel: 'pro:reallocateOpenItemPayment', args: proReallocateOpenItemPaymentArgsSchema, result: z.object({ reversal: proOpenItemPaymentReversalSchema, payment: proOpenItemPaymentSchema }) },
   'pro:reverseDocumentAccounting': { channel: 'pro:reverseDocumentAccounting', args: proReverseDocumentAccountingArgsSchema, result: z.object({ ok: z.literal(true), reversalEntryId: z.string() }) },
   'pro:previewAccountingBackfill': { channel: 'pro:previewAccountingBackfill', args: z.undefined(), result: accountingBackfillPreviewSchema },

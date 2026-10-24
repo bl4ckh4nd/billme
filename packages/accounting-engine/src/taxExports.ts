@@ -1,11 +1,9 @@
 import { createHash } from 'node:crypto';
 import {
-  CANONICAL_TAX_CASES,
   type EBilanzArtifact,
   type OssArtifact,
   type OssRow,
   type ReportSnapshot,
-  type TaxCatalogEntry,
   type TaxCatalogProvenance,
   type TaxExportEntry,
   type TaxExportErrorCode,
@@ -14,8 +12,13 @@ import {
   type TaxExportPreparation,
   type TaxReportSnapshotBinding,
   type UstvaArtifact,
-  type UstvaCatalog,
+  type UstvaComputation,
+  type UstvaKennzahlCatalog,
   type UstvaRow,
+  type UstvaSource,
+  USTVA_LABELS,
+  USTVA_TAX_KZ,
+  ustvaContributions,
   type UnternehmensregisterArtifact,
   type ZmArtifact,
   type ZmRow,
@@ -46,7 +49,9 @@ const PREPARATION_CATALOG: TaxCatalogProvenance = {
   sourceHash: '0'.repeat(64),
   official: false,
 };
-const SUPPORTED_TAX_YEAR = 2025;
+/** UStVA/ZM/OSS run from 2025 on. Kennzahlen exist for the forms up to USTVA_LATEST_FORM_YEAR; a later year uses that form, marked provisional. */
+const FIRST_TAX_YEAR = 2025;
+export const USTVA_LATEST_FORM_YEAR = 2026;
 
 /** Metadata for preparation only. This is not an official provider catalog. */
 export const EBILANZ_6_9_PREPARATION_CATALOG = PREPARATION_CATALOG;
@@ -104,7 +109,7 @@ const periodBounds = (input: TaxExportPeriod): { period: string; year: number; f
 };
 
 const assertSupportedYear = (year: number, kind: string): void => {
-  if (year !== SUPPORTED_TAX_YEAR) throw new TaxExportError('UNSUPPORTED_YEAR', `${kind} preparation does not support ${year}`);
+  if (year < FIRST_TAX_YEAR || year > 2100) throw new TaxExportError('UNSUPPORTED_YEAR', `${kind} preparation does not support ${year}`);
 };
 
 const inPeriod = (date: string, bounds: ReturnType<typeof periodBounds>): boolean => {
@@ -112,35 +117,10 @@ const inPeriod = (date: string, bounds: ReturnType<typeof periodBounds>): boolea
   return date >= bounds.from && date <= bounds.to;
 };
 
-const assertCatalog = (catalog: UstvaCatalog): void => {
-  if (!catalog.id.trim() || !catalog.version.trim() || !catalog.source.trim() || !/^[a-f0-9]{64}$/i.test(catalog.sourceHash)) {
-    throw new TaxExportError('CATALOG_PROVENANCE_INVALID', 'Tax catalog id, version, source and SHA-256 are required');
-  }
-  if (!Number.isInteger(catalog.taxYear) || !catalog.entries.length) {
-    throw new TaxExportError('CATALOG_PROVENANCE_INVALID', 'Tax catalog year and entries are required');
-  }
-  const seen = new Set<string>();
-  for (const entry of catalog.entries) {
-    if (!entry.kennziffer.trim() || !CANONICAL_TAX_CASES.some((taxCase) => taxCase.key === entry.taxCaseKey)) {
-      throw new TaxExportError('CATALOG_MISMATCH', `Catalog entry is not canonical: ${entry.taxCaseKey}`);
-    }
-    const key = `${entry.taxCaseKey}:${entry.direction ?? 'output'}`;
-    if (seen.has(key)) throw new TaxExportError('CATALOG_MISMATCH', `Duplicate catalog entry: ${key}`);
-    seen.add(key);
-  }
-};
-
 const assertProvenance = (catalog: TaxCatalogProvenance): void => {
   if (!catalog.id.trim() || !catalog.version.trim() || !catalog.source.trim() || !/^[a-f0-9]{64}$/i.test(catalog.sourceHash) || !Number.isInteger(catalog.taxYear)) {
     throw new TaxExportError('CATALOG_PROVENANCE_INVALID', 'Tax catalog provenance is incomplete');
   }
-};
-
-const canonicalLine = (line: TaxExportLine): { key: TaxExportLine['taxCaseKey']; taxCase: (typeof CANONICAL_TAX_CASES)[number] } => {
-  if (!line.taxCaseKey) throw new TaxExportError('MISSING_TAX_CASE', 'Tax export line has no canonical tax case');
-  const taxCase = CANONICAL_TAX_CASES.find((candidate) => candidate.key === line.taxCaseKey);
-  if (!taxCase) throw new TaxExportError('CATALOG_MISMATCH', `Unknown canonical tax case: ${line.taxCaseKey}`);
-  return { key: line.taxCaseKey, taxCase };
 };
 
 const assertRate = (rate: number | undefined): number => {
@@ -185,39 +165,82 @@ const base = <T extends TaxExportPreparation['kind']>(kind: T, period: TaxExport
   ...extra,
 });
 
+/** The Kennzahlen catalogue of a tax year: the form of that year, from 2027 on the latest form (provisional). */
+export const ustvaCatalogFor = (taxYear: number): UstvaKennzahlCatalog => {
+  assertSupportedYear(taxYear, 'UStVA');
+  const formYear = Math.min(taxYear, USTVA_LATEST_FORM_YEAR);
+  const provisional = taxYear > USTVA_LATEST_FORM_YEAR;
+  const entries = Object.entries(USTVA_LABELS).sort(([a], [b]) => Number(a) - Number(b));
+  return {
+    id: `ustva-kennzahlen-${formYear}`, taxYear, formYear, version: `USt 1 A ${formYear}`,
+    source: 'BMF, Vordruckmuster USt 1 A (Umsatzsteuer-Voranmeldung) 2025/2026: Kennzahlen',
+    sourceHash: artifactHash({ formYear, entries, taxKz: USTVA_TAX_KZ }), official: !provisional, provisional,
+    label: provisional ? `UStVA-Kennzahlen ${formYear} (vorläufig für ${taxYear})` : `UStVA-Kennzahlen ${formYear}`,
+  };
+};
+
+const STANDARD_RATE: Record<string, number> = { DE_STD_19: 19, DE_STD_7: 7 };
+
+/**
+ * The UStVA of a period from tax-keyed journal lines: each line goes into the Kennzahl of its tax case and
+ * direction (the table shared with Lite, accounting-shared ustvaKennziffern.ts). A self-assessed purchase adds
+ * its basis and tax to 46/84/89/93 and the same tax to 67/61. Kz 83 = output tax − input tax.
+ */
+export const computeUstva = (input: { from: string; to: string; entries: readonly TaxExportEntry[] }): UstvaComputation => {
+  const totals = new Map<string, { row: UstvaRow; net: number; tax: number }>();
+  const sources: UstvaSource[] = [];
+  const issues: UstvaComputation['issues'] = [];
+  for (const entry of input.entries) {
+    assertIsoDate(entry.postingDate, 'postingDate');
+    if (entry.postingDate < input.from || entry.postingDate > input.to) continue;
+    for (const line of entry.lines) {
+      if (!line.taxCaseKey) continue;
+      // Under Ist the invoice's basis line only marks the case; the tax arises with the payment (payment_vat).
+      if (line.netAmount === undefined && line.taxAmount === undefined) continue;
+      const key = line.taxCaseKey;
+      const direction = line.direction ?? 'output';
+      const rate = STANDARD_RATE[key] ?? Number(line.taxRate ?? 0);
+      const net = Math.round(Number(line.netAmount ?? 0) * 100);
+      const tax = Math.round(Number(line.taxAmount ?? 0) * 100);
+      const parts = ustvaContributions(key, direction, rate, net, tax);
+      // Unknown keys (a tenant's own tax case) and cases without a Kennzahl are reported, never dropped silently.
+      if (!parts) {
+        if (!issues.some((item) => item.taxCaseKey === key && item.entryId === entry.entryId)) issues.push({ code: 'USTVA_KENNZAHL_MISSING', taxCaseKey: key, entryId: entry.entryId, message: `Steuerfall ${key} hat keine UStVA-Kennzahl in dieser Vorbereitung; bitte manuell prüfen.` });
+        continue;
+      }
+      for (const part of parts) {
+        const mapKey = `${part.kennziffer}:${part.direction}`;
+        const current = totals.get(mapKey) ?? { row: { kennziffer: part.kennziffer, ...(USTVA_TAX_KZ[part.kennziffer] ? { taxKennziffer: USTVA_TAX_KZ[part.kennziffer] } : {}), label: USTVA_LABELS[part.kennziffer] ?? part.kennziffer, direction: part.direction, netAmount: 0, taxAmount: 0, lineCount: 0, taxCaseKeys: [] }, net: 0, tax: 0 };
+        current.net += part.basis; current.tax += part.tax; current.row.lineCount += 1;
+        if (!current.row.taxCaseKeys.includes(key)) current.row.taxCaseKeys.push(key);
+        totals.set(mapKey, current);
+        sources.push({ kennziffer: part.kennziffer, direction: part.direction, entryId: entry.entryId, entryNumber: entry.entryNumber, postingDate: entry.postingDate, reference: entry.reference, sourceType: entry.sourceType, taxCaseKey: key, netAmount: amount(part.basis), taxAmount: amount(part.tax) });
+      }
+    }
+  }
+  const rows = [...totals.values()].sort((a, b) => Number(a.row.kennziffer) - Number(b.row.kennziffer) || a.row.direction.localeCompare(b.row.direction)).map(({ row, net, tax }) => ({ ...row, taxCaseKeys: [...row.taxCaseKeys].sort(), netAmount: amount(net), taxAmount: amount(tax) }));
+  const output = [...totals.values()].filter(({ row }) => row.direction === 'output').reduce((sum, { tax }) => sum + tax, 0);
+  const inputTax = [...totals.values()].filter(({ row }) => row.direction === 'input').reduce((sum, { tax }) => sum + tax, 0);
+  if (rows.length) rows.push({ kennziffer: '83', label: USTVA_LABELS['83']!, direction: 'total', netAmount: 0, taxAmount: amount(output - inputTax), lineCount: 0, taxCaseKeys: [] });
+  return { rows, sources, issues, outputTaxAmount: amount(output), inputTaxAmount: amount(inputTax), payableAmount: amount(output - inputTax) };
+};
+
 export type PrepareUstvaInput = {
   period: string | TaxExportPeriod;
-  catalog: UstvaCatalog;
   entries: readonly TaxExportEntry[];
 };
 
-/** Build an auditable UStVA preparation artifact; never a submission payload. */
+/** Build an auditable UStVA preparation artifact with the Kennzahlen of the form; never a submission payload. */
 export const prepareUstva = (input: PrepareUstvaInput): UstvaArtifact => {
   const period = typeof input.period === 'string' ? { period: input.period } : input.period;
   const bounds = periodBounds(period);
-  assertCatalog(input.catalog);
-  assertSupportedYear(bounds.year, 'UStVA');
-  if (bounds.year !== input.catalog.taxYear) throw new TaxExportError('UNSUPPORTED_YEAR', `Catalog does not support ${bounds.year}`);
-  const totals = new Map<string, { entry: TaxCatalogEntry; net: number; tax: number; count: number }>();
-  for (const journalEntry of input.entries) {
-    if (!inPeriod(journalEntry.postingDate, bounds)) continue;
-    for (const line of journalEntry.lines) {
-      if (!line.taxCaseKey) continue;
-      const { key } = canonicalLine(line);
-      const direction = line.direction ?? input.catalog.entries.find((candidate) => candidate.taxCaseKey === key)?.direction ?? 'output';
-      const catalogEntry = input.catalog.entries.find((candidate) => candidate.taxCaseKey === key && (candidate.direction ?? 'output') === direction);
-      if (!catalogEntry) throw new TaxExportError('CATALOG_MISMATCH', `No UStVA Kennziffer for ${key}/${direction}`);
-      const current = totals.get(`${key}:${direction}`) ?? { entry: catalogEntry, net: 0, tax: 0, count: 0 };
-      current.net += cents(line.netAmount, 'netAmount');
-      current.tax += cents(line.taxAmount ?? 0, 'taxAmount');
-      current.count += 1;
-      totals.set(`${key}:${direction}`, current);
-    }
-  }
-  const rows: UstvaRow[] = [...totals.values()]
-    .sort((a, b) => a.entry.kennziffer.localeCompare(b.entry.kennziffer))
-    .map(({ entry, net, tax, count }) => ({ taxCaseKey: entry.taxCaseKey, kennziffer: entry.kennziffer, direction: entry.direction ?? 'output', netAmount: amount(net), taxAmount: amount(tax), lineCount: count }));
-  return base('ustva', bounds, { period: bounds.period, catalog: input.catalog, rows }, { catalog: input.catalog, rows }) as UstvaArtifact;
+  const catalog = ustvaCatalogFor(bounds.year);
+  const computed = computeUstva({ from: bounds.from, to: bounds.to, entries: input.entries });
+  // A frozen return must not leave out amounts silently: the live view shows the issue, preparing refuses it.
+  if (computed.issues.length) throw new TaxExportError('USTVA_KENNZAHL_MISSING', [...new Set(computed.issues.map((issue) => issue.message))].join(' '));
+  const artifact = base('ustva', bounds, { period: bounds.period, catalog, rows: computed.rows }, { catalog, ...computed }) as UstvaArtifact;
+  if (catalog.provisional) artifact.warnings.push(`Für ${bounds.year} gibt es in Billme noch keinen eigenen Vordruck; verwendet werden die Kennzahlen ${catalog.formYear}.`);
+  return artifact;
 };
 
 export type AggregateTaxInput = {
@@ -236,14 +259,16 @@ export const aggregateZm = (input: AggregateTaxInput): ZmArtifact => {
     if (!inPeriod(entry.postingDate, bounds)) continue;
     for (const line of entry.lines) {
       if (!line.taxCaseKey) continue;
-      const { key } = canonicalLine(line);
+      const key = line.taxCaseKey;
       if (key !== 'EU_IGL_GOODS_0' && key !== 'EU_B2B_SERVICE_RC') continue;
+      // The ZM lists the own sales; an EU purchase of the same tax case is not one.
+      if (line.direction === 'input') continue;
       const countryCode = country(line.countryCode);
       const id = vatId(line.counterpartyVatId, countryCode);
       evidence(line);
       const net = cents(line.netAmount, 'netAmount');
       const mapKey = `${key}:${id}`;
-      const current = totals.get(mapKey) ?? { row: { taxCaseKey: key, countryCode, counterpartyVatId: id, netAmount: 0, lineCount: 0 }, net: 0 };
+      const current = totals.get(mapKey) ?? { row: { taxCaseKey: key, kind: key === 'EU_IGL_GOODS_0' ? 'lieferung' as const : 'sonstige_leistung' as const, countryCode, counterpartyVatId: id, netAmount: 0, lineCount: 0 }, net: 0 };
       current.net += net;
       current.row.lineCount += 1;
       totals.set(mapKey, current);
@@ -262,8 +287,9 @@ export const aggregateOss = (input: AggregateTaxInput): OssArtifact => {
     if (!inPeriod(entry.postingDate, bounds)) continue;
     for (const line of entry.lines) {
       if (!line.taxCaseKey) continue;
-      const { key } = canonicalLine(line);
+      const key = line.taxCaseKey;
       if (key !== 'EU_B2C_OSS') continue;
+      if (line.direction === 'input') continue;
       const countryCode = country(line.countryCode);
       const taxRate = assertRate(line.taxRate);
       const net = cents(line.netAmount, 'netAmount');

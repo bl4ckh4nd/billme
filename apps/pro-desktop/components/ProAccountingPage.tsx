@@ -739,6 +739,16 @@ export const ProAccountingPage: React.FC<{ view?: unknown; onViewChange?: (view:
       getBankLedgerReconciliation() {
         return ipc.pro.getBankLedgerReconciliation();
       },
+      getVatSummary(range) {
+        return ipc.pro.getVatSummary(range);
+      },
+      async prepareTaxExport(input) {
+        const result = await ipc.pro.prepareTaxExport({ kind: input.kind, period: input.period, year: input.year, reason: input.reason, idempotencyKey: input.idempotencyKey ?? `tax:${input.kind}:${input.period}` });
+        return { artifact: result.artifact as never, run: result.run as never, replayed: result.replayed };
+      },
+      async exportTaxArtifact(kind, id) {
+        return JSON.stringify(await ipc.pro.getTaxExportArtifact({ kind, id }), null, 2);
+      },
       listVendors() {
         return ipc.pro.listVendors();
       },

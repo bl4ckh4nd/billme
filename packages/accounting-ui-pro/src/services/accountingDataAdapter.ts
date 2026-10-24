@@ -5,7 +5,7 @@ import type { AssetDepreciationScheduleEntry, AssetItem, AssetUpsertInput } from
 import type { AccountingPostingPreview, IncomingInvoiceDocumentEntity, IncomingInvoiceEntity, OpenItemEntity, OpenItemPaymentEntity, OpenItemPaymentInput, VendorEntity } from '@billme/accounting-shared';
 import type { ProBankTransaction } from '@billme/accounting-shared';
 import type { AccountingCommandInput, AccountingSourcePostResult, AccountingSourceRun, EurAnnexFact, EurAnnexFactInput, EurCashFact, EurCashFactInput, TaxPreparationArtifact, TaxPreparationInput } from '../sourceRuns';
-import type { JournalEntryEntity } from '@billme/accounting-shared';
+import type { JournalEntryEntity, UstvaComputation } from '@billme/accounting-shared';
 
 // The desktop IPC transaction schema intentionally omits tenantId because the
 // tenant is fixed by the local Pro database. Keep the source identity and
@@ -156,6 +156,8 @@ export interface ProAccountingDataAdapter {
   postManualJournalEntry?: (input: ManualJournalEntryInput) => Promise<JournalEntryEntity>;
   /** Booked bank lines against the ledger account of their bank account. */
   getBankLedgerReconciliation?: () => Promise<BankLedgerReconciliationRow[]>;
+  /** VAT per tax case plus the UStVA Kennzahlen of a range, live from the ledger (no lock). */
+  getVatSummary?: (range: { from: string; to: string }) => Promise<{ kennzahlen?: UstvaComputation }>;
   listVendors?: () => Promise<VendorEntity[]>;
   upsertVendor?: (vendor: Omit<VendorEntity, 'tenantId' | 'createdAt' | 'updatedAt'>, reason: string) => Promise<VendorEntity>;
   listIncomingInvoices?: () => Promise<IncomingInvoiceEntity[]>;

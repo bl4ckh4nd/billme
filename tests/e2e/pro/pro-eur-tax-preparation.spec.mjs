@@ -1,3 +1,4 @@
+import { writeFileSync } from 'node:fs';
 import { expect, test } from '@playwright/test';
 import { appUrl, importPendingProTransaction, invokeDesktopIpc, launchDesktopApp, seedDesktopData } from '../support.mjs';
 
@@ -140,12 +141,55 @@ test('blocks UStVA/ZM/OSS preparation inputs until country, identity, and eviden
   await page.screenshot({ path: test.info().outputPath('01-tax-drafts-in-inbox.png'), fullPage: true });
 });
 
-test('reports the desktop tax provider as unavailable instead of simulating a filing', async () => {
+test('a § 13b purchase shows up in the UStVA with Kz 84/85 and 67, drills down to its journal entry, and is prepared without any transmission', async () => {
   const { page, baseUrl } = desktop;
-  await page.goto(appUrl(baseUrl, '/'));
-  await page.getByRole('navigation', { name: 'Hauptnavigation' }).getByRole('button', { name: 'Sonderbuchungen' }).click();
-  await expect(page.getByRole('heading', { name: 'Sonderbuchungen & Abschluss', level: 2 })).toBeVisible();
-  await expect(page.getByText(/Der Provider bleibt nicht verfügbar/)).toBeVisible();
-  await expect(page.getByRole('button', { name: 'Vorbereitung erstellen' })).toBeDisabled();
-  await page.screenshot({ path: test.info().outputPath('01-tax-provider-unavailable.png'), fullPage: true });
+  const now = new Date().toISOString();
+  // February 2026: no seeded document falls into it, so the Kennzahlen are exactly this purchase.
+  await invokeDesktopIpc(page, 'pro:upsertVendor', { reason: 'E2E vendor', vendor: { id: 'v-13b', tenantId: 'default', name: 'E2E Bau GmbH', createdAt: now, updatedAt: now } });
+  await invokeDesktopIpc(page, 'pro:upsertIncomingInvoice', {
+    reason: 'E2E § 13b',
+    invoice: {
+      id: 'in-13b', tenantId: 'default', vendorId: 'v-13b', number: 'ER-13B-1', invoiceDate: '2026-02-10', dueDate: '2026-02-28', servicePeriod: '2026-02',
+      netAmount: 1000, taxAmount: 0, grossAmount: 1000, status: 'open', taxRate: 19, taxCaseKey: 'DE_RC_13B_DOMESTIC', accountingStatus: 'unposted', createdAt: now, updatedAt: now,
+      taxMeta: { vendorCountryCode: 'DE', evidenceType: 'rechnung', evidenceReference: 'Bauleistung § 13b' },
+      lines: [{ id: 'in-13b-line', incomingInvoiceId: 'in-13b', position: 0, description: 'Estrich', quantity: 1, unitPrice: 1000, netAmount: 1000, taxRate: 19, taxAmount: 0, taxCaseKey: 'DE_RC_13B_DOMESTIC', grossAmount: 1000, accountNumber: '4900' }],
+    },
+  });
+  expect((await invokeDesktopIpc(page, 'pro:postIncomingInvoiceAccounting', { invoiceId: 'in-13b', reason: 'E2E post § 13b' })).status).toBe('ready');
+
+  await page.goto(appUrl(baseUrl, '/accounting?view=special'));
+  const panel = page.getByTestId('ustva-panel');
+  await expect(panel).toBeVisible();
+  await panel.getByRole('textbox', { name: 'UStVA-Monat' }).fill('2026-02');
+  await expect(panel.getByText('2026-02-01 bis 2026-02-28')).toBeVisible();
+  const table = panel.getByRole('table', { name: 'UStVA-Kennzahlen' });
+  const kz84 = table.locator('tr[data-kennziffer="84"]');
+  await expect(kz84).toContainText('84 / 85');
+  await expect(kz84).toContainText('1.000,00');
+  await expect(kz84).toContainText('190,00');
+  await expect(table.locator('tr[data-kennziffer="67"]')).toContainText('190,00');
+  await expect(table.locator('tr[data-kennziffer="83"]')).toContainText('0,00');
+
+  await kz84.getByRole('button', { name: '1 Buchung' }).click();
+  await panel.getByRole('button', { name: 'Journal öffnen' }).click();
+  const lines = page.getByLabel('Buchungszeilen');
+  await expect(lines).toContainText('1577');
+  await expect(lines).toContainText('1787');
+  await page.screenshot({ path: test.info().outputPath('01-ustva-13b-drilldown.png'), fullPage: true });
+  await page.getByRole('button', { name: 'Journalansicht schließen' }).click();
+
+  // The frozen preparation states plainly that nothing goes to ELSTER; the filing itself stays unavailable.
+  await expect(page.getByText(/Keine Übermittlung an ELSTER oder das BZSt\./)).toBeVisible();
+  await page.getByRole('combobox', { name: 'Steuervorbereitung' }).selectOption('ustva');
+  await page.getByRole('textbox', { name: 'Steuerzeitraum' }).fill('2026-02');
+  await page.getByRole('textbox', { name: 'Audit-Grund Steuerexport' }).fill('UStVA Februar vorbereitet');
+  await page.getByRole('button', { name: 'Vorbereitung erstellen' }).click();
+  await expect(page.getByText(/vorbereitet \(prepared\) – keine offizielle Übermittlung/)).toBeVisible();
+  await page.screenshot({ path: test.info().outputPath('02-ustva-prepared.png'), fullPage: true });
+
+  const run = (await invokeDesktopIpc(page, 'pro:listAccountingSourceRuns', undefined)).find((item) => item.sourceType === 'tax_export_ustva');
+  const artifact = await invokeDesktopIpc(page, 'pro:getTaxExportArtifact', { kind: 'ustva', id: run.id });
+  writeFileSync(test.info().outputPath('ustva-2026-02.json'), JSON.stringify(artifact, null, 2));
+  expect(artifact).toMatchObject({ submissionReady: false, providerValidation: 'unavailable', catalog: { formYear: 2026, provisional: false } });
+  expect(artifact.rows.map((row) => [row.kennziffer, row.direction, row.netAmount, row.taxAmount])).toEqual([['67', 'input', 1000, 190], ['84', 'output', 1000, 190], ['83', 'total', 0, 0]]);
 });

@@ -3,6 +3,7 @@ import { Button, Card, CardHeader, EmptyState, Field, Input, Select, Stepper, Te
 import { JournalEntryDetailModal } from './JournalEntryDetail';
 import PeriodLockPanel from './PeriodLockPanel';
 import ManualEntryPanel from './ManualEntryPanel';
+import UstvaPanel from './UstvaPanel';
 import { userFacingReference } from '../domain/references';
 import type { Account, UserRole } from '../types';
 import { permissionContextForRole } from '../domain/permissions';
@@ -64,7 +65,6 @@ type FormState = {
 
 const periodOf = (date: string): string => date.slice(0, 7);
 const yearOf = (date: string): number => Number(date.slice(0, 4));
-const SUPPORTED_TAX_YEAR = 2025;
 const isRecord = (value: unknown): value is Record<string, unknown> => Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 
 const synchronizeDomainFacts = (
@@ -300,7 +300,7 @@ export default function SonderbuchungenWorkspace({ dataAdapter, role = 'admin', 
   const [busy, setBusy] = useState(false);
   const busyRef = useRef(false);
   const [taxKind, setTaxKind] = useState<TaxPreparationKind>('ustva');
-  const [taxPeriod, setTaxPeriod] = useState(`${SUPPORTED_TAX_YEAR}-01`);
+  const [taxPeriod, setTaxPeriod] = useState(() => localToday().slice(0, 7));
   const [taxReason, setTaxReason] = useState('');
   const [taxBusy, setTaxBusy] = useState(false);
   const [taxError, setTaxError] = useState<string | null>(null);
@@ -519,9 +519,10 @@ export default function SonderbuchungenWorkspace({ dataAdapter, role = 'admin', 
         </Card>
       </section>
 
+      <UstvaPanel dataAdapter={dataAdapter} initialMonth={localToday().slice(0, 7)} onOpenEntry={setSelectedJournalEntryId} />
       <section aria-labelledby="tax-preparation-heading">
         <Card padding="none">
-          <CardHeader className={cardHeadClass} title={<span id="tax-preparation-heading">Steuerliche Vorbereitung / Export</span>} subtitle="Vorbereitung und Export sind keine offizielle Übermittlung. Der Provider bleibt nicht verfügbar." />
+          <CardHeader className={cardHeadClass} title={<span id="tax-preparation-heading">Steuerliche Vorbereitung / Export</span>} subtitle="Friert die Meldung des Zeitraums als Prüfstand ein (UStVA mit Kennzahlen, ZM je USt-IdNr., OSS) und sperrt die Monate einer UStVA weich. Keine Übermittlung an ELSTER oder das BZSt." />
           <div className="flex flex-col gap-3 p-3.5">
             <div className="flex flex-wrap items-end gap-3">
               <Select label="Meldung" aria-label="Steuervorbereitung" value={taxKind} onChange={(event) => { setPreparedArtifact(null); setTaxError(null); setTaxKind(event.target.value as TaxPreparationKind); }} disabled={taxBusy}>

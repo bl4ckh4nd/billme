@@ -26,6 +26,7 @@ const stableJson = (value: unknown): string => {
  * - posted drafts overwritten, correction runs rejected after committing, or EÜR actors lost
  * - canonical GuV amounts/range lost while projecting the IPC report
  * - a server response the client's schema no longer accepts
+ * - the UStVA Kennzahlen or a tax preparation that do not parse through the client
  * - a mutation sent without the reason / allocation event id / reservation id
  *   the server requires, instead of being refused before the request leaves
  * - an error body the client swallows instead of showing its message
@@ -144,7 +145,14 @@ describe('pro renderer client against the embedded backend', () => {
     assert.ok(!(await api().pro.listAccountSuggestionRules({})).some((candidate) => candidate.id === rule.id));
     const checked = await api().pro.validateTaxCompliance({ transactionId: tx.id });
     assert.equal(typeof checked.ok, 'boolean');
-    assert.ok((await api().pro.getVatSummary({})).rows.length > 0);
+    const vat = await api().pro.getVatSummary({});
+    assert.ok(vat.rows.length > 0);
+    assert.ok(vat.kennzahlen!.rows.some((row) => row.kennziffer === '83'), 'the UStVA Kennzahlen parse through the client');
+    const month = today().slice(0, 7);
+    const prepared = await api().pro.prepareTaxExport({ kind: 'ustva', period: month, idempotencyKey: `client-${randomUUID()}`, reason: 'UStVA über den Client' });
+    assert.deepEqual([prepared.artifact.kind, prepared.artifact.submissionReady], ['ustva', false]);
+    assert.equal((await api().pro.getTaxExportArtifact({ kind: 'ustva', id: prepared.run.id })).sourceHash, prepared.artifact.sourceHash);
+    await assert.rejects(api().pro.prepareTaxExport({ kind: 'ustva', period: month, idempotencyKey: 'x', reason: ' ' } as never), 'a blank reason is refused before the request');
     assert.deepEqual(await api().pro.listWorkflowEntries(), []);
     const matches = await api().transactions.list({});
     assert.ok(matches.some((candidate) => candidate.counterparty === 'Client Lieferant'));

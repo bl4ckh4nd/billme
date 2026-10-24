@@ -346,10 +346,17 @@ export const accountingPostingPreviewSchema = z.object({
   issues: z.array(z.object({ code: z.string(), message: z.string(), blocking: z.boolean() })),
 });
 export const accountingPolicySchema = z.object({ tenantId: z.string(), activeChart: ledgerChartSchema, vatMethod: z.enum(['soll', 'ist']), periodPolicy: z.literal('calendar_month'), updatedAt: z.string() });
-export const accountingAccountMappingSchema = z.object({ id: z.string(), tenantId: z.string(), chart: ledgerChartSchema, role: z.enum(['accounts_receivable', 'accounts_payable', 'bank', 'revenue', 'expense', 'asset', 'output_vat', 'output_vat_deferred', 'input_vat', 'cash', 'output_vat_7', 'output_vat_deferred_7', 'input_vat_7', 'revenue_7', 'revenue_small_business', 'revenue_exempt', 'revenue_rc_13b', 'revenue_eu_supply', 'revenue_eu_service', 'revenue_export', 'revenue_outside_scope', 'cash_discount_granted', 'cash_discount_granted_7', 'customer_advances', 'customer_advances_7', 'dunning_fees', 'late_interest']), accountNumber: z.string(), updatedAt: z.string() });
+export const accountingAccountMappingSchema = z.object({ id: z.string(), tenantId: z.string(), chart: ledgerChartSchema, role: z.enum(['accounts_receivable', 'accounts_payable', 'bank', 'revenue', 'expense', 'asset', 'output_vat', 'output_vat_deferred', 'input_vat', 'cash', 'output_vat_7', 'output_vat_deferred_7', 'input_vat_7', 'revenue_7', 'revenue_small_business', 'revenue_exempt', 'revenue_rc_13b', 'revenue_eu_supply', 'revenue_eu_service', 'revenue_export', 'revenue_outside_scope', 'cash_discount_granted', 'cash_discount_granted_7', 'customer_advances', 'customer_advances_7', 'dunning_fees', 'late_interest', 'input_vat_rc_13b', 'output_vat_rc_13b', 'input_vat_ige', 'output_vat_ige', 'input_vat_ige_7', 'output_vat_ige_7']), accountNumber: z.string(), updatedAt: z.string() });
 export const vendorSchema = z.object({ id: z.string(), tenantId: z.string(), vendorNumber: z.string().optional(), name: z.string().min(1), email: z.string().optional(), address: z.string().optional(), vatId: z.string().optional(), iban: z.string().optional(), defaultExpenseAccount: z.string().optional(), createdAt: z.string(), updatedAt: z.string() });
 const incomingInvoiceLineSchema = z.object({ id: z.string(), incomingInvoiceId: z.string(), position: z.number().int(), description: z.string(), quantity: z.number(), unitPrice: z.number(), netAmount: z.number(), taxRate: z.number(), taxAmount: z.number(), grossAmount: z.number(), accountNumber: z.string().optional(), assetAccountNumber: z.string().optional() });
-export const incomingInvoiceSchema = z.object({ id: z.string(), tenantId: z.string(), vendorId: z.string(), number: z.string(), invoiceDate: z.string(), dueDate: z.string(), servicePeriod: z.string().optional(), netAmount: z.number(), taxAmount: z.number(), grossAmount: z.number(), status: z.enum(['draft', 'open', 'paid', 'cancelled', 'unresolved']), taxRate: z.number(), taxCaseKey: z.string().optional(), notes: z.string().optional(), lines: z.array(incomingInvoiceLineSchema), accountingStatus: z.enum(['unposted', 'posted', 'unresolved', 'reversed']), accountingSnapshot: accountingSnapshotSchema.optional(), createdAt: z.string(), updatedAt: z.string() });
+/** Evidence of a self-assessed purchase (§ 13b, innergemeinschaftlicher Erwerb). */
+export const incomingInvoiceTaxMetaSchema = z.object({
+  vendorCountryCode: z.string().trim().toUpperCase().regex(/^[A-Z]{2}$/, 'Ländercode mit zwei Buchstaben, z. B. AT.').optional(),
+  vendorVatId: z.string().trim().toUpperCase().regex(/^[A-Z]{2}[A-Z0-9]{2,14}$/, 'USt-IdNr. mit Länderpräfix, z. B. ATU12345678.').optional(),
+  evidenceType: z.string().trim().min(1).max(60).optional(),
+  evidenceReference: z.string().trim().min(1).max(200).optional(),
+});
+export const incomingInvoiceSchema = z.object({ id: z.string(), tenantId: z.string(), vendorId: z.string(), number: z.string(), invoiceDate: z.string(), dueDate: z.string(), servicePeriod: z.string().optional(), netAmount: z.number(), taxAmount: z.number(), grossAmount: z.number(), status: z.enum(['draft', 'open', 'paid', 'cancelled', 'unresolved']), taxRate: z.number(), taxCaseKey: z.string().optional(), taxMeta: incomingInvoiceTaxMetaSchema.optional(), notes: z.string().optional(), lines: z.array(incomingInvoiceLineSchema), accountingStatus: z.enum(['unposted', 'posted', 'unresolved', 'reversed']), accountingSnapshot: accountingSnapshotSchema.optional(), createdAt: z.string(), updatedAt: z.string() });
 export const incomingInvoiceDocumentMimeSchema = z.enum(['application/pdf', 'image/jpeg', 'image/png', 'image/webp']);
 export const incomingInvoiceDocumentReviewStatusSchema = z.enum(['pending', 'accepted', 'rejected']);
 export const incomingInvoiceDocumentSchema = z.object({
@@ -974,7 +981,7 @@ export const proAccountingSourceRunSchema = z.object({
   id: z.string().min(1),
   tenantId: z.string().min(1),
   // Settlement commands keep their command name as source type (closingSourceType on the server).
-  sourceType: accountingSourceTypeSchema.or(z.enum(['correction', 'skonto', 'bad_debt', 'advance_settlement'])),
+  sourceType: accountingSourceTypeSchema.or(z.enum(['correction', 'skonto', 'bad_debt', 'advance_settlement', 'tax_export_ustva', 'tax_export_zm', 'tax_export_oss'])),
   sourceId: z.string().min(1),
   sourceRevision: z.string().min(1),
   idempotencyKey: z.string().min(1),

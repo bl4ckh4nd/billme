@@ -133,7 +133,16 @@ const createIncomingInvoiceDraftLine = (): IncomingInvoiceDraftLine => ({
   assetAccountNumber: '',
 });
 
-const calculateIncomingInvoiceLine = (line: IncomingInvoiceDraftLine): CalculatedIncomingInvoiceLine | null => {
+/** Purchases where the buyer owes the VAT (§ 13b, innergemeinschaftlicher Erwerb): the supplier bills net. */
+const SELF_ASSESSED_TAX_CASES = [
+  { key: 'DE_RC_13B_DOMESTIC', label: '§ 13b Inland (z. B. Bauleistung)', vatIdRequired: false },
+  { key: 'EU_B2B_SERVICE_RC', label: 'Sonstige Leistung aus einem EU-Land (§ 13b)', vatIdRequired: true },
+  { key: 'NON_EU_SERVICE_RC', label: 'Leistung aus einem Drittland (§ 13b)', vatIdRequired: false },
+  { key: 'EU_IGE_GOODS_RC', label: 'Innergemeinschaftlicher Erwerb (Ware aus einem EU-Land)', vatIdRequired: true },
+] as const;
+const taxFieldIds = { country: 'opos-invoice-tax-country', vatId: 'opos-invoice-tax-vat-id', reference: 'opos-invoice-tax-reference' } as const;
+
+const calculateIncomingInvoiceLine = (line: IncomingInvoiceDraftLine, selfAssessed = false): CalculatedIncomingInvoiceLine | null => {
   const quantity = Number(line.quantity);
   const unitPrice = Number(line.unitPrice);
   const taxRate = Number(line.taxRate);
@@ -141,7 +150,8 @@ const calculateIncomingInvoiceLine = (line: IncomingInvoiceDraftLine): Calculate
     || !Number.isFinite(quantity) || quantity <= 0 || !Number.isFinite(unitPrice) || unitPrice <= 0
     || !Number.isFinite(taxRate) || taxRate < 0 || taxRate > 100) return null;
   const netAmount = roundCents(quantity * unitPrice);
-  const taxAmount = roundCents(netAmount * taxRate / 100);
+  // A self-assessed purchase shows no VAT on the invoice; the rate is what the buyer owes itself.
+  const taxAmount = selfAssessed ? 0 : roundCents(netAmount * taxRate / 100);
   return {
     ...line,
     quantity,
@@ -207,6 +217,10 @@ export default function OposView({ dataAdapter, role = 'admin', initialInvoiceId
   const [vendorId, setVendorId] = useState('');
   const [vendorName, setVendorName] = useState('');
   const [invoiceLines, setInvoiceLines] = useState<IncomingInvoiceDraftLine[]>(() => [createIncomingInvoiceDraftLine()]);
+  const [taxCaseKey, setTaxCaseKey] = useState('');
+  const [taxCountry, setTaxCountry] = useState('');
+  const [taxVatId, setTaxVatId] = useState('');
+  const [taxReference, setTaxReference] = useState('');
   const [invoiceReason, setInvoiceReason] = useState('');
   const [selectedInvoiceId, setSelectedInvoiceId] = useState(initialInvoiceId ?? '');
   const [preview, setPreview] = useState<AccountingPostingPreview | null>(null);
@@ -314,7 +328,8 @@ export default function OposView({ dataAdapter, role = 'admin', initialInvoiceId
   };
 
   const selectedItem = items.find((item) => item.id === selectedItemId);
-  const calculatedInvoiceLines = invoiceLines.map(calculateIncomingInvoiceLine);
+  const selfAssessedCase = SELF_ASSESSED_TAX_CASES.find((entry) => entry.key === taxCaseKey);
+  const calculatedInvoiceLines = invoiceLines.map((line) => calculateIncomingInvoiceLine(line, Boolean(selfAssessedCase)));
   const invoiceTotals = calculatedInvoiceLines.reduce((totals, line) => line ? {
     netAmount: roundCents(totals.netAmount + line.netAmount),
     taxAmount: roundCents(totals.taxAmount + line.taxAmount),
@@ -365,6 +380,11 @@ export default function OposView({ dataAdapter, role = 'admin', initialInvoiceId
     if (!invoiceNumber.trim()) errors[invoiceFieldIds.number] = 'Rechnungsnummer ist erforderlich.';
     if (!vendorId && !vendorName.trim()) errors[invoiceFieldIds.vendorName] = 'Kreditorname ist erforderlich, wenn kein Kreditor ausgewählt ist.';
     if (!invoiceReason.trim()) errors[invoiceFieldIds.reason] = 'Begründung ist erforderlich.';
+    if (selfAssessedCase) {
+      if (!/^[A-Za-z]{2}$/.test(taxCountry.trim())) errors[taxFieldIds.country] = 'Land des Lieferanten mit zwei Buchstaben angeben, z. B. AT.';
+      if (selfAssessedCase.vatIdRequired && !/^[A-Za-z]{2}[A-Za-z0-9]{2,14}$/.test(taxVatId.trim())) errors[taxFieldIds.vatId] = 'USt-IdNr. des Lieferanten mit Länderpräfix angeben.';
+      if (!taxReference.trim()) errors[taxFieldIds.reference] = 'Nachweis angeben, z. B. den Hinweis auf der Rechnung.';
+    }
     for (const line of invoiceLines) {
       if (!line.description.trim()) {
         errors[invoiceLineFieldId(line.id, 'description')] = 'Beschreibung ist erforderlich.';
@@ -537,6 +557,10 @@ export default function OposView({ dataAdapter, role = 'admin', initialInvoiceId
         taxAmount: invoiceTotals.taxAmount,
         grossAmount: invoiceTotals.grossAmount,
         taxRate: lines[0]?.taxRate ?? 0,
+        ...(selfAssessedCase ? {
+          taxCaseKey: selfAssessedCase.key,
+          taxMeta: { vendorCountryCode: taxCountry.trim().toUpperCase(), ...(taxVatId.trim() ? { vendorVatId: taxVatId.trim().toUpperCase() } : {}), evidenceType: 'rechnung', evidenceReference: taxReference.trim() },
+        } : {}),
         status: 'draft',
         accountingStatus: 'unposted',
         lines: lines.map((line, index) => ({
@@ -910,7 +934,31 @@ export default function OposView({ dataAdapter, role = 'admin', initialInvoiceId
                   ) : null}
                   <Input label="Rechnungsdatum" type="date" fullWidth value={invoiceDate} onChange={(e) => setInvoiceDate(e.target.value)} />
                   <Input label="Fällig am" type="date" fullWidth value={dueDate} onChange={(e) => setDueDate(e.target.value)} />
+                  <Select
+                    label="Steuerfall"
+                    aria-label="Steuerfall"
+                    fullWidth
+                    value={taxCaseKey}
+                    onChange={(e) => {
+                      setTaxCaseKey(e.target.value);
+                      // Prefill the supplier's VAT ID and country from the creditor.
+                      const vatId = vendors.find((vendor) => vendor.id === vendorId)?.vatId ?? '';
+                      if (e.target.value && !taxVatId && vatId) setTaxVatId(vatId);
+                      if (e.target.value && !taxCountry) setTaxCountry(vatId ? vatId.slice(0, 2).toUpperCase() : e.target.value === 'DE_RC_13B_DOMESTIC' ? 'DE' : '');
+                    }}
+                  >
+                    <option value="">Inland oder steuerfrei (nach Steuersatz)</option>
+                    {SELF_ASSESSED_TAX_CASES.map((entry) => <option key={entry.key} value={entry.key}>{entry.label}</option>)}
+                  </Select>
                 </div>
+                {selfAssessedCase ? (
+                  <div className="grid gap-3 sm:grid-cols-3">
+                    <p className="text-caption text-muted sm:col-span-3">Der Lieferant rechnet netto ab. Tragen Sie bei den Positionen den Steuersatz ein, den Sie selbst schulden. Billme bucht Umsatzsteuer und Vorsteuer in gleicher Höhe.</p>
+                    <Input id={taxFieldIds.country} label="Land des Lieferanten" fullWidth required={canMutate} maxLength={2} error={invoiceErrors[taxFieldIds.country]} value={taxCountry} onChange={(e) => { setTaxCountry(e.target.value); clearInvoiceError(taxFieldIds.country); }} placeholder="z. B. AT" />
+                    <Input id={taxFieldIds.vatId} label={selfAssessedCase.vatIdRequired ? 'USt-IdNr. des Lieferanten' : 'USt-IdNr. des Lieferanten (optional)'} fullWidth required={canMutate && selfAssessedCase.vatIdRequired} error={invoiceErrors[taxFieldIds.vatId]} value={taxVatId} onChange={(e) => { setTaxVatId(e.target.value); clearInvoiceError(taxFieldIds.vatId); }} placeholder="z. B. ATU12345678" />
+                    <Input id={taxFieldIds.reference} label="Nachweis" fullWidth required={canMutate} error={invoiceErrors[taxFieldIds.reference]} value={taxReference} onChange={(e) => { setTaxReference(e.target.value); clearInvoiceError(taxFieldIds.reference); }} placeholder="z. B. Hinweis „Steuerschuldnerschaft des Leistungsempfängers“" />
+                  </div>
+                ) : null}
                 <div className="border-t border-border pt-3">
                   <div className="flex flex-wrap items-start justify-between gap-2">
                     <div className="min-w-0">

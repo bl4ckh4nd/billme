@@ -42,6 +42,7 @@ import type {
 } from '@billme/accounting-shared';
 
 export type { AccountingMutationContext } from '@billme/accounting-shared';
+import type { UstvaComputation } from '@billme/accounting-shared';
 export type { TaxFilingAction, TaxFilingMutation, TaxFilingProviderResult, TaxFilingRecord } from '@billme/accounting-shared';
 import type {
   DunningEmailProvider,
@@ -466,6 +467,8 @@ export interface VatSummary {
     grossAmount: number;
     lineCount: number;
   }>;
+  /** UStVA Kennzahlen of the range, the same computation as the prepared UStVA. */
+  kennzahlen?: UstvaComputation;
 }
 
 export interface DatevPostingRow {

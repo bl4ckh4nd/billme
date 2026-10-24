@@ -45,6 +45,13 @@ export interface IncomingInvoiceLineEntity {
   assetAccountNumber?: string;
 }
 
+export interface IncomingInvoiceTaxMeta {
+  vendorCountryCode?: string;
+  vendorVatId?: string;
+  evidenceType?: string;
+  evidenceReference?: string;
+}
+
 export interface IncomingInvoiceEntity {
   id: string;
   tenantId: string;
@@ -59,6 +66,8 @@ export interface IncomingInvoiceEntity {
   status: 'draft' | 'open' | 'paid' | 'cancelled' | 'unresolved';
   taxRate: number;
   taxCaseKey?: string;
+  /** Evidence of a self-assessed purchase (§ 13b, innergemeinschaftlicher Erwerb): the supplier's country and VAT ID. */
+  taxMeta?: IncomingInvoiceTaxMeta;
   notes?: string;
   lines: IncomingInvoiceLineEntity[];
   accountingStatus: 'unposted' | 'posted' | 'unresolved' | 'reversed';
@@ -240,7 +249,8 @@ export interface AccountingAccountMapping {
   chart: 'SKR03' | 'SKR04';
   role: 'accounts_receivable' | 'accounts_payable' | 'bank' | 'revenue' | 'expense' | 'asset' | 'output_vat' | 'output_vat_deferred' | 'input_vat' | 'cash'
     | 'output_vat_7' | 'output_vat_deferred_7' | 'input_vat_7' | 'revenue_7' | 'revenue_small_business' | 'revenue_exempt' | 'revenue_rc_13b' | 'revenue_eu_supply'
-    | 'revenue_eu_service' | 'revenue_export' | 'revenue_outside_scope' | 'cash_discount_granted' | 'cash_discount_granted_7' | 'customer_advances' | 'customer_advances_7' | 'dunning_fees' | 'late_interest';
+    | 'revenue_eu_service' | 'revenue_export' | 'revenue_outside_scope' | 'cash_discount_granted' | 'cash_discount_granted_7' | 'customer_advances' | 'customer_advances_7' | 'dunning_fees' | 'late_interest'
+    | 'input_vat_rc_13b' | 'output_vat_rc_13b' | 'input_vat_ige' | 'output_vat_ige' | 'input_vat_ige_7' | 'output_vat_ige_7';
   accountNumber: string;
   updatedAt: string;
 }

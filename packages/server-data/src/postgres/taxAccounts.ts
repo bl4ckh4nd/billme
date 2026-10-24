@@ -7,7 +7,9 @@ import type { PostgresQueryable } from './connection.js';
  *
  * Every account is a role of `accounting_account_mappings` with a chart default below, so a tenant can map it
  * to another account of its chart; a `tax_case_account_mappings` row for the case and role wins over both.
- * Numbers are those of the shipped SKR catalogue (canonicalLedgerCatalog.ts, migrations 0029 and 0045).
+ * Numbers are those of the shipped SKR catalogue (canonicalLedgerCatalog.ts, migrations 0029, 0045 and 0047).
+ * Self-assessed purchases (§ 13b, innergemeinschaftlicher Erwerb) book the USt the buyer owes and the same amount as
+ * Vorsteuer: `output_tax`/`input_tax` of those cases resolve to the § 13b and Erwerb accounts.
  */
 export type LedgerChart = 'SKR03' | 'SKR04';
 
@@ -21,6 +23,7 @@ export const ACCOUNT_ROLE_DEFAULTS: Record<LedgerChart, Record<string, string>> 
     cash_discount_granted: '8736', cash_discount_granted_7: '8731',
     customer_advances: '1718', customer_advances_7: '1711',
     dunning_fees: '2700', late_interest: '2650',
+    input_vat_rc_13b: '1577', output_vat_rc_13b: '1787', input_vat_ige: '1574', output_vat_ige: '1774', input_vat_ige_7: '1572', output_vat_ige_7: '1772',
   },
   SKR04: {
     accounts_receivable: '1200', accounts_payable: '3300', bank: '1800', revenue: '4400', expense: '6300', asset: '0670',
@@ -31,6 +34,7 @@ export const ACCOUNT_ROLE_DEFAULTS: Record<LedgerChart, Record<string, string>> 
     cash_discount_granted: '4736', cash_discount_granted_7: '4731',
     customer_advances: '3272', customer_advances_7: '3260',
     dunning_fees: '4830', late_interest: '7100',
+    input_vat_rc_13b: '1407', output_vat_rc_13b: '3837', input_vat_ige: '1404', output_vat_ige: '3804', input_vat_ige_7: '1402', output_vat_ige_7: '3802',
   },
 };
 
@@ -47,9 +51,11 @@ export type TaxAccountRole = 'output_tax' | 'input_tax' | 'output_tax_deferred' 
 const BASE_ROLE: Record<TaxAccountRole, string> = {
   output_tax: 'output_vat', input_tax: 'input_vat', output_tax_deferred: 'output_vat_deferred', revenue: 'revenue', cash_discount: 'cash_discount_granted', customer_advance: 'customer_advances',
 };
+const SELF_ASSESSED_OUTPUT = { DE_RC_13B_DOMESTIC: 'output_vat_rc_13b', EU_B2B_SERVICE_RC: 'output_vat_rc_13b', NON_EU_SERVICE_RC: 'output_vat_rc_13b', EU_IGE_GOODS_RC: 'output_vat_ige' };
+const SELF_ASSESSED_INPUT = { DE_RC_13B_DOMESTIC: 'input_vat_rc_13b', EU_B2B_SERVICE_RC: 'input_vat_rc_13b', NON_EU_SERVICE_RC: 'input_vat_rc_13b', EU_IGE_GOODS_RC: 'input_vat_ige' };
 const ROLE_BY_CASE: Record<TaxAccountRole, Record<string, string>> = {
-  output_tax: { DE_STD_7: 'output_vat_7' },
-  input_tax: { DE_STD_7: 'input_vat_7' },
+  output_tax: { DE_STD_7: 'output_vat_7', ...SELF_ASSESSED_OUTPUT },
+  input_tax: { DE_STD_7: 'input_vat_7', ...SELF_ASSESSED_INPUT },
   output_tax_deferred: { DE_STD_7: 'output_vat_deferred_7' },
   revenue: {
     DE_STD_7: 'revenue_7', DE_KU19: 'revenue_small_business', DE_ZERO_EXEMPT: 'revenue_exempt', DE_RC_13B_DOMESTIC: 'revenue_rc_13b',
@@ -67,13 +73,14 @@ const CASH_DISCOUNT_CASES = new Set(['DE_STD_19', 'DE_STD_7']);
  * else the base role. Callers that only know the general account (`m.input_vat`, `m.output_vat`) still get the
  * 7 % account for DE_STD_7.
  */
-export const taxCaseAccount = async (db: PostgresQueryable, tenantId: string, chart: string, taxCaseKey: string | undefined, role: TaxAccountRole, fallback?: string, date?: string): Promise<string> => {
+export const taxCaseAccount = async (db: PostgresQueryable, tenantId: string, chart: string, taxCaseKey: string | undefined, role: TaxAccountRole, fallback?: string, date?: string, rate?: number): Promise<string> => {
   const roles = await accountRoleMappings(db, tenantId, chart === 'SKR04' ? 'SKR04' : 'SKR03');
   if (taxCaseKey) {
     const rows = (await db.query(`SELECT account_number FROM tax_case_account_mappings WHERE (tenant_id=$1 OR tenant_id IS NULL) AND chart=$2 AND tax_case_key=$3 AND role=$4 AND (valid_from IS NULL OR valid_from <= COALESCE($5,CURRENT_DATE::text)) AND (valid_to IS NULL OR valid_to >= COALESCE($5,CURRENT_DATE::text)) ORDER BY (tenant_id IS NULL) ASC, valid_from DESC NULLS LAST, updated_at DESC LIMIT 1`, [tenantId, chart, taxCaseKey, role, date ?? null])).rows as Array<{ account_number: string }>;
     if (rows[0]?.account_number) return rows[0].account_number;
-    if (role === 'cash_discount' && !CASH_DISCOUNT_CASES.has(taxCaseKey)) return taxCaseAccount(db, tenantId, chart, taxCaseKey, 'revenue', undefined, date);
-    const caseRole = ROLE_BY_CASE[role][taxCaseKey];
+    if (role === 'cash_discount' && !CASH_DISCOUNT_CASES.has(taxCaseKey)) return taxCaseAccount(db, tenantId, chart, taxCaseKey, 'revenue', undefined, date, rate);
+    // The Erwerb at 7 % has its own pair of accounts; the case alone does not say which rate it is.
+    const caseRole = rate === 7 && taxCaseKey === 'EU_IGE_GOODS_RC' && (role === 'output_tax' || role === 'input_tax') ? `${ROLE_BY_CASE[role][taxCaseKey]}_7` : ROLE_BY_CASE[role][taxCaseKey];
     if (caseRole && roles[caseRole]) return roles[caseRole];
   }
   return fallback ?? roles[BASE_ROLE[role]];

@@ -504,7 +504,7 @@ export const incomingInvoices = pgTable("incoming_invoices", {
   id: text("id"), tenantId: text("tenant_id"), vendorId: text("vendor_id"), number: text("number"),
   invoiceDate: text("invoice_date"), dueDate: text("due_date"), servicePeriod: text("service_period"),
   netAmount: numeric("net_amount"), taxAmount: numeric("tax_amount"), grossAmount: numeric("gross_amount"),
-  status: text("status"), taxRate: numeric("tax_rate"), taxCaseKey: text("tax_case_key"), notes: text("notes"),
+  status: text("status"), taxRate: numeric("tax_rate"), taxCaseKey: text("tax_case_key"), taxMetaJson: text("tax_meta_json"), notes: text("notes"),
   accountingStatus: text("accounting_status"), accountingSnapshotJson: text("accounting_snapshot_json"),
   accountingJournalEntryId: text("accounting_journal_entry_id"), accountingPostedAt: text("accounting_posted_at"), createdAt: text("created_at"), updatedAt: text("updated_at"),
 });

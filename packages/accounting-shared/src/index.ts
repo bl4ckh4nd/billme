@@ -11,3 +11,4 @@ export * from './accountingPolicy';
 export * from "./openItems";
 export * from './closing';
 export * from './eurSkrMapping';
+export * from './ustvaKennziffern';

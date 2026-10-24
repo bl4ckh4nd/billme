@@ -254,7 +254,7 @@ const mappingBody = z.object({
   reason: reasonSchema,
   id: z.string().optional(),
   chart: z.enum(['SKR03', 'SKR04']),
-  role: z.enum(['accounts_receivable', 'accounts_payable', 'bank', 'revenue', 'expense', 'asset', 'output_vat', 'output_vat_deferred', 'input_vat', 'cash', 'output_vat_7', 'output_vat_deferred_7', 'input_vat_7', 'revenue_7', 'revenue_small_business', 'revenue_exempt', 'revenue_rc_13b', 'revenue_eu_supply', 'revenue_eu_service', 'revenue_export', 'revenue_outside_scope', 'cash_discount_granted', 'cash_discount_granted_7', 'customer_advances', 'customer_advances_7', 'dunning_fees', 'late_interest']),
+  role: z.enum(['accounts_receivable', 'accounts_payable', 'bank', 'revenue', 'expense', 'asset', 'output_vat', 'output_vat_deferred', 'input_vat', 'cash', 'output_vat_7', 'output_vat_deferred_7', 'input_vat_7', 'revenue_7', 'revenue_small_business', 'revenue_exempt', 'revenue_rc_13b', 'revenue_eu_supply', 'revenue_eu_service', 'revenue_export', 'revenue_outside_scope', 'cash_discount_granted', 'cash_discount_granted_7', 'customer_advances', 'customer_advances_7', 'dunning_fees', 'late_interest', 'input_vat_rc_13b', 'output_vat_rc_13b', 'input_vat_ige', 'output_vat_ige', 'input_vat_ige_7', 'output_vat_ige_7']),
   accountNumber: z.string().trim().min(1),
 });
 const vendorInput = vendorSchema.omit({ tenantId: true, createdAt: true, updatedAt: true });
@@ -594,7 +594,7 @@ export const registerProAccountingRoutes = (app: FastifyInstance, options: ProAc
       try {
         return await repositoryFor(app).prepareTaxExport(session.scope, { ...body, mutation: mutationFor(session, body.reason) });
       } catch (error) {
-        if (error instanceof Error && /MISSING_EVIDENCE|INVALID_COUNTRY|INVALID_VAT_ID|INVALID_RATE|CATALOG|UNSUPPORTED|INVALID_PERIOD/.test(error.message)) throw new ApiError(422, error.message);
+        if (error instanceof Error && /MISSING_EVIDENCE|INVALID_COUNTRY|INVALID_VAT_ID|INVALID_RATE|CATALOG|UNSUPPORTED|INVALID_PERIOD|USTVA_KENNZAHL_MISSING/.test(error.message)) throw new ApiError(422, error.message);
         throw error;
       }
     },

@@ -494,6 +494,7 @@ const mockAccountingRoleDefaults: Record<'SKR03' | 'SKR04', Record<MockAccountin
     revenue_7: '8300', revenue_small_business: '8195', revenue_exempt: '8100', revenue_rc_13b: '8337', revenue_eu_supply: '8125',
     revenue_eu_service: '8336', revenue_export: '8120', revenue_outside_scope: '8338',
     cash_discount_granted: '8736', cash_discount_granted_7: '8731', customer_advances: '1718', customer_advances_7: '1711', dunning_fees: '2700', late_interest: '2650',
+    input_vat_rc_13b: '1577', output_vat_rc_13b: '1787', input_vat_ige: '1574', output_vat_ige: '1774', input_vat_ige_7: '1572', output_vat_ige_7: '1772',
   },
   SKR04: {
     accounts_receivable: '1200', accounts_payable: '3300', bank: '1800', revenue: '4400',
@@ -502,6 +503,7 @@ const mockAccountingRoleDefaults: Record<'SKR03' | 'SKR04', Record<MockAccountin
     revenue_7: '4300', revenue_small_business: '4185', revenue_exempt: '4100', revenue_rc_13b: '4337', revenue_eu_supply: '4125',
     revenue_eu_service: '4336', revenue_export: '4120', revenue_outside_scope: '4338',
     cash_discount_granted: '4736', cash_discount_granted_7: '4731', customer_advances: '3272', customer_advances_7: '3260', dunning_fees: '4830', late_interest: '7100',
+    input_vat_rc_13b: '1407', output_vat_rc_13b: '3837', input_vat_ige: '1404', output_vat_ige: '3804', input_vat_ige_7: '1402', output_vat_ige_7: '3802',
   },
 };
 const mockAccountingAccountMappings: MockAccountingAccountMapping[] = [];
@@ -4384,6 +4386,9 @@ const invoke = async <K extends IpcRouteKey>(key: K, args: IpcArgs<K>): Promise<
       throw new Error('Freie Buchungen sind in der Demo nicht möglich.');
     case 'pro:getBankLedgerReconciliation':
       return [] as IpcResult<K>;
+    case 'pro:prepareTaxExport':
+    case 'pro:getTaxExportArtifact':
+      throw new Error('Steuervorbereitungen sind in der Demo nicht möglich.');
 
     case 'pro:listAccountingSourceRuns':
       return [...mockAccountingSourceRuns]

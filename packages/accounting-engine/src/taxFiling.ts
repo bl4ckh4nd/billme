@@ -56,15 +56,16 @@ const snapshotSourceHash = (snapshot: TaxFilingSnapshot): string | undefined => 
 };
 
 /**
- * The supported 2025 filing contract is intentionally narrow. It binds every
+ * The filing contract (tax years from 2025) is intentionally narrow. It binds every
  * filing to a report/source snapshot and avoids silently transmitting a
  * payload from another tax year or taxonomy. Provider binaries still remain
  * a separate fail-closed seam.
  */
 export const validateTaxFilingSnapshot = (snapshot: TaxFilingSnapshot): void => {
   const payload = snapshot.payload;
-  if (payload.taxYear !== 2025) {
-    throw new TaxFilingError('VALIDATION_FAILED', 'Only the 2025 tax filing contract is supported');
+  // From 2025 on; later years use the latest contract, the provider seam below stays fail-closed for every year.
+  if (typeof payload.taxYear !== 'number' || !Number.isInteger(payload.taxYear) || payload.taxYear < 2025 || payload.taxYear > 2100) {
+    throw new TaxFilingError('VALIDATION_FAILED', 'Tax filing needs a tax year from 2025 on');
   }
   if (!snapshotSourceHash(snapshot)) {
     throw new TaxFilingError('VALIDATION_FAILED', 'Tax filing must reference an immutable report snapshot hash');

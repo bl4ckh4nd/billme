@@ -30,7 +30,8 @@ import {
  * - SKR04 / Ist-VAT: SKR03 accounts used on an SKR04 tenant, output VAT reported
  *   before it is paid, VAT recognised without a payment or beyond the invoice
  *   (overpayment), a chart switch after the first posting, a report of the other
- *   chart
+ *   chart, a UStVA that reports the invoice basis instead of the paid VAT or
+ *   fails on the Ist basis markers, a § 13b purchase on SKR03 accounts
  * - Ist-VAT accounts and corrections: not-yet-due VAT on the USt-Vorauszahlungen
  *   account (1780) or all rates on one account; a Skonto, a Forderungsausfall or
  *   a Storno of a paid invoice reducing the due VAT (1776) that was never due, or
@@ -394,6 +395,27 @@ describe('SKR04 with Ist-VAT', () => {
     assert.match(locked.body.message, /Kontenrahmen/);
     assert.equal((await get(h, '/accounting/policy')).activeChart, 'SKR04');
     assert.equal((await h.raw('GET', '/accounting/reports/susa?chart=SKR03')).status, 409, 'a report of the other chart is refused');
+  });
+
+  test('the UStVA of an Ist tenant reports the VAT as it is paid, not the invoice basis; a § 13b purchase books 1407/3837 on SKR04', async () => {
+    const month = today().slice(0, 7);
+    const [year, monthNo] = month.split('-').map(Number);
+    const from = `${month}-01`;
+    const to = `${month}-${String(new Date(Date.UTC(year!, monthNo!, 0)).getUTCDate()).padStart(2, '0')}`;
+    const due = money((await journal(h)).filter((entry) => entry.postingDate >= from && entry.postingDate <= to)
+      .reduce((sum, entry) => sum + entry.lines.filter((line) => line.accountNumber === '3806').reduce((s, line) => s + line.creditAmount - line.debitAmount, 0), 0));
+    assert.ok(due > 0, 'payments in this month made VAT due');
+    const view = (await get<{ kennzahlen: { rows: Array<{ kennziffer: string; taxAmount: number }> } }>(h, `/accounting/vat/summary?from=${from}&to=${to}`)).kennzahlen;
+    assert.equal(view.rows.find((row) => row.kennziffer === '81')!.taxAmount, due, 'Kz 81 holds the VAT recognised with the payments');
+    const prepared = await h.raw('POST', '/accounting/tax-exports/prepare', { kind: 'ustva', period: month, idempotencyKey: `ustva-${randomUUID()}`, reason: 'UStVA Ist' });
+    assert.equal(prepared.status, 200, prepared.text);
+
+    const vendorId = `v-${randomUUID().slice(0, 6)}`;
+    await h.raw('POST', '/accounting/vendors', { reason: 'Lieferant', vendor: { id: vendorId, name: 'Bau SKR04' } });
+    const id = `in-${randomUUID().slice(0, 6)}`;
+    await h.raw('POST', '/accounting/incoming-invoices', { reason: 'Eingang', invoice: { id, vendorId, number: 'ER-13B', invoiceDate: '2026-03-05', dueDate: '2026-03-30', netAmount: 1000, taxAmount: 0, grossAmount: 1000, status: 'open', taxRate: 19, taxCaseKey: 'DE_RC_13B_DOMESTIC', taxMeta: { vendorCountryCode: 'DE', evidenceType: 'rechnung', evidenceReference: 'Bauleistung' }, lines: [{ id: `l-${id}`, incomingInvoiceId: id, position: 0, description: 'Bau', quantity: 1, unitPrice: 1000, netAmount: 1000, taxRate: 19, taxAmount: 0, grossAmount: 1000 }] } });
+    assert.equal((await h.raw('POST', '/accounting/incoming-invoices/post', { invoiceId: id, reason: 'gebucht' })).body.status, 'ready');
+    assert.deepEqual(shape((await entryFor(h, `incoming-invoice:${id}`))!).sort((a, b) => a[0].localeCompare(b[0])), [['1407', 190, 0], ['3300', 0, 1000], ['3837', 0, 190], ['6300', 1000, 0]], 'under Ist the § 13b tax is still due with the purchase');
   });
 });
 

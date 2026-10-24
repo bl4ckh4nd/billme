@@ -941,6 +941,12 @@ export const createProWebClient = (config: ProWebClientConfig) => {
     postManualJournalEntry(input: unknown) {
       return requestJson({ method: 'POST', body: input, parser: (payload) => payload }, '/api/v1/pro/accounting/journal');
     },
+    prepareTaxExport(input: unknown) {
+      return requestJson({ method: 'POST', body: input, parser: (payload) => payload }, '/api/v1/pro/accounting/tax-exports/prepare');
+    },
+    getTaxExportArtifact(kind: string, id: string) {
+      return requestJson({ parser: (payload) => payload }, `/api/v1/pro/accounting/tax-exports/${encodeURIComponent(kind)}/${encodeURIComponent(id)}`);
+    },
     getBankLedgerReconciliation() {
       return requestJson({ parser: (payload) => payload }, '/api/v1/pro/accounting/bank-reconciliation');
     },
@@ -1249,6 +1255,14 @@ export const createProHttpBillmeApi = ({ fallback, onInvoke, downloadBlob, ...cl
         case 'pro:postManualJournalEntry': {
           const parsedArgs = ipcRoutes[key].args.parse(args);
           return ipcRoutes[key].result.parse(await client.postManualJournalEntry(parsedArgs)) as IpcResult<K>;
+        }
+        case 'pro:prepareTaxExport': {
+          const parsedArgs = ipcRoutes[key].args.parse(args);
+          return ipcRoutes[key].result.parse(await client.prepareTaxExport(parsedArgs)) as IpcResult<K>;
+        }
+        case 'pro:getTaxExportArtifact': {
+          const parsedArgs = ipcRoutes[key].args.parse(args) as IpcArgs<'pro:getTaxExportArtifact'>;
+          return ipcRoutes[key].result.parse(await client.getTaxExportArtifact(parsedArgs.kind, parsedArgs.id)) as IpcResult<K>;
         }
         case 'pro:getBankLedgerReconciliation': {
           return ipcRoutes[key].result.parse(await client.getBankLedgerReconciliation()) as IpcResult<K>;

@@ -144,7 +144,35 @@ showpage
 %%EOF
 `;
 
+// XRechnung 3.0 (CII) from the real builder, so the validator checks what Billme exports.
+// Node >= 23.6 strips the TypeScript types of the builder module itself.
+const { buildZugferdXml } = await import('../../../packages/desktop-services/src/einvoice/zugferdXml.ts');
+const xrechnung = buildZugferdXml({
+  invoiceNumber: 'RE-2026-002',
+  typeCode: '380',
+  issueDate: '2026-02-15',
+  dueDate: '2026-03-01',
+  currency: 'EUR',
+  seller: {
+    name: 'Billme GmbH', street: 'Hauptstr. 1', city: 'Berlin', postalCode: '10115', countryCode: 'DE',
+    vatId: 'DE123456789', taxId: '12/345/67890', iban: 'DE89370400440532013000',
+    contactName: 'Support Team', phone: '+49 30 123456', email: 'info@billme.app',
+  },
+  buyer: { name: 'Stadt Musterhausen', street: 'Rathausplatz 1', city: 'Hamburg', postalCode: '20095', countryCode: 'DE' },
+  buyerEmail: 'rechnungseingang@musterhausen.example',
+  buyerReference: '04011000-12345-67',
+  delivery: { date: '2026-02-10' },
+  skonto: { percent: 2, days: 10 },
+  lines: [
+    { lineId: '1', name: 'Wartung', quantity: 2, unitCode: 'C62', netUnitPrice: 100, netLineTotal: 200, taxRate: 19, taxCategoryCode: 'S', lineKind: 'item' },
+    { lineId: '2', name: 'Fachbuch', quantity: 1, unitCode: 'C62', netUnitPrice: 30, netLineTotal: 30, taxRate: 7, taxCategoryCode: 'S', lineKind: 'item' },
+  ],
+  allowances: [],
+  totals: { lineNetTotal: 230, taxTotal: 40.1, grandTotal: 270.1 },
+}, { profile: 'xrechnung' });
+
 fs.writeFileSync(path.join(outDir, 'invoice.xml'), xml, 'utf8');
+fs.writeFileSync(path.join(outDir, 'xrechnung.xml'), xrechnung, 'utf8');
 fs.writeFileSync(path.join(outDir, 'fixture.ps'), ps, 'utf8');
 
 console.log(`Wrote fixtures to ${outDir}`);

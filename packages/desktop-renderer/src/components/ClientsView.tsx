@@ -3,14 +3,14 @@
 import React, { useState } from 'react';
 import {
     Search, Plus, MapPin, Phone, Mail,
-    Trash2, Edit3, LayoutGrid, List, Check, ArrowUpRight, X
+    Trash2, Edit3, LayoutGrid, List, Check, ArrowUpRight, X, FileUp, User
 } from 'lucide-react';
 import {
   Avatar, Badge, Button, Card, CardHeader, EMPTY_VALUE, EmptyState, ErrorState, IconButton, Input, ListRow, Metric, Modal, PageHeader,
   SegmentedControl, Select, Sparkline, Table, TableBody, TableCell, TableHead, TableHeader, TableRow, Textarea, ValidationSummary,
   useActionFeedback,
 } from '@billme/ui';
-import type { Client, ClientAddress, ClientEmail } from '@billme/desktop-core/types';
+import type { Client, ClientAddress, ClientContact, ClientEmail } from '@billme/desktop-core/types';
 import { useClientsQuery, useDeleteClientMutation, useUpsertClientMutation } from '../hooks/useClients';
 import { useDeferredDelete } from '../hooks/useDeferredDelete';
 import { useCreateIntent } from '../hooks/useCreateIntent';
@@ -21,11 +21,14 @@ import { useNavigate, useRouterState } from '@tanstack/react-router';
 import { useUiStore } from '../ui-store';
 import { v4 as uuidv4 } from 'uuid';
 import { SkeletonLoader } from '../ui/components/SkeletonLoader';
+import { CsvImportDialog } from './masterdata/CsvImportDialog';
 
 type ClientEditorErrors = Record<string, string>;
 
 const emailFieldKey = (id: string) => `email:${id}`;
 const addressFieldKey = (id: string, field: 'street' | 'zip' | 'city' | 'country') => `address:${id}:${field}`;
+const contactFieldKey = (id: string, field: 'name' | 'email') => `contact:${id}:${field}`;
+const MAX_CONTACTS = 20;
 
 const kpiTile = 'rounded-tile border border-border bg-surface px-4 py-3.5';
 
@@ -59,6 +62,7 @@ export const ClientsView: React.FC = () => {
     const [searchTerm, setSearchTerm] = useState('');
     const [viewMode, setViewMode] = useState<'grid' | 'list'>('list');
     const [isEditorOpen, setIsEditorOpen] = useState(false);
+    const [isImportOpen, setIsImportOpen] = useState(false);
     const [draft, setDraft] = useState<Client | null>(null);
     const [editorErrors, setEditorErrors] = useState<ClientEditorErrors>({});
     const editorId = React.useId();
@@ -178,10 +182,17 @@ export const ClientsView: React.FC = () => {
                 ],
             } as Client);
 
+        // A client saved before contact lists existed shows its single contactPerson as the primary contact.
+        const contacts: ClientContact[] = base.contacts?.length
+            ? base.contacts
+            : base.contactPerson?.trim()
+                ? [{ id: uuidv4(), name: base.contactPerson.trim(), isPrimary: true }]
+                : [];
         const fixed: Client = {
             ...base,
             addresses: (base.addresses ?? []).map((a) => ({ ...a, clientId: base.id })),
             emails: (base.emails ?? []).map((e) => ({ ...e, clientId: base.id })),
+            contacts,
         };
 
         setEditorErrors({});
@@ -271,6 +282,24 @@ export const ClientsView: React.FC = () => {
             addError('emails', 'Mindestens eine E-Mail muss als Standard Rechnung markiert sein.');
         }
 
+        const normalizedContacts = (draft.contacts ?? [])
+            .map((contact) => ({
+                ...contact,
+                name: contact.name.trim(),
+                role: contact.role?.trim() || undefined,
+                email: contact.email?.trim() || undefined,
+                phone: contact.phone?.trim() || undefined,
+            }))
+            .filter((contact) => contact.name || contact.role || contact.email || contact.phone);
+        for (const contact of normalizedContacts) {
+            if (!contact.name) addError(contactFieldKey(contact.id, 'name'), 'Name des Ansprechpartners ist erforderlich.');
+            if (contact.email && !emailRegex.test(contact.email)) addError(contactFieldKey(contact.id, 'email'), `Ungültige E-Mail-Adresse: ${contact.email}`);
+        }
+        if (normalizedContacts.length > 0 && !normalizedContacts.some((contact) => contact.isPrimary)) {
+            normalizedContacts[0] = { ...normalizedContacts[0]!, isPrimary: true };
+        }
+        const primaryContact = normalizedContacts.find((contact) => contact.isPrimary);
+
         const normalizedAddresses = (draft.addresses ?? [])
             .map((address) => ({
                 ...address,
@@ -319,13 +348,14 @@ export const ClientsView: React.FC = () => {
             ...draft,
             company,
             email: legacyEmail,
-            contactPerson: draft.contactPerson.trim(),
+            contactPerson: primaryContact?.name ?? '',
             phone: draft.phone.trim(),
             address: draft.address.trim(),
             notes: draft.notes ?? '',
             customerNumber: draft.customerNumber?.trim() || undefined,
             addresses: normalizedAddresses,
             emails: normalizedEmails,
+            contacts: normalizedContacts,
             projects: draft.projects ?? [],
             activities: draft.activities ?? [],
         };
@@ -565,6 +595,28 @@ export const ClientsView: React.FC = () => {
                                             <dd className="min-w-0">{(billingAddress ? `${billingAddress.street}, ${billingAddress.zip} ${billingAddress.city}` : selectedClient.address) || EMPTY_VALUE}</dd>
                                         </div>
                                     </dl>
+                                    {(selectedClient.contacts ?? []).length > 0 && (
+                                        <ul aria-label="Ansprechpartner" className="flex flex-col gap-2 border-t border-border pt-3">
+                                            {[...(selectedClient.contacts ?? [])]
+                                                .sort((a, b) => Number(b.isPrimary) - Number(a.isPrimary))
+                                                .map((contact) => (
+                                                    <li key={contact.id} className="flex items-start gap-2 text-control">
+                                                        <User size={14} className="mt-0.5 shrink-0 text-muted" aria-hidden="true" />
+                                                        <div className="min-w-0">
+                                                            <p className="flex flex-wrap items-center gap-1.5 text-foreground">
+                                                                <span className="font-medium">{contact.name}</span>
+                                                                {contact.isPrimary && <Badge tone="info">Primär</Badge>}
+                                                            </p>
+                                                            {(contact.role || contact.email || contact.phone) && (
+                                                                <p className="truncate text-caption text-muted">
+                                                                    {[contact.role, contact.email, contact.phone].filter(Boolean).join(' · ')}
+                                                                </p>
+                                                            )}
+                                                        </div>
+                                                    </li>
+                                                ))}
+                                        </ul>
+                                    )}
                                     {selectedClient.tags.length > 0 && (
                                         <div className="flex flex-wrap gap-1.5">
                                             {selectedClient.tags.map((tag) => <Badge key={tag} tone="neutral">{tag}</Badge>)}
@@ -690,13 +742,6 @@ export const ClientsView: React.FC = () => {
                                 />
                             </div>
                             <Input
-                                id={getInputId('contactPerson')}
-                                label="Ansprechpartner"
-                                value={draft.contactPerson}
-                                onChange={(e) => setDraft({ ...draft, contactPerson: e.target.value })}
-                                fullWidth
-                            />
-                            <Input
                                 id="clientsview-telefon"
                                 label="Telefon"
                                 value={draft.phone}
@@ -783,6 +828,94 @@ export const ClientsView: React.FC = () => {
                 </div>
 
                 <div className="flex flex-col gap-3">
+                    <Card padding="none">
+                        <CardHeader
+                            className="px-3.5 py-3"
+                            title="Ansprechpartner"
+                            subtitle="Der primäre Ansprechpartner steht als „z. Hd.“ auf neuen Rechnungen."
+                            actions={
+                                <Button
+                                    variant="secondary"
+                                    size="sm"
+                                    disabled={(draft.contacts ?? []).length >= MAX_CONTACTS}
+                                    onClick={() =>
+                                        setDraft({
+                                            ...draft,
+                                            contacts: [
+                                                ...(draft.contacts ?? []),
+                                                { id: uuidv4(), name: '', isPrimary: (draft.contacts ?? []).length === 0 },
+                                            ],
+                                        })
+                                    }
+                                >
+                                    + Ansprechpartner
+                                </Button>
+                            }
+                        />
+                        {(draft.contacts ?? []).map((contact, idx) => {
+                            const updateContact = (patch: Partial<ClientContact>) => {
+                                const next = [...(draft.contacts ?? [])];
+                                next[idx] = { ...contact, ...patch };
+                                setDraft({ ...draft, contacts: next });
+                            };
+                            return (
+                                <div key={contact.id} className="flex flex-col gap-3 border-t border-border p-3.5">
+                                    <div className="grid grid-cols-2 gap-3">
+                                        <Input
+                                            id={getInputId(contactFieldKey(contact.id, 'name'))}
+                                            label="Name"
+                                            value={contact.name}
+                                            required
+                                            error={editorErrors[contactFieldKey(contact.id, 'name')]}
+                                            onChange={(e) => updateContact({ name: e.target.value })}
+                                            fullWidth
+                                        />
+                                        <Input
+                                            label="Funktion"
+                                            value={contact.role ?? ''}
+                                            onChange={(e) => updateContact({ role: e.target.value })}
+                                            placeholder="z. B. Einkauf"
+                                            fullWidth
+                                        />
+                                        <Input
+                                            id={getInputId(contactFieldKey(contact.id, 'email'))}
+                                            label="E-Mail"
+                                            value={contact.email ?? ''}
+                                            error={editorErrors[contactFieldKey(contact.id, 'email')]}
+                                            onChange={(e) => updateContact({ email: e.target.value })}
+                                            fullWidth
+                                        />
+                                        <Input
+                                            label="Telefon"
+                                            value={contact.phone ?? ''}
+                                            onChange={(e) => updateContact({ phone: e.target.value })}
+                                            fullWidth
+                                        />
+                                    </div>
+                                    <div className="flex flex-wrap items-center justify-between gap-2">
+                                        <Button
+                                            size="sm"
+                                            variant={contact.isPrimary ? 'dark' : 'secondary'}
+                                            aria-pressed={contact.isPrimary}
+                                            onClick={() => setDraft({ ...draft, contacts: setOnlyOneFlag(draft.contacts ?? [], contact.id, 'isPrimary') })}
+                                        >
+                                            {contact.isPrimary && <Check size={14} aria-hidden="true" />}
+                                            Primär
+                                        </Button>
+                                        <Button
+                                            size="sm"
+                                            variant="danger"
+                                            onClick={() => setDraft({ ...draft, contacts: (draft.contacts ?? []).filter((c) => c.id !== contact.id) })}
+                                        >
+                                            <Trash2 size={14} aria-hidden="true" />
+                                            Entfernen
+                                        </Button>
+                                    </div>
+                                </div>
+                            );
+                        })}
+                    </Card>
+
                     <Card padding="none">
                         <CardHeader
                             className="px-3.5 py-3"
@@ -1116,6 +1249,7 @@ export const ClientsView: React.FC = () => {
     return (
         <div className="flex flex-col gap-3">
             {isEditorOpen && draft && renderEditor(draft)}
+            {isImportOpen && <CsvImportDialog kind="clients" existing={clients} onClose={() => setIsImportOpen(false)} />}
             {selectedClientId ? (
                 <DetailView />
             ) : (
@@ -1125,9 +1259,14 @@ export const ClientsView: React.FC = () => {
                         title="Kunden"
                         description={isLoadingClients || isClientsError ? undefined : countLabel(visibleClients.length, 'Stammdatensatz', 'Stammdatensätze')}
                         actions={
-                            <Button onClick={() => openEditor()}>
-                                <Plus size={16} aria-hidden="true" /> Neuer Kunde
-                            </Button>
+                            <>
+                                <Button variant="secondary" onClick={() => setIsImportOpen(true)}>
+                                    <FileUp size={16} aria-hidden="true" /> Importieren (CSV)
+                                </Button>
+                                <Button onClick={() => openEditor()}>
+                                    <Plus size={16} aria-hidden="true" /> Neuer Kunde
+                                </Button>
+                            </>
                         }
                         toolbar={
                             <>

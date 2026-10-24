@@ -137,6 +137,7 @@ export const clients = pgTable("clients", {
   notes: text("notes"),
   addressesJson: text("addresses_json"),
   emailsJson: text("emails_json"),
+  contactsJson: text("contacts_json"),
   projectsJson: text("projects_json"),
   activitiesJson: text("activities_json"),
   createdAt: text("created_at"),

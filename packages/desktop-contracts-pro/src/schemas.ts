@@ -9,6 +9,7 @@ import {
 
 import {
   businessReportingProfileSchema,
+  datevSettingsSchema,
   dunningLevelSchema,
   eurLineSchema,
 } from '@billme/desktop-contracts/schemas';
@@ -625,6 +626,7 @@ const isValidMonthDay = (value: string): boolean => {
 
 const appSettingsBaseSchema = z.object({
   businessReportingProfile: businessReportingProfileSchema.optional(),
+  datev: datevSettingsSchema.optional(),
   company: z.object({
     name: z.string(),
     owner: z.string(),

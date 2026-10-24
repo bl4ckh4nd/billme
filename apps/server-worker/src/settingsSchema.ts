@@ -186,8 +186,17 @@ export const BusinessReportingProfileSchema = z
     }
   });
 
+// Mirrors datevSettingsSchema in @billme/desktop-contracts; the worker does not read it.
+const DatevSettingsSchema = z.object({
+  consultantNumber: z.string(),
+  clientNumber: z.string(),
+  accountLength: z.number().int().min(4).max(8).default(4),
+  chart: z.enum(['SKR03', 'SKR04']).default('SKR03'),
+});
+
 const SettingsBaseSchema = z.object({
   businessReportingProfile: BusinessReportingProfileSchema.optional(),
+  datev: DatevSettingsSchema.optional(),
   company: CompanySettingsSchema,
   finance: FinanceSettingsSchema,
   numbers: NumbersSettingsSchema,

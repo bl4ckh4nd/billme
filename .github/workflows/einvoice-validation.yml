@@ -23,7 +23,8 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          # 24: the fixture generator imports the TypeScript XML builder (type stripping).
+          node-version: 24
 
       - name: Setup Java
         uses: actions/setup-java@v4
@@ -80,6 +81,12 @@ jobs:
           java -Xmx1G -Dfile.encoding=UTF-8 -jar tools/validator/Mustang-CLI.jar \
             --action validate \
             --source apps/desktop/.artifacts/einvoice/invoice.xml
+
+      - name: Validate XRechnung CII from the Billme builder (Mustang)
+        run: |
+          java -Xmx1G -Dfile.encoding=UTF-8 -jar tools/validator/Mustang-CLI.jar \
+            --action validate \
+            --source apps/desktop/.artifacts/einvoice/xrechnung.xml
 
       - name: Validate ZUGFeRD PDF (Mustang)
         run: |

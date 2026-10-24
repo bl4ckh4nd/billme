@@ -136,6 +136,7 @@ type ClientRow = {
   notes: string;
   addresses_json: string | null;
   emails_json: string | null;
+  contacts_json: string | null;
   projects_json: string | null;
   activities_json: string | null;
   tax_profile_json: string | null;
@@ -347,6 +348,7 @@ const rowToClient = (row: ClientRow): Client =>
     notes: row.notes,
     addresses: parseJson(row.addresses_json, []),
     emails: parseJson(row.emails_json, []),
+    contacts: parseJson(row.contacts_json, []),
     projects: parseJson(row.projects_json, []),
     activities: parseJson(row.activities_json, []),
     taxProfile: parseJson(row.tax_profile_json, undefined),
@@ -567,6 +569,7 @@ const toClientRow = (r: any): ClientRow => ({
   notes: r.notes!,
   addresses_json: r.addressesJson ?? null,
   emails_json: r.emailsJson ?? null,
+  contacts_json: r.contactsJson ?? null,
   projects_json: r.projectsJson ?? null,
   activities_json: r.activitiesJson ?? null,
   tax_profile_json: r.taxProfileJson ?? null,
@@ -900,6 +903,7 @@ export const createPostgresClientRepository = (
           notes: nextClient.notes,
           addressesJson: toJson(nextClient.addresses ?? []),
           emailsJson: toJson(nextClient.emails ?? []),
+          contactsJson: toJson(nextClient.contacts ?? []),
           projectsJson: toJson(nextClient.projects ?? []),
           activitiesJson: toJson(nextClient.activities ?? []),
           taxProfileJson: nextClient.taxProfile
@@ -925,6 +929,7 @@ export const createPostgresClientRepository = (
             notes: nextClient.notes,
             addressesJson: toJson(nextClient.addresses ?? []),
             emailsJson: toJson(nextClient.emails ?? []),
+            contactsJson: toJson(nextClient.contacts ?? []),
             projectsJson: toJson(nextClient.projects ?? []),
             activitiesJson: toJson(nextClient.activities ?? []),
             taxProfileJson: nextClient.taxProfile

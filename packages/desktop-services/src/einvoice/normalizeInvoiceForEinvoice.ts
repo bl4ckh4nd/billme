@@ -27,8 +27,14 @@ export type NormalizedEinvoice = {
     vatId?: string;
     taxId?: string;
     iban?: string;
+    /** BG-6 seller contact (BT-41 name, BT-42 phone, BT-43 email); BT-34 uses the email too. */
+    contactName?: string;
+    phone?: string;
+    email?: string;
   };
   buyer: NormalizedAddress;
+  /** BT-49 buyer electronic address: the billing e-mail of the invoice. */
+  buyerEmail?: string;
   buyerVatId?: string;
   /** BT-10 Käuferreferenz (Leitweg-ID). */
   buyerReference?: string;
@@ -111,7 +117,8 @@ const normalizeBuyerAddress = (invoice: Invoice): NormalizedAddress => {
   const lines = (invoice.clientAddress ?? '')
     .split('\n')
     .map((v) => v.trim())
-    .filter(Boolean);
+    // The editor puts the primary contact as "z. Hd. …" above the street.
+    .filter((v) => Boolean(v) && !/^z\.\s?Hd\./i.test(v));
   const street = lines[0] ?? '';
   const cityLine = lines[1] ?? '';
   const parsed = parseAddressFromLine(cityLine);
@@ -124,7 +131,7 @@ const normalizeBuyerAddress = (invoice: Invoice): NormalizedAddress => {
   };
 };
 
-const normalizeSellerAddress = (settings: AppSettings): NormalizedAddress & { vatId?: string; taxId?: string; iban?: string } => {
+const normalizeSellerAddress = (settings: AppSettings): NormalizedEinvoice['seller'] => {
   const companyName = settings.company.name.trim();
   const street = settings.company.street.trim();
   const city = settings.company.city.trim();
@@ -141,6 +148,9 @@ const normalizeSellerAddress = (settings: AppSettings): NormalizedAddress & { va
     vatId: vatId || undefined,
     taxId: taxId || undefined,
     iban: settings.finance.iban.replace(/\s/g, '').toUpperCase() || undefined,
+    contactName: (settings.company.owner ?? '').trim() || companyName || undefined,
+    phone: (settings.company.phone ?? '').trim() || undefined,
+    email: (settings.company.email ?? '').trim() || undefined,
   };
 };
 
@@ -234,6 +244,7 @@ export const normalizeInvoiceForEinvoice = (
     currency: 'EUR',
     seller,
     buyer,
+    buyerEmail: invoice.clientEmail?.trim() || undefined,
     buyerVatId: invoice.taxMeta?.buyerVatId?.trim() || undefined,
     buyerReference: (invoice.taxMeta as { buyerReference?: string } | undefined)?.buyerReference?.trim() || undefined,
     precedingInvoice: typeCode === '381' && source ? { number: source.number, date: toIsoDate(source.date, 'source.date') } : undefined,

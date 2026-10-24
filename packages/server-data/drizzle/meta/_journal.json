@@ -274,6 +274,13 @@
       "when": 1790985600006,
       "tag": "0039_server_data_invoice_skonto",
       "breakpoints": false
+    },
+    {
+      "idx": 40,
+      "version": "7",
+      "when": 1790985600007,
+      "tag": "0040_server_data_client_contacts",
+      "breakpoints": false
     }
   ]
 }

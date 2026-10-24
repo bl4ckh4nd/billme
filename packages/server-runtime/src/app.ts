@@ -83,7 +83,7 @@ import {
 } from '@billme/desktop-contracts-pro/schemas';
 import { SessionTokenService, checkSessionSecret, type AuthSession, type AuthSessionInfo } from './auth.js';
 import { createAuthStore, resolveSetupToken } from './authStore.js';
-import { buildAuditEntry, withInvoiceHistory, withOfferHistory } from './auditHistory.js';
+import { buildAuditEntry, withInvoiceHistories, withInvoiceHistory, withOfferHistories, withOfferHistory } from './auditHistory.js';
 import { assertOfferContentEditable, assertInvoiceContentEditable, cancelUnpaidRevisionSource, chainIssueBodySchema, settleCorrectedSource, settledInvoiceStatus, issueDocumentChain, issuableIn, lockChainSource, postOpenedBillingDocument } from './documentIssuance.js';
 import { ApiError, registerErrorHandler, typedRoute } from './http.js';
 import { registerServerApiOrpc } from './orpc.js';
@@ -98,6 +98,7 @@ import { registerAutomationRoutes, type RegisterAutomationRoutesOptions } from '
 import { registerAuditRoutes } from './auditRoutes.js';
 import { registerEurRuleRoutes } from './eurRuleRoutes.js';
 import { registerDocumentTemplateRoutes } from './documentTemplateRoutes.js';
+import { registerEinvoiceRoutes } from './einvoiceRoutes.js';
 import { authenticateCliToken, isDeviceLoginPath, registerCliAccessRoutes } from './cliAccessRoutes.js';
 import { createPlatformMailer, type PlatformMailer } from './platformMail.js';
 import { registerWorkspaceRoutes } from './workspaceRoutes.js';
@@ -436,7 +437,7 @@ const registerBillingRoutes = (app: FastifyInstance, product: 'lite' | 'pro', pr
       const pool = requireDatabase(app);
       const dependencies = createPostgresBillingDependencies(pool);
       const invoices = await dependencies.invoiceRepo.list(session.scope);
-      return Promise.all(invoices.map((invoice) => withInvoiceHistory(pool, session.scope, invoice)));
+      return withInvoiceHistories(pool, session.scope, invoices);
     },
   });
 
@@ -722,7 +723,7 @@ const registerBillingRoutes = (app: FastifyInstance, product: 'lite' | 'pro', pr
       const pool = requireDatabase(app);
       const dependencies = createPostgresBillingDependencies(pool);
       const offers = await dependencies.offerRepo.list(session.scope);
-      return Promise.all(offers.map((offer) => withOfferHistory(pool, session.scope, offer)));
+      return withOfferHistories(pool, session.scope, offers);
     },
   });
 
@@ -1682,6 +1683,8 @@ export const buildServerApi = async (options: BuildServerApiOptions = {}): Promi
     registerCatalogRoutes(app, 'pro', '/api/v1/pro');
     registerDocumentTemplateRoutes(app, 'lite', '/api/v1/lite');
     registerDocumentTemplateRoutes(app, 'pro', '/api/v1/pro');
+    registerEinvoiceRoutes(app, 'lite', '/api/v1/lite');
+    registerEinvoiceRoutes(app, 'pro', '/api/v1/pro');
     registerTransactionRoutes(app, 'lite');
     registerTransactionRoutes(app, 'pro');
     registerProRoutes(app);
@@ -1712,6 +1715,7 @@ export const buildServerApi = async (options: BuildServerApiOptions = {}): Promi
     registerBillingRoutes(app, product, `/api/v1/${product}`);
     registerCatalogRoutes(app, product, `/api/v1/${product}`);
     registerDocumentTemplateRoutes(app, product, `/api/v1/${product}`);
+    registerEinvoiceRoutes(app, product, `/api/v1/${product}`);
     registerTransactionRoutes(app, product);
     if (product === 'pro') {
       registerProRoutes(app);

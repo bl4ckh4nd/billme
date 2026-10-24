@@ -23,6 +23,8 @@ export const MOCK_SETTINGS: AppSettings = {
     chart: 'SKR03',
     vatMethod: 'soll',
   },
+  // Demo numbers in the DATEV range; a new workspace has no `datev` until the user enters it.
+  datev: { consultantNumber: '1001', clientNumber: '1', accountLength: 4, chart: 'SKR03' },
   portal: {
     baseUrl: '',
   },

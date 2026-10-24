@@ -11,7 +11,30 @@ const xmlEscape = (value: string): string =>
 const formatAmount = (value: number): string => value.toFixed(2);
 const formatQuantity = (value: number): string => Number(value.toFixed(6)).toString();
 
-export const buildZugferdXml = (doc: NormalizedEinvoice): string => {
+const EN16931_GUIDELINE_ID = 'urn:cen.eu:en16931:2017';
+export const XRECHNUNG_CII_GUIDELINE_ID = 'urn:cen.eu:en16931:2017#compliant#urn:xeinkauf.de:kosit:xrechnung_3.0';
+
+/**
+ * CII XML (EN 16931). `xrechnung` sets the XRechnung 3.0 guideline id (BT-24)
+ * and adds what its CIUS requires on top: business process (BT-23), seller
+ * contact (BG-6) and the electronic addresses of seller (BT-34) and buyer (BT-49).
+ */
+export const buildZugferdXml = (doc: NormalizedEinvoice, options: { profile?: 'en16931' | 'xrechnung' } = {}): string => {
+  const xrechnung = options.profile === 'xrechnung';
+  const electronicAddress = (email: string | undefined) => xrechnung && email ? `
+        <ram:URIUniversalCommunication>
+          <ram:URIID schemeID="EM">${xmlEscape(email)}</ram:URIID>
+        </ram:URIUniversalCommunication>` : '';
+  const sellerContact = xrechnung ? `
+        <ram:DefinedTradeContact>
+          <ram:PersonName>${xmlEscape(doc.seller.contactName ?? doc.seller.name)}</ram:PersonName>${doc.seller.phone ? `
+          <ram:TelephoneUniversalCommunication>
+            <ram:CompleteNumber>${xmlEscape(doc.seller.phone)}</ram:CompleteNumber>
+          </ram:TelephoneUniversalCommunication>` : ''}${doc.seller.email ? `
+          <ram:EmailURIUniversalCommunication>
+            <ram:URIID>${xmlEscape(doc.seller.email)}</ram:URIID>
+          </ram:EmailURIUniversalCommunication>` : ''}
+        </ram:DefinedTradeContact>` : '';
   const linesXml = doc.lines
     .map(
       (line) => `    <ram:IncludedSupplyChainTradeLineItem>
@@ -89,9 +112,12 @@ export const buildZugferdXml = (doc: NormalizedEinvoice): string => {
   xmlns:ram="urn:un:unece:uncefact:data:standard:ReusableAggregateBusinessInformationEntity:100"
   xmlns:udt="urn:un:unece:uncefact:data:standard:UnqualifiedDataType:100"
   xmlns:qdt="urn:un:unece:uncefact:data:standard:QualifiedDataType:100">
-  <rsm:ExchangedDocumentContext>
+  <rsm:ExchangedDocumentContext>${xrechnung ? `
+    <ram:BusinessProcessSpecifiedDocumentContextParameter>
+      <ram:ID>urn:fdc:peppol.eu:2017:poacc:billing:01:1.0</ram:ID>
+    </ram:BusinessProcessSpecifiedDocumentContextParameter>` : ''}
     <ram:GuidelineSpecifiedDocumentContextParameter>
-      <ram:ID>urn:cen.eu:en16931:2017</ram:ID>
+      <ram:ID>${xrechnung ? XRECHNUNG_CII_GUIDELINE_ID : EN16931_GUIDELINE_ID}</ram:ID>
     </ram:GuidelineSpecifiedDocumentContextParameter>
   </rsm:ExchangedDocumentContext>
   <rsm:ExchangedDocument>
@@ -106,13 +132,13 @@ ${linesXml}
     <ram:ApplicableHeaderTradeAgreement>${doc.buyerReference ? `
       <ram:BuyerReference>${xmlEscape(doc.buyerReference)}</ram:BuyerReference>` : ''}
       <ram:SellerTradeParty>
-        <ram:Name>${xmlEscape(doc.seller.name)}</ram:Name>
+        <ram:Name>${xmlEscape(doc.seller.name)}</ram:Name>${sellerContact}
         <ram:PostalTradeAddress>
           <ram:PostcodeCode>${xmlEscape(doc.seller.postalCode)}</ram:PostcodeCode>
           <ram:LineOne>${xmlEscape(doc.seller.street)}</ram:LineOne>
           <ram:CityName>${xmlEscape(doc.seller.city)}</ram:CityName>
           <ram:CountryID>${xmlEscape(doc.seller.countryCode)}</ram:CountryID>
-        </ram:PostalTradeAddress>
+        </ram:PostalTradeAddress>${electronicAddress(doc.seller.email)}
         ${doc.seller.vatId ? `<ram:SpecifiedTaxRegistration><ram:ID schemeID="VA">${xmlEscape(doc.seller.vatId)}</ram:ID></ram:SpecifiedTaxRegistration>` : ''}
         ${doc.seller.taxId ? `<ram:SpecifiedTaxRegistration><ram:ID schemeID="FC">${xmlEscape(doc.seller.taxId)}</ram:ID></ram:SpecifiedTaxRegistration>` : ''}
       </ram:SellerTradeParty>
@@ -123,7 +149,7 @@ ${linesXml}
           <ram:LineOne>${xmlEscape(doc.buyer.street)}</ram:LineOne>
           <ram:CityName>${xmlEscape(doc.buyer.city)}</ram:CityName>
           <ram:CountryID>${xmlEscape(doc.buyer.countryCode)}</ram:CountryID>
-        </ram:PostalTradeAddress>
+        </ram:PostalTradeAddress>${electronicAddress(doc.buyerEmail)}
         ${doc.buyerVatId ? `<ram:SpecifiedTaxRegistration><ram:ID schemeID="VA">${xmlEscape(doc.buyerVatId)}</ram:ID></ram:SpecifiedTaxRegistration>` : ''}
       </ram:BuyerTradeParty>
     </ram:ApplicableHeaderTradeAgreement>

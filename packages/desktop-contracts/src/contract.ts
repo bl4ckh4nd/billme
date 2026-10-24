@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { dunningDeliverySchema, resolveDunningDeliverySchema } from '@billme/server-core';
-import { liteVatPeriodSchema, liteVatReportSchema, liteVatExportSchema } from '@billme/server-core';
+import { liteVatPeriodSchema, liteVatReportSchema, liteVatExportSchema, einvoiceParseRequestSchema, incomingEinvoiceSchema, xrechnungExportSchema } from '@billme/server-core';
 import { serverRoleSchema, teamInviteResultSchema, teamSchema } from '@billme/server-core';
 import { cliAccessRequestSchema, cliTokenSummarySchema, liteCashEntryInputSchema, liteCashEntrySchema, liteReceiptInputSchema, liteReceiptSchema, liteReceiptFileSchema, liteReceiptUploadSchema } from '@billme/server-core';
 import { taxFilingRoutes } from './taxFiling';
@@ -41,6 +41,8 @@ import {
   eurExportCsvArgsSchema,
   eurExportPdfArgsSchema,
   eurExportPdfResultSchema,
+  eurExportDatevArgsSchema,
+  eurExportDatevResultSchema,
   eurRuleSchema,
   eurListRulesArgsSchema,
   eurUpsertRuleArgsSchema,
@@ -478,6 +480,8 @@ export const ipcRoutes = {
   'vat:getReport': { channel: 'vat:getReport', args: liteVatPeriodSchema, result: liteVatReportSchema },
   'vat:exportCsv': { channel: 'vat:exportCsv', args: liteVatPeriodSchema, result: liteVatExportSchema },
   'vat:exportPdf': { channel: 'vat:exportPdf', args: liteVatPeriodSchema, result: liteVatExportSchema },
+  'einvoice:parse': { channel: 'einvoice:parse', args: einvoiceParseRequestSchema, result: incomingEinvoiceSchema },
+  'documents:exportXRechnung': { channel: 'documents:exportXRechnung', args: z.object({ id: z.string().min(1) }), result: xrechnungExportSchema },
   'cash:listEntries': { channel: 'cash:listEntries', args: z.undefined(), result: z.array(liteCashEntrySchema) },
   'cash:listReceipts': { channel: 'cash:listReceipts', args: z.undefined(), result: z.array(liteReceiptSchema) },
   'cash:saveEntry': { channel: 'cash:saveEntry', args: z.object({ entry: liteCashEntryInputSchema, expectedUpdatedAt: z.string().optional(), reason: z.string().trim().min(1) }), result: liteCashEntrySchema },
@@ -816,6 +820,11 @@ export const ipcRoutes = {
     channel: 'eur:exportPdf',
     args: eurExportPdfArgsSchema,
     result: eurExportPdfResultSchema,
+  },
+  'eur:exportDatev': {
+    channel: 'eur:exportDatev',
+    args: eurExportDatevArgsSchema,
+    result: eurExportDatevResultSchema,
   },
   'eur:listRules': {
     channel: 'eur:listRules',

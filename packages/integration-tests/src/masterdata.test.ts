@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { after, before, describe, test } from 'node:test';
 import type { BillmeApi } from '@billme/desktop-contracts/api';
 import { createDefaultTemplateBody, resolveInvoiceTaxMode } from '@billme/server-core';
+import { mapArticleCsv, mapClientCsv, parseGermanNumber, readMasterdataCsv } from '@billme/desktop-services/masterdataCsv';
 import { PRODUCTS, startProduct, type LiteHarness } from './harness.js';
 import { addDays, datevEvidence, draftInvoice, draftOffer, ISSUER, issueInvoice, newClient, today } from './fixtures.js';
 
@@ -17,6 +18,14 @@ import { addDays, datevEvidence, draftInvoice, draftOffer, ISSUER, issueInvoice,
  * - clients: addresses/e-mails/tax profile (VAT ID) lost on save, the wrong
  *   default address or e-mail taken for a new document, invalid payloads
  *   accepted, a client delete that damages the invoices written for it
+ * - contact persons: the list lost on save or restart, two primary contacts
+ *   accepted, none primary left without a primary, the legacy contactPerson
+ *   not following the primary contact, invalid contacts (no name, bad e-mail,
+ *   more than 20) accepted
+ * - CSV import: German/English headers or the ";" delimiter and BOM not read,
+ *   "1.234,56" misread, an invalid row saved, an existing customer number, the
+ *   same name+PLZ or an existing SKU/title imported twice, blank customer
+ *   numbers not assigned by the server, the import reason missing in the audit
  * - projects: code collisions, budget/date fields lost, archived projects still
  *   listed, a project moved between clients duplicated, no audit entry
  * - articles: VAT rate/unit lost, garbage (VAT 190 %, no title) accepted
@@ -73,6 +82,7 @@ for (const product of PRODUCTS) describe(`masterdata (${product})`, () => {
   after(async () => { await h.close(); });
 
   const makeClient = (overrides: Record<string, unknown> = {}) => h.api.clients.upsert({ client: newClient(overrides) as never });
+  const clientById = async (id: string) => (await h.api.clients.list()).find((client) => client.id === id);
   const getSettings = async (): Promise<Settings> => (await h.api.settings.get())!;
   const setSettings = (settings: Settings) => h.api.settings.set({ settings });
 
@@ -495,6 +505,112 @@ for (const product of PRODUCTS) describe(`masterdata (${product})`, () => {
       ];
       for (const [label, response] of cases) assert.equal(response.status, 400, `${label}: ${response.text}`);
       assert.equal((await h.raw('POST', '/clients', { reason: 'x' })).status, 400, 'missing client');
+    });
+
+    test('contact persons round-trip, keep one primary and mirror it into contactPerson', async () => {
+      const id = randomUUID();
+      const created = await makeClient({
+        id, company: `Kontakte ${uid()}`, contactPerson: 'veraltet',
+        contacts: [
+          { id: 'k-1', name: 'Anna Einkauf', role: 'Einkauf', email: 'anna@kontakte.example', phone: '030 1', isPrimary: false },
+          { id: 'k-2', name: 'Bernd Buchhaltung', role: 'Buchhaltung', isPrimary: true },
+        ],
+      });
+      assert.equal(created.contactPerson, 'Bernd Buchhaltung', 'contactPerson mirrors the primary contact');
+      const stored = (await clientById(id))!;
+      assert.deepEqual(stored.contacts, [
+        { id: 'k-1', name: 'Anna Einkauf', role: 'Einkauf', email: 'anna@kontakte.example', phone: '030 1', isPrimary: false },
+        { id: 'k-2', name: 'Bernd Buchhaltung', role: 'Buchhaltung', isPrimary: true },
+      ]);
+
+      // Switching the primary contact moves the legacy name along.
+      const switched = await h.api.clients.upsert({ client: { ...stored, contacts: stored.contacts!.map((contact) => ({ ...contact, isPrimary: contact.id === 'k-1' })) } as never });
+      assert.equal(switched.contactPerson, 'Anna Einkauf');
+      assert.deepEqual((await clientById(id))!.contacts!.map((contact) => [contact.id, contact.isPrimary]), [['k-1', true], ['k-2', false]]);
+
+      // None marked: the first one becomes primary.
+      const unmarked = await makeClient({ company: `Ohne Primär ${uid()}`, contacts: [{ id: 'u-1', name: 'Erste', isPrimary: false }, { id: 'u-2', name: 'Zweite', isPrimary: false }] });
+      assert.deepEqual(unmarked.contacts!.map((contact) => contact.isPrimary), [true, false]);
+      assert.equal(unmarked.contactPerson, 'Erste');
+
+      // Without contacts the legacy field stays as sent; an old row reads as no contacts.
+      const legacy = await makeClient({ company: `Ohne Kontakte ${uid()}`, contactPerson: 'Nur Legacy' });
+      assert.equal(legacy.contactPerson, 'Nur Legacy');
+      assert.deepEqual((await clientById(legacy.id))!.contacts, []);
+    });
+
+    test('invalid contact lists are rejected with 400 and nothing is saved', async () => {
+      const post = (contacts: unknown) => h.raw('POST', '/clients', { reason: 'test', client: newClient({ company: `Ungültig ${uid()}`, contacts }) });
+      const before = (await h.api.clients.list()).length;
+      const cases: Array<[string, Awaited<ReturnType<typeof post>>]> = [
+        ['two primary contacts', await post([{ id: 'a', name: 'A', isPrimary: true }, { id: 'b', name: 'B', isPrimary: true }])],
+        ['contact without name', await post([{ id: 'a', name: ' ', isPrimary: true }])],
+        ['malformed contact e-mail', await post([{ id: 'a', name: 'A', email: 'kein-mail', isPrimary: true }])],
+        ['more than 20 contacts', await post(Array.from({ length: 21 }, (_, index) => ({ id: `c-${index}`, name: `K ${index}`, isPrimary: index === 0 })))],
+      ];
+      for (const [label, response] of cases) assert.equal(response.status, 400, `${label}: ${response.text}`);
+      assert.equal((await h.api.clients.list()).length, before);
+    });
+
+    test('a CSV import maps German headers, assigns customer numbers, skips duplicates and invalid rows', async () => {
+      const tag = uid();
+      const existing = await makeClient({ company: `Bestand ${tag}`, customerNumber: `KD-CSV-${tag}` });
+      const csv = '\uFEFFFirma;Kundennummer;Ansprechpartner;E-Mail;Telefon;Straße;PLZ;Ort;Land;USt-IdNr\r\n'
+        + `Neu Eins ${tag};;Clara Import;clara@import.example;030 5;Importweg 1;10115;Berlin;DE;de123456789\r\n`
+        + `Doppelt ${tag};KD-CSV-${tag};;;;;;;;\r\n`
+        + `Kaputt ${tag};;;keine-mail;;;;;;\r\n`
+        + `Neu Eins ${tag};;;;;Anderer Weg 2;10115;Berlin;DE;\r\n`
+        + ';;;;;;;;;\r\n'
+        + `Neu Zwei ${tag};;;;;;;;;\r\n`;
+      const table = readMasterdataCsv(csv);
+      assert.equal(table.delimiter, ';');
+      const rows = mapClientCsv(table, await h.api.clients.list(), randomUUID);
+      assert.deepEqual(rows.map((row) => row.status), ['ok', 'duplicate', 'error', 'duplicate', 'ok'], 'the empty line is skipped, same name+PLZ inside the file is a duplicate');
+      assert.match(rows[2]!.errors.join(), /Ungültige E-Mail/);
+
+      const imported = [];
+      for (const row of rows) if (row.record) imported.push(await h.api.clients.upsert({ client: row.record as never, reason: 'CSV-Import kunden.csv' }));
+      assert.equal(imported.length, 2);
+      const [first, second] = imported;
+      assert.ok(first!.customerNumber && second!.customerNumber && first!.customerNumber !== second!.customerNumber, 'blank numbers are assigned by the server');
+      assert.equal(sequenceOf(second!.customerNumber!), sequenceOf(first!.customerNumber!) + 1);
+      assert.equal(first!.contactPerson, 'Clara Import');
+      assert.deepEqual(first!.contacts!.map((contact) => [contact.name, contact.isPrimary]), [['Clara Import', true]]);
+      assert.equal(first!.emails![0]!.email, 'clara@import.example');
+      assert.deepEqual([first!.addresses![0]!.street, first!.addresses![0]!.zip, first!.addresses![0]!.city], ['Importweg 1', '10115', 'Berlin']);
+      assert.equal(first!.taxProfile!.vatId, 'DE123456789');
+      const stored = await h.api.clients.list();
+      assert.equal(stored.filter((client) => client.customerNumber === existing.customerNumber).length, 1, 'the existing client is not imported twice');
+      assert.equal(stored.filter((client) => client.company === `Neu Eins ${tag}`).length, 1);
+      assert.equal(stored.some((client) => client.company === `Kaputt ${tag}`), false);
+
+      // Re-running the same file imports nothing: every row is a duplicate or invalid now.
+      assert.deepEqual(mapClientCsv(table, stored, randomUUID).map((row) => row.status), ['duplicate', 'duplicate', 'error', 'duplicate', 'duplicate']);
+
+      const audit = parseCsv(await h.api.audit.exportCsv()).filter((row) => row[3] === first!.id);
+      assert.deepEqual(audit.map((row) => [row[4], row[5]]), [['client.create', 'CSV-Import kunden.csv']]);
+    });
+
+    test('a CSV import of articles reads "1.234,56", English headers and the "," delimiter, and skips SKU/title duplicates', async () => {
+      assert.deepEqual(['1.234,56', '1234,5', '1234.56', '1.234', '€ 12', 'zwölf', ''].map(parseGermanNumber), [1234.56, 1234.5, 1234.56, 1234, 12, null, null]);
+      const tag = uid();
+      await h.api.articles.upsert({ article: { id: randomUUID(), sku: `SKU-${tag}`, title: `Bestand ${tag}`, description: '', price: 1, unit: 'Stk', category: 'x', taxRate: 19 } });
+      const semicolon = readMasterdataCsv(`Artikelnummer;Bezeichnung;Preis;USt;Einheit;Kategorie\nA-${tag};Beratung ${tag};1.234,56;19;Std;Dienstleistung\nsku-${tag};Anders ${tag};5;7;;\nB-${tag};Ermäßigt ${tag};"12,50";7 %;;\nC-${tag};Falsch ${tag};abc;16;;\nD-${tag};;10;19;;\nE-${tag};bestand ${tag};3;0;;`);
+      const rows = mapArticleCsv(semicolon, await h.api.articles.list(), randomUUID);
+      assert.deepEqual(rows.map((row) => row.status), ['ok', 'duplicate', 'ok', 'error', 'error', 'duplicate'], 'SKU and title compare case-insensitively');
+      assert.match(rows[3]!.errors.join(' | '), /Preis ist keine Zahl.*USt-Satz muss 0, 7 oder 19 sein/);
+      assert.match(rows[4]!.errors.join(), /Bezeichnung fehlt/);
+      for (const row of rows) if (row.record) await h.api.articles.upsert({ article: row.record });
+      const stored = await h.api.articles.list();
+      const beratung = stored.find((article) => article.sku === `A-${tag}`)!;
+      assert.deepEqual([beratung.price, beratung.taxRate, beratung.unit, beratung.category], [1234.56, 19, 'Std', 'Dienstleistung']);
+      assert.deepEqual([stored.find((article) => article.sku === `B-${tag}`)!.price, stored.find((article) => article.sku === `B-${tag}`)!.taxRate], [12.5, 7]);
+      assert.equal(stored.some((article) => article.sku === `C-${tag}`), false);
+
+      const comma = readMasterdataCsv(`SKU,Title,Description,Price,Unit,VAT\nF-${tag},English ${tag},"Zeile, mit Komma",99.90,h,19`);
+      assert.equal(comma.delimiter, ',');
+      const [english] = mapArticleCsv(comma, stored, randomUUID);
+      assert.deepEqual([english!.status, english!.record?.description, english!.record?.price, english!.record?.unit], ['ok', 'Zeile, mit Komma', 99.9, 'h']);
     });
 
     test('a client can be fetched by id and an unknown id gives null', async () => {
@@ -1030,7 +1146,7 @@ for (const product of PRODUCTS) describe(`masterdata (${product})`, () => {
 
 for (const product of PRODUCTS) test(`master data, templates, frozen layouts and counters survive an app restart (${product})`, async (t) => {
   const first = await startProduct(product, null, 'masterdata-restart');
-  const owner = await first.api.clients.upsert({ client: newClient({ company: 'Neustart GmbH', taxProfile: { type: 'business', countryCode: 'DE', vatId: 'DE123456789' } }) as never });
+  const owner = await first.api.clients.upsert({ client: newClient({ company: 'Neustart GmbH', taxProfile: { type: 'business', countryCode: 'DE', vatId: 'DE123456789' }, contacts: [{ id: 'r-1', name: 'Rita Rückruf', isPrimary: false }, { id: 'r-2', name: 'Paul Primär', role: 'GF', isPrimary: true }] }) as never });
   await first.api.clients.upsert({ client: newClient({ company: 'Manuell', customerNumber: 'KD-0007' }) as never });
   const project = await first.api.projects.upsert({ reason: 'neu', project: { id: randomUUID(), clientId: owner.id, name: 'Vor Neustart', status: 'active', budget: 123.45, startDate: '2026-04-01' } as never });
   const article = await first.api.articles.upsert({ article: { id: randomUUID(), title: 'Neustart-Artikel', description: '', price: 12.5, unit: 'Std.', category: 'x', taxRate: 7 } });
@@ -1049,6 +1165,8 @@ for (const product of PRODUCTS) test(`master data, templates, frozen layouts and
   const clients = await second.api.clients.list();
   assert.equal(clients.find((client) => client.id === owner.id)!.customerNumber, owner.customerNumber);
   assert.deepEqual(clients.find((client) => client.id === owner.id)!.taxProfile, { type: 'business', countryCode: 'DE', vatId: 'DE123456789' });
+  assert.deepEqual(clients.find((client) => client.id === owner.id)!.contacts, [{ id: 'r-1', name: 'Rita Rückruf', isPrimary: false }, { id: 'r-2', name: 'Paul Primär', role: 'GF', isPrimary: true }]);
+  assert.equal(clients.find((client) => client.id === owner.id)!.contactPerson, 'Paul Primär');
   assert.equal(clients.find((client) => client.company === 'Manuell')!.customerNumber, 'KD-0007');
   assert.deepEqual((await second.api.projects.get({ id: project.id }))!.budget, 123.45);
   assert.equal((await second.api.articles.list()).find((candidate) => candidate.id === article.id)!.taxRate, 7);

@@ -208,6 +208,22 @@ export const clientEmailSchema = z.object({
 });
 export type ClientEmail = z.infer<typeof clientEmailSchema>;
 
+/** A contact person at the client. At most one is primary; its name mirrors into the legacy `contactPerson`. */
+export const clientContactSchema = z.object({
+  id: entityIdSchema,
+  name: z.string().trim().min(1),
+  role: z.string().optional(),
+  email: z.string().email().optional(),
+  phone: z.string().optional(),
+  isPrimary: z.boolean().default(false),
+});
+export type ClientContact = z.infer<typeof clientContactSchema>;
+
+export const clientContactsSchema = z
+  .array(clientContactSchema)
+  .max(20)
+  .refine((contacts) => contacts.filter((contact) => contact.isPrimary).length <= 1, { message: 'Nur ein Ansprechpartner kann primär sein.' });
+
 export const clientProjectStatusSchema = z.enum(['active', 'completed', 'planned', 'on_hold', 'inactive', 'archived']);
 export type ClientProjectStatus = z.infer<typeof clientProjectStatusSchema>;
 
@@ -258,6 +274,7 @@ export const clientSchema = z.object({
   notes: z.string().default(''),
   addresses: z.array(clientAddressSchema).default([]),
   emails: z.array(clientEmailSchema).default([]),
+  contacts: clientContactsSchema.optional(),
   projects: z.array(clientProjectSchema).default([]),
   activities: z.array(clientActivitySchema).default([]),
   taxProfile: z.object({

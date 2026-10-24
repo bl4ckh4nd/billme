@@ -12,7 +12,8 @@ import {
 } from '@billme/ui';
 import { Spinner } from '../ui/components/Spinner';
 import type { AppSettings, BusinessReportingProfile, DunningLevel } from '@billme/desktop-core/types';
-import { getRendererRuntime, ipc } from '../runtime-api';
+import { getRendererProduct, getRendererRuntime, ipc } from '../runtime-api';
+import { datevSettingsSchema } from '@billme/desktop-contracts/schemas';
 import { useSetSettingsMutation, useSettingsQuery } from '../hooks/useSettings';
 import { useQueryClient } from '@tanstack/react-query';
 import { v4 as uuidv4 } from 'uuid';
@@ -39,7 +40,7 @@ const PROFIT_DETERMINATION_COPY: Record<BusinessReportingProfile['profitDetermin
 
 const inferBusinessReportingProfile = (settings: AppSettings): BusinessReportingProfile => {
   if (settings.businessReportingProfile) return settings.businessReportingProfile;
-  const isGmbh = /(?:GmbH|HRB)/i.test(`${settings.company.name} ${settings.finance.registerCourt}`);
+  const isGmbh = getRendererProduct() === 'pro' && /(?:GmbH|HRB)/i.test(`${settings.company.name} ${settings.finance.registerCourt}`);
   return {
     jurisdiction: 'DE',
     legalForm: isGmbh ? 'gmbh' : 'sole_proprietor',
@@ -52,6 +53,14 @@ const inferBusinessReportingProfile = (settings: AppSettings): BusinessReporting
 };
 
 /** One settings group: a card on the ground with a lined head. `flush` leaves the body padding to the rows. */
+type DatevDraft = { consultantNumber: string; clientNumber: string; accountLength: number; chart: 'SKR03' | 'SKR04' };
+const datevDraftOf = (settings: AppSettings): DatevDraft => ({
+  consultantNumber: settings.datev?.consultantNumber ?? '',
+  clientNumber: settings.datev?.clientNumber ?? '',
+  accountLength: settings.datev?.accountLength ?? 4,
+  chart: settings.datev?.chart ?? 'SKR03',
+});
+
 const SettingsCard: React.FC<Pick<CardHeaderProps, 'title' | 'subtitle' | 'count' | 'actions'> & { flush?: boolean; children: React.ReactNode }> = ({
   flush = false,
   children,
@@ -125,6 +134,7 @@ const SettingsForm: React.FC<{ initialSettings: AppSettings }> = ({ initialSetti
   const setSettingsMutation = useSetSettingsMutation();
   const [settings, setSettings] = useState<AppSettings>(initialSettings);
   const [reportingProfile, setReportingProfile] = useState<BusinessReportingProfile>(() => inferBusinessReportingProfile(initialSettings));
+  const [datevDraft, setDatevDraft] = useState<DatevDraft>(() => datevDraftOf(initialSettings));
   const [backupPath, setBackupPath] = useState('');
   const [auditStatus, setAuditStatus] = useState<string | null>(null);
   const [backupStatus, setBackupStatus] = useState<string | null>(null);
@@ -152,12 +162,15 @@ const SettingsForm: React.FC<{ initialSettings: AppSettings }> = ({ initialSetti
   const [previewLevelIndex, setPreviewLevelIndex] = useState<number | null>(null);
   /** The choice inside the "Gewinnermittlung ändern" dialog; null while the dialog is closed. */
   const [pendingProfitDetermination, setPendingProfitDetermination] = useState<BusinessReportingProfile['profitDetermination'] | null>(null);
+  // Lite keeps no ledger: EÜR only, so neither GmbH nor double-entry can be chosen there.
+  const isLite = getRendererProduct() !== 'pro';
   const { notify } = useActionFeedback('settings');
 
   React.useEffect(() => {
     if (loadedSettings) {
       setSettings(loadedSettings);
       setReportingProfile(inferBusinessReportingProfile(loadedSettings));
+      setDatevDraft(datevDraftOf(loadedSettings));
     }
   }, [loadedSettings]);
 
@@ -178,6 +191,13 @@ const SettingsForm: React.FC<{ initialSettings: AppSettings }> = ({ initialSetti
   }, []);
 
   const handleSave = async () => {
+    // Both numbers empty means no DATEV export; anything else must be a complete, valid pair.
+    const datevEmpty = !datevDraft.consultantNumber.trim() && !datevDraft.clientNumber.trim();
+    const datev = datevEmpty ? undefined : datevSettingsSchema.safeParse(datevDraft);
+    if (datev && !datev.success) {
+      notify('error', `DATEV-Export: ${datev.error.issues[0]?.message ?? 'Angaben unvollständig.'}`);
+      return;
+    }
     const normalizeCategoryList = (list: Array<{ id: string; name: string }>) => {
       const seen = new Set<string>();
       const out: Array<{ id: string; name: string }> = [];
@@ -241,6 +261,7 @@ const SettingsForm: React.FC<{ initialSettings: AppSettings }> = ({ initialSetti
     const sanitizedSettings: AppSettings = {
       ...settings,
       businessReportingProfile: reportingProfile,
+      datev: datev?.data,
       legal: {
         ...settings.legal,
         taxAccountingMethod: reportingProfile.vatMethod,
@@ -648,6 +669,7 @@ const SettingsForm: React.FC<{ initialSettings: AppSettings }> = ({ initialSetti
         );
       case 'finance':
         return (
+          <>
           <SettingsCard
             title="Bankverbindung & Steuer"
             subtitle="Wichtig für den Zahlungsverkehr und die Pflichtangaben auf der Rechnung."
@@ -709,6 +731,56 @@ const SettingsForm: React.FC<{ initialSettings: AppSettings }> = ({ initialSetti
               placeholder="z.B. Amtsgericht Berlin HRB 12345"
             />
           </SettingsCard>
+          <SettingsCard
+            title="DATEV-Export (für die Steuerberatung)"
+            subtitle="Die Nummern bekommst du von deiner Steuerberatung. Ohne sie gibt es keinen DATEV-Export."
+          >
+            <div className="grid grid-cols-2 gap-3">
+              <Input
+                id="settings-datev-consultant"
+                label="Beraternummer"
+                inputMode="numeric"
+                fullWidth
+                className="font-mono"
+                value={datevDraft.consultantNumber}
+                onChange={(e) => setDatevDraft((draft) => ({ ...draft, consultantNumber: e.target.value }))}
+                placeholder="4 bis 7 Ziffern"
+              />
+              <Input
+                id="settings-datev-client"
+                label="Mandantennummer"
+                inputMode="numeric"
+                fullWidth
+                className="font-mono"
+                value={datevDraft.clientNumber}
+                onChange={(e) => setDatevDraft((draft) => ({ ...draft, clientNumber: e.target.value }))}
+                placeholder="1 bis 5 Ziffern"
+              />
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <Select
+                id="settings-datev-account-length"
+                label="Sachkontenlänge"
+                fullWidth
+                value={datevDraft.accountLength}
+                onChange={(e) => setDatevDraft((draft) => ({ ...draft, accountLength: Number(e.target.value) }))}
+              >
+                {[4, 5, 6, 7, 8].map((length) => <option key={length} value={length}>{length} Stellen</option>)}
+              </Select>
+              <Select
+                id="settings-datev-chart"
+                label={isLite ? 'Kontenrahmen der Steuerberatung' : 'Kontenrahmen'}
+                hint={isLite ? 'billme Lite führt selbst keine Konten; der Export ordnet deine EÜR-Kategorien diesen Standardkonten zu.' : undefined}
+                fullWidth
+                value={datevDraft.chart}
+                onChange={(e) => setDatevDraft((draft) => ({ ...draft, chart: e.target.value as DatevDraft['chart'] }))}
+              >
+                <option value="SKR03">SKR03</option>
+                <option value="SKR04">SKR04</option>
+              </Select>
+            </div>
+          </SettingsCard>
+          </>
         );
       case 'numbers':
         return (
@@ -1393,7 +1465,7 @@ const SettingsForm: React.FC<{ initialSettings: AppSettings }> = ({ initialSetti
                 </Select>
                 <Select label="Rechtsform" aria-label="Rechtsform" fullWidth value={reportingProfile.legalForm} onChange={(event) => updateReportingProfile('legalForm', event.target.value as BusinessReportingProfile['legalForm'])}>
                   <option value="sole_proprietor">Einzelunternehmen</option>
-                  <option value="gmbh">GmbH</option>
+                  {(!isLite || reportingProfile.legalForm === 'gmbh') && <option value="gmbh">GmbH</option>}
                 </Select>
                 <div className="col-span-2">
                   <p className="mb-1 text-caption font-medium text-foreground-secondary">Gewinnermittlung</p>
@@ -1402,9 +1474,17 @@ const SettingsForm: React.FC<{ initialSettings: AppSettings }> = ({ initialSetti
                       <p data-testid="profit-determination-value" className="text-label text-foreground">{PROFIT_DETERMINATION_COPY[reportingProfile.profitDetermination].label}</p>
                       <p className="mt-0.5 text-caption text-muted">{PROFIT_DETERMINATION_COPY[reportingProfile.profitDetermination].hint}</p>
                     </div>
-                    <Button variant="secondary" size="sm" onClick={() => setPendingProfitDetermination(reportingProfile.profitDetermination)}>
-                      Ändern…
-                    </Button>
+                    {isLite ? (
+                      <p className="max-w-48 text-caption text-muted">
+                        {reportingProfile.profitDetermination === 'eur'
+                          ? 'Doppelte Buchführung mit Kontenrahmen gibt es in billme Pro.'
+                          : 'billme Lite rechnet nur mit EÜR. Stelle die Rechtsform auf Einzelunternehmen um.'}
+                      </p>
+                    ) : (
+                      <Button variant="secondary" size="sm" onClick={() => setPendingProfitDetermination(reportingProfile.profitDetermination)}>
+                        Ändern…
+                      </Button>
+                    )}
                   </div>
                 </div>
                 {reportingProfile.legalForm === 'gmbh' && (
@@ -1413,7 +1493,7 @@ const SettingsForm: React.FC<{ initialSettings: AppSettings }> = ({ initialSetti
                     <option value="small">Small</option>
                   </Select>
                 )}
-                {reportingProfile.profitDetermination === 'double_entry' && (
+                {!isLite && reportingProfile.profitDetermination === 'double_entry' && (
                   <Select label="Kontenrahmen" aria-label="Kontenrahmen" fullWidth value={reportingProfile.chart ?? ''} onChange={(event) => updateReportingProfile('chart', event.target.value as 'SKR03' | 'SKR04')}>
                     <option value="SKR03">SKR03</option>
                     <option value="SKR04">SKR04</option>

@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { after, before, describe, test } from 'node:test';
 import { calculateInvoiceTaxSnapshot } from '@billme/server-core';
+import { canDuplicateDocument, duplicateDocument } from '@billme/desktop-services/duplicateDocument';
 import { PRODUCTS, startProduct, type LiteHarness } from './harness.js';
 import { addDays, asSmallBusiness, datevEvidence, draftInvoice, draftOffer, issueInvoice, today, type DocumentInput } from './fixtures.js';
 
@@ -34,7 +35,13 @@ import { addDays, asSmallBusiness, datevEvidence, draftInvoice, draftOffer, issu
  *   bank payments edited outside the bank matching
  * - corrections: credit note / cancellation numbering and status of the source,
  *   revisions of paid invoices
- * - audit: create/update/payment not logged, hash chain broken
+ * - duplicating: the copy keeping the source's number, status, payments,
+ *   history, frozen layout snapshot, portal decision or chain links; the
+ *   source changed by the copy; a correction or chain document offered for
+ *   copying; the offer validity or the payment term not carried over
+ * - audit: create/update/payment not logged, hash chain broken, the list
+ *   showing another document's history or a history that differs from the
+ *   single read (the list reads all histories in one query)
  * - persistence: data gone after the app restarts
  * - validation: missing reason, bad item kind, unknown id
  */
@@ -549,6 +556,68 @@ for (const product of PRODUCTS) describe(`invoices (${product})`, () => {
     });
   });
 
+  describe('duplicating', () => {
+    test('a duplicated invoice is a new draft with a fresh number and none of the source\'s payments, history or snapshot', async () => {
+      const settings = (await h.api.settings.get())!;
+      const issued = await issueInvoice(h.api, { client: 'Kopiervorlage', items: [
+        { kind: 'item', description: 'Beratung', quantity: 2, price: 100, total: 200, taxRate: 19 },
+        { kind: 'item', description: 'Material', quantity: 1, price: 50, total: 50, taxRate: 7 },
+      ] });
+      await h.api.invoices.savePayment({ invoiceId: issued.id, payment: { id: randomUUID(), date: today(), amount: 10, method: 'bank' }, reason: 'Anzahlung' });
+      const source = (await h.api.invoices.list()).find((invoice) => invoice.id === issued.id)!;
+      assert.ok(source.layout?.snapshot, 'the issued source carries a frozen snapshot');
+      assert.ok(source.payments.length === 1 && (source.history ?? []).length > 0);
+      const sourceBefore = structuredClone(source);
+
+      const reservation = await h.api.numbers.reserve({ kind: 'invoice' });
+      const copy = duplicateDocument(source, { kind: 'invoice', id: randomUUID(), reservation, settings });
+      assert.equal(copy.status, 'draft');
+      assert.equal(copy.date, today());
+      assert.equal(copy.dueDate, addDays(today(), settings.legal.paymentTermsDays));
+      assert.deepEqual([copy.payments, copy.history, copy.layout?.snapshot, copy.dunningLevel], [[], [], undefined, undefined]);
+
+      const saved = await h.api.invoices.upsert({ reason: 'Dupliziert', invoice: copy });
+      assert.notEqual(saved.number, source.number);
+      assert.equal(saved.number, reservation.number);
+      assert.equal(saved.status, 'draft');
+      assert.deepEqual(saved.payments, []);
+      assert.equal(saved.layout?.snapshot, undefined, 'a draft copy is not frozen');
+      assert.deepEqual(saved.items, source.items);
+      assert.deepEqual([saved.client, saved.clientEmail, saved.clientAddress, saved.taxMode], [source.client, source.clientEmail, source.clientAddress, source.taxMode]);
+      assert.equal(saved.amount, source.amount);
+      assert.deepEqual((await h.api.invoices.list()).find((invoice) => invoice.id === source.id), sourceBefore, 'the source is unchanged');
+    });
+
+    test('a copy that keeps the source\'s number without a reservation is refused', async () => {
+      const settings = (await h.api.settings.get())!;
+      const source = await issueInvoice(h.api, { client: 'Nummernklau' });
+      const copy = duplicateDocument(source, { kind: 'invoice', id: randomUUID(), reservation: { number: source.number, reservationId: source.numberReservationId! }, settings });
+      const response = await h.raw('POST', '/invoices', { reason: 'Dupliziert', invoice: { ...copy, kind: 'invoice' } });
+      assert.ok([400, 409].includes(response.status), `${response.status}: ${response.text}`);
+      assert.equal((await h.api.invoices.list()).filter((invoice) => invoice.number === source.number).length, 1);
+    });
+
+    test('an offer copy keeps its validity span and drops the customer decision; corrections cannot be copied', async () => {
+      const settings = (await h.api.settings.get())!;
+      const date = addDays(today(), -10);
+      const offer = await draftOffer(h.api, { client: 'Angebotskunde', date, dueDate: addDays(date, 21) });
+      const decided = { ...offer, status: 'accepted' as const, shareDecision: 'accepted' as const, acceptedAt: new Date().toISOString(), acceptedBy: 'Kunde' };
+      const reservation = await h.api.numbers.reserve({ kind: 'offer' });
+      const copy = duplicateDocument(decided, { kind: 'offer', id: randomUUID(), reservation, settings });
+      assert.deepEqual([copy.status, copy.date, copy.dueDate], ['draft', today(), addDays(today(), 21)]);
+      assert.deepEqual([copy.shareDecision, copy.acceptedAt, copy.acceptedBy], [undefined, undefined, undefined]);
+      const saved = await h.api.offers.upsert({ reason: 'Dupliziert', offer: copy } as never);
+      assert.equal(saved.number, reservation.number);
+      assert.notEqual(saved.number, offer.number);
+
+      assert.equal(canDuplicateDocument('offer', {}), true);
+      assert.equal(canDuplicateDocument('invoice', {}), true);
+      for (const kind of ['credit_note', 'cancellation_invoice', 'advance_invoice', 'partial_invoice', 'final_invoice', 'order_confirmation', 'delivery_note'] as const) {
+        assert.equal(canDuplicateDocument('invoice', { documentKind: kind }), false, kind);
+      }
+    });
+  });
+
   describe('audit and validation', () => {
     test('every invoice mutation lands in a verifiable audit chain', async () => {
       const open = await issueInvoice(h.api, { client: 'Audited' });
@@ -560,6 +629,19 @@ for (const product of PRODUCTS) describe(`invoices (${product})`, () => {
       assert.ok(csv.includes('Audit-Zahlung'));
       const history = (await h.api.invoices.list()).find((i) => i.id === open.id)!.history ?? [];
       assert.ok(history.some((entry) => entry.action.includes('Audit-Zahlung')));
+    });
+
+    test('the list carries each document\'s own history, the same as the single read', async () => {
+      const paid = await issueInvoice(h.api, { client: 'History A' });
+      await h.api.invoices.savePayment({ invoiceId: paid.id, payment: { id: randomUUID(), date: today(), amount: 1, method: 'bank' }, reason: 'Nur bei A' });
+      const other = await issueInvoice(h.api, { client: 'History B' });
+      const listed = await h.api.invoices.list();
+      for (const invoice of [paid, other]) {
+        const single = await h.raw('GET', `/documents/invoice/${invoice.id}`);
+        assert.deepEqual(listed.find((i) => i.id === invoice.id)!.history, single.body.history, invoice.client);
+      }
+      assert.ok(listed.find((i) => i.id === paid.id)!.history!.some((entry) => entry.action.includes('Nur bei A')));
+      assert.ok(!listed.find((i) => i.id === other.id)!.history!.some((entry) => entry.action.includes('Nur bei A')));
     });
 
     test('a mutation without a reason is rejected before it reaches the server', async () => {

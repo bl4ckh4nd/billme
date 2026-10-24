@@ -1,13 +1,17 @@
 import React from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Badge, Button, Card, Checkbox, Input, Modal, Select } from '@billme/ui';
-import type { LiteCashEntry, LiteReceipt } from '@billme/server-core';
+import type { IncomingEinvoice, LiteCashEntry, LiteReceipt } from '@billme/server-core';
 import type { IpcArgs } from '@billme/desktop-contracts/contract';
 import { localIsoDate } from '@billme/desktop-utils';
 import { ipc } from '../../runtime-api';
+import { EinvoiceReview, receiptFromEinvoice } from './EinvoiceReview';
 
 const money = (value: number) => (value / 100).toLocaleString('de-DE', { style: 'currency', currency: 'EUR' });
 const parseCents = (value: string) => Math.round(Number(value.trim().replace(',', '.')) * 100);
+const fileToBase64 = (file: File) => new Promise<string>((resolve, reject) => { const reader = new FileReader(); reader.onload = () => resolve(String(reader.result).split(',')[1] ?? ''); reader.onerror = reject; reader.readAsDataURL(file); });
+const failureText = (failure: unknown) => (failure instanceof Error ? failure.message : String(failure));
+type OriginalFile = { fileName: string; mimeType: 'application/xml' | 'application/pdf'; contentBase64: string };
 const blankReceipt = (): LiteReceipt => ({ id: crypto.randomUUID(), number: '', counterparty: '', documentDate: localIsoDate(), receivedDate: localIsoDate(), serviceDate: localIsoDate(), grossAmountCents: 0, taxMode: 'domestic', deductiblePercent: 100, reviewed: false, taxBreakdown: [{ rate: 19, netAmountCents: 0, vatAmountCents: 0 }], updatedAt: '', fileCount: 0 });
 
 export const LiteCashPanel: React.FC = () => {
@@ -29,16 +33,47 @@ export const LiteCashPanel: React.FC = () => {
   const [bankId, setBankId] = React.useState('');
   const [matching, setMatching] = React.useState<LiteCashEntry>();
   const [manageReceiptId, setManageReceiptId] = React.useState('');
+  /** A read e-invoice under review, its problems after "Übernehmen", and the original file to archive on save. */
+  const [einvoice, setEinvoice] = React.useState<{ parsed: IncomingEinvoice; original: OriginalFile }>();
+  const [einvoiceProblems, setEinvoiceProblems] = React.useState<string[]>([]);
+  const [pendingOriginal, setPendingOriginal] = React.useState<OriginalFile>();
+  const [readingEinvoice, setReadingEinvoice] = React.useState(false);
+  const [viewing, setViewing] = React.useState<IncomingEinvoice>();
+  const einvoiceInput = React.useRef<HTMLInputElement>(null);
   const files = useQuery({ queryKey: ['cash', 'files', manageReceiptId], queryFn: () => ipc.cash.listFiles({ receiptId: manageReceiptId }), enabled: !!manageReceiptId });
   const refresh = async () => { await Promise.all(['cash', 'eur', 'transactions', 'lite-vat', 'dashboard-flows'].map((key) => queryClient.invalidateQueries({ queryKey: [key] }))); };
   const start = (entry?: LiteCashEntry) => {
     setEditing(entry); setReceipt(undefined); setReceiptOnly(false); setError(''); setReason('');
+    setEinvoice(undefined); setEinvoiceProblems([]); setPendingOriginal(undefined);
     setForm({ id: entry?.id ?? crypto.randomUUID(), cashDate: entry?.originalCashDate ?? localIsoDate(), amount: entry ? String(Math.abs(entry.amountCents) / 100) : '', flowType: entry?.flowType ?? 'expense', refund: entry ? (entry.flowType === 'expense' ? entry.amountCents > 0 : entry.amountCents < 0) : false, counterparty: entry?.counterparty ?? '', purpose: entry?.purpose ?? '', receiptId: entry?.receiptId ?? '' }); setOpen(true);
   };
   const persistReceipt = async () => {
     if (!receipt) return form.receiptId || undefined;
     const saved = await ipc.cash.saveReceipt({ receipt, expectedUpdatedAt: receipt.updatedAt || undefined, reason: reason.trim() });
-    setReceipt(saved); setManageReceiptId(saved.id); return saved.id;
+    setReceipt(saved); setManageReceiptId(saved.id);
+    // GoBD: the received e-invoice file itself is the record; the server ignores a repeated upload of the same bytes.
+    if (pendingOriginal) { await ipc.cash.uploadFile({ receiptId: saved.id, ...pendingOriginal, reason: reason.trim() }); setPendingOriginal(undefined); }
+    return saved.id;
+  };
+  const readEinvoice = async (file: File) => {
+    setError(''); setEinvoiceProblems([]); setReadingEinvoice(true);
+    try {
+      if (file.size > 14 * 1024 * 1024) throw new Error('E-Rechnungen dürfen höchstens 14 MB groß sein.');
+      const original: OriginalFile = { fileName: file.name, mimeType: /\.pdf$/i.test(file.name) || file.type === 'application/pdf' ? 'application/pdf' : 'application/xml', contentBase64: await fileToBase64(file) };
+      setEinvoice({ parsed: await ipc.einvoice.parse({ fileName: original.fileName, contentBase64: original.contentBase64 }), original });
+    } catch (failure) { setError(failureText(failure)); setEinvoice(undefined); }
+    finally { setReadingEinvoice(false); }
+  };
+  const applyEinvoice = () => {
+    if (!einvoice) return;
+    const { receipt: next, problems } = receiptFromEinvoice(einvoice.parsed, receipt ?? blankReceipt());
+    setReceipt(next); setEinvoiceProblems(problems); setPendingOriginal(einvoice.original); setEinvoice(undefined);
+    if (!receiptOnly) setForm((current) => ({ ...current, counterparty: current.counterparty || next.counterparty, purpose: current.purpose || `Rechnung ${next.number}`.trim() }));
+  };
+  const showArchived = async (id: string) => {
+    setError('');
+    const file = await ipc.cash.downloadFile({ id });
+    setViewing(await ipc.einvoice.parse({ fileName: file.fileName, contentBase64: file.contentBase64 }));
   };
   const save = useMutation({ mutationFn: async () => {
     if (!reason.trim()) throw new Error('Bitte eine Begründung eingeben.');
@@ -58,7 +93,7 @@ export const LiteCashPanel: React.FC = () => {
       if (file.size > 10 * 1024 * 1024) throw new Error('Belegdateien dürfen höchstens 10 MB groß sein.');
       const receiptId = await persistReceipt() ?? manageReceiptId;
       if (!receiptId) throw new Error('Bitte zuerst einen Beleg auswählen oder erfassen.');
-      const contentBase64 = await new Promise<string>((resolve, reject) => { const reader = new FileReader(); reader.onload = () => resolve(String(reader.result).split(',')[1] ?? ''); reader.onerror = reject; reader.readAsDataURL(file); });
+      const contentBase64 = await fileToBase64(file);
       const mimeType = /\.xml$/i.test(file.name) ? 'application/xml' : file.type;
       if (!['application/pdf', 'image/jpeg', 'image/png', 'image/webp', 'application/xml'].includes(mimeType)) throw new Error('Bitte PDF, JPEG, PNG, WebP oder XML auswählen.');
       await ipc.cash.uploadFile({ receiptId, fileName: file.name, mimeType: mimeType as IpcArgs<'cash:uploadFile'>['mimeType'], contentBase64, reason }); await refresh();
@@ -88,7 +123,7 @@ export const LiteCashPanel: React.FC = () => {
       <div className="mt-3 flex flex-col gap-3">{(entries.data ?? []).map((entry) => <div key={entry.id} className="flex flex-wrap items-center gap-2 border-b border-border pb-3">
         <span className="min-w-0 flex-1 text-control">{entry.cashDate} · {entry.counterparty} · {entry.purpose} · {money(entry.amountCents)}</span>
         {entry.matchedTransactionId ? <><Badge tone="success">Mit Bank abgeglichen</Badge><Button variant="secondary" size="sm" disabled={action.isPending} onClick={() => { setError(''); void action.mutateAsync(() => ipc.cash.unmatchEntry({ id: entry.id, reason: 'Manuellen Bankabgleich rückgängig gemacht' })).catch(() => undefined); }}>Abgleich aufheben</Button></> : <><Button variant="secondary" size="sm" onClick={() => start(entry)}>Bearbeiten</Button><Button variant="secondary" size="sm" onClick={() => { setMatching(entry); setBankId(''); setError(''); }}>Mit Bank abgleichen</Button><Button variant="danger" size="sm" onClick={() => { setEditing(entry); setReason(''); setError(''); }}>Rückgängig</Button></>}
-        {entry.receiptId && <Button variant="secondary" size="sm" onClick={() => { setManageReceiptId(entry.receiptId!); setReceipt(undefined); setReason(''); }}>Beleg</Button>}
+        {entry.receiptId && <Button variant="secondary" size="sm" onClick={() => { setManageReceiptId(entry.receiptId!); setReceipt(undefined); setReason(''); setViewing(undefined); }}>Beleg</Button>}
       </div>)}</div>
     </details>
     <Modal open={open} onClose={() => { if (!save.isPending && !uploading) { setOpen(false); setEditing(undefined); setManageReceiptId(''); } }} titleId="manual-cash-title" className="max-w-3xl">
@@ -103,6 +138,14 @@ export const LiteCashPanel: React.FC = () => {
           <Select label="Vorhandener Beleg" value={form.receiptId} disabled={!!receipt} onChange={(e) => setForm({ ...form, receiptId: e.target.value })}><option value="">Noch kein Beleg</option>{(receipts.data ?? []).map((item) => <option key={item.id} value={item.id}>{item.counterparty} · {item.number} · {money(item.grossAmountCents)}</option>)}</Select>
           <Button variant="secondary" onClick={() => { const next = blankReceipt(); if (form.flowType === 'income' && settings.data?.legal.smallBusinessRule) { next.taxMode = 'small_business'; next.deductiblePercent = 0; next.taxBreakdown = [{ rate: 0, netAmountCents: 0, vatAmountCents: 0 }]; } setReceipt(next); }}>Neuen Beleg erfassen</Button>
         </div>}
+        <div className="mt-4 flex flex-wrap items-center gap-3">
+          <Button variant="secondary" loading={readingEinvoice} disabled={save.isPending || uploading} onClick={() => einvoiceInput.current?.click()}>E-Rechnung einlesen</Button>
+          <span className="text-caption text-muted">XRechnung, ZUGFeRD oder Factur-X als XML oder PDF</span>
+          <input ref={einvoiceInput} type="file" accept=".xml,.pdf" aria-label="E-Rechnung auswählen" className="hidden" onChange={(e) => { const file = e.target.files?.[0]; if (file) void readEinvoice(file); e.target.value = ''; }} />
+        </div>
+        {einvoice && <div className="mt-4 border-t border-border pt-4"><EinvoiceReview invoice={einvoice.parsed} /><div className="mt-3 flex justify-end gap-2"><Button variant="secondary" onClick={() => setEinvoice(undefined)}>Verwerfen</Button><Button onClick={applyEinvoice}>Übernehmen</Button></div></div>}
+        {einvoiceProblems.length > 0 && <ul role="alert" className="mt-3 flex flex-col gap-1 text-control text-error-text">{einvoiceProblems.map((problem) => <li key={problem}>{problem}</li>)}</ul>}
+        {pendingOriginal && <p className="mt-3 text-caption text-muted">Die Originaldatei {pendingOriginal.fileName} wird beim Speichern an den Beleg angehängt.</p>}
         {receipt && <div className="mt-4 border-t border-border pt-4"><h3 className="text-control font-semibold">Beleg und Steuerdaten</h3><div className="mt-3 grid gap-3 sm:grid-cols-2">
           <Input label="Belegnummer" value={receipt.number} onChange={(e) => setReceipt({ ...receipt, number: e.target.value })} />
           <Input label="Belegaussteller" value={receipt.counterparty} onChange={(e) => setReceipt({ ...receipt, counterparty: e.target.value })} />
@@ -128,6 +171,6 @@ export const LiteCashPanel: React.FC = () => {
     </Modal>
     <Modal open={!!matching} onClose={() => setMatching(undefined)} titleId="cash-match-title"><div className="p-5"><h2 id="cash-match-title" className="text-section">Mit Bank abgleichen</h2><p className="my-3 text-control">Es werden nur freie Bankzahlungen mit exakt demselben Betrag und derselben Richtung angeboten. Das Bankdatum ersetzt das Zahlungsdatum {matching?.cashDate} in der EÜR.</p><Select label="Bankzahlung" value={bankId} onChange={(e) => setBankId(e.target.value)}><option value="">Bitte auswählen</option>{candidates.map((bank) => <option key={bank.id} value={bank.id}>{bank.date} · {bank.counterparty} · {money(Math.round(bank.amount * 100))}</option>)}</Select><p className="mt-3 text-control">Neues Zahlungsdatum: {candidates.find((bank) => bank.id === bankId)?.date ?? '–'}</p>{!candidates.length && <p className="mt-3 text-control">Keine passende freie Bankzahlung vorhanden.</p>}<Button className="mt-4" disabled={!bankId || action.isPending} onClick={() => { if (matching) void action.mutateAsync(() => ipc.cash.matchEntry({ id: matching.id, transactionId: bankId, expectedCashDate: matching.originalCashDate, reason: `Exakter Bankabgleich bestätigt: ${matching.cashDate} → ${candidates.find((bank) => bank.id === bankId)?.date}` })).then(() => setMatching(undefined)).catch(() => undefined); }}>Datum und Abgleich bestätigen</Button>{error && <p role="alert" className="mt-3 text-error-text">{error}</p>}</div></Modal>
     <Modal open={!!editing && !open} onClose={() => setEditing(undefined)} titleId="cash-reverse-title"><div className="p-5"><h2 id="cash-reverse-title" className="text-section">Manuelle Buchung rückgängig machen</h2><Input label="Begründung" value={reason} onChange={(e) => setReason(e.target.value)} /><Button variant="danger" className="mt-4" disabled={!reason.trim() || action.isPending} onClick={() => { if (editing) void action.mutateAsync(() => ipc.cash.deleteEntry({ id: editing.id, expectedUpdatedAt: editing.updatedAt, reason })).then(() => setEditing(undefined)).catch(() => undefined); }}>Rückgängig machen</Button>{error && <p role="alert" className="mt-3 text-error-text">{error}</p>}</div></Modal>
-    <Modal open={!!manageReceiptId && !open} onClose={() => setManageReceiptId('')} titleId="cash-files-title"><div className="p-5"><h2 id="cash-files-title" className="text-section">Originalbelege</h2>{(files.data ?? []).map((file) => <Button key={file.id} variant="secondary" className="mt-3" onClick={() => void download(file.id).catch((failure: Error) => setError(failure.message))}>{file.fileName} herunterladen</Button>)}<Input className="mt-4" label="Begründung" value={reason} onChange={(e) => setReason(e.target.value)} /><Input className="mt-3" label="Originalbeleg hinzufügen" type="file" accept=".pdf,.jpg,.jpeg,.png,.webp,.xml" onChange={(e) => { const file = e.target.files?.[0]; if (file) void upload(file); e.target.value = ''; }} /><Button variant="secondary" className="mt-3" onClick={() => { const item = receipts.data?.find((row) => row.id === manageReceiptId); if (item) { start(); setReceiptOnly(true); setReceipt(item); } }}>Steuerdaten bearbeiten</Button>{error && <p role="alert" className="mt-3 text-error-text">{error}</p>}</div></Modal>
+    <Modal open={!!manageReceiptId && !open} onClose={() => { setManageReceiptId(''); setViewing(undefined); }} titleId="cash-files-title" className="max-w-3xl"><div className="p-5"><h2 id="cash-files-title" className="text-section">Originalbelege</h2>{(files.data ?? []).map((file) => <div key={file.id} className="mt-3 flex flex-wrap gap-2"><Button variant="secondary" onClick={() => void download(file.id).catch((failure: Error) => setError(failure.message))}>{file.fileName} herunterladen</Button>{/xml$/i.test(file.mimeType) && <Button variant="secondary" aria-label={`${file.fileName} anzeigen`} onClick={() => void showArchived(file.id).catch((failure: unknown) => { setViewing(undefined); setError(failureText(failure)); })}>Anzeigen</Button>}</div>)}{viewing && <div className="mt-4 border-t border-border pt-4"><EinvoiceReview invoice={viewing} /></div>}<Input className="mt-4" label="Begründung" value={reason} onChange={(e) => setReason(e.target.value)} /><Input className="mt-3" label="Originalbeleg hinzufügen" type="file" accept=".pdf,.jpg,.jpeg,.png,.webp,.xml" onChange={(e) => { const file = e.target.files?.[0]; if (file) void upload(file); e.target.value = ''; }} /><Button variant="secondary" className="mt-3" onClick={() => { const item = receipts.data?.find((row) => row.id === manageReceiptId); if (item) { start(); setReceiptOnly(true); setReceipt(item); } }}>Steuerdaten bearbeiten</Button>{error && <p role="alert" className="mt-3 text-error-text">{error}</p>}</div></Modal>
   </Card>;
 };

@@ -1,6 +1,11 @@
 import type { FastifyInstance } from 'fastify';
+import { buildDatevBuchungsstapelCsv, type DatevBuchungsstapelRow } from '@billme/accounting-engine/datev-export';
+import { isSupportedEurTaxYear } from '@billme/accounting-shared';
+import { datevSettingsSchema } from '@billme/desktop-contracts-pro/schemas';
+import { getCatalogForYear } from '@billme/desktop-services/eurCatalog';
+import { DATEV_MONEY_ACCOUNTS, datevAccountFor } from '@billme/desktop-services/eur/datevAccountMap';
 import { filterEurListItems } from '@billme/server-core';
-import { createPostgresProAccountingRepository, getServerEurReport, listServerEurAnnexFacts, listServerEurCashFacts, listServerEurCashItems, saveServerEurAnnexFact, saveServerEurCashFact, saveServerEurClassificationFact } from '@billme/server-data';
+import { createPostgresProAccountingRepository, getServerEurReport, getServerSettings, listServerEurAnnexFacts, listServerEurCashFacts, listServerEurCashItems, saveServerEurAnnexFact, saveServerEurCashFact, saveServerEurClassificationFact, type ServerEurCashItem } from '@billme/server-data';
 import { z } from 'zod';
 import { ApiError, typedRoute } from './http.js';
 import { createMutationContext, requireDatabase, requireMutationSessionFor, requireSession } from './runtimeContext.js';
@@ -41,8 +46,124 @@ const mapEurError = (error: unknown): never => {
   throw error;
 };
 
+const isoDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/).refine((value) => !Number.isNaN(Date.parse(`${value}T00:00:00Z`)) && new Date(`${value}T00:00:00Z`).toISOString().slice(0, 10) === value, 'Ungültiges Datum.');
+export const liteDatevExportQuerySchema = z.object({ from: isoDate, to: isoDate });
+
+// CP1252 printable range; anything else in a free text becomes '?' so one emoji cannot fail the whole file.
+const CP1252_TEXT = /[^\x20-\x7e\xa0-\xff€‚ƒ„…†‡ˆ‰Š‹ŒŽ‘’“”•–—˜™š›œžŸ]/g;
+const datevText = (value: string, max: number): string => value.replace(/\s+/g, ' ').replace(CP1252_TEXT, '?').trim().slice(0, max);
+const datevReference = (item: ServerEurCashItem): string => {
+  const invoiceNumber = item.sourceType === 'invoice' ? /^Rechnung (\S+)/.exec(item.purpose)?.[1] : undefined;
+  return (invoiceNumber ?? item.sourceId).replace(/[^A-Za-z0-9_$&%*+\-/]/g, '-').slice(0, 36);
+};
+const round2 = (value: number): number => Math.round((value + Number.EPSILON) * 100) / 100;
+
+/** The VAT rate behind a gross EÜR item: the classification's rate, else gross/net; null when that is no 0/7/19 %. */
+const itemVatRate = (item: ServerEurCashItem): number | null => {
+  if (item.classification?.vatMode === 'default' && item.classification.vatRate !== undefined) return item.classification.vatRate;
+  const gross = Math.abs(item.amountGross);
+  const net = Math.abs(item.amountNet);
+  if (net <= 0 || gross - net < 0.005) return 0;
+  const rate = (gross / net - 1) * 100;
+  return [19, 7].find((candidate) => Math.abs(candidate - rate) < 0.6) ?? null;
+};
+
+type DatevRowError = { sourceType: ServerEurCashItem['sourceType']; sourceId: string; date: string; amount: number; counterparty: string; message: string };
+
+/**
+ * EÜR cash items → DATEV rows. Konto is the Geldkonto (bank, or Kasse for a cash-book entry without a
+ * matched bank transaction), Gegenkonto the account for the Kennziffer, because DATEV applies the
+ * BU-Schlüssel to the Gegenkonto. S/H is from the Geldkonto's side: income S, expense H.
+ * Private, durchlaufende and excluded items are not operating income/expense and are skipped.
+ */
+const buildLiteDatevRows = (items: ServerEurCashItem[], args: { taxYear: number; from: string; to: string; chart: 'SKR03' | 'SKR04'; accountLength: number }) => {
+  const kennziffer = new Map(getCatalogForYear(args.taxYear).map((line) => [line.id, line.kennziffer?.trim() || undefined]));
+  const pad = (account: string) => account.padEnd(args.accountLength, '0');
+  const rows: DatevBuchungsstapelRow[] = [];
+  const errors: DatevRowError[] = [];
+  for (const item of items) {
+    const amount = round2(Math.abs(item.amountGross));
+    const fail = (message: string) => errors.push({ sourceType: item.sourceType, sourceId: item.sourceId, date: item.date, amount, counterparty: item.counterparty, message });
+    if (item.classification?.excluded || ['private-withdrawal', 'private-contribution', 'pass-through'].includes(item.kind ?? '') || amount === 0) continue;
+    if (item.date < args.from || item.date > args.to) {
+      // ponytail: a payment moved by the § 11 EStG 10-Tage-Regel has its Belegdatum in the neighbouring year,
+      // outside this DATEV fiscal year; list it instead of dropping it. Replace once the advisor asks for an Abgrenzung booking.
+      if ((item.date < args.from && args.from.endsWith('-01-01')) || (item.date > args.to && args.to.endsWith('-12-31'))) fail('Zahlung liegt außerhalb des Wirtschaftsjahres (10-Tage-Regel, § 11 EStG); bitte manuell buchen.');
+      continue;
+    }
+    const lineId = item.classification?.eurLineId;
+    if (!lineId) { fail('Noch keiner EÜR-Kategorie zugeordnet.'); continue; }
+    const rate = itemVatRate(item);
+    if (rate === null) { fail('Steuersatz nicht eindeutig (weder 0, 7 noch 19 %).'); continue; }
+    // ponytail: split items (cash facts with several lines) go to the main category with the full gross;
+    // replace with one row per split once Lite splits carry gross amounts.
+    const choice = datevAccountFor(kennziffer.get(lineId), rate, item.flowType, args.chart);
+    if ('error' in choice) { fail(choice.error); continue; }
+    const money = DATEV_MONEY_ACCOUNTS[item.sourceType === 'manual' && !item.accountId ? 'cash' : 'bank'][args.chart];
+    rows.push({
+      date: item.date,
+      belegfeld1: datevReference(item),
+      buchungstext: datevText(`${item.counterparty} ${item.purpose}`, 60),
+      konto: pad(money),
+      gegenkonto: pad(choice.account),
+      sollHabenKennzeichen: item.flowType === 'income' ? 'S' : 'H',
+      buSchluessel: choice.buKey,
+      umsatz: amount,
+    });
+  }
+  return { rows, errors };
+};
+
 export const registerLiteEurRoutes = (app: FastifyInstance): void => {
   const prefix = '/api/v1/lite/reports/eur';
+
+  typedRoute(app, {
+    method: 'GET',
+    url: '/api/v1/lite/eur/datev.csv',
+    query: liteDatevExportQuerySchema,
+    async handler({ request, query }) {
+      const session = await requireSession(app, 'lite', request.headers.authorization);
+      if (query.from > query.to) throw new ApiError(400, 'Der Zeitraum beginnt nach seinem Ende.');
+      const taxYear = Number(query.from.slice(0, 4));
+      if (query.to.slice(0, 4) !== query.from.slice(0, 4)) throw new ApiError(422, 'Ein DATEV-Buchungsstapel darf nur ein Wirtschaftsjahr enthalten. Bitte einen Zeitraum innerhalb eines Jahres wählen.');
+      if (!isSupportedEurTaxYear(taxYear)) throw new ApiError(400, `Für ${taxYear} gibt es noch keine Anlage EÜR.`);
+      const db = requireDatabase(app);
+      const stored = await getServerSettings(db, session.scope.tenantId);
+      const datev = datevSettingsSchema.safeParse(stored ? (JSON.parse(stored.settingsJson) as { datev?: unknown }).datev : undefined);
+      if (!datev.success) throw new ApiError(422, 'Für den DATEV-Export fehlen Beraternummer und Mandantennummer. Bitte unter Einstellungen → Finanzen eintragen.');
+      let items: ServerEurCashItem[];
+      try {
+        items = await listServerEurCashItems(db, session.scope, { taxYear, product: 'lite' });
+      } catch (error) {
+        return mapEurError(error);
+      }
+      const { rows, errors } = buildLiteDatevRows(items, { taxYear, from: query.from, to: query.to, chart: datev.data.chart, accountLength: datev.data.accountLength });
+      let content: Buffer;
+      try {
+        content = buildDatevBuchungsstapelCsv(rows, {
+          consultantNumber: datev.data.consultantNumber,
+          clientNumber: datev.data.clientNumber,
+          fiscalYearStart: `${taxYear}-01-01`,
+          accountLength: datev.data.accountLength,
+          chart: datev.data.chart,
+          from: query.from,
+          to: query.to,
+          periodScope: 'fiscal-year',
+          createdAt: new Date(),
+          stackName: `EÜR ${query.from} bis ${query.to}`.slice(0, 30),
+        });
+      } catch (error) {
+        throw new ApiError(422, error instanceof Error ? error.message : 'DATEV-Export fehlgeschlagen.');
+      }
+      return {
+        fileName: `EXTF_Buchungsstapel_${query.from}_${query.to}.csv`,
+        mimeType: 'text/csv' as const,
+        contentBase64: content.toString('base64'),
+        rowCount: rows.length,
+        errors,
+      };
+    },
+  });
 
   typedRoute(app, {
     method: 'GET',

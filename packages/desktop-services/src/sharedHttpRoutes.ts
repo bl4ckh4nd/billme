@@ -53,7 +53,7 @@ const TRANSACTION_LINK_REASON = 'Zahlung automatisch mit Rechnung verknüpft';
 const TRANSACTION_UNLINK_REASON = 'Zahlungsverknüpfung aufgehoben';
 
 const SHARED_HTTP_ROUTE_KEYS = new Set<string>([
-  'vat:getReport', 'vat:exportCsv', 'vat:exportPdf',
+  'vat:getReport', 'vat:exportCsv', 'vat:exportPdf', 'einvoice:parse', 'documents:exportXRechnung', 'eur:exportDatev',
   'cash:listEntries', 'cash:listReceipts', 'cash:saveEntry', 'cash:saveReceipt', 'cash:deleteEntry', 'cash:matchEntry', 'cash:unmatchEntry', 'cash:listClosedPeriods', 'cash:closePeriod', 'cash:listFiles', 'cash:uploadFile', 'cash:downloadFile',
   'invoices:list', 'invoices:upsert', 'invoices:delete', 'invoices:savePayment', 'invoices:removePayment',
   'offers:list', 'offers:upsert', 'offers:delete',
@@ -176,6 +176,14 @@ export const createSharedHttpInvoke = ({ product, routes, reasons, transport }: 
         const endpoint = key === 'vat:getReport' ? '' : key === 'vat:exportPdf' ? '/export/pdf' : '/export/csv';
         return requestJson('GET', `${prefix}/reports/vat${endpoint}?from=${encodeURIComponent(parsed.from)}&to=${encodeURIComponent(parsed.to)}`, resultOf(key));
       }
+      case 'eur:exportDatev': {
+        // Lite only: Pro exports DATEV from its ledger (`/accounting/datev/export.csv`).
+        const parsed = args as IpcArgs<'eur:exportDatev'>;
+        return requestJson('GET', `${prefix}/eur/datev.csv`, resultOf(key), undefined, { from: parsed.from, to: parsed.to });
+      }
+      case 'einvoice:parse': return requestJson('POST', `${prefix}/einvoice/parse`, resultOf(key), args);
+      case 'documents:exportXRechnung':
+        return requestJson('GET', `${prefix}/documents/invoice/${encodeURIComponent((args as IpcArgs<'documents:exportXRechnung'>).id)}/xrechnung`, resultOf(key));
       case 'cash:listEntries': return requestJson('GET', `${prefix}/cash/entries`, resultOf(key));
       case 'cash:listReceipts': return requestJson('GET', `${prefix}/cash/receipts`, resultOf(key));
       case 'cash:listClosedPeriods': return requestJson('GET', `${prefix}/cash/periods`, resultOf(key));
@@ -238,7 +246,7 @@ export const createSharedHttpInvoke = ({ product, routes, reasons, transport }: 
         return requestJson('GET', `${prefix}/clients`, z.array(serverClientSchema));
       case 'clients:upsert': {
         const parsed = args as IpcArgs<'clients:upsert'>;
-        return requestJson('POST', `${prefix}/clients`, serverClientSchema, { reason: reasons.clientUpsert, client: parsed.client });
+        return requestJson('POST', `${prefix}/clients`, serverClientSchema, { reason: parsed.reason ?? reasons.clientUpsert, client: parsed.client });
       }
       case 'clients:delete': {
         const parsed = args as IpcArgs<'clients:delete'>;

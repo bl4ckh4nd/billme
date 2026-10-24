@@ -46,6 +46,11 @@ export interface DatevBuchungsstapelOptions {
   importedBy?: string;
   stackName?: string;
   dictationCode?: string;
+  /**
+   * 'month' (default, the Pro ledger export) requires from/to in one month. 'fiscal-year' only
+   * requires both inside the Wirtschaftsjahr, which is what DATEV itself demands (Lite EÜR export).
+   */
+  periodScope?: 'month' | 'fiscal-year';
 }
 
 // DATEV Developer Portal, booking-batch field heading (format version 13).
@@ -131,7 +136,7 @@ const validateDatevOptions = (options: DatevBuchungsstapelOptions): void => {
   parseDate(options.from);
   parseDate(options.to);
   if (options.from > options.to) throw new Error('DATEV-Zeitraum ist umgekehrt.');
-  if (options.from.slice(0, 7) !== options.to.slice(0, 7)) throw new Error('DATEV Buchungsstapel muss genau eine Periode enthalten.');
+  if (options.periodScope !== 'fiscal-year' && options.from.slice(0, 7) !== options.to.slice(0, 7)) throw new Error('DATEV Buchungsstapel muss genau eine Periode enthalten.');
   const fiscalEnd = new Date(Date.UTC(fiscalStart.getUTCFullYear() + 1, fiscalStart.getUTCMonth(), fiscalStart.getUTCDate()));
   fiscalEnd.setUTCDate(fiscalEnd.getUTCDate() - 1);
   const from = parseDate(options.from);

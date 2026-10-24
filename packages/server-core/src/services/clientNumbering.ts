@@ -51,6 +51,7 @@ export interface ClientRecord {
   notes: string;
   addresses?: ClientAddressRecord[];
   emails?: ClientEmailRecord[];
+  contacts?: Array<{ id: string; name: string; isPrimary?: boolean }>;
   projects: unknown[];
   activities: unknown[];
 }
@@ -422,8 +423,19 @@ export function prepareClientForUpsert<TClient extends ClientRecord>(
     throw new Error('Kundennummer bereits vergeben');
   }
 
+  // With contacts, one is always primary (the first when none is marked) and the
+  // legacy contactPerson mirrors it; without contacts contactPerson stays as sent.
+  const contacts = client.contacts?.length
+    ? client.contacts.some((contact) => contact.isPrimary)
+      ? client.contacts
+      : client.contacts.map((contact, index) => ({ ...contact, isPrimary: index === 0 }))
+    : client.contacts;
+  const primaryContact = contacts?.find((contact) => contact.isPrimary);
+
   return {
     ...client,
+    ...(contacts ? { contacts } : {}),
+    ...(primaryContact ? { contactPerson: primaryContact.name } : {}),
     customerNumber,
     customerNumberReservationId,
     address: legacyAddress,

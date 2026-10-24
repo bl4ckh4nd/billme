@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test';
-import { appUrl, getDesktopSettings, invokeDesktopIpc, launchDesktopApp, seedDesktopData } from '../support.mjs';
+import { appUrl, getDesktopSettings, invokeDesktopIpc, launchDesktopApp, seedDesktopData, setDesktopSettings } from '../support.mjs';
 import { createShooter, seedBankTransactions } from './lite-support.mjs';
 
 /**
@@ -9,7 +9,8 @@ import { createShooter, seedBankTransactions } from './lite-support.mjs';
  * - settings: a new category, the payment term or a dunning fee not persisted by
  *   "Einstellungen speichern"; a mail test that reports success without a server;
  *   the audit check not reachable; the dark theme lost after a reload; the shortcut
- *   overview not opening
+ *   overview not opening; Lite offering GmbH or double-entry bookkeeping (it keeps
+ *   no ledger, so that would switch it to SKR accounts it cannot book)
  * - EÜR: search or direction filter showing other rows; "exclude as private" not
  *   persisted or not reachable through the "Ausgeschl." filter; undo leaving the
  *   classification behind
@@ -31,6 +32,39 @@ test.afterEach(async () => {
 });
 
 const section = (page, name) => page.getByRole('button', { name: new RegExp(`^${name}`) }).first();
+
+test('Lite stays on EÜR: no GmbH, no double-entry switch, no Kontenrahmen', async () => {
+  const { page, baseUrl } = desktop;
+  const shot = createShooter(page);
+  await page.goto(appUrl(baseUrl, '/settings'));
+  await section(page, 'Rechtliches').click();
+  await expect(page.getByTestId('profit-determination-value')).toHaveText('EÜR');
+  await expect(page.getByLabel('Rechtsform').locator('option')).toHaveText(['Einzelunternehmen']);
+  await expect(page.getByRole('button', { name: 'Ändern…' })).toHaveCount(0);
+  await expect(page.getByText('Doppelte Buchführung mit Kontenrahmen gibt es in billme Pro.')).toBeVisible();
+  await expect(page.getByLabel('Kontenrahmen')).toHaveCount(0);
+  await shot('lite-eur-only');
+});
+
+test('a Lite GmbH profile left on double-entry gets back to EÜR through the legal form', async () => {
+  const { page, baseUrl } = desktop;
+  const settings = await getDesktopSettings(page);
+  await setDesktopSettings(page, { ...settings, businessReportingProfile: { jurisdiction: 'DE', legalForm: 'gmbh', profitDetermination: 'double_entry', hgbSizeClass: 'micro', chart: 'SKR03', fiscalYearStart: '01-01', vatMethod: 'soll' } });
+  await page.reload();
+  await page.goto(appUrl(baseUrl, '/settings'));
+  await section(page, 'Rechtliches').click();
+  await expect(page.getByTestId('profit-determination-value')).toHaveText('Doppelte Buchführung');
+  await expect(page.getByText('billme Lite rechnet nur mit EÜR. Stelle die Rechtsform auf Einzelunternehmen um.')).toBeVisible();
+  await expect(page.getByLabel('Kontenrahmen'), 'Lite never shows a chart of accounts').toHaveCount(0);
+  await page.getByLabel('Rechtsform').selectOption('sole_proprietor');
+  await expect(page.getByTestId('profit-determination-value')).toHaveText('EÜR');
+  await page.getByRole('button', { name: 'Einstellungen speichern' }).click();
+  await expect.poll(async () => (await getDesktopSettings(page)).businessReportingProfile?.profitDetermination).toBe('eur');
+  await page.reload();
+  await page.goto(appUrl(baseUrl, '/settings'));
+  await section(page, 'Rechtliches').click();
+  await expect(page.getByLabel('Rechtsform').locator('option'), 'GmbH is gone once left').toHaveText(['Einzelunternehmen']);
+});
 
 test('categories, payment term and dunning fee are saved; the mail test, the audit check, the theme and the shortcuts work', async () => {
   const { page, baseUrl } = desktop;

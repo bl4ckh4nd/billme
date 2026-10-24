@@ -34,7 +34,8 @@ import { issueInvoice } from './fixtures.js';
  *   payments, tax snapshots and billing addresses, offers and portal decisions, number
  *   reservations (the next number must not collide), bank accounts and transactions,
  *   settings, recurring profiles, the audit chain (it must still verify, and keep
- *   growing from where it stopped)
+ *   growing from where it stopped); a migrated database missing columns added
+ *   later (e.g. client contact persons)
  * - a database with tables this version does not know being migrated anyway (silent data loss)
  * - a damaged or missing source reported as success
  * - bad command lines giving the wrong exit code
@@ -403,6 +404,10 @@ describe('SQLite v0.4.0 to PGlite', () => {
         const issued = await issueInvoice(h.api, { client: 'Neukunde nach Migration' });
         assert.equal(issued.number, next);
         assert.equal((await h.api.invoices.list()).length, 4);
+        // A migrated client takes contact persons (clients.contacts_json, migration 0040).
+        const [migratedClient] = await h.api.clients.list();
+        assert.deepEqual(migratedClient!.contacts, [], 'a migrated client has no contacts yet');
+        await h.api.clients.upsert({ client: { ...migratedClient!, contacts: [{ id: 'mig-1', name: 'Nach Migration', isPrimary: true }] } as never });
         const verify = await h.api.audit.verify();
         assert.equal(verify.ok, true, 'the imported chain must keep verifying after new entries');
         assert.ok(verify.count > entryCount);
@@ -412,6 +417,7 @@ describe('SQLite v0.4.0 to PGlite', () => {
       try {
         assert.equal((await again.api.invoices.list()).length, 4);
         assert.equal((await again.api.clients.list()).length, 2);
+        assert.deepEqual((await again.api.clients.list()).flatMap((client) => client.contacts ?? []), [{ id: 'mig-1', name: 'Nach Migration', isPrimary: true }]);
         assert.equal((await again.api.audit.verify()).ok, true);
       } finally { await again.close({ keepData: true }); }
     });

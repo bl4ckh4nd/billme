@@ -3,7 +3,7 @@ import {
   Search, Plus, FileText,
   ArrowLeft, Share2, ArrowUpRight,
   AlertTriangle, Mail, Gavel, CheckCircle, X,
-  Download, Printer, Send, Paperclip, MoreHorizontal, RefreshCw, Link, ExternalLink, Trash2, LayoutTemplate, Edit3, Euro, ArrowRight
+  Download, Printer, Send, Paperclip, MoreHorizontal, RefreshCw, Link, ExternalLink, Trash2, LayoutTemplate, Edit3, Euro, ArrowRight, Copy
 } from 'lucide-react';
 import {
   Badge, Button, Card, CardHeader, Checkbox, ConfirmDialog, EMPTY_VALUE, EmptyState, ErrorState, HatchedProgress, IconButton, Input, Menu, Modal,
@@ -27,6 +27,9 @@ import type { IpcArgs } from '@billme/desktop-contracts/contract';
 import { useQueryClient } from '@tanstack/react-query';
 import { v4 as uuidv4 } from 'uuid';
 import { localIsoDate } from '@billme/desktop-utils';
+import { canDuplicateDocument, duplicateDocument } from '@billme/desktop-services/duplicateDocument';
+import { useNavigate } from '@tanstack/react-router';
+import { useUiStore } from '../ui-store';
 import { SkeletonLoader } from '../ui/components/SkeletonLoader';
 import { CHAIN_START_LABELS, ChainSourcePicker, type ChainStartAction } from './invoices/ChainSourcePicker';
 import {
@@ -46,14 +49,21 @@ import {
 
 const NOTE_PREFIX = 'Notiz: ';
 
-const formatCurrency = (amount: number) => {
-  return new Intl.NumberFormat('de-DE', { style: 'currency', currency: 'EUR' }).format(amount);
-};
+// Built once: constructing an Intl formatter per cell dominated rendering long lists.
+const currencyFormat = new Intl.NumberFormat('de-DE', { style: 'currency', currency: 'EUR' });
+const dateFormat = new Intl.DateTimeFormat('de-DE', { day: '2-digit', month: '2-digit', year: 'numeric' });
+
+const formatCurrency = (amount: number) => currencyFormat.format(amount);
 
 const formatDate = (dateString: string) => {
   if (!dateString) return EMPTY_VALUE;
-  return new Date(dateString).toLocaleDateString('de-DE', { day: '2-digit', month: '2-digit', year: 'numeric' });
+  const date = new Date(dateString);
+  // format() throws on an invalid date where toLocaleDateString answered "Invalid Date".
+  return Number.isNaN(date.getTime()) ? date.toLocaleDateString('de-DE') : dateFormat.format(date);
 };
+
+// Rows rendered at once; the rest follow on request. Filter, search and selection still cover the whole list.
+const LIST_PAGE_SIZE = 100;
 
 // Documents without a linked client carry the literal "Unbekannt"; treat it as no value.
 const MISSING_COUNTERPARTY = 'Unbekannt';
@@ -316,6 +326,9 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
         return left.localeCompare(right, 'de', { numeric: true }) * factor;
       })
     : filteredDocuments;
+  const listKey = `${documentType}|${filter}|${kindFilter}|${searchTerm}|${sort?.key}|${sort?.direction}`;
+  const [rowLimit, setRowLimit] = useState({ key: listKey, count: LIST_PAGE_SIZE });
+  const visibleCount = rowLimit.key === listKey ? rowLimit.count : LIST_PAGE_SIZE;
   const allFilteredSelected = filteredDocuments.length > 0 && filteredDocuments.every((doc) => selectedIds.has(doc.id));
 
   const overdueInvoices = invoices.filter(i => i.status === 'overdue');
@@ -361,6 +374,26 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
     });
   };
 
+  const navigate = useNavigate();
+  const setEditingInvoice = useUiStore((s) => s.setEditingInvoice);
+  /** Opens a copy under a freshly reserved number in the editor, like "Neue Rechnung": cancelling there releases the number. */
+  const handleDuplicate = (source: Invoice | Offer) => {
+    if (!settings) return;
+    const kind = documentType;
+    const numbers = ipc.numbers;
+    void (async () => {
+      try {
+        const reservation = await numbers.reserve({ kind });
+        if (ipc.numbers !== numbers) return;
+        const copy = duplicateDocument(source, { kind, id: uuidv4(), reservation, settings });
+        setEditingInvoice(copy, kind, 'create');
+        navigate({ to: '/documents/edit' });
+      } catch (error) {
+        notify('error', `Nummer konnte nicht reserviert werden: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    })();
+  };
+
   const handleSharePaymentLink = () => {
     if (!selectedDocument?.number) {
       notify('error', 'Kein Dokument für Zahllink ausgewählt.');
@@ -396,6 +429,21 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
           notify('error', `PDF Fehler: ${String(e)}`);
         }
       })();
+  };
+
+  const handleExportXRechnung = () => {
+    if (!selectedDocument) return;
+    void (async () => {
+      try {
+        const file = await ipc.documents.exportXRechnung({ id: selectedDocument.id });
+        const bytes = Uint8Array.from(atob(file.contentBase64), (char) => char.charCodeAt(0));
+        const url = URL.createObjectURL(new Blob([bytes], { type: file.mimeType }));
+        const link = document.createElement('a'); link.href = url; link.download = file.fileName; document.body.appendChild(link); link.click(); link.remove(); setTimeout(() => URL.revokeObjectURL(url), 1000);
+        notify('success', `${file.fileName} heruntergeladen`);
+      } catch (error) {
+        notify('error', error instanceof Error ? error.message : String(error));
+      }
+    })();
   };
 
   const handlePublishOffer = () => {
@@ -1259,6 +1307,12 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
                             })();
                           },
                         },
+                        ...(canDuplicateDocument(documentType, selectedDocument)
+                          ? [{ id: 'duplicate', label: 'Duplizieren', icon: <Copy size={14} />, onSelect: () => handleDuplicate(selectedDocument) }]
+                          : []),
+                        ...(documentType === 'invoice' && isBillingDocumentKind((selectedDocument as Invoice).documentKind)
+                          ? [{ id: 'xrechnung', label: 'XRechnung (XML)', icon: <FileText size={14} />, onSelect: handleExportXRechnung }]
+                          : []),
                         ...(documentType === 'invoice'
                           ? [{ id: 'payment-link', label: 'Zahlungslink kopieren', icon: <Share2 size={14} />, onSelect: handleSharePaymentLink }]
                           : []),
@@ -2027,6 +2081,7 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
                />
              </Card>
            ) : sortedDocuments.length > 0 ? (
+             <>
              <Table aria-label={documentType === 'invoice' ? 'Rechnungen' : 'Angebote'}>
                <TableHeader>
                  <TableRow>
@@ -2050,7 +2105,7 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
                  </TableRow>
                </TableHeader>
                <TableBody>
-                 {sortedDocuments.map((doc) => {
+                 {sortedDocuments.slice(0, visibleCount).map((doc) => {
                    const selected = selectedIds.has(doc.id);
                    return (
                      <TableRow
@@ -2107,6 +2162,15 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
                  })}
                </TableBody>
              </Table>
+             {sortedDocuments.length > visibleCount && (
+               <div className="flex items-center justify-center gap-3 py-3">
+                 <span className="text-caption text-muted tabular-nums">{visibleCount} von {sortedDocuments.length} angezeigt</span>
+                 <Button size="sm" variant="secondary" onClick={() => setRowLimit({ key: listKey, count: visibleCount + LIST_PAGE_SIZE * 5 })}>
+                   Weitere anzeigen
+                 </Button>
+               </div>
+             )}
+             </>
            ) : (
              <Card padding="none">
               <EmptyState

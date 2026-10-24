@@ -1,5 +1,5 @@
 import React, { useState, useMemo } from 'react';
-import { Search, Plus, Edit3, Trash2, LayoutGrid, List, Check, X, Copy } from 'lucide-react';
+import { Search, Plus, Edit3, Trash2, LayoutGrid, List, Check, X, Copy, FileUp } from 'lucide-react';
 import type { Article } from '@billme/desktop-core/types';
 import { v4 as uuidv4 } from 'uuid';
 import { useArticlesQuery, useDeleteArticleMutation, useUpsertArticleMutation } from '../hooks/useArticles';
@@ -12,6 +12,7 @@ import {
 } from '@billme/ui';
 import { SkeletonLoader } from '../ui/components/SkeletonLoader';
 import { useRouterState } from '@tanstack/react-router';
+import { CsvImportDialog } from './masterdata/CsvImportDialog';
 
 const normalizeCategoryName = (value: string): string => value.trim();
 
@@ -46,6 +47,7 @@ export const ArticlesView: React.FC = () => {
     commit: (id) => deleteArticle.mutateAsync(id),
     label: (count) => count === 1 ? 'Artikel gelöscht' : `${count} Artikel gelöscht`,
   });
+  const [isImportOpen, setIsImportOpen] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
   const locationSearch = useRouterState({ select: (s) => s.location.search }) as Record<string, unknown>;
   const [selectedCategory, setSelectedCategory] = useState<string>('Alle');
@@ -310,6 +312,7 @@ export const ArticlesView: React.FC = () => {
 
   return (
     <div className="flex flex-col">
+      {isImportOpen && <CsvImportDialog kind="articles" existing={articles} onClose={() => setIsImportOpen(false)} />}
       <div className="relative">
         <PageHeader
           title="Leistungen"
@@ -319,9 +322,14 @@ export const ArticlesView: React.FC = () => {
               ? 'Nicht verfügbar'
               : `${filteredArticles.length} Einträge`}
           actions={
-            <Button onClick={() => handleOpenForm()}>
-              <Plus size={16} aria-hidden="true" /> Neuer Artikel
-            </Button>
+            <>
+              <Button variant="secondary" onClick={() => setIsImportOpen(true)}>
+                <FileUp size={16} aria-hidden="true" /> Importieren (CSV)
+              </Button>
+              <Button onClick={() => handleOpenForm()}>
+                <Plus size={16} aria-hidden="true" /> Neuer Artikel
+              </Button>
+            </>
           }
           toolbar={
             <>

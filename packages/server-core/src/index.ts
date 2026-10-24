@@ -51,6 +51,7 @@ export type ServerRole = z.infer<typeof serverRoleSchema>;
 export * from './api-schemas.js';
 export * from './liteCash.js';
 export * from './liteVat.js';
+export * from './einvoice.js';
 export * from './orpc/contract.js';
 const parseJsonResponse = async <T>(response: Response, schema: z.ZodType<T>): Promise<T> => {
   const payload = await response.json().catch(() => null);

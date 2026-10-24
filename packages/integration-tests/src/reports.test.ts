@@ -46,6 +46,12 @@ import { bankAccount, configureLite, importBankRows, issueDated, line, pay } fro
  *   replayed idempotency key creating a second filing, a certificate stored
  *   without an encryption key
  * - persistence: classifications, rules and reports changing after a restart
+ * - DATEV export (EÜR → Buchungsstapel): a file without consultant/client
+ *   number, a range across two fiscal years, an unclassified or unmapped item
+ *   silently dropped, private/excluded items exported, the wrong account for
+ *   the chart or the VAT rate, a BU key on an Automatikkonto (or none on a plain
+ *   account), cash entries booked against the bank, amounts with a dot, a
+ *   Belegdatum other than TTMM, UTF-8 instead of CP1252, settings.datev lost on save
  */
 
 const YEAR_LINE = (year: number, code: string) => `E${year}_KZ${code}`;
@@ -1374,5 +1380,138 @@ describe('VAT preparation', () => {
         assert.deepEqual((await h.api.taxFiling.getStatus()).certificates, []);
       });
     });
+  });
+});
+
+describe('DATEV export (EÜR → Buchungsstapel)', () => {
+  let h: LiteHarness;
+  const account = 'bank-datev';
+  const ids = {} as Record<string, string>;
+  const exportDatev = (from: string, to: string) => h.raw('GET', `/eur/datev.csv?from=${from}&to=${to}`);
+  const setDatev = async (datev: Record<string, unknown> | undefined) => {
+    const current = await h.api.settings.get() as any;
+    await h.api.settings.set({ settings: { ...current, datev } } as never);
+  };
+  /** CSV data rows (after header + column heading), split into DATEV fields. */
+  const rowsOf = (bytes: Buffer) => bytes.toString('latin1').split('\r\n').slice(2).filter(Boolean).map((row) => row.split(';'));
+  const byGegenkonto = (rows: string[][], account: string) => rows.filter((row) => row[7] === account);
+
+  before(async () => {
+    h = await startLite(null, 'reports-datev');
+    await configureLite(h.api);
+    await h.api.accounts.upsert({ account: bankAccount(account) } as never);
+    await importBankRows(h.api, account, [
+      ['2026-03-10', 1190, 'Kunde Ü', 'Beratung März'],
+      ['2026-03-12', -59.5, 'Hoster AG', 'Hosting Server'],
+      ['2026-03-15', -200, 'Max Muster', 'Privatentnahme'],
+      ['2026-03-16', -80, 'Unbekannt GmbH', 'Ohne Beleg'],
+      ['2026-03-17', -45, 'Pendler AG', 'Zweitwohnung'],
+    ]);
+    const tx = async (counterparty: string) => (await h.api.transactions.list({} as never)).find((t) => t.counterparty === counterparty)!.id;
+    const classify = (sourceType: 'transaction' | 'invoice' | 'manual', sourceId: string, code: string | undefined, extra: Record<string, unknown> = {}) =>
+      h.raw('PUT', '/reports/eur/classifications', { sourceType, sourceId, taxYear: 2026, eurLineId: code ? YEAR_LINE(2026, code) : undefined, reason: 'Beleg geprüft', ...extra });
+    ids.income = await tx('Kunde Ü');
+    ids.hoster = await tx('Hoster AG');
+    ids.private = await tx('Max Muster');
+    ids.unclassified = await tx('Unbekannt GmbH');
+    ids.unmapped = await tx('Pendler AG');
+    for (const [sourceId, code, extra] of [
+      [ids.income, '112', { vatMode: 'default', vatRate: 19 }],
+      [ids.hoster, '228', { vatMode: 'default', vatRate: 19 }],
+      [ids.private, undefined, { excluded: true }],
+      // Kz 152 (doppelte Haushaltsführung) has no standard account in the map.
+      [ids.unmapped, '152', {}],
+    ] as const) assert.equal((await classify('transaction', sourceId, code, extra)).status, 200);
+    // 7 % invoice paid into the bank: Erlöse 7 % is its own Automatikkonto.
+    const invoice = await issueDated(h.api, { client: 'Buchladen Köhler', date: '2026-03-18', items: [line('Fachbuch', 100, 7)], servicePeriod: '2026-03-18' });
+    ids.invoiceNumber = invoice.number;
+    const payment = await pay(h.api, invoice.id, 107, '2026-03-20');
+    assert.equal((await classify('invoice', `${invoice.id}:payment:${payment.id}`, '112')).status, 200);
+    // Cash book: an expense and an income in May.
+    await h.api.cash.saveEntry({ entry: { id: 'cash-buero', cashDate: '2026-05-02', amountCents: -3000, currency: 'EUR', flowType: 'expense', counterparty: 'Schreibwaren Müller', purpose: 'Bürobedarf bar' }, reason: 'Barzahlung' } as never);
+    await h.api.cash.saveEntry({ entry: { id: 'cash-verkauf', cashDate: '2026-05-03', amountCents: 4000, currency: 'EUR', flowType: 'income', counterparty: 'Laufkunde', purpose: 'Verkauf bar' }, reason: 'Barverkauf' } as never);
+    assert.equal((await classify('manual', 'cash-buero', '183', { vatMode: 'default', vatRate: 19 })).status, 200);
+    assert.equal((await classify('manual', 'cash-verkauf', '112', { vatMode: 'default', vatRate: 19 })).status, 200);
+  });
+  after(async () => { await h.close(); });
+
+  test('without Beraternummer and Mandantennummer the export is refused with a German hint', async () => {
+    const response = await exportDatev('2026-01-01', '2026-12-31');
+    assert.equal(response.status, 422, response.text);
+    assert.match(response.text, /Beraternummer/);
+    await assert.rejects(h.api.eur.exportDatev({ from: '2026-01-01', to: '2026-12-31' }), /Beraternummer/);
+  });
+
+  test('settings.datev survives a save and refetch; invalid numbers are refused', async () => {
+    await setDatev({ consultantNumber: '1234567', clientNumber: '12345', accountLength: 4, chart: 'SKR03' });
+    assert.deepEqual((await h.api.settings.get() as any).datev, { consultantNumber: '1234567', clientNumber: '12345', accountLength: 4, chart: 'SKR03' });
+    await assert.rejects(setDatev({ consultantNumber: '0999', clientNumber: '1' }), 'a Beraternummer below 1001 is no DATEV number');
+    await assert.rejects(setDatev({ consultantNumber: '1001', clientNumber: '123456' }), 'a Mandantennummer has at most 5 digits');
+    assert.equal((await h.api.settings.get() as any).datev.consultantNumber, '1234567', 'a refused save changes nothing');
+  });
+
+  test('the year file: EXTF header, accounts per SKR03, Geldkonto, BU keys, comma amounts, TTMM, CP1252', async () => {
+    const response = await exportDatev('2026-01-01', '2026-12-31');
+    assert.equal(response.status, 200, response.text);
+    const result = response.body as { fileName: string; mimeType: string; contentBase64: string; rowCount: number; errors: Array<{ sourceId: string; message: string }> };
+    assert.equal(result.fileName, 'EXTF_Buchungsstapel_2026-01-01_2026-12-31.csv');
+    assert.equal(result.mimeType, 'text/csv');
+    const bytes = Buffer.from(result.contentBase64, 'base64');
+    const [header, heading] = bytes.toString('latin1').split('\r\n');
+    assert.match(header!, /^"EXTF";700;21;"Buchungsstapel";13;/);
+    assert.ok(header!.includes(';1234567;12345;20260101;4;20260101;20261231;'), header);
+    assert.ok(header!.includes(';"03";'), 'Kontenrahmen SKR03 in the header');
+    assert.equal(heading!.split(';').length, 125);
+
+    const rows = rowsOf(bytes);
+    assert.equal(rows.length, 5);
+    assert.equal(result.rowCount, 5);
+    const [income] = byGegenkonto(rows, '8400').filter((row) => row[6] === '1200');
+    assert.deepEqual([income![0], income![1], income![6], income![7], income![8], income![9]], ['1190,00', '"S"', '1200', '8400', '', '1003'], 'Erlöse 19 % is an Automatikkonto: no BU key; bank Soll');
+    const [hoster] = byGegenkonto(rows, '4806');
+    assert.deepEqual([hoster![0], hoster![1], hoster![6], hoster![8], hoster![9]], ['59,50', '"H"', '1200', '"0009"', '1203'], 'EDV-Kosten with BU 9 (19 % Vorsteuer), bank Haben');
+    const [book] = byGegenkonto(rows, '8300');
+    assert.deepEqual([book![0], book![6], book![8], book![9], book![10]], ['107,00', '1200', '', '2003', `"${ids.invoiceNumber}"`], 'a 7 % invoice goes to Erlöse 7 %, Belegfeld 1 is the invoice number');
+    const [office] = byGegenkonto(rows, '4900');
+    assert.deepEqual([office![0], office![1], office![6], office![8], office![9]], ['30,00', '"H"', '1000', '"0009"', '0205'], 'a cash-book entry is booked against Kasse 1000');
+    const cashIncome = byGegenkonto(rows, '8400').find((row) => row[6] === '1000');
+    assert.equal(cashIncome?.[0], '40,00');
+
+    assert.ok(bytes.includes(Buffer.from([0xfc])), 'ü of Müller is the CP1252 byte 0xFC');
+    assert.ok(!bytes.includes(Buffer.from([0xc3, 0xbc])), 'no UTF-8 ü');
+    assert.ok(!bytes.toString('latin1').includes('Privatentnahme'), 'an excluded private item is not exported');
+    assert.ok(!result.errors.some((error) => error.sourceId === ids.private), 'and not reported as an error either');
+    const unclassified = result.errors.find((error) => error.sourceId === ids.unclassified);
+    assert.match(unclassified?.message ?? '', /keiner EÜR-Kategorie/);
+    const unmapped = result.errors.find((error) => error.sourceId === ids.unmapped);
+    assert.match(unmapped?.message ?? '', /Kennziffer 152 hat kein DATEV-Standardkonto/);
+    assert.equal(result.errors.length, 2);
+  });
+
+  test('a month holds only its own items; SKR04 with 5-digit accounts pads the account numbers', async () => {
+    const march = await h.api.eur.exportDatev({ from: '2026-03-01', to: '2026-03-31' });
+    assert.equal(march.rowCount, 3, 'only the March bank items');
+    assert.ok(!Buffer.from(march.contentBase64, 'base64').toString('latin1').includes('Laufkunde'));
+
+    await setDatev({ consultantNumber: '1234567', clientNumber: '12345', accountLength: 5, chart: 'SKR04' });
+    const q2 = await h.api.eur.exportDatev({ from: '2026-04-01', to: '2026-06-30' });
+    const bytes = Buffer.from(q2.contentBase64, 'base64');
+    assert.ok(bytes.toString('latin1').split('\r\n')[0]!.includes(';20260101;5;20260401;20260630;'));
+    const rows = rowsOf(bytes);
+    assert.deepEqual(rows.map((row) => [row[6], row[7]]).sort(), [['16000', '44000'], ['16000', '63000']], 'SKR04: Kasse 1600, Erlöse 4400, sonstige Aufwendungen 6300');
+    await setDatev({ consultantNumber: '1234567', clientNumber: '12345', accountLength: 4, chart: 'SKR03' });
+  });
+
+  test('bad ranges: across two fiscal years 422, reversed or malformed 400, unsupported year 400, no token 401', async () => {
+    const crossYear = await exportDatev('2025-12-01', '2026-01-31');
+    assert.equal(crossYear.status, 422, crossYear.text);
+    assert.match(crossYear.text, /Wirtschaftsjahr/);
+    assert.equal((await exportDatev('2026-03-31', '2026-03-01')).status, 400);
+    assert.equal((await exportDatev('2026-02-30', '2026-03-01')).status, 400);
+    assert.equal((await exportDatev('01.01.2026', '2026-03-01')).status, 400);
+    assert.equal((await h.raw('GET', '/eur/datev.csv?from=2026-01-01')).status, 400);
+    assert.equal((await exportDatev('2024-01-01', '2024-12-31')).status, 400);
+    const anonymous = await fetch(`${h.connection.baseUrl}/api/v1/lite/eur/datev.csv?from=2026-01-01&to=2026-12-31`);
+    assert.equal(anonymous.status, 401);
   });
 });

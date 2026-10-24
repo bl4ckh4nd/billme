@@ -13,6 +13,7 @@ import {
   templateKindSchema,
   type DocumentTemplateBody,
   type TemplateKind,
+  type TenantScope,
 } from '@billme/server-core';
 import {
   createPostgresBillingDependencies,
@@ -83,6 +84,84 @@ const toRecord = (record: ServerDocumentTemplateRecord) => documentTemplateRecor
   createdAt: record.createdAt,
   updatedAt: record.updatedAt,
 });
+
+type RenderContext = z.infer<typeof renderContextSchema>;
+
+/** Everything the print window renders from; the XRechnung export reads the same context. */
+export const loadRenderContext = async (
+  app: FastifyInstance,
+  session: { scope: TenantScope },
+  params: { kind: 'invoice' | 'offer' | 'dunning'; id: string },
+  query: { level?: number },
+): Promise<RenderContext> => {
+  const database = requireDatabase(app);
+  const tenantId = session.scope.tenantId;
+  const repositories = createPostgresBillingDependencies(database);
+  const document = params.kind === 'offer'
+    ? await repositories.offerRepo.getById(session.scope, params.id)
+    : await repositories.invoiceRepo.getById(session.scope, params.id);
+  if (!document) throw new ApiError(404, 'Beleg nicht gefunden.');
+
+  // A dunning letter is a new document about the invoice: current template and company data.
+  const isDunning = params.kind === 'dunning';
+  if (isDunning && document.kind !== 'invoice') throw new ApiError(404, 'Rechnung nicht gefunden.');
+  const templateKind: TemplateKind = isDunning
+    ? 'dunning'
+    : document.kind === 'offer' ? 'offer' : templateKindForDocument({ documentKind: document.documentKind });
+  const storedSettings = await getServerSettings(database, tenantId);
+  let settings = storedSettings ? appSettingsSchema.parse(JSON.parse(storedSettings.settingsJson)) : null;
+
+  // Resolution order: frozen snapshot → per-document choice → default of the kind → preset.
+  let template: { id?: string; version?: number; name?: string; body: DocumentTemplateBody } | null = null;
+  const snapshot = isDunning ? undefined : document.layout?.snapshot;
+  if (snapshot) {
+    const version = await getServerDocumentTemplateVersion(database, tenantId, snapshot.templateId, snapshot.templateVersion);
+    if (version) {
+      template = { id: snapshot.templateId, version: snapshot.templateVersion, body: documentTemplateBodySchema.parse(JSON.parse(version.bodyJson)) };
+    }
+    if (settings) settings = appSettingsSchema.parse({ ...settings, ...snapshot.sender });
+  }
+  if (!template) {
+    const records = await listServerDocumentTemplates(database, tenantId);
+    template = resolveDocumentTemplate(templateKind, {
+      templateId: document.layout?.templateId,
+      templates: records.filter((record) => record.kind === templateKind).map(toRecord),
+      defaults: await getServerDocumentTemplateDefaults(database, tenantId),
+    });
+  }
+
+  let source: RenderContext['source'];
+  if (document.kind === 'invoice' && templateKind === 'credit_note' && document.sourceDocumentId) {
+    const sourceInvoice = await repositories.invoiceRepo.getById(session.scope, document.sourceDocumentId);
+    if (sourceInvoice) {
+      source = { number: sourceInvoice.number, date: sourceInvoice.date, documentKind: sourceInvoice.documentKind };
+    }
+  }
+
+  if (document.kind === 'invoice' && isDunning) {
+    const level = query.level ?? Math.max(1, document.dunningLevel ?? 0);
+    const claimed = (await database.query<{ fee: string }>(
+      "SELECT fee FROM dunning_deliveries WHERE tenant_id=$1 AND invoice_id=$2 AND level=$3 AND state IN ('preparing','sending','unknown')",
+      [tenantId, document.id, level],
+    )).rows[0];
+    const { intro, ...dunning } = buildDunningDocumentContext({
+      invoice: document,
+      level,
+      levels: (settings?.dunning.levels ?? []).map((definition) =>
+        claimed && definition.id === level ? { ...definition, fee: Number(claimed.fee) } : definition,
+      ),
+      history: await repositories.dunningHistoryRepo.listByInvoice(session.scope, document.id),
+      baseInterestRatePercent: settings?.dunning.baseInterestRatePercent,
+      credited: (await database.query<{ amount: string | number }>(
+        "SELECT amount FROM invoices WHERE tenant_id=$1 AND source_document_id=$2 AND document_kind='credit_note' AND status<>'draft'",
+        [tenantId, document.id],
+      )).rows.reduce((sum, row) => sum + Math.abs(Number(row.amount)), 0),
+      today: new Date(),
+    });
+    return { templateKind, document, template, settings, source, dunning, texts: intro ? { intro } : undefined };
+  }
+  return { templateKind, document, template, settings, source, texts: document.layout?.texts };
+};
 
 export const registerDocumentTemplateRoutes = (app: FastifyInstance, product: 'lite' | 'pro', prefix: string) => {
   typedRoute(app, {
@@ -169,73 +248,7 @@ export const registerDocumentTemplateRoutes = (app: FastifyInstance, product: 'l
     response: renderContextSchema,
     async handler({ request, params, query }) {
       const session = await requireSession(app, product, request.headers.authorization);
-      const database = requireDatabase(app);
-      const tenantId = session.scope.tenantId;
-      const repositories = createPostgresBillingDependencies(database);
-      const document = params.kind === 'offer'
-        ? await repositories.offerRepo.getById(session.scope, params.id)
-        : await repositories.invoiceRepo.getById(session.scope, params.id);
-      if (!document) throw new ApiError(404, 'Beleg nicht gefunden.');
-
-      // A dunning letter is a new document about the invoice: current template and company data.
-      const isDunning = params.kind === 'dunning';
-      if (isDunning && document.kind !== 'invoice') throw new ApiError(404, 'Rechnung nicht gefunden.');
-      const templateKind: TemplateKind = isDunning
-        ? 'dunning'
-        : document.kind === 'offer' ? 'offer' : templateKindForDocument({ documentKind: document.documentKind });
-      const storedSettings = await getServerSettings(database, tenantId);
-      let settings = storedSettings ? appSettingsSchema.parse(JSON.parse(storedSettings.settingsJson)) : null;
-
-      // Resolution order: frozen snapshot → per-document choice → default of the kind → preset.
-      let template: { id?: string; version?: number; name?: string; body: DocumentTemplateBody } | null = null;
-      const snapshot = isDunning ? undefined : document.layout?.snapshot;
-      if (snapshot) {
-        const version = await getServerDocumentTemplateVersion(database, tenantId, snapshot.templateId, snapshot.templateVersion);
-        if (version) {
-          template = { id: snapshot.templateId, version: snapshot.templateVersion, body: documentTemplateBodySchema.parse(JSON.parse(version.bodyJson)) };
-        }
-        if (settings) settings = appSettingsSchema.parse({ ...settings, ...snapshot.sender });
-      }
-      if (!template) {
-        const records = await listServerDocumentTemplates(database, tenantId);
-        template = resolveDocumentTemplate(templateKind, {
-          templateId: document.layout?.templateId,
-          templates: records.filter((record) => record.kind === templateKind).map(toRecord),
-          defaults: await getServerDocumentTemplateDefaults(database, tenantId),
-        });
-      }
-
-      let source: z.infer<typeof renderContextSchema>['source'];
-      if (document.kind === 'invoice' && templateKind === 'credit_note' && document.sourceDocumentId) {
-        const sourceInvoice = await repositories.invoiceRepo.getById(session.scope, document.sourceDocumentId);
-        if (sourceInvoice) {
-          source = { number: sourceInvoice.number, date: sourceInvoice.date, documentKind: sourceInvoice.documentKind };
-        }
-      }
-
-      if (document.kind === 'invoice' && isDunning) {
-        const level = query.level ?? Math.max(1, document.dunningLevel ?? 0);
-        const claimed = (await database.query<{ fee: string }>(
-          "SELECT fee FROM dunning_deliveries WHERE tenant_id=$1 AND invoice_id=$2 AND level=$3 AND state IN ('preparing','sending','unknown')",
-          [tenantId, document.id, level],
-        )).rows[0];
-        const { intro, ...dunning } = buildDunningDocumentContext({
-          invoice: document,
-          level,
-          levels: (settings?.dunning.levels ?? []).map((definition) =>
-            claimed && definition.id === level ? { ...definition, fee: Number(claimed.fee) } : definition,
-          ),
-          history: await repositories.dunningHistoryRepo.listByInvoice(session.scope, document.id),
-          baseInterestRatePercent: settings?.dunning.baseInterestRatePercent,
-          credited: (await database.query<{ amount: string | number }>(
-            "SELECT amount FROM invoices WHERE tenant_id=$1 AND source_document_id=$2 AND document_kind='credit_note' AND status<>'draft'",
-            [tenantId, document.id],
-          )).rows.reduce((sum, row) => sum + Math.abs(Number(row.amount)), 0),
-          today: new Date(),
-        });
-        return { templateKind, document, template, settings, source, dunning, texts: intro ? { intro } : undefined };
-      }
-      return { templateKind, document, template, settings, source, texts: document.layout?.texts };
+      return loadRenderContext(app, session, params, query);
     },
   });
 };

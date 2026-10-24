@@ -24,10 +24,25 @@ const triggerCsvDownload = (content: string, fileName: string): void => {
   URL.revokeObjectURL(url);
 };
 
-/** Anlage EÜR for one tax year: totals, lines by Kennziffer, CSV and PDF export. */
+const MONTHS = ['Januar', 'Februar', 'März', 'April', 'Mai', 'Juni', 'Juli', 'August', 'September', 'Oktober', 'November', 'Dezember'];
+const pad2 = (value: number) => String(value).padStart(2, '0');
+const lastDay = (year: number, month: number) => new Date(Date.UTC(year, month, 0)).getUTCDate();
+/** 'year', 'q1'..'q4' or 'm1'..'m12' → ISO range inside the tax year (DATEV wants one Wirtschaftsjahr per file). */
+const datevRange = (year: number, period: string): { from: string; to: string } => {
+  const [first, last] = period === 'year' ? [1, 12]
+    : period.startsWith('q') ? [Number(period.slice(1)) * 3 - 2, Number(period.slice(1)) * 3]
+      : [Number(period.slice(1)), Number(period.slice(1))];
+  return { from: `${year}-${pad2(first)}-01`, to: `${year}-${pad2(last)}-${pad2(lastDay(year, last))}` };
+};
+type DatevExportResult = Awaited<ReturnType<typeof ipc.eur.exportDatev>>;
+
+/** Anlage EÜR for one tax year: totals, lines by Kennziffer, CSV, PDF and DATEV export. */
 export const EurReportPanel: React.FC = () => {
   const [taxYear, setTaxYear] = React.useState<number>(LATEST_SUPPORTED_EUR_TAX_YEAR);
   const [isPdfExporting, setIsPdfExporting] = React.useState(false);
+  const [datevPeriod, setDatevPeriod] = React.useState('year');
+  const [isDatevExporting, setIsDatevExporting] = React.useState(false);
+  const [datevResult, setDatevResult] = React.useState<DatevExportResult | null>(null);
   const { notify } = useActionFeedback('eur-report');
   const { data: report, isLoading, isError, error, refetch } = useQuery({
     queryKey: ['eur', 'report', taxYear],
@@ -50,6 +65,31 @@ export const EurReportPanel: React.FC = () => {
       notify('error', 'PDF-Export fehlgeschlagen');
     } finally {
       setIsPdfExporting(false);
+    }
+  };
+
+  const exportDatev = async () => {
+    setIsDatevExporting(true);
+    try {
+      const result = await ipc.eur.exportDatev(datevRange(taxYear, datevPeriod));
+      const bytes = Uint8Array.from(atob(result.contentBase64), (char) => char.charCodeAt(0));
+      const blob = new Blob([bytes], { type: 'text/csv;charset=windows-1252' });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = result.fileName;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+      setDatevResult(result);
+      notify(result.errors.length ? 'info' : 'success', result.errors.length
+        ? `DATEV-Export mit ${result.rowCount} Buchungen; ${result.errors.length} Posten fehlen.`
+        : `DATEV-Export mit ${result.rowCount} Buchungen gespeichert.`);
+    } catch (exportError) {
+      notify('error', exportError instanceof Error && exportError.message.trim() ? exportError.message : 'DATEV-Export fehlgeschlagen');
+    } finally {
+      setIsDatevExporting(false);
     }
   };
 
@@ -88,7 +128,37 @@ export const EurReportPanel: React.FC = () => {
                 PDF exportieren
               </Button>
             )}
+            <Select value={datevPeriod} aria-label="DATEV-Zeitraum" onChange={(e) => setDatevPeriod(e.target.value)}>
+              <option value="year">Jahr {taxYear}</option>
+              <optgroup label="Quartal">
+                {[1, 2, 3, 4].map((quarter) => <option key={quarter} value={`q${quarter}`}>{quarter}. Quartal</option>)}
+              </optgroup>
+              <optgroup label="Monat">
+                {MONTHS.map((month, index) => <option key={month} value={`m${index + 1}`}>{month}</option>)}
+              </optgroup>
+            </Select>
+            <Button variant="secondary" onClick={() => void exportDatev()} loading={isDatevExporting}>
+              <Download size={16} aria-hidden="true" />
+              DATEV-Export
+            </Button>
           </div>
+          {datevResult && datevResult.errors.length > 0 && (
+            <div role="status" aria-label="Nicht exportierte Posten" className="border-b border-border bg-warning-bg px-3.5 py-3">
+              <p className="text-label text-foreground">
+                {datevResult.errors.length === 1 ? '1 Posten ist' : `${datevResult.errors.length} Posten sind`} nicht in {datevResult.fileName}
+              </p>
+              <ul className="mt-1.5 flex flex-col gap-1 text-caption text-foreground-secondary">
+                {datevResult.errors.map((rowError) => (
+                  <li key={`${rowError.sourceType}:${rowError.sourceId}`}>
+                    <span className="tabular-nums">{new Date(`${rowError.date}T00:00:00`).toLocaleDateString('de-DE')}</span>
+                    {' · '}{rowError.counterparty || EMPTY_VALUE}{' · '}
+                    <span className="tabular-nums">{formatCurrency(rowError.amount)}</span>
+                    {': '}{rowError.message}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
           {isError ? (
             <ErrorState
               title="Report konnte nicht geladen werden"

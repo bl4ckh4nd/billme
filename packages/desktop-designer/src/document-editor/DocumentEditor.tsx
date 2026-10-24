@@ -115,11 +115,14 @@ const formatDocumentAddress = (address: NonNullable<ClientLike['addresses']>[num
   country: normalizeCountry(address.country),
 });
 
+const ATTENTION_LINE = /^z\.\s?Hd\./i;
+
 const parseAddressText = (value: string, company: string, previous: unknown): Record<string, string> => {
   const lines = value.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
   const base = previous && typeof previous === 'object' ? previous as Record<string, string> : {};
   const nonAddressLines = new Set([company, base.company, base.contactPerson].map((line) => line?.trim()).filter(Boolean));
-  const addressLines = lines.filter((line) => !nonAddressLines.has(line));
+  // The "z. Hd." line names the contact person, it is not part of the street address.
+  const addressLines = lines.filter((line) => !nonAddressLines.has(line) && !ATTENTION_LINE.test(line));
   const cityIndex = addressLines.findIndex((line) => /\b\d{4,6}\b/.test(line));
   const cityLine = cityIndex >= 0 ? addressLines[cityIndex] : '';
   const cityMatch = cityLine.match(/^(?:([A-Za-z-]{2,5})[ -])?(\d{4,6})\s+(.+)$/);
@@ -296,14 +299,18 @@ export const DocumentEditor: React.FC<DocumentEditorProps> = ({
     const billingAddress = addresses.find((address) => address.isDefaultBilling) ?? addresses.find((address) => address.kind === 'billing') ?? addresses[0];
     const shippingAddress = addresses.find((address) => address.isDefaultShipping) ?? addresses.find((address) => address.kind === 'shipping') ?? billingAddress;
     const billingEmail = emails.find((email) => email.isDefaultBilling) ?? emails.find((email) => email.isDefaultGeneral) ?? emails[0];
+    const contactName = (client.contacts?.find((contact) => contact.isPrimary) ?? client.contacts?.[0])?.name?.trim();
+    const formattedAddress = billingAddress ? formatDocumentAddress(billingAddress) : client.address;
     setFormData((previous) => ({
       ...previous,
       clientId: client.id,
       clientNumber: client.customerNumber,
       client: client.company,
       clientEmail: billingEmail?.email ?? client.email ?? previous.clientEmail,
-      clientAddress: billingAddress ? formatDocumentAddress(billingAddress) : client.address ?? previous.clientAddress,
-      billingAddressJson: billingAddress ?? previous.billingAddressJson,
+      clientAddress: formattedAddress !== undefined
+        ? [contactName ? `z. Hd. ${contactName}` : '', formattedAddress].filter(Boolean).join('\n')
+        : previous.clientAddress,
+      billingAddressJson: billingAddress ? { ...billingAddress, ...(contactName ? { contactPerson: contactName } : {}) } : previous.billingAddressJson,
       shippingAddressJson: shippingAddress ?? previous.shippingAddressJson,
       taxMeta: {
         ...previous.taxMeta,
@@ -446,7 +453,8 @@ export const DocumentEditor: React.FC<DocumentEditorProps> = ({
         handleSave();
       } else if (key === 'z' && !(event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement)) {
         event.preventDefault();
-        event.shiftKey ? history.redo() : history.undo();
+        if (event.shiftKey) history.redo();
+        else history.undo();
       } else if (key === 'y') {
         event.preventDefault();
         history.redo();

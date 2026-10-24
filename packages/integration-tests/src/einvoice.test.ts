@@ -3,8 +3,9 @@ import { randomUUID } from 'node:crypto';
 import { after, before, describe, test } from 'node:test';
 import { PDFArray, PDFDict, PDFDocument, PDFName, PDFRawStream, PDFString, decodePDFRawStream } from 'pdf-lib';
 import { createDocumentExportPreparer } from '@billme/desktop-services/documentExport';
-import { startLite, type LiteHarness } from './harness.js';
-import { asSmallBusiness, draftInvoice, draftOffer } from './fixtures.js';
+import { readFile } from 'node:fs/promises';
+import { startLite, startPro, type LiteHarness, type ProHarness } from './harness.js';
+import { asSmallBusiness, draftInvoice, draftOffer, issueInvoice } from './fixtures.js';
 import { configureLite, issueDated, line } from './reports-fixtures.js';
 
 /**
@@ -34,6 +35,20 @@ import { configureLite, issueDated, line } from './reports-fixtures.js';
  * - when it must NOT happen: e-invoicing disabled, offers, incomplete seller or
  *   buyer address, nothing billable
  * - EN 16931 conformance details a validator would reject (see the todos)
+ *
+ * XRechnung export (`documents:exportXRechnung`, CII) and reading received
+ * e-invoices (`einvoice:parse`), Lite and Pro:
+ * - the XRechnung carries the wrong guideline id (BT-24), loses the seller
+ *   contact (BG-6), the electronic addresses (BT-34/BT-49) or the Leitweg-ID,
+ *   or its totals and VAT groups differ from the invoice when read back
+ * - a draft, a document without Leitweg-ID, seller phone/e-mail or buyer
+ *   e-mail is exported anyway instead of 422 with the missing fields named
+ * - the ZUGFeRD export starts to carry XRechnung-only elements
+ * - reading: the embedded XML of a ZUGFeRD PDF is not found, a UBL invoice is
+ *   misread (entities, leading zeros, dates, VAT per rate, IBAN), a credit note
+ *   is not flagged
+ * - hostile or wrong input: a DOCTYPE/ENTITY payload is parsed (XXE), a PDF
+ *   without e-invoice or a random text is accepted, bad base64 passes
  */
 
 const xmlOf = (container: Awaited<ReturnType<typeof readFacturX>>) => container.files[0]!.xml;
@@ -508,5 +523,183 @@ describe('e-invoice export (Lite)', () => {
         await configureLite(h.api, { eInvoice: true });
       }
     });
+  });
+});
+
+const UBL_FIXTURE = new URL('./fixtures/xrechnung-ubl.xml', import.meta.url);
+const XRECHNUNG_ID = 'urn:cen.eu:en16931:2017#compliant#urn:xeinkauf.de:kosit:xrechnung_3.0';
+const base64 = (bytes: Uint8Array | string) => Buffer.from(bytes).toString('base64');
+const fromBase64 = (value: string) => Buffer.from(value, 'base64').toString('utf8');
+/** Seller contact XRechnung requires on top of the e-invoice profile (BR-DE-2/6/7). */
+const withPhone = async (api: LiteHarness['api']) => {
+  const settings = (await api.settings.get())!;
+  await api.settings.set({ settings: { ...settings, company: { ...settings.company, phone: '+49 30 1234567' } } });
+};
+/** An issued invoice for a public buyer: Leitweg-ID and billing e-mail set. */
+const issueForAuthority = async (api: LiteHarness['api'], over: Record<string, unknown> = {}) => {
+  const draft = await draftInvoice(api, { client: 'Stadt Musterhausen', clientEmail: 'eingang@musterhausen.example', date: '2026-08-03', dueDate: '2026-08-17', items: [line('Wartung', 200, 19), line('Fachbuch', 30, 7)], taxMeta: { buyerReference: '04011000-12345-67' } as never, ...over });
+  return api.invoices.upsert({ reason: 'Rechnung gestellt', invoice: { ...draft, servicePeriod: '2026-08-01', status: 'open' } });
+};
+
+describe('XRechnung export and e-invoice inbox (Lite)', () => {
+  let h: LiteHarness;
+  let prepare: ReturnType<typeof createDocumentExportPreparer>;
+  before(async () => {
+    h = await startLite(null, 'einvoice-xrechnung');
+    await configureLite(h.api, { eInvoice: true });
+    prepare = createDocumentExportPreparer({ product: 'lite', resolveConnection: () => h.connection });
+  });
+  after(async () => { await h.close(); });
+
+  test('missing Leitweg-ID and seller phone: 422 naming each field; drafts and unknown ids are refused', async () => {
+    const withoutReference = await issueDated(h.api, { client: 'Ohne Leitweg', date: '2026-08-01', servicePeriod: '2026-08-01', items: [line('Leistung', 100, 19)] });
+    const refused = await h.raw('GET', `/documents/invoice/${withoutReference.id}/xrechnung`);
+    assert.equal(refused.status, 422, refused.text);
+    assert.match(refused.body.message, /^XRechnung nicht möglich, es fehlt: /);
+    assert.match(refused.body.message, /Leitweg-ID\/Käuferreferenz \(BT-10\)/);
+    assert.match(refused.body.message, /Telefonnummer deines Unternehmens \(BT-42\)/);
+    assert.doesNotMatch(refused.body.message, /E-Mail des Kunden/, 'the buyer e-mail is there');
+    await assert.rejects(h.api.documents.exportXRechnung({ id: withoutReference.id }), /Leitweg-ID/);
+
+    await withPhone(h.api);
+    const draft = await draftInvoice(h.api, { client: 'Entwurf Behörde', items: [line('Leistung', 100, 19)], taxMeta: { buyerReference: '991-1' } as never });
+    const draftExport = await h.raw('GET', `/documents/invoice/${draft.id}/xrechnung`);
+    assert.equal(draftExport.status, 422, draftExport.text);
+    assert.match(draftExport.body.message, /Entwurf/);
+    const noBuyerMail = await issueForAuthority(h.api, { clientEmail: '' });
+    const mailRefused = await h.raw('GET', `/documents/invoice/${noBuyerMail.id}/xrechnung`);
+    assert.equal(mailRefused.status, 422, mailRefused.text);
+    assert.match(mailRefused.body.message, /E-Mail des Kunden \(BT-49\)/);
+    assert.equal((await h.raw('GET', '/documents/invoice/does-not-exist/xrechnung')).status, 404);
+  });
+
+  test('round trip: the exported XRechnung reads back with number, totals, VAT, profile, BT-34/BT-49 and BG-6', async () => {
+    await withPhone(h.api);
+    const invoice = await issueForAuthority(h.api);
+    const file = await h.api.documents.exportXRechnung({ id: invoice.id });
+    assert.equal(file.fileName, `${invoice.number.replace(/[^\w.-]+/g, '_')}_xrechnung.xml`);
+    assert.equal(file.mimeType, 'application/xml');
+    const xml = fromBase64(file.contentBase64);
+    assertWellFormed(xml);
+    assert.equal(first(blocks(xml, 'ram:GuidelineSpecifiedDocumentContextParameter')[0]!, 'ram:ID'), XRECHNUNG_ID);
+    const seller = blocks(xml, 'ram:SellerTradeParty')[0]!;
+    const contact = blocks(seller, 'ram:DefinedTradeContact')[0]!;
+    assert.equal(first(contact, 'ram:PersonName'), 'Max Muster', 'BT-41: the owner');
+    assert.equal(first(contact, 'ram:CompleteNumber'), '+49 30 1234567', 'BT-42');
+    assert.equal(first(contact, 'ram:URIID'), 'info@muster.example', 'BT-43');
+    assert.ok(seller.includes('<ram:URIID schemeID="EM">info@muster.example</ram:URIID>'), 'BT-34');
+    assert.ok(seller.indexOf('<ram:DefinedTradeContact>') < seller.indexOf('<ram:PostalTradeAddress>') && seller.indexOf('</ram:PostalTradeAddress>') < seller.indexOf('<ram:URIUniversalCommunication>'), 'CII order');
+    assert.ok(blocks(xml, 'ram:BuyerTradeParty')[0]!.includes('<ram:URIID schemeID="EM">eingang@musterhausen.example</ram:URIID>'), 'BT-49');
+
+    const parsed = await h.api.einvoice.parse({ fileName: file.fileName, contentBase64: file.contentBase64 });
+    const stored = (await h.api.invoices.list()).find((entry) => entry.id === invoice.id)!;
+    assert.equal(parsed.syntax, 'CII');
+    assert.equal(parsed.profile, XRECHNUNG_ID);
+    assert.equal(parsed.number, invoice.number);
+    assert.equal(parsed.typeCode, '380');
+    assert.equal(parsed.isCreditNote, false);
+    assert.deepEqual([parsed.issueDate, parsed.dueDate, parsed.serviceDate], ['2026-08-03', '2026-08-17', '2026-08-01']);
+    assert.equal(parsed.buyerReference, '04011000-12345-67');
+    assert.equal(parsed.seller.email, 'info@muster.example');
+    assert.equal(parsed.seller.vatId, 'DE123456789');
+    assert.equal(parsed.iban, 'DE02120300000000202051');
+    assert.deepEqual(parsed.totals, { net: stored.taxSnapshot!.netAmount, vat: stored.taxSnapshot!.vatAmount, gross: stored.taxSnapshot!.grossAmount, due: stored.taxSnapshot!.grossAmount });
+    assert.deepEqual(parsed.vatBreakdown.map((g) => [g.category, g.rate, g.netAmount, g.vatAmount]).sort(), [['S', 19, 200, 38], ['S', 7, 30, 2.1]].sort());
+    assert.deepEqual(parsed.lines.map((l) => [l.description, l.netAmount]), [['Wartung', 200], ['Fachbuch', 30]]);
+    assert.deepEqual(parsed.warnings, []);
+
+    // The ZUGFeRD PDF of the same invoice stays EN 16931 without XRechnung-only elements.
+    const prepared = await prepare('invoice', invoice.id);
+    const zugferd = xmlOf(await readFacturX(await prepared.finalize!(await blankPdf())));
+    assert.equal(first(zugferd, 'ram:ID'), 'urn:cen.eu:en16931:2017');
+    assert.ok(!zugferd.includes('DefinedTradeContact') && !zugferd.includes('URIUniversalCommunication') && !zugferd.includes('BusinessProcessSpecifiedDocumentContextParameter'));
+  });
+
+  test('a cancellation exports as XRechnung 381 and reads back as a credit note with the correction warning', async () => {
+    await withPhone(h.api);
+    const source = await issueForAuthority(h.api);
+    const cancellation = await h.api.documents.chainIssue({ operation: 'correction', id: randomUUID(), invoiceId: source.id, kind: 'cancellation_invoice', date: '2026-08-05', dueDate: '2026-08-05', reason: 'Storno' } as never);
+    const file = await h.api.documents.exportXRechnung({ id: cancellation.id });
+    const parsed = await h.api.einvoice.parse({ fileName: file.fileName, contentBase64: file.contentBase64 });
+    assert.equal(parsed.typeCode, '381');
+    assert.equal(parsed.isCreditNote, true);
+    assert.ok(parsed.warnings.includes('Gutschrift – bitte als Korrekturbeleg erfassen.'));
+  });
+
+  test('the ZUGFeRD PDF export is read through its embedded factur-x.xml', async () => {
+    const invoice = await issueDated(h.api, { client: 'PDF Leser GmbH', date: '2026-08-06', dueDate: '2026-08-20', servicePeriod: '2026-08-06', items: [line('Beratung', 99.99, 19)] });
+    const prepared = await prepare('invoice', invoice.id);
+    const pdf = await prepared.finalize!(await blankPdf());
+    const parsed = await h.api.einvoice.parse({ fileName: 'rechnung.pdf', contentBase64: base64(pdf) });
+    assert.deepEqual(parsed.source, { kind: 'pdf', attachmentName: 'factur-x.xml' });
+    assert.equal(parsed.profile, 'urn:cen.eu:en16931:2017');
+    assert.equal(parsed.number, invoice.number);
+    assert.equal(parsed.seller.name, 'Muster Consulting');
+    assert.equal(parsed.buyer.name, 'PDF Leser GmbH');
+    assert.deepEqual(parsed.totals, { net: 99.99, vat: 19, gross: 118.99, due: 118.99 });
+  });
+
+  test('a hand-written UBL XRechnung: entities decoded, leading zeros kept, VAT per rate, payment data', async () => {
+    const xml = await readFile(UBL_FIXTURE);
+    const parsed = await h.api.einvoice.parse({ fileName: 'xrechnung-ubl.xml', contentBase64: base64(xml) });
+    assert.equal(parsed.syntax, 'UBL');
+    assert.equal(parsed.profile, XRECHNUNG_ID);
+    assert.deepEqual([parsed.number, parsed.typeCode, parsed.issueDate, parsed.dueDate, parsed.serviceDate], ['0815-2026-17', '380', '2026-03-10', '2026-03-24', '2026-03-05']);
+    assert.deepEqual(parsed.period, { start: '2026-03-01', end: '2026-03-05' });
+    assert.equal(parsed.buyerReference, '991-01234-56');
+    assert.deepEqual(parsed.seller, { name: 'Bürobedarf Schulz & Partner GmbH', vatId: 'DE987654321', street: 'Papierweg 7', zip: '04109', city: 'Leipzig', country: 'DE', email: 'rechnung@schulz-partner.example' });
+    assert.deepEqual([parsed.iban, parsed.bic, parsed.paymentReference], ['DE75512108001245126199', 'SOGEDEFFXXX', '0815-2026-17']);
+    assert.deepEqual(parsed.vatBreakdown, [{ category: 'S', rate: 19, netAmount: 100, vatAmount: 19 }, { category: 'S', rate: 7, netAmount: 20, vatAmount: 1.4 }]);
+    assert.deepEqual(parsed.totals, { net: 120, vat: 20.4, gross: 140.4, due: 140.4 });
+    assert.deepEqual(parsed.lines.map((l) => [l.description, l.quantity, l.unit, l.netPrice, l.netAmount, l.vatRate]), [['Druckerpapier A4, 5 000 Blatt', 2, 'H87', 50, 100, 19], ['Fachbuch Buchhaltung', 1, 'H87', 20, 20, 7]]);
+    assert.deepEqual(parsed.notes, ['Vielen Dank für Ihren Auftrag & bis bald.']);
+    assert.deepEqual(parsed.warnings, []);
+  });
+
+  test('hostile and wrong input: DOCTYPE/ENTITY refused (400), no e-invoice (422), bad request (400)', async () => {
+    const xxe = '<?xml version="1.0"?>\n<!DOCTYPE r [<!ENTITY x SYSTEM "file:///etc/passwd">]>\n<rsm:CrossIndustryInvoice xmlns:rsm="urn:x"><a>&x;</a></rsm:CrossIndustryInvoice>';
+    const refused = await h.raw('POST', '/einvoice/parse', { fileName: 'xxe.xml', contentBase64: base64(xxe) });
+    assert.equal(refused.status, 400, refused.text);
+    assert.match(refused.body.message, /DOCTYPE/);
+    assert.ok(!refused.text.includes('root:'), 'nothing of the file leaks');
+
+    const plainPdf = await h.raw('POST', '/einvoice/parse', { fileName: 'scan.pdf', contentBase64: base64(await blankPdf()) });
+    assert.equal(plainPdf.status, 422, plainPdf.text);
+    assert.match(plainPdf.body.message, /^Keine E-Rechnung gefunden: .*eingebettete Rechnung/);
+    for (const [fileName, content, reason] of [
+      ['notiz.txt', 'Hallo, das ist keine Rechnung.', /weder PDF noch XML/],
+      ['bestellung.xml', '<?xml version="1.0"?><Order><ID>1</ID></Order>', /weder eine CII-Rechnung/],
+      ['kaputt.xml', '<rsm:CrossIndustryInvoice><a></rsm:CrossIndustryInvoice>', /nicht wohlgeformt/],
+      ['kaputt.pdf', '%PDF-1.7 kein echtes PDF', /PDF-Datei konnte nicht gelesen werden/],
+    ] as const) {
+      const response = await h.raw('POST', '/einvoice/parse', { fileName, contentBase64: base64(content) });
+      assert.equal(response.status, 422, `${fileName}: ${response.text}`);
+      assert.match(response.body.message, reason, fileName);
+    }
+    assert.equal((await h.raw('POST', '/einvoice/parse', { fileName: 'x.xml', contentBase64: '***' })).status, 400, 'bad base64');
+    assert.equal((await h.raw('POST', '/einvoice/parse', { contentBase64: base64('<a/>') })).status, 400, 'no file name');
+  });
+});
+
+describe('XRechnung export and e-invoice inbox (Pro)', () => {
+  let h: ProHarness;
+  before(async () => {
+    h = await startPro(null, 'einvoice-xrechnung-pro');
+    await configureLite(h.api as never, { eInvoice: true });
+    await withPhone(h.api as never);
+  });
+  after(async () => { await h.close(); });
+
+  test('Pro reads the UBL sample and exports an XRechnung of an issued invoice', async () => {
+    const parsed = await h.api.einvoice.parse({ fileName: 'xrechnung-ubl.xml', contentBase64: base64(await readFile(UBL_FIXTURE)) });
+    assert.equal(parsed.number, '0815-2026-17');
+    assert.equal(parsed.totals.gross, 140.4);
+    const invoice = await issueInvoice(h.api as never, { client: 'Behörde Pro', items: [line('Leistung', 100, 19)], taxMeta: { buyerReference: '991-77' } as never });
+    const file = await h.api.documents.exportXRechnung({ id: invoice.id });
+    const back = await h.api.einvoice.parse({ fileName: file.fileName, contentBase64: file.contentBase64 });
+    assert.equal(back.profile, XRECHNUNG_ID);
+    assert.equal(back.number, invoice.number);
+    assert.equal(back.buyerReference, '991-77');
+    assert.equal(back.totals.gross, 119);
   });
 });

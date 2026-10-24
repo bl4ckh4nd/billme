@@ -45,6 +45,13 @@ export interface BusinessReportingProfile {
 export interface AppSettings {
   /** Canonical reporting truth; omitted only by legacy in-memory callers. */
   businessReportingProfile?: BusinessReportingProfile;
+  /** DATEV-Buchungsstapel for the tax advisor (Beraternummer, Mandantennummer, Sachkontenlänge, Kontenrahmen). */
+  datev?: {
+    consultantNumber: string;
+    clientNumber: string;
+    accountLength: number;
+    chart: LedgerChart;
+  };
   company: {
     name: string;
     owner: string;
@@ -361,6 +368,15 @@ export interface ClientEmail {
   isDefaultBilling?: boolean;
 }
 
+export interface ClientContact {
+  id: string;
+  name: string;
+  role?: string;
+  email?: string;
+  phone?: string;
+  isPrimary: boolean;
+}
+
 export interface Client {
   id: string;
   customerNumber?: string;
@@ -377,6 +393,8 @@ export interface Client {
   activities: Activity[];
   addresses?: ClientAddress[];
   emails?: ClientEmail[];
+  /** Contact persons; the primary one's name mirrors into `contactPerson`. */
+  contacts?: ClientContact[];
   taxProfile?: {
     type: 'business' | 'consumer';
     countryCode?: string;

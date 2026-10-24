@@ -82,6 +82,7 @@ export interface ClientLike {
   address?: string;
   addresses?: ClientAddressLike[];
   emails?: ClientEmailLike[];
+  contacts?: Array<{ name: string; isPrimary?: boolean }>;
   taxProfile?: {
     type: 'business' | 'consumer';
     countryCode?: string;

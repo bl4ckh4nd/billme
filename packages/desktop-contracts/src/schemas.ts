@@ -329,6 +329,8 @@ export const eurListItemSchema = z.object({
   sourceType: z.enum(['transaction', 'invoice', 'manual']),
   sourceId: z.string(),
   date: z.string(),
+  /** The tax year the payment counts in; differs from the year of `date` under the 10-Tage-Regel (§ 11 EStG). */
+  taxYear: z.number().int().optional(),
   amountGross: z.number(),
   amountNet: z.number(),
   flowType: z.enum(['income', 'expense']),
@@ -703,6 +705,7 @@ export const csvMappingSchema = z.object({
   externalIdColumn: z.string().optional(),
   currencyColumn: z.string().optional(),
   currencyExpected: z.string().optional(),
+  feeColumn: z.string().optional(),
 });
 
 export const financeImportPreviewSchema = z.object({

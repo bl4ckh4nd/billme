@@ -5,7 +5,7 @@ import { startPro, type ProHarness } from './harness.js';
 import { sha256Hex, stableStringify } from '@billme/server-data';
 import {
   addBankAccount, approveDraft, assertBalanced, assertLedgerConsistent, bankTx, cents, download, get, getDraft, importCsv, invoiceEntry, issue,
-  journal, money, openItems, payOpenItem, postDraft, type JournalEntry,
+  journal, money, openItems, payOpenItem, periods, postDraft, statusOf, type JournalEntry,
 } from './pro-fixtures.js';
 
 /**
@@ -31,6 +31,10 @@ import {
  * - EÜR rules and PDF: a rule without value, line or reason accepted, a deleted
  *   rule still suggesting, a PDF faked when no printer is attached
  * - filing operations: an unknown, stale or anonymous filing validated or submitted
+ * - year-end: a fiscal-year close or carry-forward that changes SuSa, BWA, GuV
+ *   or Bilanz of the closed or the next year (result zeroed, balances counted
+ *   twice), closing entries exported to DATEV, a closed year or a prepared
+ *   UStVA month that stays open for postings without an override
  */
 
 const GROSS = 238;
@@ -587,6 +591,8 @@ describe('pro reporting', () => {
       assert.deepEqual(artifact.rows.map((line: any) => [line.taxCaseKey, line.direction, line.netAmount, line.taxAmount, line.lineCount]), [['DE_STD_19', 'output', 500, 95, 1]], 'the June 2025 invoice: base 500, VAT 95');
       assert.deepEqual([artifact.submissionReady, artifact.exportable, artifact.providerValidation, artifact.operation], [false, true, 'unavailable', 'preparation'], 'never claims to be a submission');
       assert.match(artifact.sourceHash, /^[a-f0-9]{64}$/);
+      assert.equal(await statusOf(h, '2025-06'), 'soft_locked', 'preparing the UStVA soft-locks its month');
+      assert.ok((await h.api.audit.exportCsv()).includes('accounting_period.soft_lock'), 'the lock is audited');
       const replay = await prepare({ idempotencyKey: key });
       assert.equal(replay.body.replayed, true);
       assert.equal(replay.body.run.id, first.body.run.id);
@@ -987,6 +993,23 @@ describe('pro reporting', () => {
     });
 
     test('the fiscal-year close books the result from the ledger balances; carrying forward opens the next year', async () => {
+      const reports = async () => {
+        const out: Record<string, unknown> = {};
+        for (const path of [
+          '/accounting/reports/susa?from=2025-01-01&to=2025-12-31', '/accounting/reports/susa?from=2026-01-01&to=2026-12-31',
+          '/accounting/reports/hgb-guv?from=2025-01-01&to=2025-12-31', '/accounting/reports/hgb-guv?from=2026-01-01&to=2026-12-31',
+          '/accounting/reports/bwa01?from=2025-01-01&to=2025-12-31', '/accounting/reports/bwa01?from=2026-01-01&to=2026-12-31',
+          '/accounting/reports/bilanz?asOfDate=2025-12-31', '/accounting/reports/bilanz?asOfDate=2026-12-31',
+          '/accounting/balances?asOfDate=2026-01-31', '/accounting/vat/summary?from=2025-01-01&to=2026-12-31',
+        ]) {
+          const response = await h.raw('GET', path);
+          const body = response.body ?? {};
+          out[path] = { status: response.status, rows: body.rows ?? body, totals: body.totals, netResult: body.netResult, assets: body.assets, liabilities: body.liabilities, blocking: body.mappingHealth?.blocking };
+        }
+        return out;
+      };
+      const reportsBefore = await reports();
+      assert.equal(row((await h.raw('GET', '/accounting/reports/hgb-guv?from=2025-01-01&to=2025-12-31')).body, 'revenue'), 500);
       const balances = await get<Array<{ accountNumber: string }>>(h, '/accounting/balances?asOfDate=2025-12-31');
       const revenue = balances.find((row) => row.accountNumber === '8400')!;
       assert.ok(revenue, 'there is 2025 revenue to close');
@@ -1017,6 +1040,12 @@ describe('pro reporting', () => {
       assert.ok(badCarry.status >= 400 || badCarry.body.run?.status === 'rejected', `a period that does not contain the effective date: ${badCarry.status}`);
       const bad = await closing({ command: 'fiscal_close', sourceId: `close-${key()}`, sourceRevision: 'v1', idempotencyKey: key(), input: { sourceId: 'x', sourceRevision: 'v1', fiscalYear: 2025, period: '2026-01', closingDate: '2025-12-31', currency: 'EUR', revenueAccounts: ['8400'], expenseAccounts: [], retainedEarningsAccount: '0860', balances } });
       assert.ok(bad.status >= 400 || bad.body.run?.status === 'rejected', `a period that does not contain the closing date: ${bad.status} ${bad.text.slice(0, 120)}`);
+
+      assert.deepEqual(await reports(), reportsBefore, 'closing and carrying forward change no report of either year');
+      const datev = await get<Array<{ konto: string; gegenkonto: string }>>(h, '/accounting/datev/rows?from=2025-12-01&to=2026-01-31');
+      assert.ok(!datev.some((pair) => ['0860', '9000'].includes(pair.konto) || ['0860', '9000'].includes(pair.gegenkonto)), 'closing entries are not part of the DATEV stack');
+      assert.ok((await periods(h, 2025)).every((month) => month.status === 'soft_locked'), 'the closed fiscal year is soft-locked');
+      assert.equal(await statusOf(h, '2026-01'), 'open', 'the next year stays open');
       await assertLedgerConsistent(h);
     });
 

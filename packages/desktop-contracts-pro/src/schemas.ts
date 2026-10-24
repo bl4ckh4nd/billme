@@ -1018,3 +1018,19 @@ export {
   documentTemplateKindSchema,
   documentTemplateRecordSchema,
 };
+
+/** A Pro accounting month: open, soft-locked (postings need an override with reason) or closed (festgeschrieben, final). */
+export const accountingPeriodStatusSchema = z.enum(['open', 'soft_locked', 'closed']);
+export const accountingPeriodKeySchema = z.string().regex(/^\d{4}-(0[1-9]|1[0-2])$/, 'Monat muss YYYY-MM sein.');
+export const accountingPeriodSchema = z.object({
+  period: accountingPeriodKeySchema,
+  status: accountingPeriodStatusSchema,
+  fiscalYear: z.number().int().optional(),
+  entryCount: z.number().int().nonnegative(),
+  updatedAt: z.string().optional(),
+});
+export const accountingPeriodStatusChangeSchema = z.object({
+  period: accountingPeriodKeySchema,
+  status: accountingPeriodStatusSchema,
+  changedPeriods: z.array(accountingPeriodKeySchema),
+});

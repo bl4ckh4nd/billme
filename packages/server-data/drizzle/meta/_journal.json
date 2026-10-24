@@ -281,6 +281,20 @@
       "when": 1790985600007,
       "tag": "0040_server_data_client_contacts",
       "breakpoints": false
+    },
+    {
+      "idx": 41,
+      "version": "7",
+      "when": 1790985600008,
+      "tag": "0041_server_data_import_file_archive",
+      "breakpoints": false
+    },
+    {
+      "idx": 42,
+      "version": "7",
+      "when": 1790985600009,
+      "tag": "0042_server_data_journal_balance_guards",
+      "breakpoints": false
     }
   ]
 }

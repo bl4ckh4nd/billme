@@ -43,6 +43,8 @@ type EurItem = {
   sourceType: SourceType;
   sourceId: string;
   date: string;
+  /** The tax year the payment counts in (10-Tage-Regel can move it out of the year of `date`). */
+  taxYear?: number;
   amountGross: number;
   amountNet: number;
   flowType: 'income' | 'expense';
@@ -149,7 +151,7 @@ const EurEntryPreview: React.FC<{
             {line ? <>{showLedger && line.kennziffer ? <span className="tabular-nums">Kz {line.kennziffer} · </span> : null}{showLedger ? line.label : simpleEurCategoryLabel(line)}</> : <span className="text-warning-text">Noch keine Kategorie gewählt</span>}
           </p>
           <p className="mt-0.5 text-caption text-muted">
-            {flow} am <span className="tabular-nums">{formatDate(item.date)}</span>, zählt damit zum Steuerjahr <span className="tabular-nums">{item.date.slice(0, 4)}</span>
+            {flow} am <span className="tabular-nums">{formatDate(item.date)}</span>, zählt damit zum Steuerjahr <span className="tabular-nums">{item.taxYear ?? item.date.slice(0, 4)}</span>
           </p>
           <div className="mt-3 grid grid-cols-[1fr_1px_1fr] border-t border-border-strong pt-2.5">
             <div className="min-w-0 pr-3.5">

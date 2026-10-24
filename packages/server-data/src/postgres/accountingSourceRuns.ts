@@ -35,6 +35,7 @@ import {
 } from '@billme/accounting-engine';
 import type { TenantScope } from '@billme/server-core';
 import { appendWithClient } from './audit.js';
+import { lockPeriodRow, periodsBetween, softLockPeriods } from './accountingPeriods.js';
 import {
   runInTransaction,
   type PostgresQueryable,
@@ -189,16 +190,9 @@ const assertPeriod = async (
 ): Promise<void> => {
   if (!isoDate(postingDate)) throw new Error('INVALID_POSTING_DATE');
   if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(period) || period !== periodOf(postingDate)) throw new Error('INVALID_PERIOD');
-  let rows = await q<any>(db, `SELECT status,fiscal_year FROM accounting_periods WHERE tenant_id=$1 AND period=$2 FOR UPDATE`, [tenant(scope), period]);
-  if (!rows[0]) {
-    const year = Number(period.slice(0, 4));
-    const month = Number(period.slice(5, 7));
-    const end = new Date(Date.UTC(year, month, 0)).toISOString().slice(0, 10);
-    await q(db, `INSERT INTO accounting_periods (id,tenant_id,period,fiscal_year,status,starts_at,ends_at,created_at,updated_at) VALUES ($1,$2,$3,$4,'open',$5,$6,$7,$7) ON CONFLICT (tenant_id,period) DO NOTHING`, [randomUUID(), tenant(scope), period, fiscalYear, `${period}-01`, end, now()]);
-    rows = await q<any>(db, `SELECT status,fiscal_year FROM accounting_periods WHERE tenant_id=$1 AND period=$2 FOR UPDATE`, [tenant(scope), period]);
-  }
-  if (rows[0] && Number(rows[0].fiscal_year) !== fiscalYear) throw new Error('FISCAL_YEAR_PERIOD_MISMATCH');
-  const status = rows[0]?.status ?? 'open';
+  const row = await lockPeriodRow(db, tenant(scope), period, fiscalYear);
+  if (row.fiscalYear !== fiscalYear) throw new Error('FISCAL_YEAR_PERIOD_MISMATCH');
+  const status = row.status;
   if (status === 'closed') throw new Error('POSTING_DATE_IN_CLOSED_PERIOD');
   if (status === 'soft_locked' && (!softLockOverride || !overrideReason?.trim())) throw new Error('SOFT_LOCK_OVERRIDE_REQUIRED');
 };
@@ -212,13 +206,8 @@ const assertAccounts = async (db: PostgresQueryable, scope: TenantScope, account
   const requested = [...new Set(accounts.filter(Boolean))];
   if (!requested.length) throw new Error('INVALID_ACCOUNT');
   const chart = await activeChart(db, scope);
+  // Fail closed: an account that is not in the chart's catalogue (also an empty one) is refused.
   const rows = await q<any>(db, `SELECT account_number FROM ledger_accounts WHERE chart=$1 AND account_number = ANY($2::text[])`, [chart, requested]);
-  // A fresh test/tenant database can be initialized before the optional
-  // catalog projection. Existing posting code treats that state as open.
-  if (!rows.length) {
-    const count = await q<any>(db, `SELECT COUNT(*)::int AS count FROM ledger_accounts`);
-    if (Number(count[0]?.count ?? 0) === 0) return;
-  }
   const found = new Set(rows.map((row) => String(row.account_number)));
   const missing = requested.find((account) => !found.has(account));
   if (missing) throw new Error(`UNKNOWN_ACCOUNT:${missing}`);
@@ -275,8 +264,15 @@ const insertCommand = async (
   const entry = command.entry;
   await assertPeriod(db, scope, entry.postingDate, entry.period, entry.fiscalYear, options.softLockOverride, options.overrideReason);
   await assertAccounts(db, scope, entry.lines.map((line: any) => line.accountNumber));
+  // Same invariants as the draft/document path: cent amounts, one side per line, Soll = Haben > 0.
+  const centsOf = (value: unknown): number => { const amount = Number(value ?? 0); return Number.isFinite(amount) && amount >= 0 && Math.abs(amount * 100 - Math.round(amount * 100)) < 1e-6 ? Math.round(amount * 100) : -1; };
+  if (!entry.lines.length) throw new Error('EMPTY_ENTRY');
+  for (const line of entry.lines) { const debit = centsOf(line.debitAmount); const credit = centsOf(line.creditAmount); if (debit < 0 || credit < 0 || (debit > 0) === (credit > 0)) throw new Error(`INVALID_JOURNAL_LINE:${line.accountNumber}`); }
+  const totalDebit = entry.lines.reduce((sum: number, line: any) => sum + centsOf(line.debitAmount), 0);
+  if (totalDebit <= 0 || totalDebit !== entry.lines.reduce((sum: number, line: any) => sum + centsOf(line.creditAmount), 0)) throw new Error('UNBALANCED_ENTRY');
   const existing = (await q<any>(db, `SELECT id FROM journal_entries WHERE tenant_id=$1 AND id=$2`, [tenant(scope), entry.id]))[0];
   if (existing) return existing.id;
+  await q(db, `SELECT pg_advisory_xact_lock(hashtext($1))`, [`billme:entry-number:${tenant(scope)}`]);
   const numberRows = await q<any>(db, `SELECT COALESCE(MAX(entry_number),0)+1 AS next_number FROM journal_entries WHERE tenant_id=$1`, [tenant(scope)]);
   const entryNumber = Number(numberRows[0]?.next_number ?? 1);
   const createdAt = now();
@@ -653,7 +649,7 @@ export const createPostgresAccountingSourceRunRepository = (db: PostgresQueryabl
       let closingInput = sourceInput;
       if (commandName === 'fiscal_close' || commandName === 'carry_forward') {
         const date = String(commandName === 'fiscal_close' ? sourceInput.closingDate : sourceInput.effectiveDate);
-        const ledger = await q<any>(tx, `SELECT jl.account_number,COALESCE(SUM(jl.debit_amount-jl.credit_amount),0) balance FROM journal_lines jl JOIN journal_entries je ON je.tenant_id=jl.tenant_id AND je.id=jl.entry_id WHERE jl.tenant_id=$1 AND je.status IN ('posted','reversed') AND (je.posting_date < $2 OR ($3::boolean AND je.posting_date=$2)) GROUP BY jl.account_number`, [tenant(scope), date, commandName === 'fiscal_close']);
+        const ledger = await q<any>(tx, `SELECT jl.account_number,COALESCE(SUM(jl.debit_amount-jl.credit_amount),0) balance FROM journal_lines jl JOIN journal_entries je ON je.tenant_id=jl.tenant_id AND je.id=jl.entry_id WHERE jl.tenant_id=$1 AND je.status IN ('posted','reversed') AND COALESCE(je.source_type,'') NOT IN ('fiscal_close','carry_forward') AND (je.posting_date < $2 OR ($3::boolean AND je.posting_date=$2)) GROUP BY jl.account_number`, [tenant(scope), date, commandName === 'fiscal_close']);
         const balances = new Map(ledger.map((row) => [String(row.account_number), Number(row.balance)]));
         const selected = commandName === 'fiscal_close' ? [...(sourceInput.revenueAccounts ?? []), ...(sourceInput.expenseAccounts ?? [])] : sourceInput.balanceSheetAccounts ?? [];
         for (const account of selected) {
@@ -699,6 +695,14 @@ export const createPostgresAccountingSourceRunRepository = (db: PostgresQueryabl
       const journalEntryId = journalEntryIds[0];
       const run = await createRun(tx, scope, { sourceType, sourceId, sourceRevision, idempotencyKey, status: journalEntryIds.length ? 'posted' : 'noop', source, result: { ...resultJson, journalEntryIds }, journalEntryId, reason, mutation: input.mutation });
       if (isSettlement && journalEntryIds.length) await applySettlementOpenItems(tx, scope, commandName as SettlementCommandKind, sourceInput, (value as any).result);
+      // A closed fiscal year is soft-locked: further postings into it need an override with a written reason.
+      if (commandName === 'fiscal_close' && journalEntryIds.length && !run.replayed) {
+        const closingDate = String(sourceInput.closingDate);
+        const start = new Date(`${closingDate}T00:00:00.000Z`);
+        start.setUTCDate(start.getUTCDate() + 1);
+        start.setUTCFullYear(start.getUTCFullYear() - 1);
+        await softLockPeriods(tx, scope, periodsBetween(start.toISOString().slice(0, 7), periodOf(closingDate)), `Geschäftsjahr ${String(sourceInput.fiscalYear ?? closingDate.slice(0, 4))} abgeschlossen: ${reason}`, input.mutation);
+      }
       return { run: run.run, result: { ...resultJson, journalEntryIds }, replayed: run.replayed };
     });
   },
@@ -730,6 +734,11 @@ export const createPostgresAccountingSourceRunRepository = (db: PostgresQueryabl
         return { run: mapRun(existing), artifact: parse(existing.result_json, artifact), replayed: true };
       }
       const run = await createRun(tx, scope, { sourceType, sourceId, sourceRevision, idempotencyKey, status: 'prepared', source, result: artifact, reason, mutation: input.mutation });
+      // The months of a prepared UStVA are soft-locked: a later posting into them needs an override with a written reason.
+      if (input.kind === 'ustva' && !run.replayed) {
+        const { from, to } = (artifact as { period?: { from?: string; to?: string } }).period ?? {};
+        if (from && to) await softLockPeriods(tx, scope, periodsBetween(from.slice(0, 7), to.slice(0, 7)), `UStVA ${String(period.period)} vorbereitet: ${reason}`, input.mutation);
+      }
       return { run: run.run, artifact, replayed: run.replayed };
     });
   },

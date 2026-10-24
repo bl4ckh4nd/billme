@@ -30,8 +30,10 @@ import { addDays, asSmallBusiness, datevEvidence, draftInvoice, draftOffer, issu
  * - Skonto (Lite): terms lost on save, a payment within the days that covers
  *   the discounted amount not settling the invoice, a late or short payment
  *   settling it, a Skonto entry typed by hand, a removed payment keeping it
- * - payments: draft invoices taking payments, partial vs. full vs. over
- *   payment status, stale `expectedPayment`, removal reopening the invoice,
+ * - payments: draft invoices taking payments, partial vs. full payment status,
+ *   a manual payment above the open amount accepted (an overpayment is a credit
+ *   the customer is owed, not a settled invoice), stale `expectedPayment`,
+ *   removal reopening the invoice,
  *   bank payments edited outside the bank matching
  * - corrections: credit note / cancellation numbering and status of the source,
  *   revisions of paid invoices
@@ -409,9 +411,16 @@ for (const product of PRODUCTS) describe(`invoices (${product})`, () => {
       assert.equal(reopened.payments.length, 1);
     });
 
-    test('overpayment settles the invoice as paid', async () => {
+    test('a manual payment above the open amount is refused with a credit hint; exactly the open amount settles', async () => {
       const open = await issueInvoice(h.api, { client: 'Overpayer' });
-      const paid = await h.api.invoices.savePayment({ invoiceId: open.id, payment: { id: randomUUID(), date: today(), amount: open.amount + 10, method: 'bank' }, reason: 'Überzahlung' });
+      const over = await h.raw('POST', `/invoices/${open.id}/payments`, { payment: { id: randomUUID(), date: today(), amount: open.amount + 10, method: 'bank' }, reason: 'Überzahlung' });
+      assert.equal(over.status, 409, over.text);
+      assert.match(over.text, /Guthaben/);
+      assert.equal((await h.api.invoices.list()).find((invoice) => invoice.id === open.id)!.payments.length, 0, 'nothing was stored');
+      const first = { id: randomUUID(), date: today(), amount: 100, method: 'bank' };
+      await h.api.invoices.savePayment({ invoiceId: open.id, payment: first, reason: 'Teilzahlung' });
+      assert.equal((await h.raw('POST', `/invoices/${open.id}/payments`, { payment: { ...first, amount: open.amount + 1 }, expectedPayment: first, reason: 'zu viel' })).status, 409, 'raising a payment over the open amount is refused too');
+      const paid = await h.api.invoices.savePayment({ invoiceId: open.id, payment: { id: randomUUID(), date: today(), amount: Math.round((open.amount - 100) * 100) / 100, method: 'bank' }, reason: 'Restzahlung' });
       assert.equal(paid.status, 'paid');
     });
 

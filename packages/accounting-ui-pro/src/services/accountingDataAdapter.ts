@@ -43,6 +43,9 @@ export interface MockStoreSeed {
 
 type MaybePromise<T> = T | Promise<T>;
 
+export type AccountingPeriodStatus = 'open' | 'soft_locked' | 'closed';
+export interface AccountingPeriodRow { period: string; status: AccountingPeriodStatus; fiscalYear?: number; entryCount: number; updatedAt?: string }
+
 export interface ProAccountingDataAdapter {
   hydrate?: (seed: MockStoreSeed) => void;
   listTransactions?: () => Transaction[];
@@ -79,6 +82,8 @@ export interface ProAccountingDataAdapter {
   upsertEurClassification?: (input: EurCashClassification & { reason: string }) => Promise<unknown>;
   postAccountingCommand?: (input: AccountingCommandInput) => Promise<AccountingSourcePostResult>;
   listAccountingSourceRuns?: () => Promise<AccountingSourceRun[]>;
+  listAccountingPeriods?: (year: number) => Promise<AccountingPeriodRow[]>;
+  setAccountingPeriodStatus?: (input: { period: string; status: AccountingPeriodStatus; reason: string }) => Promise<unknown>;
   getAccountingSourceRun?: (id: string) => Promise<AccountingSourceRun | null>;
   prepareTaxExport?: (input: TaxPreparationInput) => Promise<{ artifact: TaxPreparationArtifact; run?: AccountingSourceRun; replayed?: boolean }>;
   exportTaxArtifact?: (kind: TaxPreparationInput['kind'], id: string) => Promise<Blob | Uint8Array | string>;

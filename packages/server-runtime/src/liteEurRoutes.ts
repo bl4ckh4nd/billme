@@ -5,7 +5,7 @@ import { datevSettingsSchema } from '@billme/desktop-contracts-pro/schemas';
 import { getCatalogForYear } from '@billme/desktop-services/eurCatalog';
 import { DATEV_MONEY_ACCOUNTS, datevAccountFor } from '@billme/desktop-services/eur/datevAccountMap';
 import { filterEurListItems } from '@billme/server-core';
-import { createPostgresProAccountingRepository, getServerEurReport, getServerSettings, listServerEurAnnexFacts, listServerEurCashFacts, listServerEurCashItems, saveServerEurAnnexFact, saveServerEurCashFact, saveServerEurClassificationFact, type ServerEurCashItem } from '@billme/server-data';
+import { createPostgresProAccountingRepository, getServerEurReport, getServerSettings, listServerEurAnnexFacts, periodClosedMessage, listServerEurCashFacts, listServerEurCashItems, saveServerEurAnnexFact, saveServerEurCashFact, saveServerEurClassificationFact, type ServerEurCashItem } from '@billme/server-data';
 import { z } from 'zod';
 import { ApiError, typedRoute } from './http.js';
 import { createMutationContext, requireDatabase, requireMutationSessionFor, requireSession } from './runtimeContext.js';
@@ -42,6 +42,7 @@ const mapEurError = (error: unknown): never => {
   if (error.message === 'EUR_SERVER_REPORT_UNAVAILABLE') throw new ApiError(503, 'Native EÜR-Daten sind derzeit nicht verfügbar.');
   if (error.message === 'EUR_SOURCE_NOT_FOUND') throw new ApiError(400, 'Die EÜR-Cash-Quelle ist im gewählten Kalenderzeitraum nicht vorhanden.');
   if (error.message === 'EUR_FACT_IDEMPOTENCY_CONFLICT') throw new ApiError(409, error.message);
+  if (error.message === 'LITE_PERIOD_CLOSED') throw new ApiError(409, periodClosedMessage((error as Error & { period?: string }).period ?? ''));
   if (/^EUR_(FACT|SPLIT|ANNEX|NEUTRAL)|^EUR_LINE_|^EUR_COMPUTED/.test(error.message)) throw new ApiError(400, error.message);
   throw error;
 };

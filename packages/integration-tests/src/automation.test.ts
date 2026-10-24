@@ -563,10 +563,14 @@ for (const product of PRODUCTS) describe(`automation (${product})`, () => {
     /** Every test starts without overdue invoices: settle what earlier tests left open. */
     afterEach(async () => {
       sink.state.reject = false;
-      for (const invoice of await h.api.invoices.list()) {
+      const documents = await h.api.invoices.list();
+      for (const invoice of documents) {
         const receivable = ['invoice', 'advance_invoice', 'partial_invoice', 'final_invoice'].includes(invoice.documentKind ?? 'invoice');
         if (receivable && ['open', 'overdue'].includes(invoice.status)) {
-          await h.api.invoices.savePayment({ invoiceId: invoice.id, payment: { id: randomUUID(), date: today(), amount: invoice.amount + 1000, method: 'bank' }, reason: 'Aufräumen' }).catch(() => undefined);
+          // Pay exactly what is open: a manual payment above that is refused (it would be a credit, not a settlement).
+          const credited = documents.filter((doc) => doc.documentKind === 'credit_note' && doc.sourceDocumentId === invoice.id && doc.status !== 'draft').reduce((sum, doc) => sum + Math.abs(doc.amount), 0);
+          const open = Math.round((invoice.amount - credited - invoice.payments.reduce((sum, payment) => sum + payment.amount, 0)) * 100) / 100;
+          if (open > 0) await h.api.invoices.savePayment({ invoiceId: invoice.id, payment: { id: randomUUID(), date: today(), amount: open, method: 'bank' }, reason: 'Aufräumen' }).catch(() => undefined);
         }
       }
     });

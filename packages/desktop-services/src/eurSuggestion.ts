@@ -8,6 +8,8 @@ type EurLine = {
 export interface EurSuggestion {
   lineId?: string;
   reason?: string;
+  /** A neutral kind instead of a line (income tax paid from the business account is a Privatentnahme). */
+  kind?: 'private-withdrawal' | 'private-contribution';
 }
 
 export const suggestEurLine = (
@@ -34,8 +36,9 @@ export const suggestEurLine = (
     text: `${params.counterparty} ${params.purpose}`,
   });
 
+  if (keywordSuggestion.kind) return { kind: keywordSuggestion.kind, reason: keywordSuggestion.reason };
   if (!keywordSuggestion.code) {
-    return {};
+    return keywordSuggestion.reason ? { reason: keywordSuggestion.reason } : {};
   }
 
   return hit(keywordSuggestion.code, keywordSuggestion.reason ?? 'Keyword-Vorschlag');

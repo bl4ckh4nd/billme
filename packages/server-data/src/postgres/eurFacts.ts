@@ -6,6 +6,7 @@ import type { AccountingMutationContext, TenantScope } from '@billme/server-core
 import { appendWithClient, createPostgresAuditLogPort } from './audit.js';
 import { runInTransaction, type PostgresQueryable, type PostgresTransactionClient } from './connection.js';
 import { assertServerEurCashSource, type ServerEurReportResult } from './eurReport.js';
+import { assertLitePeriodsOpen } from './liteCash.js';
 
 type EurCashFactKind = 'income' | 'expense' | 'private-withdrawal' | 'private-contribution' | 'pass-through';
 type EurSourceType = 'transaction' | 'invoice' | 'manual';
@@ -92,6 +93,8 @@ const assertMutation = (mutation: AccountingMutationContext | undefined): { reas
 const assertCashFact = async (db: PostgresQueryable, scope: TenantScope, input: SaveServerEurCashFactInput): Promise<{ sourceSnapshotHash: string; sourceType: EurSourceType; sourceId: string }> => {
   getCatalogForYear(input.taxYear);
   const source = await assertServerEurCashSource(db, scope, input.sourceType, input.sourceId.trim(), input.product ?? 'pro', input.taxYear);
+  // Festschreibung (Lite): a fact changes what the payment of a closed month counts as.
+  if (input.product === 'lite') await assertLitePeriodsOpen(db, scope, [source.date]);
   if (!Number.isFinite(input.amountNet) || input.amountNet < 0) throw new Error('EUR_FACT_AMOUNT_INVALID');
   if (input.kind === 'private-withdrawal' || input.kind === 'private-contribution' || input.kind === 'pass-through') {
     if (input.eurLineId || input.splits?.length) throw new Error('EUR_NEUTRAL_FACT_MUST_NOT_HAVE_LINE');
@@ -154,6 +157,8 @@ export interface SaveServerEurClassificationInput {
 export const saveServerEurClassificationFact = async (db: PostgresQueryable, scope: TenantScope, input: SaveServerEurClassificationInput): Promise<Record<string, unknown>> => {
   const { reason, actor } = assertMutation(input.mutation);
   const source = await assertServerEurCashSource(db, scope, input.sourceType, input.sourceId.trim(), input.product ?? 'pro', input.taxYear);
+  // Festschreibung (Lite): the category, exclusion and VAT split of a closed month's payment stay as they were.
+  if (input.product === 'lite') await assertLitePeriodsOpen(db, scope, [source.date]);
   if (input.eurLineId) {
     const line = getCatalogForYear(input.taxYear).find((candidate) => candidate.id === input.eurLineId);
     if (!line) throw new Error('EUR_LINE_NOT_FOUND');

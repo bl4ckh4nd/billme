@@ -26,6 +26,10 @@ import { createPostgresProAccountingRepository, freezeServerEurSnapshot, getServ
 import {
   accountingAccountMappingSchema,
   accountingBackfillPreviewSchema,
+  accountingPeriodKeySchema,
+  accountingPeriodSchema,
+  accountingPeriodStatusChangeSchema,
+  accountingPeriodStatusSchema,
   accountingBackfillResultSchema,
   accountingPolicySchema,
   accountingPostingPreviewSchema,
@@ -552,6 +556,29 @@ export const registerProAccountingRoutes = (app: FastifyInstance, options: ProAc
         if (error instanceof Error && /INVALID|REJECTED|REQUIRED|MISSING|OPEN_ITEM_NOT_FOUND/.test(error.message)) throw new ApiError(400, error.message);
         throw error;
       }
+    },
+  });
+
+  typedRoute(app, {
+    method: 'GET',
+    url: `${prefix}/periods`,
+    query: z.object({ year: z.coerce.number().int().min(2000).max(2100) }),
+    response: z.array(accountingPeriodSchema),
+    async handler({ request, query }) {
+      const session = await requireProSession(app, request.headers.authorization);
+      return repositoryFor(app).listAccountingPeriods(session.scope, query.year);
+    },
+  });
+
+  typedRoute(app, {
+    method: 'POST',
+    url: `${prefix}/periods/:period/status`,
+    params: z.object({ period: accountingPeriodKeySchema }),
+    body: z.object({ status: accountingPeriodStatusSchema, reason: reasonSchema }),
+    response: accountingPeriodStatusChangeSchema,
+    async handler({ request, params, body }) {
+      const session = await requireMutationSession(app, request.headers.authorization);
+      return repositoryFor(app).setAccountingPeriodStatus(session.scope, { period: params.period, status: body.status, mutation: mutationFor(session, body.reason) });
     },
   });
 

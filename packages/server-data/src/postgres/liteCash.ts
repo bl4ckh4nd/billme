@@ -51,12 +51,19 @@ export const listLiteReceipts = async (db: PostgresQueryable, scope: TenantScope
   (await rows(db, `SELECT r.*, (SELECT count(*)::int FROM lite_receipt_files f WHERE f.tenant_id=r.tenant_id AND f.receipt_id=r.id) AS file_count FROM lite_receipts r WHERE r.tenant_id=$1 ORDER BY r.updated_at DESC`, [scope.tenantId]))
     .map((row) => liteReceiptSchema.parse({ ...(typeof row.receipt_json === 'string' ? JSON.parse(row.receipt_json) : row.receipt_json as object), updatedAt: row.updated_at, fileCount: row.file_count }));
 
+/** The dates that place a receipt in a VAT month (see liteVat: later of received/service date, import or correction date). */
+const receiptTaxDates = (receipt: { documentDate: string; receivedDate?: string; serviceDate?: string; importTaxDate?: string; adjustmentDate?: string }) =>
+  [[receipt.receivedDate ?? receipt.documentDate, receipt.serviceDate ?? receipt.documentDate].sort()[1], receipt.importTaxDate, receipt.adjustmentDate];
+
 export const saveLiteReceipt = (db: PostgresQueryable, scope: TenantScope, input: unknown, expectedUpdatedAt: string | undefined, mutation: AccountingMutationContext) => runInTransaction(db, async (client) => {
   const receipt = liteReceiptInputSchema.parse(input);
   const before = (await rows(client, 'SELECT * FROM lite_receipts WHERE tenant_id=$1 AND id=$2 FOR UPDATE', [scope.tenantId, receipt.id]))[0];
   const old = before?.receipt_json;
   if (before && JSON.stringify(liteReceiptInputSchema.parse(old)) === JSON.stringify(receipt)) return (await listLiteReceipts(client, scope)).find((row) => row.id === receipt.id)!;
   if (before && expectedUpdatedAt !== before.updated_at) throw new Error('LITE_CASH_STALE');
+  // Festschreibung: neither the input VAT month of the receipt (old or new) nor a month it was paid in may change.
+  const paidOn = await rows<{ date: string }>(client, 'SELECT COALESCE(t.date, m.cash_date) AS date FROM lite_cash_entries m LEFT JOIN transactions t ON t.tenant_id=m.tenant_id AND t.id=m.matched_transaction_id WHERE m.tenant_id=$1 AND m.receipt_id=$2 AND m.deleted_at IS NULL', [scope.tenantId, receipt.id]);
+  await assertLitePeriodsOpen(client, scope, [...(old ? receiptTaxDates(liteReceiptInputSchema.parse(old)) : []), ...receiptTaxDates(receipt), ...paidOn.map((row) => row.date)]);
   if (receipt.reviewed) {
     const total = receipt.taxBreakdown.reduce((sum, line) => sum + line.netAmountCents + (['reverse_charge', 'eu_service', 'intra_eu_acquisition'].includes(receipt.taxMode) ? 0 : line.vatAmountCents), 0);
     if (!receipt.receivedDate || !receipt.serviceDate || total !== receipt.grossAmountCents || receipt.taxBreakdown.length === 0) throw new Error('LITE_RECEIPT_TAX_INCOMPLETE');

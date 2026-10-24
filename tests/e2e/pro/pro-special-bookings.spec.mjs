@@ -10,6 +10,8 @@ import { appUrl, getDesktopSettings, invokeDesktopIpc, launchDesktopApp, PRO_DOU
  * - a posting without journal entry, or the same source posted twice
  * - a bad-debt write-off without its original document reference, or the Quellbeleg
  *   (id or invoice number) not taken as the original; a server code shown instead of text
+ * - periods: a lock or Festschreibung confirmed without a written reason, a festgeschriebener
+ *   month that still offers an action, a list that disagrees with the server after the change
  */
 
 let desktop;
@@ -102,4 +104,31 @@ test('a Skonto above the invoice is refused; a valid Skonto and a bad-debt write
   await expect(feedback).toHaveText(/.+/);
   expect((await runOf(page, skontoInvoice.id)).filter((run) => run.status === 'posted').length).toBe(1);
   await shot('history');
+});
+
+test('a month is soft-locked and festgeschrieben from the period list, each only with a written reason', async () => {
+  const { page, baseUrl } = desktop;
+  await page.goto(appUrl(baseUrl, '/accounting?view=special'));
+  const list = page.getByTestId('period-lock-list');
+  await page.getByRole('combobox', { name: 'Jahr' }).selectOption('2026');
+  const month = (period) => list.locator(`li[data-period="${period}"]`);
+  await expect(month('2026-01')).toContainText('Offen');
+
+  await month('2026-01').getByRole('button', { name: 'Sperren' }).click();
+  const dialog = page.getByRole('dialog');
+  await expect(dialog.getByRole('button', { name: 'Sperren' }), 'no lock without a reason').toBeDisabled();
+  await dialog.getByRole('textbox', { name: 'Begründung (Pflicht)' }).fill('UStVA Januar abgegeben');
+  await dialog.getByRole('button', { name: 'Sperren' }).click();
+  await expect(month('2026-01')).toContainText('Vorläufig gesperrt');
+
+  await month('2026-02').getByRole('button', { name: 'Festschreiben' }).click();
+  await expect(dialog).toContainText('alle Monate davor');
+  await dialog.getByRole('textbox', { name: 'Begründung (Pflicht)' }).fill('Februar abgeschlossen');
+  await dialog.getByRole('button', { name: 'Endgültig festschreiben' }).click();
+  for (const period of ['2026-01', '2026-02']) {
+    await expect(month(period)).toContainText('Festgeschrieben');
+    await expect(month(period).getByRole('button'), 'a festgeschriebener month offers no action').toHaveCount(0);
+  }
+  await expect(month('2026-03')).toContainText('Offen');
+  await page.screenshot({ path: test.info().outputPath('periods-festgeschrieben.png'), fullPage: true });
 });

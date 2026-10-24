@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { previewCsv, type CsvMapping, type CsvPreviewResult, commitCsv } from '@billme/desktop-services/csvImport';
 import { isReceivableDocumentKind, type Invoice, type TenantScope } from '@billme/server-core';
 import { createPostgresBillingDependencies, creditedAmount, isSkontoPayment, settledInvoiceStatus, withSkontoSettlement } from './billing.js';
-import { assertLitePeriodsOpen } from './liteCash.js';
+import { assertLitePeriodsOpen, periodClosedMessage } from './liteCash.js';
 import { appendWithClient } from './audit.js';
 import { runInTransaction, type PostgresQueryable } from './connection.js';
 import type { ServerDatabase, ServerDatabaseSession } from '../database.js';
@@ -123,6 +123,8 @@ export interface TransactionImportMutationActor {
 export interface TransactionImportCommitResult {
   batchId: string;
   imported: number;
+  /** Pending lines of an earlier import that this file shows as booked. */
+  updated: number;
   skipped: number;
   errors: Array<{ rowIndex: number; message: string }>;
   fileSha256: string;
@@ -226,6 +228,7 @@ export const commitServerTransactionImport = async (
   scope: TenantScope,
   input: TransactionImportCommitInput,
   actor: TransactionImportMutationActor,
+  product: 'lite' | 'pro' = 'pro',
 ): Promise<TransactionImportCommitResult> => {
   const committed = readServerTransactionImport(input);
   const errors = importErrors(committed.rows);
@@ -253,6 +256,7 @@ export const commitServerTransactionImport = async (
       return {
         batchId: batch.id,
         imported: batch.importedCount,
+        updated: 0,
         skipped: batch.skippedCount,
         errors,
         fileSha256: committed.fileSha256,
@@ -264,81 +268,98 @@ export const commitServerTransactionImport = async (
     await query(session,
       `INSERT INTO import_batches
         (id, tenant_id, account_id, profile, file_name, file_sha256, mapping_json,
-         imported_count, skipped_count, error_count, created_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, 0, 0, $8, $9)`,
-      [batchId, tenant(scope), input.accountId, committed.profile, committed.fileName, committed.fileSha256, mappingJson, errors.length, createdAt],
+         imported_count, skipped_count, error_count, created_at, file_content)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, 0, 0, $8, $9, $10)`,
+      // GoBD: the file as received is kept with its hash (a trigger keeps the bytes unchanged).
+      [batchId, tenant(scope), input.accountId, committed.profile, committed.fileName, committed.fileSha256, mappingJson, errors.length, createdAt, committed.bytes],
     );
+    // Lite Festschreibung: a closed month takes no new bank line and no status change.
+    const closedPeriods = product === 'lite'
+      ? new Set((await query<{ period: string }>(session, "SELECT period FROM accounting_periods WHERE tenant_id = $1 AND status = 'closed'", [tenant(scope)])).rows.map((row) => row.period))
+      : new Set<string>();
+    const feeCounterparty = committed.profile === 'paypal' ? 'PayPal' : committed.profile === 'stripe' ? 'Stripe' : 'Zahlungsdienst';
 
     let imported = 0;
+    let updated = 0;
     let skipped = 0;
     const seenHashes = new Set<string>();
     for (const row of validRows) {
-      const dedupHash = row.dedupHash!;
-      if (seenHashes.has(dedupHash)) {
-        skipped += 1;
+      const status = row.parsed.status ?? 'booked';
+      // A PayPal/Stripe line is the gross payment plus the fee as its own expense (Nebenkosten des Geldverkehrs).
+      const lines = [
+        { dedupHash: row.dedupHash!, amount: row.parsed.amount!, type: row.parsed.type!, counterparty: row.parsed.counterparty ?? '', purpose: row.parsed.purpose ?? '' },
+        ...(row.parsed.fee && row.feeDedupHash ? [{
+          dedupHash: row.feeDedupHash, amount: row.parsed.fee, type: row.parsed.fee < 0 ? 'expense' as const : 'income' as const, counterparty: feeCounterparty,
+          purpose: `Gebühr (Nebenkosten des Geldverkehrs) zu ${row.parsed.externalId ?? row.parsed.purpose ?? row.parsed.counterparty ?? ''}`.trim(),
+        }] : []),
+      ];
+      const planned: Array<{ line: (typeof lines)[number]; action: 'insert' | 'book' | 'skip'; existingId?: string }> = [];
+      for (const line of lines) {
+        if (seenHashes.has(line.dedupHash)) { planned.push({ line, action: 'skip' }); continue; }
+        seenHashes.add(line.dedupHash);
+        const duplicate = await query<{ id: string; status: string }>(
+          session,
+          `SELECT id, status
+           FROM transactions
+           WHERE tenant_id = $1 AND account_id = $2 AND dedup_hash = $3
+             AND (deleted_at IS NULL OR deleted_at = '')
+           LIMIT 1
+           FOR UPDATE`,
+          [tenant(scope), input.accountId, line.dedupHash],
+        );
+        const existing = duplicate.rows[0];
+        // The dedup hash leaves the status out, so a line the bank has booked since is the same line: take it over.
+        planned.push({ line, action: !existing ? 'insert' : existing.status === 'pending' && status === 'booked' ? 'book' : 'skip', existingId: existing?.id });
+      }
+      const period = row.parsed.date!.slice(0, 7);
+      if (closedPeriods.has(period) && planned.some((step) => step.action !== 'skip')) {
+        errors.push({ rowIndex: row.rowIndex, message: periodClosedMessage(period) });
         continue;
       }
-      seenHashes.add(dedupHash);
-      const duplicate = await query<{ id: string }>(
-        session,
-        `SELECT id
-         FROM transactions
-         WHERE tenant_id = $1 AND account_id = $2 AND dedup_hash = $3
-           AND (deleted_at IS NULL OR deleted_at = '')
-         LIMIT 1
-         FOR UPDATE`,
-        [tenant(scope), input.accountId, dedupHash],
-      );
-      if (duplicate.rows[0]) {
-        skipped += 1;
-        continue;
+      for (const { line, action, existingId } of planned) {
+        if (action === 'skip') { skipped += 1; continue; }
+        if (action === 'book') {
+          await query(session, `UPDATE transactions SET status = 'booked' WHERE tenant_id = $1 AND id = $2`, [tenant(scope), existingId]);
+          await appendWithClient(session, scope, {
+            occurredAt: now(),
+            action: 'finance_import.booked',
+            reason: `CSV-Import ${committed.fileName}: vorgemerkter Umsatz ist gebucht`,
+            actor: { type: 'user', id: actor.id, displayName: actor.displayName },
+            subject: { entityType: 'transaction', entityId: existingId!, tenantId: tenant(scope) },
+            change: { before: { status: 'pending' }, after: { status: 'booked', importBatchId: batchId } },
+          });
+          updated += 1;
+          continue;
+        }
+        const transactionId = randomUUID();
+        await query(session,
+          `INSERT INTO transactions
+            (id, tenant_id, account_id, date, amount, type, counterparty, purpose,
+             linked_invoice_id, status, dedup_hash, import_batch_id)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NULL, $9, $10, $11)`,
+          [transactionId, tenant(scope), input.accountId, row.parsed.date, line.amount, line.type, line.counterparty, line.purpose, status, line.dedupHash, batchId],
+        );
+        // Inbox, Abgleich, and EÜR read bank_transactions; this mirrors the legacy import row.
+        const bankTransactionTimestamp = now();
+        await query(session,
+          `INSERT INTO bank_transactions
+            (id, tenant_id, account_id, date, amount, type, counterparty, purpose,
+             linked_invoice_id, status, source_transaction_id, created_at, updated_at)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NULL, $9, $10, $11, $11)`,
+          [
+            randomUUID(), tenant(scope), input.accountId, row.parsed.date, line.amount, line.type, line.counterparty, line.purpose,
+            // Accounting workflow status: a freshly imported bank line is never in the
+            // ledger yet, whatever the bank reported ("gebucht" = settled at the bank).
+            'pending',
+            transactionId,
+            bankTransactionTimestamp,
+          ],
+        );
+        imported += 1;
       }
-      const transactionId = randomUUID();
-      await query(session,
-        `INSERT INTO transactions
-          (id, tenant_id, account_id, date, amount, type, counterparty, purpose,
-           linked_invoice_id, status, dedup_hash, import_batch_id)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NULL, $9, $10, $11)`,
-        [
-          transactionId,
-          tenant(scope),
-          input.accountId,
-          row.parsed.date,
-          row.parsed.amount,
-          row.parsed.type,
-          row.parsed.counterparty ?? '',
-          row.parsed.purpose ?? '',
-          row.parsed.status ?? 'booked',
-          dedupHash,
-          batchId,
-        ],
-      );
-      // Inbox, Abgleich, and EÜR read bank_transactions; this mirrors the legacy import row.
-      const bankTransactionTimestamp = now();
-      await query(session,
-        `INSERT INTO bank_transactions
-          (id, tenant_id, account_id, date, amount, type, counterparty, purpose,
-           linked_invoice_id, status, source_transaction_id, created_at, updated_at)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NULL, $9, $10, $11, $11)`,
-        [
-          randomUUID(),
-          tenant(scope),
-          input.accountId,
-          row.parsed.date,
-          row.parsed.amount,
-          row.parsed.type,
-          row.parsed.counterparty ?? '',
-          row.parsed.purpose ?? '',
-          // Accounting workflow status: a freshly imported bank line is never in the
-          // ledger yet, whatever the bank reported ("gebucht" = settled at the bank).
-          'pending',
-          transactionId,
-          bankTransactionTimestamp,
-        ],
-      );
-      imported += 1;
     }
 
+    errors.sort((left, right) => left.rowIndex - right.rowIndex);
     await query(session,
       `UPDATE import_batches
        SET imported_count = $1, skipped_count = $2, error_count = $3
@@ -351,9 +372,9 @@ export const commitServerTransactionImport = async (
       reason: `CSV-Import ${committed.fileName}`,
       actor: { type: 'user', id: actor.id, displayName: actor.displayName },
       subject: { entityType: 'finance_import', entityId: batchId, tenantId: tenant(scope) },
-      change: { before: null, after: { batchId, imported, skipped, errors: errors.length, fileSha256: committed.fileSha256 } },
+      change: { before: null, after: { batchId, imported, updated, skipped, errors: errors.length, fileSha256: committed.fileSha256 } },
     });
-    return { batchId, imported, skipped, errors, fileSha256: committed.fileSha256 };
+    return { batchId, imported, updated, skipped, errors, fileSha256: committed.fileSha256 };
   }, { serializable: true });
 };
 
@@ -381,6 +402,28 @@ export const listServerImportBatches = async (
   return result.rows.map(toImportBatch);
 };
 
+/** Bank lines of a batch that Pro has already put into the books (draft posted, OPOS payment, invoice link). */
+const bookedBankLinesOfBatch = `
+  SELECT b.id FROM bank_transactions b
+  JOIN transactions t ON t.tenant_id = b.tenant_id AND t.id = b.source_transaction_id
+  WHERE b.tenant_id = $1 AND t.import_batch_id = $2 AND (
+    b.status = 'booked'
+    OR (b.linked_invoice_id IS NOT NULL AND b.linked_invoice_id <> '')
+    OR EXISTS (SELECT 1 FROM open_item_payments p WHERE p.tenant_id = b.tenant_id AND p.source_type = 'bank_transaction' AND p.source_id = b.id)
+    OR EXISTS (SELECT 1 FROM booking_drafts d WHERE d.tenant_id = b.tenant_id AND d.transaction_id = b.id AND d.workflow_status = 'posted'))`;
+
+export const getServerImportBatchFile = async (
+  database: TransactionDatabase,
+  scope: TenantScope,
+  batchId: string,
+): Promise<{ fileName: string; fileSha256: string; contentBase64: string }> => {
+  const row = (await query<{ file_name: string; file_sha256: string; file_content: Uint8Array | null }>(database, 'SELECT file_name, file_sha256, file_content FROM import_batches WHERE tenant_id = $1 AND id = $2', [tenant(scope), batchId])).rows[0];
+  if (!row) throw new Error('IMPORT_BATCH_NOT_FOUND');
+  // Batches imported before the file was archived have only the hash.
+  if (!row.file_content) throw new Error('IMPORT_FILE_NOT_STORED');
+  return { fileName: row.file_name, fileSha256: row.file_sha256, contentBase64: Buffer.from(row.file_content).toString('base64') };
+};
+
 export const getServerImportBatchDetails = async (
   database: TransactionDatabase,
   scope: TenantScope,
@@ -400,10 +443,11 @@ export const getServerImportBatchDetails = async (
   );
   const linked = transactions.rows.filter((row) => typeof row.linked_invoice_id === 'string' && row.linked_invoice_id).length;
   const manual = await query(database, 'SELECT id FROM lite_cash_entries WHERE tenant_id=$1 AND deleted_at IS NULL AND matched_transaction_id IN (SELECT id FROM transactions WHERE tenant_id=$1 AND import_batch_id=$2)', [tenant(scope), batchId]);
+  const booked = await query(database, bookedBankLinesOfBatch, [tenant(scope), batchId]);
   return {
     batch,
     transactions: transactions.rows.map(toTransaction),
-    canRollback: linked === 0 && manual.rows.length === 0 && !batch.rolledBackAt,
+    canRollback: linked === 0 && manual.rows.length === 0 && booked.rows.length === 0 && !batch.rolledBackAt,
     linkedInvoiceCount: linked,
   };
 };
@@ -414,6 +458,7 @@ export const rollbackServerImportBatch = async (
   batchId: string,
   reason: string,
   actor: TransactionImportMutationActor,
+  product: 'lite' | 'pro' = 'pro',
 ): Promise<{ success: true; deletedCount: number }> => {
   if (!reason.trim()) throw new Error('ROLLBACK_REASON_REQUIRED');
   return inTransaction(database, async (session) => {
@@ -430,6 +475,16 @@ export const rollbackServerImportBatch = async (
       [tenant(scope), batchId],
     );
     if (linked.rows.length > 0) throw new Error('IMPORT_BATCH_LINKED');
+    if ((await query(session, `${bookedBankLinesOfBatch} FOR UPDATE OF b`, [tenant(scope), batchId])).rows.length > 0) throw new Error('IMPORT_BATCH_BOOKED');
+    // The audit entry keeps the removed lines: the bank mirror rows are deleted below.
+    const removed = (await query<Record<string, unknown>>(
+      session,
+      `SELECT id, date, amount, type, counterparty, purpose, status FROM transactions
+       WHERE tenant_id = $1 AND import_batch_id = $2 AND (deleted_at IS NULL OR deleted_at = '')
+       ORDER BY date, id`,
+      [tenant(scope), batchId],
+    )).rows.map((row) => ({ id: String(row.id), date: String(row.date), amount: Number(row.amount), type: String(row.type), counterparty: String(row.counterparty ?? ''), purpose: String(row.purpose ?? ''), status: String(row.status) }));
+    if (product === 'lite') await assertLitePeriodsOpen(session, scope, removed.map((row) => row.date));
     const rolledBackAt = now();
     const deleted = await query<{ id: string }>(
       session,
@@ -458,7 +513,7 @@ export const rollbackServerImportBatch = async (
       reason,
       actor: { type: 'user', id: actor.id, displayName: actor.displayName },
       subject: { entityType: 'finance_import', entityId: batchId, tenantId: tenant(scope) },
-      change: { before: batch, after: { ...batch, rolledBackAt, rollbackReason: reason, deletedCount: deleted.rows.length } },
+      change: { before: { ...batch, transactions: removed }, after: { ...batch, rolledBackAt, rollbackReason: reason, deletedCount: deleted.rows.length } },
     });
     return { success: true as const, deletedCount: deleted.rows.length };
   }, { serializable: true });

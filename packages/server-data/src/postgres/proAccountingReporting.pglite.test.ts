@@ -42,17 +42,20 @@ async function insertEntry(database: PgliteServerDatabase, tenantId: string, id:
   const entryNumber = Number((await database.query<{ n: number }>(
     `SELECT COALESCE(MAX(entry_number), 0) + 1 AS n FROM journal_entries WHERE tenant_id = $1`, [tenantId],
   )).rows[0]!.n);
-  await database.query(
-    `INSERT INTO journal_entries (id, tenant_id, entry_number, posting_date, document_date, booking_text, period, fiscal_year, status, created_at)
-     VALUES ($1, $2, $3, $4, $4, $1, $5, $6, $7, $8)`,
-    [id, tenantId, entryNumber, date, date.slice(0, 7), Number(date.slice(0, 4)), status, now],
-  );
-  for (const [index, line] of lines.entries()) {
-    await database.query(
-      `INSERT INTO journal_lines (id, tenant_id, entry_id, line_no, account_number, debit_amount, credit_amount) VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-      [`${id}-${index}`, tenantId, id, index + 1, line.account, line.debit ?? 0, line.credit ?? 0],
+  // An entry and its lines are one transaction (the database enforces Soll = Haben at commit).
+  await database.transaction({}, async (tx) => {
+    await tx.query(
+      `INSERT INTO journal_entries (id, tenant_id, entry_number, posting_date, document_date, booking_text, period, fiscal_year, status, created_at)
+       VALUES ($1, $2, $3, $4, $4, $1, $5, $6, $7, $8)`,
+      [id, tenantId, entryNumber, date, date.slice(0, 7), Number(date.slice(0, 4)), status, now],
     );
-  }
+    for (const [index, line] of lines.entries()) {
+      await tx.query(
+        `INSERT INTO journal_lines (id, tenant_id, entry_id, line_no, account_number, debit_amount, credit_amount) VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+        [`${id}-${index}`, tenantId, id, index + 1, line.account, line.debit ?? 0, line.credit ?? 0],
+      );
+    }
+  });
 }
 
 async function insertMapping(
@@ -168,7 +171,8 @@ test('mapping health exposes unknown accounts and never matches another chart or
 
 test('overrides apply from their effective date and a retry on the same date updates in place', () => withRepo(async (database, repo) => {
   await seedTenant(database, 'tenant-a', gmbhProfile());
-  await insertEntry(database, 'tenant-a', 'y25', '2025-12-31', [{ account: '8400', credit: 100 }]);
+  await insertEntry(database, 'tenant-a', 'y25', '2025-12-31', [{ account: '4900', debit: 100 }, { account: '8400', credit: 100 }]);
+  await repo.upsertAccountMappingOverride(scope, { chart: 'SKR03', asOfDate: '2025-01-01', accountNumber: '4900', statementType: 'hgb-guv', positionKey: 'other-operating-expense', positionLabel: 'other-operating-expense', mutation: { reason: 'Gegenkonto' } } as never);
   const override = (asOfDate: string, positionKey: string, reason: string) => repo.upsertAccountMappingOverride(scope, {
     chart: 'SKR03', asOfDate, accountNumber: '8400', statementType: 'hgb-guv', positionKey, positionLabel: positionKey, mutation: { reason },
   } as never);

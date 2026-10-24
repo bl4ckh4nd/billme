@@ -5,6 +5,8 @@ import {
   eurRuleSchema,
   bookingDraftEntitySchema,
   accountingPostingPreviewSchema,
+  accountingPeriodSchema,
+  accountingPeriodStatusChangeSchema,
   accountingPolicySchema,
   accountingAccountMappingSchema,
   accountingBackfillPreviewSchema,
@@ -730,6 +732,12 @@ export const createProWebClient = (config: ProWebClientConfig) => {
     listAccountingSourceRuns() {
       return requestJson({ parser: parseArray(accountingSourceRunParser) }, '/api/v1/pro/accounting/source-runs');
     },
+    listAccountingPeriods(year: number) {
+      return requestJson({ parser: parseArray(accountingPeriodSchema), query: { year } }, '/api/v1/pro/accounting/periods');
+    },
+    setAccountingPeriodStatus(input: { period: string; status: 'open' | 'soft_locked' | 'closed'; reason: string }) {
+      return requestJson({ method: 'POST', body: { status: input.status, reason: input.reason }, parser: accountingPeriodStatusChangeSchema }, `/api/v1/pro/accounting/periods/${encodeURIComponent(input.period)}/status`);
+    },
     getAccountingSourceRun(id: string) {
       return requestJson(
         { parser: (input) => (input === null ? null : parseAccountingSourceRun(input)) },
@@ -1344,6 +1352,16 @@ export const createProHttpBillmeApi = ({ fallback, onInvoke, downloadBlob, ...cl
         case 'pro:getLedgerBalances': {
           const parsedArgs = ipcRoutes[key].args.parse(args) as IpcArgs<'pro:getLedgerBalances'>;
           const result = await client.getAccountingBalances(parsedArgs);
+          return ipcRoutes[key].result.parse(result) as IpcResult<K>;
+        }
+        case 'pro:listAccountingPeriods': {
+          const parsedArgs = ipcRoutes[key].args.parse(args) as IpcArgs<'pro:listAccountingPeriods'>;
+          const result = await client.listAccountingPeriods(parsedArgs.year);
+          return ipcRoutes[key].result.parse(result) as IpcResult<K>;
+        }
+        case 'pro:setAccountingPeriodStatus': {
+          const parsedArgs = ipcRoutes[key].args.parse(args) as IpcArgs<'pro:setAccountingPeriodStatus'>;
+          const result = await client.setAccountingPeriodStatus(parsedArgs);
           return ipcRoutes[key].result.parse(result) as IpcResult<K>;
         }
         case 'pro:listAccountingSourceRuns': {

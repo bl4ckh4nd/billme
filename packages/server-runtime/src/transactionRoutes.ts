@@ -11,6 +11,7 @@ import {
   listServerTransactions,
   commitServerTransactionImport,
   getServerImportBatchDetails,
+  getServerImportBatchFile,
   listServerImportBatches,
   previewServerTransactionImport,
   rollbackServerImportBatch,
@@ -58,6 +59,7 @@ const csvMappingSchema = z.object({
   externalIdColumn: z.string().optional(),
   currencyColumn: z.string().optional(),
   currencyExpected: z.string().optional(),
+  feeColumn: z.string().optional(),
 });
 const csvProfileSchema = z.enum(['auto', 'fints', 'paypal', 'stripe', 'generic']);
 const importPreviewBody = z.object({
@@ -91,6 +93,7 @@ const importPreviewRowSchema = z.object({
     status: z.enum(['pending', 'booked']).optional(),
     externalId: z.string().optional(),
     currency: z.string().optional(),
+    fee: z.number().optional(),
   }),
   errors: z.array(z.string()),
   dedupHash: z.string().optional(),
@@ -114,6 +117,7 @@ const importPreviewResponse = z.object({
 const importCommitResponse = z.object({
   batchId: z.string(),
   imported: z.number().int(),
+  updated: z.number().int(),
   skipped: z.number().int(),
   errors: z.array(z.object({ rowIndex: z.number().int(), message: z.string() })),
   fileSha256: z.string(),
@@ -181,6 +185,9 @@ const mapImportError = (error: unknown): never => {
   if (error.message === 'ACCOUNT_NOT_FOUND' || error.message === 'IMPORT_BATCH_NOT_FOUND') {
     throw new ApiError(404, error.message);
   }
+  if (error.message === 'IMPORT_FILE_NOT_STORED') throw new ApiError(404, 'Die Originaldatei dieses Imports wurde vor der Archivierung eingelesen und ist nicht gespeichert.');
+  if (error.message === 'IMPORT_BATCH_BOOKED') throw new ApiError(409, 'Der Import enthält Bankumsätze, die bereits gebucht sind. Er lässt sich nicht zurücknehmen.');
+  if (error.message === 'LITE_PERIOD_CLOSED') throw new ApiError(409, periodClosedMessage((error as Error & { period?: string }).period ?? ''));
   if (
     error.message === 'IMPORT_BATCH_ALREADY_ROLLED_BACK' ||
     error.message === 'IMPORT_BATCH_LINKED' ||
@@ -265,7 +272,7 @@ export const registerTransactionRoutes = (app: FastifyInstance, product: 'lite' 
       const session = await requireMutation(app, product, request.headers.authorization);
       try {
         const path = await resolveImportPath(body.path, session.scope.tenantId, session.user.id);
-        const result = await commitServerTransactionImport(requireDatabase(app), session.scope, { ...body, path, mapping: { ...body.mapping, currencyExpected: 'EUR' } }, toMutationActor(session));
+        const result = await commitServerTransactionImport(requireDatabase(app), session.scope, { ...body, path, mapping: { ...body.mapping, currencyExpected: 'EUR' } }, toMutationActor(session), product);
         const upload = uploads.get(body.path);
         if (upload) upload.committed = true;
         return result;
@@ -302,6 +309,21 @@ export const registerTransactionRoutes = (app: FastifyInstance, product: 'lite' 
   });
 
   typedRoute(app, {
+    method: 'GET',
+    url: `${prefix}/finance/import-batches/:batchId/file`,
+    params: importBatchIdParams,
+    response: z.object({ fileName: z.string(), fileSha256: z.string(), contentBase64: z.string() }),
+    async handler({ request, params }) {
+      const session = await requireSession(app, product, request.headers.authorization);
+      try {
+        return await getServerImportBatchFile(requireDatabase(app), session.scope, params.batchId);
+      } catch (error) {
+        return mapImportError(error);
+      }
+    },
+  });
+
+  typedRoute(app, {
     method: 'POST',
     url: `${prefix}/finance/import-batches/:batchId/rollback`,
     params: importBatchIdParams,
@@ -310,7 +332,7 @@ export const registerTransactionRoutes = (app: FastifyInstance, product: 'lite' 
     async handler({ request, params, body }) {
       const session = await requireMutation(app, product, request.headers.authorization);
       try {
-        return await rollbackServerImportBatch(requireDatabase(app), session.scope, params.batchId, body.reason, createMutationContext(session, body.reason).actor);
+        return await rollbackServerImportBatch(requireDatabase(app), session.scope, params.batchId, body.reason, createMutationContext(session, body.reason).actor, product);
       } catch (error) {
         return mapImportError(error);
       }

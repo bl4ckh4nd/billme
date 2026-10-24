@@ -67,6 +67,10 @@ import {
   openRouterVlmConfigSchema,
   openRouterVlmAnalyzeInputSchema,
   openRouterVlmAnalyzeResultSchema,
+  accountingPeriodKeySchema,
+  accountingPeriodSchema,
+  accountingPeriodStatusChangeSchema,
+  accountingPeriodStatusSchema,
 } from './schemas';
 
 const okSchema = z.object({ ok: z.literal(true) });
@@ -392,6 +396,8 @@ const proGetAccountingHealthResultSchema = z.object({
 });
 
 const proSetAccountingPolicyArgsSchema = z.object({ activeChart: ledgerChartSchema, vatMethod: z.enum(['soll', 'ist']) });
+const proListAccountingPeriodsArgsSchema = z.object({ year: z.number().int().min(2000).max(2100) });
+const proSetAccountingPeriodStatusArgsSchema = z.object({ period: accountingPeriodKeySchema, status: accountingPeriodStatusSchema, reason: z.string().trim().min(1) });
 const proListAccountingAccountMappingsArgsSchema = z.object({ chart: ledgerChartSchema.optional() });
 const proUpsertAccountingAccountMappingArgsSchema = z.object({ id: z.string().optional(), chart: ledgerChartSchema, role: z.enum(['accounts_receivable', 'accounts_payable', 'bank', 'revenue', 'expense', 'asset', 'output_vat', 'output_vat_deferred', 'input_vat']), accountNumber: z.string().min(1) });
 const proUpsertVendorArgsSchema = z.object({ vendor: vendorSchema, reason: z.string().trim().min(1) });
@@ -641,6 +647,8 @@ export const ipcRoutes = {
   },
   'pro:getAccountingPolicy': { channel: 'pro:getAccountingPolicy', args: z.undefined(), result: accountingPolicySchema },
   'pro:setAccountingPolicy': { channel: 'pro:setAccountingPolicy', args: proSetAccountingPolicyArgsSchema, result: accountingPolicySchema },
+  'pro:listAccountingPeriods': { channel: 'pro:listAccountingPeriods', args: proListAccountingPeriodsArgsSchema, result: z.array(accountingPeriodSchema) },
+  'pro:setAccountingPeriodStatus': { channel: 'pro:setAccountingPeriodStatus', args: proSetAccountingPeriodStatusArgsSchema, result: accountingPeriodStatusChangeSchema },
   'pro:listAccountingAccountMappings': { channel: 'pro:listAccountingAccountMappings', args: proListAccountingAccountMappingsArgsSchema, result: z.array(accountingAccountMappingSchema) },
   'pro:upsertAccountingAccountMapping': { channel: 'pro:upsertAccountingAccountMapping', args: proUpsertAccountingAccountMappingArgsSchema, result: accountingAccountMappingSchema },
   'pro:listVendors': { channel: 'pro:listVendors', args: z.undefined(), result: z.array(vendorSchema) },

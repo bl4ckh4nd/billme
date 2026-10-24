@@ -204,16 +204,18 @@ const seedPostedIncomingInvoice = async (database: PgliteServerDatabase, lineNet
      VALUES ('invoice-source-line',$1,'invoice-source',0,'Asset',1,$2,$2,0,0,$2,'0440')`,
     [tenantId, lineNet],
   );
-  await database.query(
-    `INSERT INTO journal_entries (id,tenant_id,entry_number,posting_date,document_date,booking_text,period,fiscal_year,status,source_type,source_key,created_at)
-     VALUES ('journal-source',$1,1,'2026-01-01','2026-01-01','Incoming source','2026-01',2026,'posted','incoming_invoice','incoming-invoice:invoice-source',$2)`,
-    [tenantId, now],
-  );
-  await database.query(
-    `INSERT INTO journal_lines (id,tenant_id,entry_id,line_no,account_number,debit_amount,credit_amount)
-     VALUES ('journal-source-debit',$1,'journal-source',1,'0440',1000,0),('journal-source-credit',$1,'journal-source',2,'1600',0,1000)`,
-    [tenantId],
-  );
+  await database.transaction({}, async (tx) => {
+    await tx.query(
+      `INSERT INTO journal_entries (id,tenant_id,entry_number,posting_date,document_date,booking_text,period,fiscal_year,status,source_type,source_key,created_at)
+       VALUES ('journal-source',$1,1,'2026-01-01','2026-01-01','Incoming source','2026-01',2026,'posted','incoming_invoice','incoming-invoice:invoice-source',$2)`,
+      [tenantId, now],
+    );
+    await tx.query(
+      `INSERT INTO journal_lines (id,tenant_id,entry_id,line_no,account_number,debit_amount,credit_amount)
+       VALUES ('journal-source-debit',$1,'journal-source',1,'0440',1000,0),('journal-source-credit',$1,'journal-source',2,'1600',0,1000)`,
+      [tenantId],
+    );
+  });
   await database.query(`UPDATE incoming_invoices SET accounting_status='posted', accounting_journal_entry_id='journal-source' WHERE id='invoice-source'`);
 };
 

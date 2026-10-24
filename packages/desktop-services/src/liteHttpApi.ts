@@ -89,6 +89,7 @@ const serverEurItemSchema = z.object({
   sourceType: z.enum(['transaction', 'invoice', 'manual']),
   sourceId: z.string(),
   date: z.string(),
+  taxYear: z.number().int().optional(),
   amountGross: z.number(),
   amountNet: z.number(),
   flowType: z.enum(['income', 'expense']),

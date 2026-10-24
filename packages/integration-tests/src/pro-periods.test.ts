@@ -5,7 +5,7 @@ import { startPro, type ProHarness } from './harness.js';
 import { addDays, today } from './fixtures.js';
 import {
   addBankAccount, approveDraft, assertLedgerConsistent, bankTx, draft, draftAction, entryFor, get, getDraft, importCsv, invoiceEntry, issue,
-  journal, money, openItems, payOpenItem, postDraft, PRO_TENANT, saveDraft, setPeriodStatus, shape, withDatabase, type JournalEntry,
+  journal, money, openItems, payOpenItem, periods, postDraft, saveDraft, setPeriod, shape, statusOf, type JournalEntry,
 } from './pro-fixtures.js';
 
 /**
@@ -13,10 +13,16 @@ import {
  * HTTP surface of the embedded backend.
  *
  * How this can fail (each one has a test below):
+ * - period route: a festgeschriebener (closed) month that can be reopened or
+ *   soft-locked again, a change without a written reason, a change that is not
+ *   audited, an unknown month or status accepted, a status that is lost across
+ *   a restart, a month before a closed one that still takes postings
+ *   (Festschreibung is cumulative), a reopened soft lock that still blocks
  * - closed period: an invoice, a manual draft, a payment or a reversal that
  *   still posts into it; a refused issue that leaves the invoice half-issued
  *   (number lost, no entry); a correction that is only possible by rewriting the
- *   closed month instead of posting in an open one
+ *   closed month instead of posting in an open one; an asset activation or a
+ *   journal reversal that still posts into it
  * - soft lock: an override without a (non-blank) written reason, an override
  *   flag on the wrong request, a reason that is not kept in the audit trail
  * - restart: entries, open items, the audit chain, vendors, the receipts
@@ -48,13 +54,14 @@ test('closed and soft-locked periods stop every posting path, and ledger, open i
   ]);
   const before = { entries: await journal(first), items: await openItems(first) };
   assert.ok(before.entries.length >= 2);
-  await first.close({ keepData: true });
 
-  // The accountant closes January and soft-locks February. No route does that, so the test writes the period rows.
-  await withDatabase(first.userDataPath, async (database) => {
-    await setPeriodStatus(database, PRO_TENANT, '2026-01', 'closed');
-    await setPeriodStatus(database, PRO_TENANT, '2026-02', 'soft_locked');
-  });
+  // The accountant festschreibt January and soft-locks February through the period route.
+  const closedJanuary = await setPeriod(first, '2026-01', 'closed', 'Januar festgeschrieben nach UStVA');
+  assert.equal(closedJanuary.status, 200, closedJanuary.text);
+  assert.deepEqual([closedJanuary.body.period, closedJanuary.body.status], ['2026-01', 'closed']);
+  assert.ok(closedJanuary.body.changedPeriods.includes('2026-01'));
+  assert.equal((await setPeriod(first, '2026-02', 'soft_locked', 'Februar vorläufig gesperrt')).status, 200);
+  await first.close({ keepData: true });
   const h = await startPro(t, 'pro-accounting-periods', first.userDataPath);
 
   await t.test('what was booked before the restart is unchanged', async () => {
@@ -68,6 +75,50 @@ test('closed and soft-locked periods stop every posting path, and ledger, open i
     assert.equal((await get<any[]>(h, '/accounting/incoming-invoices')).find((invoice) => invoice.id === incomingId).accountingStatus, 'posted');
     assert.equal((await get<any[]>(h, '/accounting/vendors')).length, 1);
     await assertLedgerConsistent(h);
+  });
+
+  await t.test('the month statuses survive the restart; a festgeschriebener month never changes again', async () => {
+    const months = await periods(h, 2026);
+    assert.equal(months.length, 12);
+    assert.deepEqual(months.slice(0, 3).map((row) => [row.period, row.status]), [['2026-01', 'closed'], ['2026-02', 'soft_locked'], ['2026-03', 'open']]);
+    assert.ok(months[0]!.entryCount >= 2, 'January shows its entries');
+    assert.ok((await periods(h, 2025)).every((row) => row.status === 'closed'), 'closing January closes every month before it');
+    for (const status of ['open', 'soft_locked', 'closed'] as const) {
+      const refused = await setPeriod(h, '2026-01', status, 'doch wieder öffnen');
+      assert.equal(refused.status, 409, `${status}: ${refused.text}`);
+      assert.match(refused.body.message, /PERIOD_CLOSED/);
+    }
+    const earlier = await setPeriod(h, '2025-12', 'soft_locked', 'Dezember sperren');
+    assert.equal(earlier.status, 409, earlier.text);
+    assert.equal(await statusOf(h, '2026-01'), 'closed');
+    assert.ok((await h.api.audit.exportCsv()).includes('Januar festgeschrieben nach UStVA'), 'the reason of the Festschreibung is audited');
+  });
+
+  await t.test('the period route needs a written reason, a real month and a known status', async () => {
+    assert.equal((await setPeriod(h, '2026-03', 'soft_locked', null)).status, 400, 'no reason');
+    assert.equal((await setPeriod(h, '2026-03', 'soft_locked', '   ')).status, 400, 'a blank reason');
+    assert.equal((await setPeriod(h, '2026-13', 'soft_locked')).status, 400, 'no such month');
+    assert.equal((await h.raw('POST', '/accounting/periods/2026-03/status', { status: 'locked', reason: 'x' })).status, 400, 'unknown status');
+    assert.equal((await h.raw('GET', '/accounting/periods?year=20x6')).status, 400, 'a malformed year');
+    assert.equal(await statusOf(h, '2026-03'), 'open', 'nothing was changed');
+    const again = await setPeriod(h, '2026-02', 'soft_locked', 'nochmal sperren');
+    assert.equal(again.status, 200, again.text);
+    assert.deepEqual(again.body.changedPeriods, [], 'locking a locked month changes nothing');
+  });
+
+  await t.test('a posting dated before a festgeschriebener month is refused, the month itself was never touched', async () => {
+    const unposted = await draft(h, { client: 'Dezember', date: '2025-12-15', dueDate: '2025-12-29' });
+    const refused = await h.raw('POST', '/invoices', { reason: 'stellen', invoice: { ...unposted, status: 'open', kind: 'invoice' } });
+    assert.equal(refused.status, 409, refused.text);
+    assert.match(refused.body.message, /POSTING_DATE_IN_CLOSED_PERIOD/);
+  });
+
+  await t.test('an asset activated in a closed period is refused and posts nothing', async () => {
+    const entries = (await journal(h)).length;
+    const refused = await h.raw('POST', '/accounting/assets', { reason: 'Anlage erfasst', asset: { assetNumber: `A-${randomUUID().slice(0, 6)}`, name: 'Notebook', assetClass: 'IT-Hardware', status: 'aktiv', activationDate: '2026-01-15', acquisitionCost: 1200, usefulLifeYears: 3, depreciationMethod: 'linear', costCenter: 'IT', location: 'Berlin', receiptLinked: true, assetAccountNumber: '0440' } });
+    assert.equal(refused.status, 409, refused.text);
+    assert.match(refused.body.message, /POSTING_DATE_IN_CLOSED_PERIOD/);
+    assert.equal((await journal(h)).length, entries);
   });
 
   await t.test('an invoice dated in a closed period is refused and stays a draft with its number', async () => {
@@ -145,6 +196,10 @@ test('closed and soft-locked periods stop every posting path, and ledger, open i
     assert.ok(allowed.body.entry.id);
     assert.equal(allowed.body.entry.postingDate, '2026-02-10');
     assert.equal((await bankTx(h, 'Februar Lieferant')).status, 'booked');
+    const intoClosed = await h.raw('POST', `/accounting/journal/${allowed.body.entry.id}/reverse`, { reason: 'Storno', postingDate: '2026-01-31' });
+    assert.equal(intoClosed.status, 409, intoClosed.text);
+    assert.match(intoClosed.body.message, /POSTING_DATE_IN_CLOSED_PERIOD/);
+    assert.equal((await get<JournalEntry>(h, `/accounting/journal/${allowed.body.entry.id}`)).status, 'posted');
   });
 
   await t.test('the written reason of a soft-lock override is kept in the audit trail', async () => {
@@ -182,6 +237,29 @@ test('closed and soft-locked periods stop every posting path, and ledger, open i
     const allowed = await h.raw('POST', '/accounting/closing', fact(`soft-ok-${randomUUID()}`, '2026-02-28', { softLockOverride: true, overrideReason: 'Nachtrag Sonderbuchung' }));
     assert.equal(allowed.status, 200, allowed.text);
     assert.equal((await journal(h)).length, entries + 1);
+  });
+
+  await t.test('reopening a soft-locked month needs a reason and is audited; festschreiben closes every open month before it', async () => {
+    const fact = (id: string) => ({
+      command: 'source_fact', sourceId: id, sourceRevision: 'v1', idempotencyKey: `${id}:v1`, reason: 'Sonderbuchung',
+      input: { sourceType: 'standalone_source', sourceId: id, sourceRevision: 'v1', effectiveDate: '2026-02-27', postingDate: '2026-02-27', period: '2026-02', fiscalYear: 2026, currency: 'EUR', bookingText: 'Nachtrag Februar', lines: [{ accountNumber: '4930', debitAmount: 10, creditAmount: 0 }, { accountNumber: '1200', debitAmount: 0, creditAmount: 10 }] },
+    });
+    assert.equal((await h.raw('POST', '/accounting/closing', fact(`feb-${randomUUID()}`))).status, 409, 'still soft-locked');
+    assert.equal((await setPeriod(h, '2026-02', 'open', null)).status, 400, 'reopening needs a reason');
+    const reopened = await setPeriod(h, '2026-02', 'open', 'Belege von Februar nachgereicht');
+    assert.equal(reopened.status, 200, reopened.text);
+    assert.equal(await statusOf(h, '2026-02'), 'open');
+    assert.ok((await h.api.audit.exportCsv()).includes('Belege von Februar nachgereicht'), 'the reopening is audited with its reason');
+    const posted = await h.raw('POST', '/accounting/closing', fact(`feb-${randomUUID()}`));
+    assert.equal(posted.status, 200, posted.text);
+
+    const closed = await setPeriod(h, '2026-03', 'closed', 'März festgeschrieben');
+    assert.equal(closed.status, 200, closed.text);
+    assert.ok(closed.body.changedPeriods.includes('2026-02') && closed.body.changedPeriods.includes('2026-03'), JSON.stringify(closed.body));
+    assert.deepEqual((await periods(h, 2026)).slice(0, 4).map((row) => row.status), ['closed', 'closed', 'closed', 'open']);
+    const late = await h.raw('POST', '/accounting/closing', fact(`feb-${randomUUID()}`));
+    assert.equal(late.status, 409, late.text);
+    assert.match(late.body.message, /POSTING_DATE_IN_CLOSED_PERIOD/);
   });
 
   await t.test('after all of this the ledger is still consistent', async () => {

@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import { after, before, describe, test } from 'node:test';
 import { PRODUCTS, startProduct, type LiteHarness } from './harness.js';
 import { datevEvidence, draftInvoice, issueInvoice, today } from './fixtures.js';
+import { addBankAccount, approveDraft, bankTransactions, bankTx, getDraft, importCsv, postDraft } from './pro-fixtures.js';
 
 /**
  * Bank accounts, CSV import, bank matching and manual cash end to end through
@@ -26,24 +27,39 @@ import { datevEvidence, draftInvoice, issueInvoice, today } from './fixtures.js'
  *   committed imports, unbounded open handles
  * - commit: bad rows poisoning good rows, a half-written import after a database
  *   error, duplicates on re-import or overlapping files, identical bank lines of
- *   one file collapsed, a failed first attempt (wrong mapping) or a rolled-back
- *   batch blocking a corrected re-import, import into an unknown account
+ *   one file collapsed into one (two real payments lost), a failed first attempt
+ *   (wrong mapping) or a rolled-back batch blocking a corrected re-import, import
+ *   into an unknown account; a pending line never becoming booked when the bank
+ *   books it; PayPal/Stripe imported net, so the fee vanishes and the invoice
+ *   stays open by the fee; the original file thrown away (no proof of what was
+ *   imported) or replaced later
  * - rollback: removing another batch's rows, removing rows that already pay an
- *   invoice or are matched to a cash entry, running twice, no reason, no audit,
- *   rolled-back rows still visible in lists/reports/link
+ *   invoice or are matched to a cash entry, removing bank lines Pro has already
+ *   booked in the ledger, running twice, no reason, no audit, an audit entry
+ *   that does not say which lines were removed, rolled-back rows still visible
+ *   in lists/reports/link
  * - linking: wrong payment identity, wrong status after partial/over/full
  *   payment, one bank line paying two invoices, two lines over-paying one
  *   invoice under concurrency, drafts/cancelled/credit notes/paid invoices/
  *   expenses/pending lines accepted, no audit, unlink removing the wrong payment;
  *   an issued credit note ignored, so the customer's remaining payment over-pays
- *   the invoice or never settles it, and unlinking reopens it
+ *   the invoice or never settles it, and unlinking reopens it; (Lite) a refund
+ *   or Rücklastschrift going out of the bank that cannot be tied to the invoice,
+ *   so the invoice stays "paid" or the refund counts twice in the EÜR (as a
+ *   negative payment and once more as an expense), a refund larger than what
+ *   was paid, an outgoing line paying an unpaid invoice
  * - suggestions: bad ranking, paid/draft/credit documents suggested, more than
  *   five, partial payments ignored
  * - cash entries: lost updates (expectedUpdatedAt), edits of matched entries,
  *   bad amounts/dates/currencies/references, a sign that contradicts the flow,
  *   deleted ids reused, double counting in the EÜR once matched to the bank;
+ *   a Bareinzahlung/Barabhebung (opposite signs on cash and bank) that cannot be
+ *   matched, or that is matched without saying it is a Geldtransit and then
+ *   counts as income or expense;
  *   a festgeschriebener month still taking new, changed or deleted entries,
- *   payments or bank links, the running month closable, closing not audited
+ *   payments or bank links, the running month closable, closing not audited;
+ *   the month still changed through a bank import, an import rollback, an EÜR
+ *   classification or cash fact, or a receipt paid in that month
  * - receipts and files: lost updates, unreviewed tax data marked reviewed, file
  *   bytes changed, wrong mime/content, XML entities, size and count limits
  * - persistence: imports, batches, links, cash, receipts and file bytes lost on
@@ -275,16 +291,21 @@ for (const product of PRODUCTS) describe(`transactions, banking and cash (${prod
       assert.deepEqual(result.rows.map((row) => row.parsed.status), ['pending', 'booked', 'pending', 'booked']);
     });
 
-    test('PayPal and Stripe exports are detected; net amount and created date are used, other currencies flagged', async () => {
+    test('PayPal and Stripe exports are detected; the gross amount is the payment, the fee its own line; created date used, other currencies flagged', async () => {
       const paypal = await preview('Date,Time,Name,Type,Status,Currency,Gross,Fee,Net,Transaction ID\n01.08.2026,10:00,Max,Payment,Completed,EUR,"1.234,56","-35,00","1.199,56",ABC123\n');
       assert.equal(paypal.profile, 'paypal');
-      assert.equal(paypal.suggestedMapping.amountColumn, 'Net');
+      assert.equal(paypal.suggestedMapping.amountColumn, 'Gross');
+      assert.equal(paypal.suggestedMapping.feeColumn, 'Fee');
       assert.equal(paypal.suggestedMapping.externalIdColumn, 'Transaction ID');
-      assert.equal(paypal.rows[0]!.parsed.amount, 1199.56);
+      assert.equal(paypal.rows[0]!.parsed.amount, 1234.56);
+      assert.equal(paypal.rows[0]!.parsed.fee, -35);
       assert.equal(paypal.rows[0]!.parsed.externalId, 'ABC123');
-      const stripe = await preview('id,Created (UTC),Amount,Currency,Description,Customer\nch_1,2026-08-01 10:00,12.34,eur,Order 1,cus_1\nch_2,2026-08-01 10:00,12.34,usd,Order 2,cus_1\n');
+      const stripe = await preview('id,Created (UTC),Amount,Fee,Net,Currency,Description,Customer\nch_1,2026-08-01 10:00,12.34,0.65,11.69,eur,Order 1,cus_1\nch_2,2026-08-01 10:00,12.34,0.65,11.69,usd,Order 2,cus_1\n');
       assert.equal(stripe.profile, 'stripe');
       assert.equal(stripe.suggestedMapping.dateColumn, 'Created (UTC)');
+      assert.equal(stripe.suggestedMapping.amountColumn, 'Amount');
+      assert.equal(stripe.rows[0]!.parsed.amount, 12.34);
+      assert.equal(stripe.rows[0]!.parsed.fee, -0.65, 'Stripe lists the fee as a positive number; it is money going out');
       assert.deepEqual(stripe.rows.map((row) => row.errors.length), [0, 1]);
       assert.equal(stripe.rows[0]!.parsed.date, '2026-08-01');
     });
@@ -501,15 +522,80 @@ for (const product of PRODUCTS) describe(`transactions, banking and cash (${prod
       assert.equal((await txsOf(a)).length + (await txsOf(b)).length, 2);
     });
 
-    test('identical lines inside one file are collapsed and the skipped one is reported; an external id tells twins apart', async () => {
-      // By design (transactionImport.ts seenHashes): two real payments with the same day, amount, counterparty and purpose and no
-      // external id look like one line. The skip is not silent, the user sees skipped = 1.
+    test('identical lines inside one file are two payments and both are booked; a later file holding them again adds only what is new', async () => {
       const accountId = (await newAccount()).id;
       const result = await importRows(accountId, ['2026-08-01,5,Kiosk,Kaffee', '2026-08-01,5,Kiosk,Kaffee']);
-      assert.deepEqual([result.imported, result.skipped, result.errors.length], [1, 1, 0]);
-      assert.equal((await txsOf(accountId)).length, 1);
+      assert.deepEqual([result.imported, result.skipped, result.errors.length], [2, 0, 0]);
+      assert.equal((await txsOf(accountId)).length, 2);
       const [batch] = await h.api.finance.listImportBatches({ accountId });
-      assert.deepEqual([batch!.importedCount, batch!.skippedCount], [1, 1]);
+      assert.deepEqual([batch!.importedCount, batch!.skippedCount], [2, 0]);
+      const longer = await importRows(accountId, ['2026-08-01,5,Kiosk,Kaffee', '2026-08-01,5,Kiosk,Kaffee', '2026-08-01,5,Kiosk,Kaffee', '2026-08-02,5,Kiosk,Kaffee']);
+      assert.deepEqual([longer.imported, longer.skipped], [2, 2], 'the third coffee of the day and the next day are new');
+      const overlap = await importRows(accountId, ['2026-08-01,5,Kiosk,Kaffee', '2026-08-02,5,Kiosk,Kaffee']);
+      assert.deepEqual([overlap.imported, overlap.skipped], [0, 2]);
+      assert.equal((await txsOf(accountId)).length, 4);
+    });
+
+    test('a pending line imported again as booked is taken over as booked, once and audited; a booked line never goes back to pending', async () => {
+      const accountId = (await newAccount()).id;
+      const mapping = { ...MAP, statusColumn: 'Status' };
+      const name = unique('Vorgemerkt');
+      const first = await commit(accountId, `${HEADER},Status\n${today()},77,${name},RE-77,pending\n`, { mapping });
+      assert.equal((await txsOf(accountId))[0]!.status, 'pending');
+      if (liteEur) assert.ok(!(await euerItems()).some((item) => item.counterparty === name), 'a pending line is no money yet');
+      const second = await commit(accountId, `${HEADER},Status\n${today()},77,${name},RE-77,gebucht\n${today()},1,${unique('Neu')},x,gebucht\n`, { mapping });
+      assert.deepEqual([second.imported, second.updated, second.skipped], [1, 1, 0]);
+      const rows = await txsOf(accountId);
+      assert.equal(rows.length, 2, 'no second line for the same payment');
+      const upgraded = rows.find((tx) => tx.amount === 77)!;
+      assert.equal(upgraded.status, 'booked');
+      assert.equal(upgraded.importBatchId, first.batchId, 'the line keeps the batch it came with');
+      if (liteEur) assert.ok((await euerItems()).some((item) => item.sourceId === upgraded.id), 'now it counts');
+      assert.ok((await auditCsv()).split('\n').some((row) => row.includes(upgraded.id) && row.includes('finance_import.booked')), 'the status change is audited');
+      // Another export of the bank (not the byte-identical first file, that one replays its batch) showing the line pending again.
+      const third = await commit(accountId, `${HEADER},Status\r\n${today()},77,${name},RE-77,pending\r\n`, { mapping });
+      assert.deepEqual([third.imported, third.updated, third.skipped], [0, 0, 1]);
+      assert.equal((await txsOf(accountId)).find((tx) => tx.id === upgraded.id)!.status, 'booked');
+    });
+
+    test('a PayPal payment is imported gross with the fee as its own expense line, so the invoice can be paid in full', async () => {
+      const accountId = (await newAccount()).id;
+      const invoice = await newInvoice('PayPal-Kunde');
+      const de = (value: number) => `"${value.toFixed(2).replace('.', ',')}"`;
+      const id = `PP-${randomUUID().slice(0, 8)}`;
+      const csv = `Date,Time,Name,Type,Status,Currency,Gross,Fee,Net,Transaction ID\n${today()},10:00,${invoice.client},Payment,Completed,EUR,${de(invoice.amount)},"-2,49",${de(invoice.amount - 2.49)},${id}\n`;
+      const previewed = await preview(csv);
+      const result = await h.api.finance.importCommit({ path: previewed.path, accountId, mapping: previewed.suggestedMapping, profile: 'paypal' } as never);
+      assert.deepEqual([result.imported, result.errors.length], [2, 0]);
+      const rows = await txsOf(accountId);
+      const payment = rows.find((tx) => tx.amount === invoice.amount)!;
+      const fee = rows.find((tx) => tx.amount === -2.49)!;
+      assert.ok(payment && fee, JSON.stringify(rows));
+      assert.deepEqual([fee.type, fee.counterparty, fee.date], ['expense', 'PayPal', today()]);
+      assert.match(fee.purpose, new RegExp(`Gebühr.*${id}`));
+      const again = await h.api.finance.importCommit({ path: await writeCsv(`${csv}\n`), accountId, mapping: previewed.suggestedMapping, profile: 'paypal' } as never);
+      assert.deepEqual([again.imported, again.skipped], [0, 2], 'payment and fee are both recognised again');
+      if (product === 'lite') {
+        await h.api.transactions.link({ transactionId: payment.id, invoiceId: invoice.id });
+        assert.equal((await invoiceOf(invoice.id)).status, 'paid', 'the gross amount settles the invoice');
+        const feeItem = (await euerItems()).find((item) => item.sourceId === fee.id)!;
+        assert.equal(feeItem.suggestedLineId, `E${YEAR}_KZ183`, 'the fee is a Nebenkosten des Geldverkehrs expense');
+      }
+    });
+
+    test('the original CSV file is kept byte for byte with its hash and stays downloadable after a rollback', async () => {
+      const accountId = (await newAccount()).id;
+      const content = Buffer.from(`${HEADER}\r\n2026-08-01,10,Archiv,Grüße\r\n`, 'utf8');
+      const result = await commit(accountId, content);
+      const file = await h.raw('GET', `/finance/import-batches/${result.batchId}/file`);
+      assert.equal(file.status, 200, file.text);
+      assert.equal(file.body.contentBase64, b64(content));
+      assert.equal(file.body.fileSha256, createHash('sha256').update(content).digest('hex'));
+      assert.equal(file.body.fileSha256, result.fileSha256);
+      assert.match(file.body.fileName, /\.csv$/);
+      await h.api.finance.rollbackImportBatch({ batchId: result.batchId, reason: 'falsche Datei' });
+      assert.equal((await h.raw('GET', `/finance/import-batches/${result.batchId}/file`)).body.contentBase64, b64(content), 'the rollback keeps the file');
+      assert.equal((await h.raw('GET', `/finance/import-batches/${randomUUID()}/file`)).status, 404);
     });
 
     test('lines that differ only by an external id are both booked', async () => {
@@ -609,6 +695,25 @@ for (const product of PRODUCTS) describe(`transactions, banking and cash (${prod
       assert.equal((await h.api.finance.getImportBatchDetails({ batchId: keep.batchId })).canRollback, true);
       const line = (await auditCsv()).split('\n').find((row) => row.includes(drop.batchId) && row.includes('finance_import.rollback'));
       assert.ok(line && line.includes('Falsche Datei gewählt'));
+      for (const proof of [`${YEAR}-08-02`, `${YEAR}-08-03`, '222', '-33', 'Verwerfen', 'drop']) assert.ok(line.includes(proof), `the audit entry names the removed lines (${proof})`);
+    });
+
+    if (product === 'pro') test('a batch whose bank line is booked in the ledger cannot be rolled back', async () => {
+      const pro = h as never;
+      const account = await addBankAccount(pro);
+      const name = unique('Gebucht');
+      const { commit: batch } = await importCsv(pro, account, [{ date: today(), amount: 119, counterparty: name, purpose: 'Beratung' }]);
+      const tx = await bankTx(pro, name);
+      const draft = await getDraft(pro, tx.id);
+      await approveDraft(pro, draft, [{ id: `${draft.id}-1`, accountNumber: '1200', debitAmount: 119, creditAmount: 0 }, { id: `${draft.id}-2`, accountNumber: '8400', debitAmount: 0, creditAmount: 119 }] as never, { postingDate: today() });
+      assert.equal((await postDraft(pro, draft.id, { postingDate: today() })).status, 200);
+
+      assert.equal((await h.api.finance.getImportBatchDetails({ batchId: batch.batchId })).canRollback, false);
+      const refused = await h.raw('POST', `/finance/import-batches/${batch.batchId}/rollback`, { reason: 'zu spät' });
+      assert.equal(refused.status, 409, refused.text);
+      assert.match(refused.text, /gebucht/);
+      assert.ok((await bankTransactions(pro)).some((row) => row.id === tx.id), 'the booked bank line stays');
+      assert.equal((await txsOf(account)).length, 1);
     });
 
     test('rolling back twice is refused and changes nothing the second time', async () => {
@@ -886,6 +991,45 @@ for (const product of PRODUCTS) describe(`transactions, banking and cash (${prod
       if (liteEur) assert.ok(!(await euerItems()).some((item) => item.sourceId === `${invoice.id}:payment:${refund.id}`));
       assert.equal((await invoiceOf(invoice.id)).status, 'paid');
       assert.equal((await txsOf(tx.accountId!))[0]!.linkedInvoiceId, invoice.id);
+    });
+
+    if (product === 'lite') test('a refund leaving the bank is tied to the invoice: it reopens it, counts once as a negative payment, and unlinking takes it back', async () => {
+      const invoice = await newInvoice();
+      const paidBy = await bankLine(invoice.amount);
+      await h.api.transactions.link({ transactionId: paidBy.id, invoiceId: invoice.id });
+      const refund = await bankLine(-50, { purpose: 'Erstattung' });
+      assert.ok((await h.api.transactions.findMatches({ transactionId: refund.id })).suggestions.some((s) => s.invoice.id === invoice.id), 'the paid invoice is offered for the outgoing line');
+      const linked = await h.api.transactions.link({ transactionId: refund.id, invoiceId: invoice.id });
+      assert.equal(linked.invoice!.status, 'open', '188 of 238 is left after the refund');
+      const stored = await invoiceOf(invoice.id);
+      assert.deepEqual(stored.payments.find((payment) => payment.id === txPaymentId(refund.id))?.amount, -50);
+      const items = await euerItems();
+      assert.equal(items.filter((item) => item.sourceId === refund.id).length, 0, 'the bank line is not a second (expense) item');
+      const refundItems = items.filter((item) => item.sourceId === `${invoice.id}:payment:${txPaymentId(refund.id)}`);
+      assert.deepEqual(refundItems.map((item) => [item.flowType, item.amountGross]), [['income', -50]]);
+      await h.api.transactions.unlink({ transactionId: refund.id });
+      assert.equal((await invoiceOf(invoice.id)).status, 'paid');
+      assert.ok((await euerItems()).some((item) => item.sourceId === refund.id), 'unlinked: the bank line is back');
+    });
+
+    if (product === 'lite') test('a Rücklastschrift reopens the whole invoice; more than was paid cannot go back', async () => {
+      const invoice = await newInvoice();
+      const paidBy = await bankLine(invoice.amount);
+      await h.api.transactions.link({ transactionId: paidBy.id, invoiceId: invoice.id });
+      const tooMuch = await bankLine(-(invoice.amount + 1), { purpose: 'Rücklastschrift' });
+      assert.equal((await h.raw('POST', `/transactions/${tooMuch.id}/link`, { invoiceId: invoice.id, reason: 'x' })).status, 400, 'nothing is refunded beyond what was paid');
+      const returned = await bankLine(-invoice.amount, { purpose: 'Rücklastschrift' });
+      const result = await h.api.transactions.link({ transactionId: returned.id, invoiceId: invoice.id });
+      assert.equal(result.invoice!.status, 'open');
+      assert.equal((await invoiceOf(invoice.id)).payments.reduce((sum, payment) => sum + payment.amount, 0), 0);
+    });
+
+    if (product === 'pro') test('Pro keeps refusing an outgoing line on an invoice (the ledger settles refunds)', async () => {
+      const invoice = await newInvoice();
+      const paidBy = await bankLine(invoice.amount);
+      await h.api.transactions.link({ transactionId: paidBy.id, invoiceId: invoice.id });
+      const refund = await bankLine(-50, { purpose: 'Erstattung' });
+      assert.equal((await h.raw('POST', `/transactions/${refund.id}/link`, { invoiceId: invoice.id, reason: 'x' })).status, 400);
     });
 
     test('one bank line cannot pay a second invoice', async () => {
@@ -1270,6 +1414,49 @@ for (const product of PRODUCTS) describe(`transactions, banking and cash (${prod
       assert.ok(await saveEntry({ cashDate: `${YEAR}-08-08` }), 'open months still take entries');
       assert.ok((await auditCsv()).includes('lite.period.close'));
     });
+
+    test('a closed month is not changed by a bank import, an import rollback, an EÜR classification or cash fact, or a receipt paid in it', async (t) => {
+      const own = await startProduct('lite', t, 'transactions-closed');
+      const closedMonth = '2025-03';
+      const account = 'bank-closed';
+      await own.api.accounts.upsert({ account: { id: account, name: 'Giro geschlossen', iban: 'DE02120300000000202051', balance: 0, transactions: [], type: 'bank', color: '#112233' } } as never);
+      const mapping = { ...MAP, statusColumn: 'Status' };
+      const commitOwn = async (rows: string[]) => own.api.finance.importCommit({ path: await writeCsv(`${HEADER},Status\n${rows.join('\n')}\n`), accountId: account, mapping, profile: 'generic' } as never);
+      const lines = () => own.api.transactions.list({ accountId: account });
+      const first = await commitOwn([`${closedMonth}-10,-50,Bürobedarf,Papier,gebucht`, `${closedMonth}-15,-20,Vorgemerkt,Porto,pending`]);
+      const receiptBody = receiptInput({ documentDate: `${closedMonth}-05` });
+      const receipt = await own.api.cash.saveReceipt({ receipt: receiptBody, reason: 'Beleg' } as never);
+      await own.api.cash.saveEntry({ entry: entryInput({ cashDate: `${closedMonth}-12`, receiptId: receipt.id, amountCents: -11900 }), reason: 'bar bezahlt' } as never);
+      const paper = (await lines()).find((tx) => tx.counterparty === 'Bürobedarf')!;
+      await own.api.cash.closePeriod({ period: closedMonth, reason: 'Monat abgeschlossen' });
+      const closed = new RegExp(`Monat ${closedMonth} ist festgeschrieben`);
+
+      // The original file stays untouched: rows of the closed month are refused one by one, the rest is booked.
+      const later = await commitOwn([`${closedMonth}-20,-30,Nachzügler,Gebühr,gebucht`, `${closedMonth}-15,-20,Vorgemerkt,Porto,gebucht`, '2025-04-02,-40,April,Miete April,gebucht']);
+      assert.equal(later.imported, 1);
+      assert.deepEqual(later.errors.map((error) => error.rowIndex), [2, 3]);
+      for (const error of later.errors) assert.match(error.message, closed);
+      const after = await lines();
+      assert.ok(!after.some((tx) => tx.counterparty === 'Nachzügler'), 'no new line in the closed month');
+      assert.equal(after.find((tx) => tx.counterparty === 'Vorgemerkt')!.status, 'pending', 'no status change in the closed month');
+      const april = after.find((tx) => tx.counterparty === 'April')!;
+
+      const refused = [
+        ['rollback', await own.raw('POST', `/finance/import-batches/${first.batchId}/rollback`, { reason: 'falsche Datei' })],
+        ['classification', await own.raw('PUT', '/reports/eur/classifications', { sourceType: 'transaction', sourceId: paper.id, taxYear: 2025, eurLineId: 'E2025_KZ183', reason: 'nachträglich' })],
+        ['exclusion', await own.raw('PUT', '/reports/eur/classifications', { sourceType: 'transaction', sourceId: paper.id, taxYear: 2025, excluded: true, reason: 'doch privat' })],
+        ['cash fact', await own.raw('POST', '/reports/eur/facts/cash', { sourceType: 'transaction', sourceId: paper.id, taxYear: 2025, kind: 'private-withdrawal', amountNet: 50, reason: 'privat' })],
+        ['receipt', await own.raw('POST', '/cash/receipts', { receipt: { ...receiptBody, grossAmountCents: 9900 }, expectedUpdatedAt: receipt.updatedAt, reason: 'Betrag geändert' })],
+      ] as const;
+      for (const [label, response] of refused) {
+        assert.equal(response.status, 409, `${label}: ${response.text}`);
+        assert.match(response.text, closed, label);
+      }
+      assert.equal((await lines()).filter((tx) => tx.importBatchId === first.batchId).length, 2, 'the batch is still there');
+      assert.equal((await own.api.cash.listReceipts()).find((row) => row.id === receipt.id)!.grossAmountCents, 11900);
+      const classified = await own.raw('PUT', '/reports/eur/classifications', { sourceType: 'transaction', sourceId: april.id, taxYear: 2025, eurLineId: 'E2025_KZ150', reason: 'Miete' });
+      assert.equal(classified.status, 200, `an open month is still classified: ${classified.text}`);
+    });
   });
 
   if (product === 'lite') describe('matching cash entries to bank lines', () => {
@@ -1343,6 +1530,24 @@ for (const product of PRODUCTS) describe(`transactions, banking and cash (${prod
         assert.equal(response.status, status, `${label}: ${response.text}`);
       }
       assert.equal((await h.api.cash.listEntries()).find((candidate) => candidate.id === entry.id)!.matchedTransactionId, undefined, 'nothing was matched');
+    });
+
+    test('a Barabhebung (bank out, cash in) matches only as Geldtransit; it then counts in no EÜR line', async () => {
+      const accountId = (await newAccount()).id;
+      const tx = await bankLine(-500, { accountId, date: `${YEAR}-10-04`, name: 'Geldautomat', purpose: 'Barabhebung' });
+      const entry = await saveEntry({ cashDate: `${YEAR}-10-04`, amountCents: 50000, flowType: 'income', counterparty: 'Bank', purpose: 'Barabhebung in die Kasse' });
+      const plain = await h.raw('POST', `/cash/entries/${entry.id}/match`, { transactionId: tx.id, expectedCashDate: entry.originalCashDate, reason: 'geprüft' });
+      assert.equal(plain.status, 409, 'opposite signs without saying it is a transfer stay refused');
+      const other = await bankLine(-499, { accountId, date: `${YEAR}-10-04` });
+      assert.equal((await h.raw('POST', `/cash/entries/${entry.id}/match`, { transactionId: other.id, expectedCashDate: entry.originalCashDate, transit: true, reason: 'geprüft' })).status, 409, 'the amount must still agree');
+      const matched = await h.api.cash.matchEntry({ id: entry.id, transactionId: tx.id, expectedCashDate: entry.originalCashDate, transit: true, reason: 'Barabhebung in die Kasse' } as never);
+      assert.equal(matched.matchedTransactionId, tx.id);
+      const items = (await euerItems()).filter((item) => item.sourceId === entry.id || item.sourceId === tx.id);
+      assert.deepEqual(items.map((item) => [item.sourceId, item.kind]), [[entry.id, 'transit']], 'one item, already a Geldtransit');
+      const report = await h.api.eur.getReport({ taxYear: YEAR });
+      const incomeLine = report.rows.find((row) => row.kind === 'income')!.lineId;
+      const reclassify = await h.raw('PUT', '/reports/eur/classifications', { sourceType: 'manual', sourceId: entry.id, taxYear: YEAR, eurLineId: incomeLine, reason: 'x' });
+      assert.equal(reclassify.status, 400, 'a cash↔bank transfer cannot become income');
     });
 
     test('one bank line cannot be matched to two entries', async () => {

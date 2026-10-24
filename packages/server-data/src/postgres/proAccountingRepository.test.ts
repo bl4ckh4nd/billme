@@ -19,7 +19,7 @@ test('real Postgres policy rejects a chart change after a posted journal', { ski
     await runDrizzleMigrations(pool);
     await pool.query(`INSERT INTO tenants (id,slug,display_name,product,deployment_mode,status,created_at,updated_at) VALUES ($1,$1,$2,'pro','single-tenant','active',$3,$3)`, [tenantId, 'Policy locked', now]);
     await pool.query(`INSERT INTO accounting_policies (tenant_id,active_chart,vat_method,period_policy,updated_at) VALUES ($1,'SKR03','soll','calendar_month',$2)`, [tenantId, now]);
-    await pool.query(`INSERT INTO journal_entries (id,tenant_id,entry_number,posting_date,booking_text,period,fiscal_year,status,created_at) VALUES ($1,$2,1,'2026-08-14','Policy lock test','2026-08',2026,'posted',$3)`, [`policy-journal-${suffix}`, tenantId, now]);
+    await pool.query(`WITH e AS (INSERT INTO journal_entries (id,tenant_id,entry_number,posting_date,booking_text,period,fiscal_year,status,created_at) VALUES ($1,$2,1,'2026-08-14','Policy lock test','2026-08',2026,'posted',$3) RETURNING id) INSERT INTO journal_lines (id,tenant_id,entry_id,line_no,account_number,debit_amount,credit_amount) SELECT e.id || ':1', $2, e.id, 1, '1200', 10, 0 FROM e UNION ALL SELECT e.id || ':2', $2, e.id, 2, '8400', 0, 10 FROM e`, [`policy-journal-${suffix}`, tenantId, now]);
     await assert.rejects(
       () => createPostgresProAccountingRepository(pool).setAccountingPolicy(createSingleTenantScope(tenantId, 'pro'), { activeChart: 'SKR04', vatMethod: 'soll' }),
       /ACCOUNTING_CHART_LOCKED/,
@@ -364,8 +364,8 @@ test('real Postgres permits only OPOS status projection and rejects repeated ove
     const postedReservationJournal = (await pool.query(`SELECT source_type,source_key FROM journal_entries WHERE tenant_id=$1 AND source_type='outgoing_invoice' AND source_key=$2`, [tenantId, `outgoing-invoice:${reservationInvoiceId}`])).rows[0];
     assert.deepEqual(postedReservationJournal, { source_type: 'outgoing_invoice', source_key: `outgoing-invoice:${reservationInvoiceId}` });
     const legacyEntryNumber = Number((await pool.query(`SELECT COALESCE(MAX(entry_number),0)+1 AS number FROM journal_entries WHERE tenant_id=$1`, [tenantId])).rows[0].number);
-    await pool.query(`INSERT INTO journal_entries (id,tenant_id,entry_number,posting_date,document_date,booking_text,period,fiscal_year,status,source_type,source_key,created_at) VALUES ($1,$2,$3,'2026-08-11','2026-08-11','Legacy imported','2026-08',2026,'posted','legacy_transaction',$4,$5)`, [legacyEntryId, tenantId, legacyEntryNumber, `legacy:${suffix}`, now]);
-    await pool.query(`INSERT INTO journal_lines (id,tenant_id,entry_id,line_no,account_number,debit_amount,credit_amount) VALUES ($1,$2,$3,1,$4,10,0),($5,$2,$3,2,$6,0,10)`, [`legacy-debit-${suffix}`, tenantId, legacyEntryId, bankAccount, `legacy-credit-${suffix}`, receivableAccount]);
+    // Entry and lines in one statement (one transaction): the database enforces Soll = Haben at commit.
+    await pool.query(`WITH e AS (INSERT INTO journal_entries (id,tenant_id,entry_number,posting_date,document_date,booking_text,period,fiscal_year,status,source_type,source_key,created_at) VALUES ($1,$2,$3,'2026-08-11','2026-08-11','Legacy imported','2026-08',2026,'posted','legacy_transaction',$4,$5) RETURNING id) INSERT INTO journal_lines (id,tenant_id,entry_id,line_no,account_number,debit_amount,credit_amount) SELECT $6, $2, e.id, 1, $7, 10, 0 FROM e UNION ALL SELECT $8, $2, e.id, 2, $9, 0, 10 FROM e`, [legacyEntryId, tenantId, legacyEntryNumber, `legacy:${suffix}`, now, `legacy-debit-${suffix}`, bankAccount, `legacy-credit-${suffix}`, receivableAccount]);
     const datevRows = await repository.buildDatevRows(scope, { from: '2026-08-11', to: '2026-08-12' });
     assert.ok(datevRows.some((row) => row.belegfeld1 === String(legacyEntryNumber) && row.umsatz === 10));
     assert.ok(datevRows.some((row) => row.belegfeld1 !== String(legacyEntryNumber)));

@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Button, Card, CardHeader, EmptyState, Field, Input, Select, Stepper, Textarea, formatEmptyValue } from '@billme/ui';
 import { JournalEntryDetailModal } from './JournalEntryDetail';
+import PeriodLockPanel from './PeriodLockPanel';
 import { userFacingReference } from '../domain/references';
 import type { UserRole } from '../types';
 import { permissionContextForRole } from '../domain/permissions';
@@ -303,6 +304,8 @@ export default function SonderbuchungenWorkspace({ dataAdapter, role = 'admin' }
   const [preparedArtifact, setPreparedArtifact] = useState<{ kind: TaxPreparationKind; id?: string; status: string; rowCount?: number } | null>(null);
   const [exportBusy, setExportBusy] = useState(false);
   const [historyError, setHistoryError] = useState<string | null>(null);
+  // UStVA preparation and the fiscal-year close soft-lock months on the server; reload the month list after both.
+  const [periodRefresh, setPeriodRefresh] = useState(0);
   const historyRequestId = useRef(0);
   const mounted = useRef(true);
   const canMutate = permissionContextForRole(role).canMutate;
@@ -402,6 +405,7 @@ export default function SonderbuchungenWorkspace({ dataAdapter, role = 'admin' }
       setFeedback({ kind: 'success', text: result.status === 'duplicate' ? 'Diese Quelle wurde bereits gebucht. Der bestehende Lauf bleibt maßgeblich.' : 'Sonderbuchung wurde erfolgreich gebucht.' });
       setForm(initialForm());
       await refetchHistory();
+      setPeriodRefresh((value) => value + 1);
     } catch (error) {
       setFeedback({ kind: 'error', text: caughtDomainErrorMessage(error) || 'Sonderbuchung konnte nicht gespeichert werden.' });
     } finally {
@@ -430,6 +434,7 @@ export default function SonderbuchungenWorkspace({ dataAdapter, role = 'admin' }
       const rows = result.artifact.rows;
       setPreparedArtifact({ kind: result.artifact.kind, id: result.run?.id, status: result.artifact.status, rowCount: Array.isArray(rows) ? rows.length : undefined });
       await refetchHistory();
+      setPeriodRefresh((value) => value + 1);
     } catch (error) {
       setPreparedArtifact(null);
       setTaxError(error instanceof Error ? error.message : 'Vorbereitung konnte nicht erstellt werden.');
@@ -534,6 +539,7 @@ export default function SonderbuchungenWorkspace({ dataAdapter, role = 'admin' }
         </Card>
       </section>
 
+      <PeriodLockPanel dataAdapter={dataAdapter} canMutate={canMutate} refreshToken={periodRefresh} />
       <section aria-labelledby="source-run-history-heading">
         <Card padding="none" className="overflow-hidden">
           <CardHeader className={cardHeadClass} title={<span id="source-run-history-heading">Letzte Buchungsläufe</span>} />

@@ -16,6 +16,8 @@ export type CsvMapping = {
   externalIdColumn?: string;
   currencyColumn?: string;
   currencyExpected?: string; // e.g. "EUR"
+  /** PayPal/Stripe: the fee of the payment; it becomes its own money line next to the gross amount. */
+  feeColumn?: string;
 };
 
 export type CsvPreviewRow = {
@@ -30,9 +32,12 @@ export type CsvPreviewRow = {
     status?: 'pending' | 'booked';
     externalId?: string;
     currency?: string;
+    /** The fee as its own signed money line (always against the payment: a received payment pays a fee). */
+    fee?: number;
   };
   errors: string[];
   dedupHash?: string;
+  feeDedupHash?: string;
 };
 
 export type CsvPreviewResult = {
@@ -124,7 +129,9 @@ export const suggestedMappingFor = (profile: CsvProfile, headers: string[]): Csv
   if (profile === 'stripe') {
     return {
       dateColumn: pickHeader(headers, ['Created (UTC)', 'Created', 'Date']) ?? headers[0]!,
-      amountColumn: pickHeader(headers, ['Amount', 'Net', 'Gross']) ?? headers[0]!,
+      // Stripe's Amount is the gross charge; Net = Amount - Fee.
+      amountColumn: pickHeader(headers, ['Amount', 'Gross', 'Net']) ?? headers[0]!,
+      feeColumn: pickHeader(headers, ['Fee']),
       counterpartyColumn: pickHeader(headers, ['Customer', 'Source', 'Description']),
       purposeColumn: pickHeader(headers, ['Description', 'Type', 'ID']),
       externalIdColumn: pickHeader(headers, ['ID', 'Balance Transaction ID']),
@@ -135,7 +142,9 @@ export const suggestedMappingFor = (profile: CsvProfile, headers: string[]): Csv
   if (profile === 'paypal') {
     return {
       dateColumn: pickHeader(headers, ['Date', 'Datum']) ?? headers[0]!,
-      amountColumn: pickHeader(headers, ['Net', 'Net Amount', 'Amount', 'Gross']) ?? headers[0]!,
+      // The gross amount is what the customer paid (it settles the invoice); the fee is its own expense.
+      amountColumn: pickHeader(headers, ['Gross', 'Brutto', 'Amount', 'Net', 'Net Amount']) ?? headers[0]!,
+      feeColumn: pickHeader(headers, ['Fee', 'Gebühr']),
       counterpartyColumn: pickHeader(headers, ['Name', 'From Email Address', 'To Email Address', 'Payee Name']),
       purposeColumn: pickHeader(headers, ['Type', 'Item Title', 'Subject', 'Note', 'Description']),
       externalIdColumn: pickHeader(headers, ['Transaction ID', 'Transaction ID/Order ID']),
@@ -232,7 +241,7 @@ const parseDateToIso = (input: string): string | null => {
   return null;
 };
 
-const readFileDecoded = (filePath: string, encoding: 'utf8' | 'win1252'): { text: string; sha256: string } => {
+const readFileDecoded = (filePath: string, encoding: 'utf8' | 'win1252'): { text: string; sha256: string; bytes: Buffer } => {
   let buf: Buffer;
   try {
     buf = fs.readFileSync(filePath);
@@ -249,15 +258,15 @@ const readFileDecoded = (filePath: string, encoding: 'utf8' | 'win1252'): { text
     throw new Error(`Fehler beim Dekodieren der CSV-Datei: ${error instanceof Error ? error.message : String(error)}`);
   }
 
-  return { text, sha256: sha256Hex(buf) };
+  return { text, sha256: sha256Hex(buf), bytes: buf };
 };
 
 const parseCsvRecords = (params: {
   filePath: string;
   encoding: 'utf8' | 'win1252';
   delimiter?: string;
-}): { fileName: string; fileSha256: string; delimiter: string; headers: string[]; data: Record<string, string>[] } => {
-  const { text, sha256 } = readFileDecoded(params.filePath, params.encoding);
+}): { fileName: string; fileSha256: string; bytes: Buffer; delimiter: string; headers: string[]; data: Record<string, string>[] } => {
+  const { text, sha256, bytes } = readFileDecoded(params.filePath, params.encoding);
   const headerLine = firstNonEmptyLine(text);
   const delimiter = params.delimiter ?? detectDelimiter(headerLine);
 
@@ -280,6 +289,7 @@ const parseCsvRecords = (params: {
   return {
     fileName: path.basename(params.filePath),
     fileSha256: sha256,
+    bytes,
     delimiter,
     headers,
     data,
@@ -295,6 +305,9 @@ const buildRows = (params: {
   let valid = 0;
   let errors = 0;
   const rows: CsvPreviewRow[] = [];
+  // Identical lines of one file are separate payments (two coffees on one day). The first keeps the plain hash,
+  // so files imported before still match; the n-th twin gets "#n", so a later file holding them again matches too.
+  const occurrences = new Map<string, number>();
 
   for (let i = 0; i < Math.min(params.data.length, params.maxRows); i++) {
     const raw = params.data[i] ?? {};
@@ -310,6 +323,11 @@ const buildRows = (params: {
 
     const amount = parseGermanNumber(amountRaw);
     if (amount === null) rowErrors.push(`Invalid amount: "${amountRaw}"`);
+    const feeRaw = params.mapping.feeColumn ? String(raw[params.mapping.feeColumn] ?? '').trim() : '';
+    const feeValue = feeRaw ? parseGermanNumber(feeRaw) : 0;
+    if (feeValue === null) rowErrors.push(`Invalid fee: "${feeRaw}"`);
+    // PayPal lists the fee negative, Stripe positive; either way it runs against the payment.
+    const fee = amount && feeValue ? Math.round(-Math.sign(amount) * Math.abs(feeValue) * 100) / 100 : undefined;
 
     if (params.mapping.currencyExpected && currencyRaw) {
       if (currencyRaw.toUpperCase() !== params.mapping.currencyExpected.toUpperCase()) {
@@ -340,9 +358,11 @@ const buildRows = (params: {
       status,
       externalId: externalId || undefined,
       currency: currencyRaw || undefined,
+      fee,
     };
 
     let dedupHash: string | undefined;
+    let feeDedupHash: string | undefined;
     if (params.accountIdForDedupHash && parsedTx.date && typeof parsedTx.amount === 'number') {
       const key = [
         params.accountIdForDedupHash,
@@ -352,13 +372,17 @@ const buildRows = (params: {
         parsedTx.purpose ?? '',
         parsedTx.externalId ?? '',
       ].join('|');
-      dedupHash = sha256Hex(key);
+      const occurrence = occurrences.get(key) ?? 0;
+      occurrences.set(key, occurrence + 1);
+      const unique = occurrence ? `${key}|#${occurrence}` : key;
+      dedupHash = sha256Hex(unique);
+      if (fee) feeDedupHash = sha256Hex(`${unique}|fee`);
     }
 
     if (rowErrors.length === 0) valid++;
     else errors++;
 
-    rows.push({ rowIndex, raw, parsed: parsedTx, errors: rowErrors, dedupHash });
+    rows.push({ rowIndex, raw, parsed: parsedTx, errors: rowErrors, dedupHash, feeDedupHash });
   }
 
   return { rows, valid, errors };
@@ -414,7 +438,7 @@ export const commitCsv = (params: {
   delimiter?: string;
   profile?: CsvProfile | 'auto';
   mapping: CsvMapping;
-}): { fileName: string; fileSha256: string; profile: CsvProfile; rows: CsvPreviewRow[] } => {
+}): { fileName: string; fileSha256: string; bytes: Buffer; profile: CsvProfile; rows: CsvPreviewRow[] } => {
   const encoding = params.encoding ?? 'utf8';
   const parsed = parseCsvRecords({ filePath: params.filePath, encoding, delimiter: params.delimiter });
   const headers = parsed.headers;
@@ -428,5 +452,5 @@ export const commitCsv = (params: {
     accountIdForDedupHash: params.accountId,
   });
 
-  return { fileName: parsed.fileName, fileSha256: parsed.fileSha256, profile, rows: built.rows };
+  return { fileName: parsed.fileName, fileSha256: parsed.fileSha256, bytes: parsed.bytes, profile, rows: built.rows };
 };

@@ -928,6 +928,7 @@ export const importBatches = pgTable("import_batches", {
   createdAt: text("created_at"),
   rolledBackAt: text("rolled_back_at"),
   rollbackReason: text("rollback_reason"),
+  fileContent: bytea("file_content"),
 });
 
 export const templates = pgTable("templates", {

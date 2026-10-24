@@ -40,11 +40,18 @@ async function withDatabase<T>(
          VALUES ($1,$2,$3,'Customer','customer@example.test','2026-03-15','2026-03-31',119,'open','[]','[]','[]','posted',$4,$5,$6,$6)`,
         [id, tenantId, `RE-${n}`, JSON.stringify(snapshot), journalId, now],
       );
-      await database.query(
-        `INSERT INTO journal_entries (id,tenant_id,entry_number,posting_date,document_date,booking_text,reference,period,fiscal_year,status,source_type,source_key,created_at)
-         VALUES ($1,$2,$3,'2026-03-15','2026-03-15','Original invoice',$4,'2026-03',2026,'posted','outgoing_invoice',$5,$6)`,
-        [journalId, tenantId, n, `RE-${n}`, `${options.legacySourceKey ? 'outgoing_invoice' : 'outgoing-invoice'}:${id}`, now],
-      );
+      // The original posting with its lines in one transaction: the database enforces Soll = Haben at commit.
+      await database.transaction({}, async (tx) => {
+        await tx.query(
+          `INSERT INTO journal_entries (id,tenant_id,entry_number,posting_date,document_date,booking_text,reference,period,fiscal_year,status,source_type,source_key,created_at)
+           VALUES ($1,$2,$3,'2026-03-15','2026-03-15','Original invoice',$4,'2026-03',2026,'posted','outgoing_invoice',$5,$6)`,
+          [journalId, tenantId, n, `RE-${n}`, `${options.legacySourceKey ? 'outgoing_invoice' : 'outgoing-invoice'}:${id}`, now],
+        );
+        await tx.query(
+          `INSERT INTO journal_lines (id,tenant_id,entry_id,line_no,account_number,debit_amount,credit_amount) VALUES ($1,$2,$3,1,'1400',119,0),($4,$2,$3,2,'8400',0,100),($5,$2,$3,3,'1776',0,19)`,
+          [`${journalId}-1`, tenantId, journalId, `${journalId}-2`, `${journalId}-3`],
+        );
+      });
       await database.query(
         `INSERT INTO open_items (id,tenant_id,party_type,party_id,source_type,source_id,document_number,document_date,due_date,original_amount,allocated_amount,residual_amount,status,journal_entry_id,created_at,updated_at)
          VALUES ($1,$2,'debtor',$3,'outgoing_invoice',$4,$5,'2026-03-15','2026-03-31',119,0,119,'open',$6,$7,$7)`,
@@ -191,6 +198,6 @@ test('an audit failure rolls back the source journal and run when the repository
     await assert.rejects(() => repository.runClosingCommand(scope, sourceFact('audit')), /audit_log/);
     assert.equal(await count(database, 'accounting_source_runs'), 0);
     assert.equal(await count(database, 'journal_entries', `source_type='standalone_source'`), 0);
-    assert.equal(await count(database, 'journal_lines'), 0);
+    assert.equal(await count(database, 'journal_lines', `entry_id NOT LIKE 'invoice-journal-%'`), 0);
   });
 });

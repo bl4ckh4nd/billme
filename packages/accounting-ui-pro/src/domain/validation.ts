@@ -1,5 +1,5 @@
 import { BookingDraft, IssueCounts, Transaction, ValidationIssue } from '../types';
-import { BookingPolicy, isPostingDateClosed, requiresReceipt } from './policies';
+import { BookingPolicy, requiresReceipt } from './policies';
 
 function issue(
   code: ValidationIssue['code'],
@@ -39,13 +39,7 @@ export function validateBookingDraft(
     issues.push(issue('MISSING_BOOKING_TEXT', 'error', 'Buchungstext fehlt.', { fieldPath: 'bookingText' }));
   }
 
-  if (isPostingDateClosed(draft.postingDate, policy)) {
-    issues.push(
-      issue('POSTING_DATE_IN_CLOSED_PERIOD', 'error', 'Buchungsdatum liegt in einer gesperrten Periode.', {
-        fieldPath: 'postingDate',
-      }),
-    );
-  }
+  // Closed periods are decided by the server (accounting_periods); its draft validation reports them.
 
   let soll = 0;
   let haben = 0;

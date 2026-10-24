@@ -110,7 +110,7 @@ export const LiteCashPanel: React.FC = () => {
   return <Card className="mb-4">
     <div className="flex flex-wrap items-center justify-between gap-3"><p className="text-control text-muted">Barzahlungen und Zahlungen außerhalb des Bankimports mit Beleg erfassen.</p><Button onClick={() => start()}>Manuelle Buchung</Button></div>
     <details className="mt-3"><summary className="cursor-pointer text-control">Monate festschreiben ({closedPeriods.data?.length ?? 0} festgeschrieben)</summary>
-      <p className="mt-2 text-caption text-muted">Ein festgeschriebener Monat nimmt keine Barbuchungen, Zahlungen oder Bankzuordnungen mehr an (GoBD). Das lässt sich nicht rückgängig machen; Korrekturen gehören in einen offenen Monat.</p>
+      <p className="mt-2 text-caption text-muted">Ein festgeschriebener Monat nimmt keine manuellen Buchungen, Zahlungen, Bankumsätze, Bankzuordnungen, Importrücknahmen, EÜR-Zuordnungen und Belegänderungen mehr an. Rechnungen und Einstellungen sperrt die Festschreibung nicht. Das lässt sich nicht rückgängig machen; Korrekturen gehören in einen offenen Monat.</p>
       <div className="mt-2 flex flex-wrap items-end gap-2">
         <Input type="month" label="Monat" value={closingPeriod} max={localIsoDate().slice(0, 7)} onChange={(e) => setClosingPeriod(e.target.value)} />
         <Button variant="secondary" disabled={!closingPeriod || action.isPending} onClick={() => { setError(''); void action.mutateAsync(() => ipc.cash.closePeriod({ period: closingPeriod, reason: `Monat ${closingPeriod} festgeschrieben` })); }}>Festschreiben</Button>

@@ -4360,6 +4360,13 @@ const invoke = async <K extends IpcRouteKey>(key: K, args: IpcArgs<K>): Promise<
       } as IpcResult<K>;
     }
 
+    case 'pro:listAccountingPeriods': {
+      const { year } = args as IpcArgs<'pro:listAccountingPeriods'>;
+      return Array.from({ length: 12 }, (_, index) => ({ period: `${year}-${String(index + 1).padStart(2, '0')}`, status: 'open', entryCount: 0 })) as IpcResult<K>;
+    }
+    case 'pro:setAccountingPeriodStatus':
+      throw new Error('Perioden lassen sich in der Demo nicht sperren.');
+
     case 'pro:listAccountingSourceRuns':
       return [...mockAccountingSourceRuns]
         .sort((a, b) => b.createdAt.localeCompare(a.createdAt)) as IpcResult<K>;

@@ -36,8 +36,11 @@ test('rule list derives hit count and last hit from posted bank bookings', async
       await run(`INSERT INTO booking_drafts (id, tenant_id, transaction_id, workflow_status, draft_json, updated_at) VALUES ($1, $2, $3, $4, '{}', $5)`, [`draft-${id}`, tenant, `tx-${id}`, posted ? 'posted' : 'approved', now]);
       if (!posted) return;
       entryNo += 1;
-      await run(`INSERT INTO journal_entries (id, tenant_id, entry_number, posting_date, booking_text, period, fiscal_year, status, created_at, source_draft_id) VALUES ($1, $2, $3, $4, 'Bank', $5, 2026, 'posted', $6, $7)`, [`je-${id}`, tenant, entryNo, date, date.slice(0, 7), now, `draft-${id}`]);
-      await run(`INSERT INTO journal_lines (id, tenant_id, entry_id, line_no, account_number, debit_amount, credit_amount) VALUES ($1, $2, $3, 1, $4, 50, 0), ($5, $2, $3, 2, '1200', 0, 50)`, [`jl-${id}-1`, tenant, `je-${id}`, account, `jl-${id}-2`]);
+      // Entry and lines in one transaction: the database checks Soll = Haben at commit.
+      await database.transaction({}, async (tx) => {
+        await tx.query(`INSERT INTO journal_entries (id, tenant_id, entry_number, posting_date, booking_text, period, fiscal_year, status, created_at, source_draft_id) VALUES ($1, $2, $3, $4, 'Bank', $5, 2026, 'posted', $6, $7)`, [`je-${id}`, tenant, entryNo, date, date.slice(0, 7), now, `draft-${id}`]);
+        await tx.query(`INSERT INTO journal_lines (id, tenant_id, entry_id, line_no, account_number, debit_amount, credit_amount) VALUES ($1, $2, $3, 1, $4, 50, 0), ($5, $2, $3, 2, '1200', 0, 50)`, [`jl-${id}-1`, tenant, `je-${id}`, account, `jl-${id}-2`]);
+      });
     };
     await booking('a', 'Telekom GmbH', '4920', '2026-03-10');
     await booking('b', 'Telekom GmbH', '4920', '2026-05-02');

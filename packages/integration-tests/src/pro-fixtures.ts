@@ -1,14 +1,11 @@
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
-import { join } from 'node:path';
-import { PgliteServerDatabase } from '@billme/server-data';
 import type { ProHarness } from './harness.js';
 import { draftInvoice, issueInvoice, today, type DocumentInput } from './fixtures.js';
 
 /**
  * Helpers for the Pro accounting suites. They go through the same HTTP surface
- * the Pro renderer uses; the only back door is `withDatabase`, for the one
- * state no route can produce (a closed accounting period).
+ * the Pro renderer uses.
  */
 export type JournalLine = {
   id: string;
@@ -105,7 +102,8 @@ export const assertLedgerConsistent = async (h: ProHarness): Promise<void> => {
   const balances = await get<Array<{ accountNumber: string; closingBalance: number; debitTurnover: number; creditTurnover: number }>>(h, '/accounting/balances');
   assert.equal(balances.reduce((sum, row) => sum + cents(row.closingBalance), 0), 0, 'closing balances must net to zero');
   const expected = new Map<string, number>();
-  for (const entry of entries) for (const line of entry.lines) expected.set(line.accountNumber, (expected.get(line.accountNumber) ?? 0) + cents(line.debitAmount) - cents(line.creditAmount));
+  // Balances read the running journal; year-end close and carry-forward entries are not part of it.
+  for (const entry of entries.filter((candidate) => candidate.sourceType !== 'fiscal_close' && candidate.sourceType !== 'carry_forward')) for (const line of entry.lines) expected.set(line.accountNumber, (expected.get(line.accountNumber) ?? 0) + cents(line.debitAmount) - cents(line.creditAmount));
   for (const row of balances) assert.equal(cents(row.closingBalance), expected.get(row.accountNumber) ?? 0, `balance of ${row.accountNumber} disagrees with the journal`);
 };
 
@@ -184,21 +182,12 @@ export const payOpenItem = (h: ProHarness, item: Pick<OpenItem, 'id' | 'partyId'
     },
   });
 
-/** Opens the Pro data directory directly. Only for state with no HTTP route (closed periods). Stop the backend first. */
-export const withDatabase = async <T>(userDataPath: string, work: (database: PgliteServerDatabase) => Promise<T>): Promise<T> => {
-  const database = await PgliteServerDatabase.open(join(userDataPath, 'billme-pro-pglite'));
-  try { return await work(database); } finally { await database.close(); }
-};
-
-export const setPeriodStatus = (database: PgliteServerDatabase, tenantId: string, period: string, status: 'open' | 'soft_locked' | 'closed') => {
-  const stamp = new Date().toISOString();
-  const end = new Date(Date.UTC(Number(period.slice(0, 4)), Number(period.slice(5, 7)), 0)).toISOString().slice(0, 10);
-  return database.query(
-    `INSERT INTO accounting_periods (id,tenant_id,period,fiscal_year,status,starts_at,ends_at,created_at,updated_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$8)
-     ON CONFLICT (tenant_id,period) DO UPDATE SET status=EXCLUDED.status,updated_at=EXCLUDED.updated_at`,
-    [randomUUID(), tenantId, period, Number(period.slice(0, 4)), status, `${period}-01`, end, stamp],
-  );
-};
+export type AccountingPeriod = { period: string; status: 'open' | 'soft_locked' | 'closed'; fiscalYear?: number; entryCount: number; updatedAt?: string };
+export const periods = (h: ProHarness, year: number) => get<AccountingPeriod[]>(h, `/accounting/periods?year=${year}`);
+export const statusOf = async (h: ProHarness, period: string) => (await periods(h, Number(period.slice(0, 4)))).find((row) => row.period === period)!.status;
+/** Soft-lock, reopen or festschreiben one month through the period route. */
+export const setPeriod = (h: ProHarness, period: string, status: AccountingPeriod['status'], reason: string | null = 'Monat geprüft') =>
+  h.raw('POST', `/accounting/periods/${period}/status`, reason === null ? { status } : { status, reason });
 
 /** Raw bytes of a download. `raw()` decodes as UTF-8, which would corrupt a cp1252 DATEV file. */
 export const download = async (h: ProHarness, path: string) => {

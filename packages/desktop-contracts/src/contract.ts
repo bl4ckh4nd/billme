@@ -448,6 +448,7 @@ const financeImportPreviewResultSchema = z.object({
         status: z.enum(['pending', 'booked']).optional(),
         externalId: z.string().optional(),
         currency: z.string().optional(),
+        fee: z.number().optional(),
       }),
       errors: z.array(z.string()),
       dedupHash: z.string().optional(),
@@ -464,6 +465,8 @@ const financeImportPreviewResultSchema = z.object({
 const financeImportCommitResultSchema = z.object({
   batchId: z.string(),
   imported: z.number().int(),
+  /** Lines imported before as pending ("vorgemerkt") that the bank has booked since. */
+  updated: z.number().int().optional(),
   skipped: z.number().int(),
   errors: z.array(z.object({ rowIndex: z.number().int(), message: z.string() })),
   fileSha256: z.string(),

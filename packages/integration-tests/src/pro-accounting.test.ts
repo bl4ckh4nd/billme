@@ -30,7 +30,8 @@ import {
  *   note that posts a different amount than the document, a source cancelled
  *   twice (the revenue reversed twice), an open item left open
  * - document reversal: reversing a document that has payments, reversing it
- *   twice, a journal reversal that bypasses the document owner
+ *   twice, a journal reversal that bypasses the document owner, a reversal
+ *   that loses the document reference of the original (DATEV Belegfeld)
  * - manual booking: an unbalanced / one-sided / zero / sub-cent entry, an
  *   unknown or missing account, a bad date or a period that does not match it,
  *   a draft approved or posted by the client, floating point false alarms on
@@ -382,7 +383,9 @@ describe('pro accounting: setup and posting of issued invoices', () => {
       const reversal = (await journal(h)).find((entry) => entry.id === response.body.reversalEntryId)!;
       assert.deepEqual(shape(reversal), [['1400', 0, GROSS], ['8400', 200, 0], ['1776', 38, 0]]);
       assert.equal(reversal.postingDate, today());
-      assert.equal(reversal.reference, 'Falsch gebucht');
+      assert.equal(reversal.reference, original.reference, 'the reversal keeps the document reference (invoice number) of the original');
+      assert.equal(reversal.reference, source.number);
+      assert.equal(reversal.bookingText, `Storno ${original.entryNumber}: Falsch gebucht`, 'the reason is the booking text');
       assert.equal((await get<JournalEntry>(h, `/accounting/journal/${original.id}`)).status, 'reversed');
       assert.equal((await invoiceOf(h, source.id)).status, 'cancelled');
       assert.equal((await h.raw('POST', '/accounting/documents/reverse', { reason: 'nochmal', documentType: 'outgoing_invoice', documentId: source.id })).status, 409, 'a reversed document cannot be reversed again');
@@ -617,8 +620,8 @@ describe('pro accounting: setup and posting of issued invoices', () => {
       assert.equal(response.status, 200, response.text);
       const reversal = (await journal(h)).find((entry) => entry.id === response.body.reversalEntryId)!;
       assert.deepEqual(shape(reversal), [['4930', 0, 119], ['1200', 119, 0]]);
-      assert.deepEqual([reversal.postingDate, reversal.period, reversal.reference, reversal.sourceType], ['2026-04-15', '2026-04', 'Falsch kontiert', 'reversal']);
-      assert.match(reversal.bookingText, /^Storno \d+: /);
+      assert.deepEqual([reversal.postingDate, reversal.period, reversal.reference, reversal.sourceType], ['2026-04-15', '2026-04', original.reference, 'reversal']);
+      assert.equal(reversal.bookingText, `Storno ${original.entryNumber}: Falsch kontiert`);
       const stored = await get<JournalEntry>(h, `/accounting/journal/${original.id}`);
       assert.equal(stored.status, 'reversed');
       assert.equal(stored.reversedEntryId, reversal.id);

@@ -17,7 +17,10 @@ import { bankAccount, configureLite, importBankRows, issueDated, line, pay } fro
  *   payment is counted whole; refunds do not reduce income; unpaid invoices,
  *   drafts, pending bank rows or rows of another year leak in; a regularly
  *   recurring payment flowing within 10 days of the year end (and due then) not
- *   moved to the year it is for (§11 EStG), or a one-off payment moved
+ *   moved to the year it is for (§11 EStG), or a one-off payment moved; a
+ *   moved payment listed for its year but dropped from that year's report sums
+ *   (and so missing from both years); a bank line (VAT prepayment, standing
+ *   order) never moved
  * - net/VAT split: gross booked as income, a mixed 19/7 % invoice split with
  *   the wrong ratio, vereinnahmte USt (KZ 140) / gezahlte Vorsteuer (KZ 185)
  *   missing or doubled, Kleinunternehmer showing VAT
@@ -32,13 +35,24 @@ import { bankAccount, configureLite, importBankRows, issueDated, line, pay } fro
  *   rules applied, a deleted rule still suggesting, counterparty memory wrong
  * - facts: private withdrawals counted as expense, splits that do not add up,
  *   a replayed idempotency key creating a second fact
+ * - Geldtransit / Privat (Lite): a transfer between own accounts counted as
+ *   income/expense, blocking the year as "unclassified" or raising a report
+ *   warning; the two legs of a transfer not offered as "Geldtransit?"; a leg
+ *   without its counterpart going unnoticed; Privatentnahme and Privateinlage
+ *   lumped into one "excluded" bucket, given an EÜR line, or set on the wrong
+ *   direction (an Entnahme coming in); a later line choice leaving the old
+ *   neutral kind behind
+ * - tax payments (Lite suggestions): a USt-Erstattung suggested as collected VAT
+ *   (Kz 140 instead of 141), a USt-Vorauszahlung as other expense (183 instead
+ *   of 186), Einkommensteuer/Soli/Kirchensteuer as a business expense instead of
+ *   private, "ust" found inside unrelated words (August, Zustellung)
  * - CSV export: wrong decimal format, non-exportable rows, totals that differ
  *   from the report
  * - boundaries: unsupported tax year, partial-year ranges, no EÜR profile,
  *   no token
  * - VAT preparation: a Soll/Ist switch rewriting months before it took effect;
  *   Soll vs. Ist recognised in the wrong month, partial
- *   payments / refunds / overpayments, cancellations and credit notes not
+ *   payments / refunds, cancellations and credit notes not
  *   netting out, drafts reported, reverse charge / Kleinunternehmer / export
  *   taxed, input VAT from unreviewed or file-less receipts, double input VAT
  *   for instalments, spreadsheet formula injection in the CSV, bad periods
@@ -48,7 +62,11 @@ import { bankAccount, configureLite, importBankRows, issueDated, line, pay } fro
  * - persistence: classifications, rules and reports changing after a restart
  * - DATEV export (EÜR → Buchungsstapel): a file without consultant/client
  *   number, a range across two fiscal years, an unclassified or unmapped item
- *   silently dropped, private/excluded items exported, the wrong account for
+ *   silently dropped; private withdrawals/contributions and Geldtransit silently
+ *   left out (the money account no longer matches the statement) instead of
+ *   booked to 1800/1890 (SKR03) or 2100/2180 (SKR04) and 1360/1460; an old
+ *   "excluded" item silently dropped; a manual entry without a bank line
+ *   silently booked as Kasse; the wrong account for
  *   the chart or the VAT rate, a BU key on an Automatikkonto (or none on a plain
  *   account), cash entries booked against the bank, amounts with a dot, a
  *   Belegdatum other than TTMM, UTF-8 instead of CP1252, settings.datev lost on save
@@ -728,6 +746,35 @@ describe('EÜR', () => {
     assert.ok(y2026.some(([id]) => id === oneOff.id) && !y2025.some(([id]) => id === oneOff.id), 'a one-off payment stays in the year it flowed');
     assert.ok(y2026.some(([id]) => id === late.id), 'due outside the 10 days: the rule does not apply');
     assert.ok(y2026.some(([id]) => id === 'rent-jan') && !y2025.some(([id]) => id === 'rent-jan'), 'January rent paid 29 December counts in 2026');
+
+    // The list is not enough: the report of the year the money is for must count it, the other year must not.
+    const listed = async (year: number) => own.api.eur.listItems({ taxYear: year } as never) as Promise<Array<{ sourceType: 'invoice' | 'manual' | 'transaction'; sourceId: string; amountNet: number; date: string; taxYear?: number }>>;
+    const sub = (await listed(2025)).find((item) => item.sourceId.startsWith(subscription.id))!;
+    const rent = (await listed(2026)).find((item) => item.sourceId === 'rent-jan')!;
+    assert.equal(sub.date, '2026-01-04', 'the item keeps the real payment date');
+    assert.equal(rent.date, '2025-12-29');
+    const put = (item: { sourceType: string; sourceId: string }, taxYear: number, code: string) =>
+      own.raw('PUT', '/reports/eur/classifications', { sourceType: item.sourceType, sourceId: item.sourceId, taxYear, eurLineId: YEAR_LINE(taxYear, code), reason: 'Beleg geprüft' });
+    assert.equal((await put(sub, 2025, '112')).status, 200);
+    assert.equal((await put(rent, 2026, '150')).status, 200);
+    const [r2025, r2026] = [await own.api.eur.getReport({ taxYear: 2025 }), await own.api.eur.getReport({ taxYear: 2026 })];
+    assert.equal(totalOf(r2025, '112', 2025), sub.amountNet, '2025 counts the December subscription paid on 4 January');
+    assert.equal(totalOf(r2026, '150', 2026), 500, '2026 counts the January rent paid on 29 December');
+    assert.equal(totalOf(r2025, '150', 2025), 0, 'the rent is not in 2025 as well');
+    assert.ok(!(await listed(2026)).some((item) => item.sourceId === sub.sourceId), 'and not in 2026');
+    assert.equal(sub.taxYear, 2025, 'the item says which year it counts in');
+    assert.equal(rent.taxYear, 2026);
+  });
+
+  test('the 10-day rule for a bank line: the December VAT prepayment paid on 8 January belongs to the year it is for', { todo: 'BUG: bank lines carry no "regelmäßig wiederkehrend" marker, so a classification for the previous year is refused (EUR_SOURCE_NOT_FOUND) and the payment counts in the year it flowed' }, async (t) => {
+    const own = await startLite(t, 'reports-ten-day-bank');
+    await configureLite(own.api);
+    await own.api.accounts.upsert({ account: bankAccount('bank-ten-day') } as never);
+    await importBankRows(own.api, 'bank-ten-day', [['2026-01-08', -1900, 'Finanzamt', 'USt-VA 12/2025']]);
+    const tx = (await own.api.transactions.list({} as never)).find((row) => row.counterparty === 'Finanzamt')!;
+    const classified = await own.raw('PUT', '/reports/eur/classifications', { sourceType: 'transaction', sourceId: tx.id, taxYear: 2025, eurLineId: YEAR_LINE(2025, '186'), reason: 'USt-Vorauszahlung Dezember' });
+    assert.equal(classified.status, 200, classified.text);
+    assert.equal(totalOf(await own.api.eur.getReport({ taxYear: 2025 }), '186', 2025), 1900);
   });
 
   describe('Kleinunternehmer (§ 19 UStG)', () => {
@@ -809,6 +856,97 @@ describe('EÜR', () => {
   });
 });
 
+describe('Geldtransit, Privat und Steuerzahlungen (Lite)', () => {
+  let h: LiteHarness;
+  const giro = 'bank-giro';
+  const tagesgeld = 'bank-tagesgeld';
+  const items = () => h.api.eur.listItems({ taxYear: 2026 } as never) as Promise<Array<Record<string, any>>>;
+  const itemOf = async (purpose: string) => {
+    const found = (await items()).find((item) => item.purpose === purpose);
+    assert.ok(found, `item ${purpose} not found`);
+    return found;
+  };
+  const classify = (sourceId: string, body: Record<string, unknown>, sourceType = 'transaction') =>
+    h.raw('PUT', '/reports/eur/classifications', { sourceType, sourceId, taxYear: 2026, reason: 'Kontoauszug geprüft', ...body });
+
+  before(async () => {
+    h = await startLite(null, 'reports-transit');
+    await configureLite(h.api);
+    await h.api.accounts.upsert({ account: bankAccount(giro) } as never);
+    await h.api.accounts.upsert({ account: bankAccount(tagesgeld) } as never);
+    await importBankRows(h.api, giro, [
+      ['2026-06-01', -1000, 'Max Muster', 'Umbuchung auf Tagesgeld'],
+      ['2026-06-10', -400, 'Max Muster', 'Übertrag Sparkonto'],
+      ['2026-06-20', -250, 'Max Muster', 'Privat'],
+      ['2026-06-21', 300, 'Max Muster', 'Einlage'],
+      ['2026-06-25', 840, 'Finanzamt Musterstadt', 'Erstattung Umsatzsteuer 05/2026'],
+      ['2026-06-26', -620, 'Finanzamt Musterstadt', 'USt-Vorauszahlung 05/2026'],
+      ['2026-06-27', -900, 'Finanzamt Musterstadt', 'Einkommensteuer Vorauszahlung II/2026'],
+      ['2026-06-28', -35, 'Finanzamt Musterstadt', 'Steuernummer 12/345/67890'],
+      ['2026-08-01', -15, 'Kunst AG', 'Zustellung August'],
+    ]);
+    await importBankRows(h.api, tagesgeld, [['2026-06-02', 1000, 'Max Muster', 'Umbuchung vom Giro']]);
+  });
+  after(async () => { await h.close(); });
+
+  test('the two legs of a transfer between own accounts are suggested as Geldtransit; a single leg is not', async () => {
+    const out = await itemOf('Umbuchung auf Tagesgeld');
+    const into = await itemOf('Umbuchung vom Giro');
+    assert.deepEqual([out.suggestedKind, into.suggestedKind], ['transit', 'transit']);
+    assert.match(out.suggestionReason ?? '', /Gegenbuchung/);
+    assert.notEqual((await itemOf('Übertrag Sparkonto')).suggestedKind, 'transit', 'no counterpart, no pair');
+  });
+
+  test('a Geldtransit counts nowhere, is no open item, raises no warning; a leg without its counterpart gets a hint', async () => {
+    const before = await h.api.eur.getReport({ taxYear: 2026 });
+    const out = await itemOf('Umbuchung auf Tagesgeld');
+    const into = await itemOf('Umbuchung vom Giro');
+    const lone = await itemOf('Übertrag Sparkonto');
+    for (const item of [out, into, lone]) assert.equal((await classify(item.sourceId, { kind: 'transit' })).status, 200);
+    const after = await h.api.eur.getReport({ taxYear: 2026 });
+    assert.deepEqual(after.summary, before.summary, 'no income, no expense');
+    assert.equal(after.unclassifiedCount, before.unclassifiedCount - 3);
+    assert.deepEqual(after.warnings, before.warnings, 'the year is not blocked by a warning');
+    const listed = await items();
+    const byPurpose = (purpose: string) => listed.find((item) => item.purpose === purpose)!;
+    assert.deepEqual([byPurpose('Umbuchung auf Tagesgeld').kind, byPurpose('Umbuchung vom Giro').kind], ['transit', 'transit']);
+    assert.equal(byPurpose('Umbuchung auf Tagesgeld').transitHint, undefined);
+    assert.match(byPurpose('Übertrag Sparkonto').transitHint ?? '', /Gegenstück/);
+    assert.ok((await h.api.eur.listItems({ taxYear: 2026, status: 'classified' } as never)).some((item: any) => item.sourceId === lone.sourceId));
+  });
+
+  test('Privatentnahme and Privateinlage are separate, neutral, and only in their direction; a line later removes the kind', async () => {
+    const before = await h.api.eur.getReport({ taxYear: 2026 });
+    const withdrawal = await itemOf('Privat');
+    const contribution = await itemOf('Einlage');
+    assert.equal((await classify(withdrawal.sourceId, { kind: 'private-contribution' })).status, 400, 'money going out is no Einlage');
+    assert.equal((await classify(contribution.sourceId, { kind: 'private-withdrawal' })).status, 400, 'money coming in is no Entnahme');
+    assert.equal((await classify(withdrawal.sourceId, { kind: 'private-withdrawal', eurLineId: YEAR_LINE(2026, '183') })).status, 400, 'a neutral kind has no EÜR line');
+    assert.equal((await classify(withdrawal.sourceId, { kind: 'private-withdrawal' })).status, 200);
+    assert.equal((await classify(contribution.sourceId, { kind: 'private-contribution' })).status, 200);
+    const after = await h.api.eur.getReport({ taxYear: 2026 });
+    assert.deepEqual(after.summary, before.summary);
+    assert.equal(after.unclassifiedCount, before.unclassifiedCount - 2);
+    assert.deepEqual([(await itemOf('Privat')).kind, (await itemOf('Einlage')).kind], ['private-withdrawal', 'private-contribution']);
+    assert.equal((await classify(withdrawal.sourceId, { eurLineId: YEAR_LINE(2026, '183') })).status, 200);
+    const relined = await itemOf('Privat');
+    assert.equal(relined.kind, undefined, 'the line replaces the Entnahme');
+    assert.equal((await h.api.eur.getReport({ taxYear: 2026 })).summary.expenseTotal, money(before.summary.expenseTotal + 250));
+    assert.equal((await classify(withdrawal.sourceId, { kind: 'private-withdrawal' })).status, 200, 'and back');
+  });
+
+  test('tax payments: USt refund → Kz 141, USt prepayment → Kz 186, income tax → private, an unknown Finanzamt payment → no guess', async () => {
+    assert.equal((await itemOf('Erstattung Umsatzsteuer 05/2026')).suggestedLineId, YEAR_LINE(2026, '141'));
+    assert.equal((await itemOf('USt-Vorauszahlung 05/2026')).suggestedLineId, YEAR_LINE(2026, '186'));
+    const incomeTax = await itemOf('Einkommensteuer Vorauszahlung II/2026');
+    assert.deepEqual([incomeTax.suggestedLineId, incomeTax.suggestedKind], [undefined, 'private-withdrawal']);
+    const unknown = await itemOf('Steuernummer 12/345/67890');
+    assert.equal(unknown.suggestedLineId, undefined);
+    assert.match(unknown.suggestionReason ?? '', /Finanzamt/);
+    assert.notEqual((await itemOf('Zustellung August')).suggestedLineId, YEAR_LINE(2026, '186'), '"ust" inside a word is no tax payment');
+  });
+});
+
 describe('VAT preparation', () => {
   let h: LiteHarness;
   const account = 'bank-vat';
@@ -839,12 +977,13 @@ describe('VAT preparation', () => {
     h = await startLite(null, 'reports-vat');
     await configureLite(h.api, { vatMethod: 'ist' });
     await h.api.accounts.upsert({ account: bankAccount(account) } as never);
-    // Q2: 100 @19 % + 100 @7 %, paid in instalments, overpaid, then refunded.
+    // Q2: 100 @19 % + 100 @7 %, paid in instalments, then partly refunded. An overpayment cannot be recorded
+    // by hand (it is a credit the customer is owed, see invoices.test.ts).
     const mixed = await issueDated(h.api, { client: 'Mixed GmbH', date: '2026-04-01', servicePeriod: '2026-04-01', items: [line('Beratung', 100, 19), line('Fachbuch', 100, 7)] });
     ids.mixed = mixed.id;
     await pay(h.api, mixed.id, 113, '2026-04-30');
-    await pay(h.api, mixed.id, 123, '2026-05-03');
-    await pay(h.api, mixed.id, -10, '2026-06-01', 'refund');
+    await assert.rejects(pay(h.api, mixed.id, 123, '2026-05-03'), /Guthaben/);
+    await pay(h.api, mixed.id, 113, '2026-05-03');
     await pay(h.api, mixed.id, -56.5, '2026-06-02', 'refund');
     // July: every special tax treatment once (net 100 … 700).
     const meta = { taxRuleConfirmed: true, buyerVatId: 'ATU12345678', buyerCountryCode: 'AT', sellerCountryCode: 'DE' };
@@ -914,14 +1053,13 @@ describe('VAT preparation', () => {
       assert.deepEqual(april.sources.map((src) => [src.sourceType, src.sourceId, src.date, src.code, src.basisCents, src.taxCents]).sort(), [['invoice', ids.mixed, '2026-04-30', '81', 5000, 950], ['invoice', ids.mixed, '2026-04-30', '86', 5000, 350]].sort(), 'one source row per rate, dated by the payment');
     });
 
-    test('an overpayment adds no VAT, is flagged, and its refund nets out in the month it is paid back', async () => {
+    test('the second instalment is taxed in its month, and a refund nets out in the month it is paid back', async () => {
       const may = await month(5);
-      assert.equal(may.outputVatCents, 1300, 'only the remaining 113 of the invoice is taxed');
-      assert.deepEqual(may.reconciliation, { paymentCashCents: 12300, paymentRecognizedCents: 11300, paymentResidualCents: 1000 });
-      assert.ok(may.issues.some((i) => i.code === 'PAYMENT_RESIDUAL' && i.sourceId === ids.mixed));
-      assert.equal(may.preparationComplete, false);
+      assert.equal(may.outputVatCents, 1300, 'the remaining 113 of the invoice is taxed');
+      assert.deepEqual(may.reconciliation, { paymentCashCents: 11300, paymentRecognizedCents: 11300, paymentResidualCents: 0 });
+      assert.ok(!may.issues.some((i) => i.code === 'PAYMENT_RESIDUAL'));
       const june = await month(6);
-      assert.equal(june.outputVatCents, -650, 'the 56.50 refund reverses VAT, the 10.00 refund of the overpayment does not');
+      assert.equal(june.outputVatCents, -650, 'the 56.50 refund reverses VAT');
       assert.equal(position(june, '81')?.taxCents, -475);
       assert.equal(position(june, '86')?.taxCents, -175);
       assert.equal(june.payableCents, -650, 'a negative Zahllast is a refund claim');
@@ -930,7 +1068,7 @@ describe('VAT preparation', () => {
     test('a quarter and the year add up the months', async () => {
       const q2 = await report('2026-04-01', '2026-06-30');
       assert.equal(q2.outputVatCents, 1300 + 1300 - 650);
-      assert.equal(q2.reconciliation.paymentCashCents, 11300 + 12300 - 6650);
+      assert.equal(q2.reconciliation.paymentCashCents, 11300 + 11300 - 5650);
       const year = await report('2026-01-01', '2026-12-31');
       assert.ok(year.outputVatCents >= q2.outputVatCents);
     });
@@ -1406,7 +1544,13 @@ describe('DATEV export (EÜR → Buchungsstapel)', () => {
       ['2026-03-15', -200, 'Max Muster', 'Privatentnahme'],
       ['2026-03-16', -80, 'Unbekannt GmbH', 'Ohne Beleg'],
       ['2026-03-17', -45, 'Pendler AG', 'Zweitwohnung'],
+      ['2026-03-19', -20, 'Alt GmbH', 'Früher ausgeschlossen'],
+      ['2026-03-21', -300, 'Max Muster', 'Umbuchung Tagesgeld'],
+      ['2026-03-23', 150, 'Max Muster', 'Einlage'],
+      ['2026-05-05', -100, 'Geldautomat', 'Barabhebung'],
     ]);
+    await h.api.accounts.upsert({ account: bankAccount(`${account}-2`) } as never);
+    await importBankRows(h.api, `${account}-2`, [['2026-03-22', 300, 'Max Muster', 'Umbuchung vom Giro']]);
     const tx = async (counterparty: string) => (await h.api.transactions.list({} as never)).find((t) => t.counterparty === counterparty)!.id;
     const classify = (sourceType: 'transaction' | 'invoice' | 'manual', sourceId: string, code: string | undefined, extra: Record<string, unknown> = {}) =>
       h.raw('PUT', '/reports/eur/classifications', { sourceType, sourceId, taxYear: 2026, eurLineId: code ? YEAR_LINE(2026, code) : undefined, reason: 'Beleg geprüft', ...extra });
@@ -1415,10 +1559,20 @@ describe('DATEV export (EÜR → Buchungsstapel)', () => {
     ids.private = await tx('Max Muster');
     ids.unclassified = await tx('Unbekannt GmbH');
     ids.unmapped = await tx('Pendler AG');
+    ids.legacy = await tx('Alt GmbH');
+    ids.transitOut = (await h.api.transactions.list({} as never)).find((t) => t.purpose === 'Umbuchung Tagesgeld')!.id;
+    ids.transitIn = (await h.api.transactions.list({} as never)).find((t) => t.purpose === 'Umbuchung vom Giro')!.id;
+    ids.contribution = (await h.api.transactions.list({} as never)).find((t) => t.purpose === 'Einlage')!.id;
+    ids.atm = await tx('Geldautomat');
     for (const [sourceId, code, extra] of [
       [ids.income, '112', { vatMode: 'default', vatRate: 19 }],
       [ids.hoster, '228', { vatMode: 'default', vatRate: 19 }],
-      [ids.private, undefined, { excluded: true }],
+      [ids.private, undefined, { kind: 'private-withdrawal' }],
+      [ids.contribution, undefined, { kind: 'private-contribution' }],
+      [ids.transitOut, undefined, { kind: 'transit' }],
+      [ids.transitIn, undefined, { kind: 'transit' }],
+      // An item excluded before Privat and Geldtransit had their own kinds: the export must not drop it silently.
+      [ids.legacy, undefined, { excluded: true }],
       // Kz 152 (doppelte Haushaltsführung) has no standard account in the map.
       [ids.unmapped, '152', {}],
     ] as const) assert.equal((await classify('transaction', sourceId, code, extra)).status, 200);
@@ -1432,6 +1586,9 @@ describe('DATEV export (EÜR → Buchungsstapel)', () => {
     await h.api.cash.saveEntry({ entry: { id: 'cash-verkauf', cashDate: '2026-05-03', amountCents: 4000, currency: 'EUR', flowType: 'income', counterparty: 'Laufkunde', purpose: 'Verkauf bar' }, reason: 'Barverkauf' } as never);
     assert.equal((await classify('manual', 'cash-buero', '183', { vatMode: 'default', vatRate: 19 })).status, 200);
     assert.equal((await classify('manual', 'cash-verkauf', '112', { vatMode: 'default', vatRate: 19 })).status, 200);
+    // Barabhebung: the bank line and the cash entry are one Geldtransit.
+    await h.api.cash.saveEntry({ entry: { id: 'cash-atm', cashDate: '2026-05-05', amountCents: 10000, currency: 'EUR', flowType: 'income', counterparty: 'Bank', purpose: 'Barabhebung' }, reason: 'Barabhebung' } as never);
+    await h.api.cash.matchEntry({ id: 'cash-atm', transactionId: ids.atm, expectedCashDate: '2026-05-05', transit: true, reason: 'Barabhebung' } as never);
   });
   after(async () => { await h.close(); });
 
@@ -1464,33 +1621,39 @@ describe('DATEV export (EÜR → Buchungsstapel)', () => {
     assert.equal(heading!.split(';').length, 125);
 
     const rows = rowsOf(bytes);
-    assert.equal(rows.length, 5);
-    assert.equal(result.rowCount, 5);
+    assert.equal(rows.length, 8);
+    assert.equal(result.rowCount, 8);
     const [income] = byGegenkonto(rows, '8400').filter((row) => row[6] === '1200');
     assert.deepEqual([income![0], income![1], income![6], income![7], income![8], income![9]], ['1190,00', '"S"', '1200', '8400', '', '1003'], 'Erlöse 19 % is an Automatikkonto: no BU key; bank Soll');
     const [hoster] = byGegenkonto(rows, '4806');
     assert.deepEqual([hoster![0], hoster![1], hoster![6], hoster![8], hoster![9]], ['59,50', '"H"', '1200', '"0009"', '1203'], 'EDV-Kosten with BU 9 (19 % Vorsteuer), bank Haben');
     const [book] = byGegenkonto(rows, '8300');
     assert.deepEqual([book![0], book![6], book![8], book![9], book![10]], ['107,00', '1200', '', '2003', `"${ids.invoiceNumber}"`], 'a 7 % invoice goes to Erlöse 7 %, Belegfeld 1 is the invoice number');
-    const [office] = byGegenkonto(rows, '4900');
-    assert.deepEqual([office![0], office![1], office![6], office![8], office![9]], ['30,00', '"H"', '1000', '"0009"', '0205'], 'a cash-book entry is booked against Kasse 1000');
-    const cashIncome = byGegenkonto(rows, '8400').find((row) => row[6] === '1000');
-    assert.equal(cashIncome?.[0], '40,00');
+    const [withdrawal] = byGegenkonto(rows, '1800');
+    assert.deepEqual([withdrawal![0], withdrawal![1], withdrawal![6], withdrawal![8]], ['200,00', '"H"', '1200', ''], 'Privatentnahme: 1800 against the bank, no BU key');
+    const [contribution] = byGegenkonto(rows, '1890');
+    assert.deepEqual([contribution![0], contribution![1], contribution![6]], ['150,00', '"S"', '1200'], 'Privateinlage: 1890');
+    const transit = byGegenkonto(rows, '1360');
+    assert.deepEqual(transit.map((row) => [row[0], row[1], row[6]]).sort(), [['300,00', '"H"', '1200'], ['300,00', '"S"', '1200']], 'Geldtransit: each leg against 1360');
+    const [atm] = byGegenkonto(rows, '1000');
+    assert.deepEqual([atm![0], atm![1], atm![6]], ['100,00', '"H"', '1200'], 'Barabhebung: from the bank into the Kasse');
+    assert.ok(!byGegenkonto(rows, '4900').length && !rows.some((row) => row[6] === '1000'), 'a manual entry without a bank line is not booked as Kasse');
+    for (const id of ['cash-buero', 'cash-verkauf']) assert.match(result.errors.find((error) => error.sourceId === id)?.message ?? '', /Bank oder Kasse/);
 
     assert.ok(bytes.includes(Buffer.from([0xfc])), 'ü of Müller is the CP1252 byte 0xFC');
     assert.ok(!bytes.includes(Buffer.from([0xc3, 0xbc])), 'no UTF-8 ü');
-    assert.ok(!bytes.toString('latin1').includes('Privatentnahme'), 'an excluded private item is not exported');
-    assert.ok(!result.errors.some((error) => error.sourceId === ids.private), 'and not reported as an error either');
+    assert.ok(!result.errors.some((error) => error.sourceId === ids.private), 'a Privatentnahme is no error');
+    assert.match(result.errors.find((error) => error.sourceId === ids.legacy)?.message ?? '', /Privat oder Geldtransit/, 'an old exclusion is named, not dropped');
     const unclassified = result.errors.find((error) => error.sourceId === ids.unclassified);
     assert.match(unclassified?.message ?? '', /keiner EÜR-Kategorie/);
     const unmapped = result.errors.find((error) => error.sourceId === ids.unmapped);
     assert.match(unmapped?.message ?? '', /Kennziffer 152 hat kein DATEV-Standardkonto/);
-    assert.equal(result.errors.length, 2);
+    assert.equal(result.errors.length, 5);
   });
 
   test('a month holds only its own items; SKR04 with 5-digit accounts pads the account numbers', async () => {
     const march = await h.api.eur.exportDatev({ from: '2026-03-01', to: '2026-03-31' });
-    assert.equal(march.rowCount, 3, 'only the March bank items');
+    assert.equal(march.rowCount, 7, 'only the March bank items (income, hosting, book, Entnahme, Einlage, two transit legs)');
     assert.ok(!Buffer.from(march.contentBase64, 'base64').toString('latin1').includes('Laufkunde'));
 
     await setDatev({ consultantNumber: '1234567', clientNumber: '12345', accountLength: 5, chart: 'SKR04' });
@@ -1498,7 +1661,10 @@ describe('DATEV export (EÜR → Buchungsstapel)', () => {
     const bytes = Buffer.from(q2.contentBase64, 'base64');
     assert.ok(bytes.toString('latin1').split('\r\n')[0]!.includes(';20260101;5;20260401;20260630;'));
     const rows = rowsOf(bytes);
-    assert.deepEqual(rows.map((row) => [row[6], row[7]]).sort(), [['16000', '44000'], ['16000', '63000']], 'SKR04: Kasse 1600, Erlöse 4400, sonstige Aufwendungen 6300');
+    assert.deepEqual(rows.map((row) => [row[6], row[7]]).sort(), [['18000', '16000']], 'SKR04: Barabhebung Bank 1800 → Kasse 1600; the unmatched cash entries are errors');
+    assert.equal(q2.errors.filter((error) => /Bank oder Kasse/.test(error.message)).length, 2);
+    const march04 = rowsOf(Buffer.from((await h.api.eur.exportDatev({ from: '2026-03-01', to: '2026-03-31' })).contentBase64, 'base64'));
+    assert.deepEqual(['21000', '21800', '14600'].map((gegen) => march04.filter((row) => row[7] === gegen).length), [1, 1, 2], 'SKR04: Entnahme 2100, Einlage 2180, Geldtransit 1460');
     await setDatev({ consultantNumber: '1234567', clientNumber: '12345', accountLength: 4, chart: 'SKR03' });
   });
 

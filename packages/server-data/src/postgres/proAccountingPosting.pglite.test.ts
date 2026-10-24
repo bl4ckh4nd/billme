@@ -8,6 +8,19 @@ import { createSingleTenantScope } from '@billme/server-core';
 import { PgliteServerDatabase } from '../pglite/database.js';
 import { createPostgresProAccountingRepository } from './proAccountingRepository.js';
 
+/**
+ * Pro posting against PGlite.
+ *
+ * How this can fail:
+ * - a draft posts into a closed month, or into a soft-locked month without an override and a reason
+ * - an entry whose debit and credit totals differ (or that has fewer than two lines) is committed by
+ *   a path that bypasses the repository check, because the database itself does not enforce Soll = Haben
+ * - lines are appended to an entry that an earlier transaction already posted
+ * - an empty or missing chart of accounts lets any account number through (fail-open)
+ * - a repeated post creates a second journal entry, or fractions of a cent slip through as floats
+ * - a reversal leaves a VAT cent behind or reverses asset/payment journals generically
+ */
+
 const stamp = '2026-03-01T09:00:00.000Z';
 const scope = createSingleTenantScope('tenant-a', 'pro');
 
@@ -87,6 +100,50 @@ test('gebuchte Journale und Zeilen sind per Trigger unveränderlich', async () =
     await assert.rejects(() => database.query(`UPDATE journal_lines SET debit_amount=debit_amount+1 WHERE entry_id=$1`, [entry.id]), /journal lines are immutable/);
     await assert.rejects(() => database.query(`DELETE FROM journal_lines WHERE entry_id=$1`, [entry.id]), /journal lines are immutable/);
     assert.equal((await database.query<{ booking_text: string }>(`SELECT booking_text FROM journal_entries WHERE id=$1`, [entry.id])).rows[0]?.booking_text, entry.bookingText);
+  });
+});
+
+test('die Datenbank erzwingt Soll = Haben je Buchung und nimmt keine Zeilen in gebuchte Einträge an', async () => {
+  await withFixture(async (fixture) => {
+    const { database, repository } = fixture;
+    const draft = await approvedDraft(fixture, 'tx-guard');
+    const { entry } = await repository.postDraft(scope, draft.id, { postingDate: '2026-03-01' });
+    const insertEntry = (session: { query: (text: string, values?: unknown[]) => Promise<unknown> }, id: string, number: number) => session.query(`INSERT INTO journal_entries (id,tenant_id,entry_number,posting_date,document_date,booking_text,period,fiscal_year,status,source_type,source_key,created_at) VALUES ($1,'tenant-a',$2,'2026-03-02','2026-03-02','Direkt','2026-03',2026,'posted','standalone_source',$1,$3)`, [id, number, stamp]);
+    const insertLine = (session: { query: (text: string, values?: unknown[]) => Promise<unknown> }, entryId: string, no: number, account: string, debit: number, credit: number) => session.query(`INSERT INTO journal_lines (id,tenant_id,entry_id,line_no,account_number,debit_amount,credit_amount) VALUES ($1,'tenant-a',$2,$3,$4,$5,$6)`, [`${entryId}-${no}-${account}-${debit}`, entryId, no, account, debit, credit]);
+    const before = await count(database, 'journal_lines');
+
+    await assert.rejects(() => database.transaction({}, async (tx) => {
+      await insertLine(tx, entry.id, 3, '6000', 5, 0);
+      await insertLine(tx, entry.id, 4, '1200', 0, 5);
+    }), /JOURNAL_ENTRY_ALREADY_POSTED/, 'even a balanced pair cannot be added to a posted entry');
+    await assert.rejects(() => database.transaction({}, async (tx) => {
+      await insertEntry(tx, 'e-unbalanced', 900);
+      await insertLine(tx, 'e-unbalanced', 1, '6000', 10, 0);
+      await insertLine(tx, 'e-unbalanced', 2, '1200', 0, 9.99);
+    }), /UNBALANCED_ENTRY/, 'debit and credit differ by a cent');
+    await assert.rejects(() => database.transaction({}, async (tx) => { await insertEntry(tx, 'e-empty', 901); }), /UNBALANCED_ENTRY/, 'an entry without lines');
+    await assert.rejects(() => database.transaction({}, async (tx) => {
+      await insertEntry(tx, 'e-zero', 902);
+      await insertLine(tx, 'e-zero', 1, '6000', 0, 0);
+      await insertLine(tx, 'e-zero', 2, '1200', 0, 0);
+    }), /UNBALANCED_ENTRY/, 'a zero entry');
+    assert.equal(await count(database, 'journal_lines'), before, 'nothing of the refused transactions was kept');
+
+    await database.transaction({}, async (tx) => {
+      await insertEntry(tx, 'e-balanced', 903);
+      await insertLine(tx, 'e-balanced', 1, '6000', 10, 0);
+      await insertLine(tx, 'e-balanced', 2, '1200', 0, 10);
+    });
+    assert.equal(await count(database, 'journal_lines'), before + 2, 'a balanced entry written in one transaction is accepted');
+  });
+});
+
+test('ohne Kontenkatalog wird kein Konto akzeptiert (fail-closed)', async () => {
+  await withFixture(async (fixture) => {
+    const { database } = fixture;
+    await database.query(`DELETE FROM ledger_accounts WHERE chart='SKR03'`);
+    const saved = await approvedDraft(fixture, 'tx-no-catalog');
+    assert.ok(saved.validationIssues.some((item) => item.code === 'UNKNOWN_ACCOUNT' && item.blocking), JSON.stringify(saved.validationIssues));
   });
 });
 
@@ -237,16 +294,16 @@ test('generisches Storno von Anlagen- und Zahlungsjournalen wird abgewiesen', as
       ['payment-owned', 'payment', /PAYMENT_REVERSAL_REQUIRED/],
       ['payment-vat-owned', 'payment_vat', /PAYMENT_REVERSAL_REQUIRED/],
     ];
-    for (const [index, [id, sourceType]] of cases.entries()) {
-      await database.query(
+    for (const [index, [id, sourceType]] of cases.entries()) await database.transaction({}, async (tx) => {
+      await tx.query(
         `INSERT INTO journal_entries (id,tenant_id,entry_number,posting_date,document_date,booking_text,period,fiscal_year,status,source_type,source_key,created_at) VALUES ($1,'tenant-a',$2,'2026-03-01','2026-03-01','Quelle','2026-03',2026,'posted',$3,$4,$5)`,
         [id, index + 1, sourceType, `${sourceType}:${id}`, stamp],
       );
-      await database.query(
+      await tx.query(
         `INSERT INTO journal_lines (id,tenant_id,entry_id,line_no,account_number,debit_amount,credit_amount) VALUES ($1,'tenant-a',$2,1,'1200',10,0),($3,'tenant-a',$2,2,'6000',0,10)`,
         [`${id}-l1`, id, `${id}-l2`],
       );
-    }
+    });
     for (const [id, , pattern] of cases) {
       await assert.rejects(() => repository.reverseJournalEntry(scope, id, 'generisches Storno'), pattern);
     }

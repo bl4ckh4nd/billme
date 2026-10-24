@@ -595,6 +595,12 @@ export const ProAccountingPage: React.FC<{ view?: unknown; onViewChange?: (view:
       listAccountingSourceRuns(): Promise<AccountingSourceRun[]> {
         return ipc.pro.listAccountingSourceRuns();
       },
+      listAccountingPeriods(year: number) {
+        return ipc.pro.listAccountingPeriods({ year });
+      },
+      setAccountingPeriodStatus(input) {
+        return runMutation(() => ipc.pro.setAccountingPeriodStatus({ ...input, reason: requireMutationReason(input.reason, 'Periodenstatus ändern') }));
+      },
       async saveEurCashFact(input: EurCashFactInput): Promise<EurCashFact> {
         return ipc.eur.saveCashFact(input);
       },

@@ -418,6 +418,9 @@ const registerBillingRoutes = (app: FastifyInstance, product: 'lite' | 'pro', pr
         if (!existing) {
           throw new ApiError(404, 'Client not found');
         }
+        // Invoices (and through them the books) keep pointing at the client for the retention period.
+        const documents = await pool.query('SELECT 1 FROM invoices WHERE tenant_id = $1 AND client_id = $2 LIMIT 1', [session.scope.tenantId, params.id]);
+        if (documents.rows.length) throw new ApiError(409, 'Für diesen Kunden gibt es Rechnungen. Er kann nicht gelöscht werden.');
         await repositories.clientRepo.remove(session.scope, params.id);
         await repositories.auditLog.append(
           session.scope,

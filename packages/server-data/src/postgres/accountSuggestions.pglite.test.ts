@@ -72,16 +72,18 @@ const seed = async (database: PgliteServerDatabase): Promise<void> => {
       `INSERT INTO booking_drafts (id,tenant_id,transaction_id,workflow_status,draft_json,updated_at) VALUES ($1,$2,$3,'posted','{}',$4)`,
       [`draft-${id}`, tenantId, transactionId, createdAt],
     );
-    await database.query(
+    await database.transaction({}, async (tx) => {
+    await tx.query(
       `INSERT INTO journal_entries (id,tenant_id,entry_number,posting_date,booking_text,period,fiscal_year,status,source_draft_id,created_at)
        VALUES ($1,$2,$3,'2026-02-01','Buchung','2026-02',2026,$4,$5,$6)`,
       [`entry-${id}`, tenantId, Number(entryNumber), status, `draft-${id}`, createdAt],
     );
-    await database.query(
+    await tx.query(
       `INSERT INTO journal_lines (id,tenant_id,entry_id,line_no,account_number,debit_amount,credit_amount)
        VALUES ($1,$2,$3,1,$4,10,0),($5,$2,$3,2,'1200',0,10)`,
       [`line-${id}-1`, tenantId, `entry-${id}`, account, `line-${id}-2`],
     );
+    });
   }
 };
 

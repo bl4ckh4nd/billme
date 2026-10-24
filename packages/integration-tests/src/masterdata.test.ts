@@ -17,7 +17,8 @@ import { addDays, datevEvidence, draftInvoice, draftOffer, ISSUER, issueInvoice,
  *   update that drops the assigned number, manual numbers stored untrimmed
  * - clients: addresses/e-mails/tax profile (VAT ID) lost on save, the wrong
  *   default address or e-mail taken for a new document, invalid payloads
- *   accepted, a client delete that damages the invoices written for it
+ *   accepted, a client delete that damages the invoices written for it, or
+ *   deletes a client its invoices and bookings still point at
  * - contact persons: the list lost on save or restart, two primary contacts
  *   accepted, none primary left without a primary, the legacy contactPerson
  *   not following the primary contact, invalid contacts (no name, bad e-mail,
@@ -622,25 +623,29 @@ for (const product of PRODUCTS) describe(`masterdata (${product})`, () => {
       assert.deepEqual([missing.status, missing.body], [200, null]);
     });
 
-    test('deleting a client leaves its invoices intact and is audited; unknown ids and missing reasons are refused', async () => {
+    test('a client with invoices cannot be deleted (the invoices and the books keep pointing at it); one without is deleted and audited', async () => {
       const owner = await makeClient({ company: `Löschkunde ${uid()}` });
       const invoice = await issueInvoice(h.api, { client: owner.company, clientId: owner.id });
-      const deleted = await h.raw('DELETE', `/clients/${owner.id}`, { reason: 'Kunde gelöscht' });
-      assert.equal(deleted.status, 200, deleted.text);
-      assert.ok(!(await h.api.clients.list()).some((client) => client.id === owner.id));
-
+      const refused = await h.raw('DELETE', `/clients/${owner.id}`, { reason: 'Kunde gelöscht' });
+      assert.equal(refused.status, 409, refused.text);
+      assert.match(refused.text, /Rechnungen/);
+      assert.ok((await h.api.clients.list()).some((client) => client.id === owner.id), 'the client stays');
       const kept = (await h.api.invoices.list()).find((candidate) => candidate.id === invoice.id)!;
-      assert.equal(kept.client, owner.company, 'the invoice keeps its own copy of the client name');
-      assert.equal(kept.clientAddress, invoice.clientAddress);
-      assert.equal(kept.clientEmail, invoice.clientEmail);
+      assert.equal(kept.client, owner.company);
       assert.equal(kept.status, 'open');
-      assert.equal(kept.amount, invoice.amount);
-      const context = await h.api.documents.renderContext({ kind: 'invoice', id: invoice.id });
-      assert.equal(context.document.client, owner.company, 'the invoice still renders');
+      assert.ok(!parseCsv(await h.api.audit.exportCsv()).some((row) => row[3] === owner.id && row[4] === 'client.delete'), 'nothing deleted, nothing audited');
 
-      const entry = parseCsv(await h.api.audit.exportCsv()).find((row) => row[3] === owner.id && row[4] === 'client.delete')!;
+      const drafted = await makeClient({ company: `Nur Entwurf ${uid()}` });
+      await draftInvoice(h.api, { client: drafted.company, clientId: drafted.id });
+      assert.equal((await h.raw('DELETE', `/clients/${drafted.id}`, { reason: 'x' })).status, 409, 'a draft invoice references the client too');
+
+      const unused = await makeClient({ company: `Ohne Belege ${uid()}` });
+      const deleted = await h.raw('DELETE', `/clients/${unused.id}`, { reason: 'Kunde gelöscht' });
+      assert.equal(deleted.status, 200, deleted.text);
+      assert.ok(!(await h.api.clients.list()).some((client) => client.id === unused.id));
+      const entry = parseCsv(await h.api.audit.exportCsv()).find((row) => row[3] === unused.id && row[4] === 'client.delete')!;
       assert.equal(entry[5], 'Kunde gelöscht');
-      assert.equal(JSON.parse(entry[9]!).company, owner.company, 'the deleted client is preserved in the audit trail');
+      assert.equal(JSON.parse(entry[9]!).company, unused.company, 'the deleted client is preserved in the audit trail');
 
       assert.equal((await h.raw('DELETE', `/clients/${randomUUID()}`, { reason: 'x' })).status, 404);
       const other = await makeClient({ company: `Bleibt ${uid()}` });

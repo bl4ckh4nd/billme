@@ -9,6 +9,8 @@ export type EurCashItemKind =
   | 'private_contribution'
   | 'private'
   | 'pass-through'
+  /** Geldtransit: money moved between the business's own accounts (bank, cash, PayPal); never income or expense. */
+  | 'transit'
   | 'pass_through'
   | 'passThrough';
 
@@ -53,6 +55,11 @@ export interface EurCalculationItem {
   /** Cash date; `date` is accepted as a compatibility alias. */
   cashDate?: string;
   date?: string;
+  /**
+   * The tax year the money counts in when that is not the year of the cash date (§ 11 Abs. 1 S. 2 /
+   * Abs. 2 S. 2 EStG, 10-Tage-Regel). A full-year calculation filters by this year; other ranges by the date.
+   */
+  attributedTaxYear?: number;
   lineId?: string;
   splits?: readonly EurExpenseSplit[];
   excluded?: boolean;
@@ -187,6 +194,7 @@ export const calculateEurRows = (
   if (options.taxYear !== undefined && ((from && !from.startsWith(`${options.taxYear}-`)) || (to && !to.startsWith(`${options.taxYear}-`)))) {
     throw new RangeError(`EÜR range does not belong to ${options.taxYear}`);
   }
+  const fullYear = options.taxYear !== undefined && from === `${options.taxYear}-01-01` && to === `${options.taxYear}-12-31`;
   const linesById = new Map(lines.map((line) => [line.id, line]));
   const totals = new Map(lines.map((line) => [line.id, 0]));
   const warnings: string[] = [];
@@ -207,12 +215,13 @@ export const calculateEurRows = (
     if (!Number.isFinite(item.amountNet)) throw new RangeError(`Invalid EÜR amount for ${source}`);
     if (cashDate) {
       assertDate(cashDate, `cash date for ${source}`);
-      if (!dateInRange(cashDate, from, to)) continue;
+      if (fullYear && item.attributedTaxYear !== undefined ? item.attributedTaxYear !== options.taxYear : !dateInRange(cashDate, from, to)) continue;
     } else if (options.requireCashDate) {
       throw new RangeError(`Missing cash date for ${source}`);
     }
     const kind = itemKind(item);
     const flowType = item.flowType ?? (kind === 'income' || kind === 'expense' ? kind : undefined);
+    if (kind === 'transit') continue;
     if (kind === 'private-withdrawal' || kind === 'private-contribution' || kind === 'pass-through') {
       const amount = toCents(item.amountNet);
       if (!Number.isFinite(item.amountNet) || amount < 0) throw new RangeError(`Invalid neutral EÜR amount for ${source}`);

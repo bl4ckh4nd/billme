@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import {
+  clientContactsSchema,
   offerStatusSchema,
   documentLayoutSchema,
   documentTemplateBodySchema,
@@ -225,6 +226,7 @@ export const clientSchema = z.object({
       }),
     )
     .optional(),
+  contacts: clientContactsSchema.optional(),
 });
 
 export const articleSchema = z.object({
@@ -374,6 +376,17 @@ export const eurExportPdfResultSchema = z.object({
   path: z.string().min(1),
 });
 
+const isoDateSchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
+export const eurExportDatevArgsSchema = z.object({ from: isoDateSchema, to: isoDateSchema });
+/** One DATEV-Buchungsstapel file; `errors` lists EÜR items that are in the period but not in the file. */
+export const eurExportDatevResultSchema = z.object({
+  fileName: z.string().min(1),
+  mimeType: z.literal('text/csv'),
+  contentBase64: z.string(),
+  rowCount: z.number().int().nonnegative(),
+  errors: z.array(z.object({ sourceType: z.enum(['transaction', 'invoice', 'manual']), sourceId: z.string(), date: z.string(), amount: z.number(), counterparty: z.string(), message: z.string() })),
+});
+
 export const eurRuleSchema = z.object({
   id: z.string(),
   taxYear: z.number().int(),
@@ -490,8 +503,17 @@ const isValidIban = (value: string): boolean => {
   return remainder === 1;
 };
 
+/** DATEV-Buchungsstapel for the tax advisor; the bounds mirror the formatter in `@billme/accounting-engine/datev-export`. */
+export const datevSettingsSchema = z.object({
+  consultantNumber: z.string().trim().regex(/^\d{4,7}$/, 'Beraternummer: 4 bis 7 Ziffern.').refine((value) => Number(value) >= 1001, 'Beraternummer ab 1001.'),
+  clientNumber: z.string().trim().regex(/^\d{1,5}$/, 'Mandantennummer: 1 bis 5 Ziffern.').refine((value) => Number(value) >= 1, 'Mandantennummer ab 1.'),
+  accountLength: z.number().int().min(4).max(8).default(4),
+  chart: z.enum(['SKR03', 'SKR04']).default('SKR03'),
+});
+
 const appSettingsBaseSchema = z.object({
   businessReportingProfile: businessReportingProfileSchema.optional(),
+  datev: datevSettingsSchema.optional(),
   company: z.object({
     name: z.string(),
     owner: z.string(),
@@ -650,6 +672,8 @@ export const appSettingsSchema: z.ZodType<
 
 export const upsertClientPayloadSchema = z.object({
   client: clientSchema,
+  /** Audit reason; the HTTP adapters fall back to their own wording. */
+  reason: z.string().trim().min(1).optional(),
 });
 
 export const deleteByIdSchema = z.object({
@@ -741,7 +765,8 @@ export const documentRenderContextArgsSchema = z.object({
 
 export const documentRenderContextSchema = z.object({
   templateKind: documentTemplateKindSchema,
-  document: invoiceSchema,
+  // Offers print too, with their own statuses (accepted, declined, expired).
+  document: invoiceSchema.extend({ status: z.union([invoiceSchema.shape.status, offerStatusSchema]) }),
   template: z.object({
     id: z.string().optional(),
     version: z.number().int().positive().optional(),

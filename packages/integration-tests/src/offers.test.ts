@@ -16,7 +16,8 @@ import { documentIdFromUrl, newToken, startPortal, type PortalHandle } from './o
  *   gaps after a released draft, a reservation reused for another offer or
  *   kind, a duplicate number answered with a 500 that leaks the SQL
  * - validity: an open offer past its validUntil still shown as open, expired on
- *   its last day, or no longer acceptable by hand
+ *   its last day, or no longer acceptable by hand; an expired or accepted offer
+ *   that can no longer be printed (render context refusing offer statuses)
  * - offer edits: draft edits lost, status set outside the allowed values,
  *   malformed dates saved, a stale copy erasing the portal publication or the
  *   recorded customer decision, an accepted offer's content changing after the
@@ -319,6 +320,20 @@ for (const product of PRODUCTS) describe(`offers and the document chain (${produ
       assert.equal((await h.api.offers.upsert({ reason: 'versendet', offer: { ...current, status: 'open' } } as never)).status, 'open', 'valid through its last day');
       const accepted = await h.api.offers.upsert({ reason: 'Kunde hat trotzdem telefonisch zugesagt', offer: { ...open, status: 'accepted' } } as never);
       assert.equal(accepted.status, 'accepted', 'an expired offer accepted later is a fresh confirmation');
+    });
+
+    test('expired, accepted and declined offers still print', async () => {
+      const expired = await draftOffer(h.api, { client: 'Druck Abgelaufen GmbH', date: addDays(today(), -30), dueDate: addDays(today(), -1) });
+      await h.api.offers.upsert({ reason: 'versendet', offer: { ...expired, status: 'open' } } as never);
+      assert.equal((await h.api.documents.renderContext({ kind: 'offer', id: expired.id })).document.status, 'expired');
+      for (const status of ['accepted', 'declined'] as const) {
+        const offer = await draftOffer(h.api, { client: `Druck ${status} GmbH` });
+        await h.api.offers.upsert({ reason: 'versendet', offer: { ...offer, status: 'open' } } as never);
+        await h.api.offers.upsert({ reason: 'Kundenentscheidung', offer: { ...offer, status } } as never);
+        const context = await h.api.documents.renderContext({ kind: 'offer', id: offer.id });
+        assert.equal(context.document.status, status);
+        assert.equal(context.templateKind, 'offer');
+      }
     });
   });
 

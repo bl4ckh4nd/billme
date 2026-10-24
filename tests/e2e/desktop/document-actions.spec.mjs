@@ -98,15 +98,14 @@ test('a partial credit note is created from the detail page, a Storno after it i
   expect((await invoices(page)).find((invoice) => invoice.id === 'inv-open-1').status, 'a partial credit leaves the source open').toBe('open');
   await shot('credit-note');
 
-  // A Stornorechnung cannot follow a credit note: the refusal is shown, nothing is created.
+  // A Stornorechnung cannot follow a credit note: the button is gone and the backend refuses it, nothing is created.
   await page.getByRole('button', { name: 'Zurück zur Liste' }).click();
   await page.getByRole('row', { name: `Rechnung ${number} öffnen` }).click();
-  await page.getByRole('button', { name: 'Storno', exact: true }).click();
-  await page.getByRole('dialog', { name: /Storno.* erstellen/ }).getByRole('button', { name: /Storno.* erstellen/ }).click();
-  const refusal = page.getByText(/Dokument konnte nicht erstellt werden/).first();
-  await expect(refusal).toBeVisible();
-  await expect(refusal, 'the reason is shown in German, without a technical prefix').toHaveText(/Dokument konnte nicht erstellt werden: Zu dieser Rechnung gibt es schon eine Gutschrift oder Stornorechnung/);
-  await expect(refusal).not.toHaveText(/Error:/);
+  await expect(page.getByRole('button', { name: 'Gutschrift', exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Storno', exact: true }), 'no Storno is offered after a credit note').toHaveCount(0);
+  const refused = await invokeDesktopIpc(page, 'documents:chainIssue', { operation: 'correction', kind: 'cancellation_invoice', invoiceId: 'inv-open-1', id: crypto.randomUUID(), date: '2026-02-10', reason: 'E2E' })
+    .then(() => null, (error) => String(error));
+  expect(refused, 'the backend refuses a Storno after a credit note').toMatch(/Stornorechnung ist nicht mehr möglich|Gutschrift oder Stornorechnung/);
   await shot('storno-refused');
   expect((await invoices(page)).some((invoice) => invoice.documentKind === 'cancellation_invoice')).toBe(false);
 

@@ -1,6 +1,6 @@
 import { expect, test } from '@playwright/test';
 import { appUrl, invokeDesktopIpc, launchDesktopApp, seedDesktopData } from '../support.mjs';
-import { createShooter, readEditorTotals } from './lite-support.mjs';
+import { createShooter, readEditorTotals, useRegularVat } from './lite-support.mjs';
 
 for (const app of ['desktop', 'pro']) {
   test(`${app} preserves article VAT through invoice save and reload`, async () => {
@@ -8,12 +8,9 @@ for (const app of ['desktop', 'pro']) {
     try {
       const { page, baseUrl } = desktop;
       const shot = createShooter(page);
-      await seedDesktopData(page, {
-        app,
-        settingsOverrides: { legal: { smallBusinessRule: false, defaultVatRate: 19 } },
-      });
-      // Seeding writes past react-query; reload so the editor prices with the regular-VAT settings.
-      await page.reload();
+      // The seed issues §19 invoices, so regular VAT is switched on only afterwards.
+      await seedDesktopData(page, { app });
+      await useRegularVat(page);
       await page.goto(appUrl(baseUrl, '/articles'));
 
       const createArticle = async (title, price, rate) => {

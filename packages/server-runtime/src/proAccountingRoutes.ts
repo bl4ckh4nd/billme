@@ -44,6 +44,8 @@ import {
   incomingInvoiceDocumentUploadSchema,
   journalEntryEntitySchema,
   ledgerBalanceRowSchema,
+  proBankLedgerReconciliationRowSchema,
+  proPostManualJournalEntryArgsSchema,
   openItemSchema,
   standaloneAccountingSourceFactSchema,
   transactionSchema,
@@ -820,6 +822,30 @@ export const registerProAccountingRoutes = (app: FastifyInstance, options: ProAc
         ? Array.isArray(query.accountNumbers) ? query.accountNumbers : [query.accountNumbers]
         : undefined;
       return serviceFor(app).listJournalEntries(session.scope, { ...query, accountNumbers });
+    },
+  });
+
+  // Freie Buchung (Buchungssatz): posted directly with Beleg, text and reason; the period locks apply.
+  typedRoute(app, {
+    method: 'POST',
+    url: `${prefix}/journal`,
+    body: proPostManualJournalEntryArgsSchema,
+    response: journalEntryEntitySchema,
+    async handler({ request, body }) {
+      const session = await requireMutationSession(app, request.headers.authorization);
+      const { reason, ...input } = body;
+      return repositoryFor(app).postManualJournalEntry(session.scope, { ...input, mutation: mutationFor(session, reason) });
+    },
+  });
+
+  // Bank lines against the ledger account of their bank account: booked total, pending lines, drift.
+  typedRoute(app, {
+    method: 'GET',
+    url: `${prefix}/bank-reconciliation`,
+    response: z.array(proBankLedgerReconciliationRowSchema),
+    async handler({ request }) {
+      const session = await requireProSession(app, request.headers.authorization);
+      return repositoryFor(app).getBankLedgerReconciliation(session.scope);
     },
   });
 

@@ -11,6 +11,7 @@ import { useAccountingWorkspace, useWorkspaceLifetime } from '../AccountingWorks
 import { Account, BookingAction, BookingDraft, BookingWorkflowStatus, JournalLine, Transaction, UserRole } from '../types';
 import type { AccountSuggestionRuleSummary, InvoiceMatchCandidate, ProAccountingDataAdapter } from '../services/accountingDataAdapter';
 import { Badge, Button, Card, CardHeader, ConfirmDialog, EmptyState, HatchedProgress, IconButton, Input, Select, cn } from '@billme/ui';
+import BankLedgerReconciliationCard from './BankLedgerReconciliationCard';
 import AccountCombobox from './AccountCombobox';
 import IssueBadges, { StatusBadge } from './IssueBadges';
 
@@ -871,6 +872,8 @@ export default function ReconciliationWorkbench({
             </Card>
           </section>
         )}
+
+        <BankLedgerReconciliationCard dataAdapter={dataAdapter} refreshToken={transactions.length + transactions.filter((transaction) => transaction.workflowStatus === 'posted').length} />
 
         {dataAdapter?.listAccountSuggestionRules && (
           <section aria-label="Kontierungsregeln">

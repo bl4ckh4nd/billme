@@ -4366,6 +4366,15 @@ const invoke = async <K extends IpcRouteKey>(key: K, args: IpcArgs<K>): Promise<
     }
     case 'pro:setAccountingPeriodStatus':
       throw new Error('Perioden lassen sich in der Demo nicht sperren.');
+    case 'pro:listOpenItemPayments':
+      return [...mockOpenItemPayments] as IpcResult<K>;
+    case 'pro:reverseOpenItemPayment':
+    case 'pro:reallocateOpenItemPayment':
+      throw new Error('Zahlungen lassen sich in der Demo nicht stornieren oder umbuchen.');
+    case 'pro:postManualJournalEntry':
+      throw new Error('Freie Buchungen sind in der Demo nicht möglich.');
+    case 'pro:getBankLedgerReconciliation':
+      return [] as IpcResult<K>;
 
     case 'pro:listAccountingSourceRuns':
       return [...mockAccountingSourceRuns]

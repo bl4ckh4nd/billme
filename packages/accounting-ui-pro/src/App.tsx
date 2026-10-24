@@ -261,7 +261,7 @@ function Workspace({ seed, dataAdapter, role = 'admin', assetsAvailable = true, 
           ) : currentView === 'receipts' ? (
             <ReceiptsInbox dataAdapter={dataAdapter} onOpenInvoice={(invoiceId) => { setOposInvoiceId(invoiceId); showView('opos'); }} />
           ) : currentView === 'special' ? (
-            <SonderbuchungenWorkspace dataAdapter={dataAdapter} role={role} />
+            <SonderbuchungenWorkspace dataAdapter={dataAdapter} role={role} accounts={accounts} chart={seed?.chartFramework} />
           ) : currentView === 'assets' && !assetsAvailable ? (
             <div className="text-control text-muted">Anlagen sind in dieser Verbindung nicht verfügbar.</div>
           ) : (

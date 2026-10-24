@@ -20,7 +20,7 @@ import {
   useActionFeedback,
   type BadgeTone,
 } from '@billme/ui';
-import { LATEST_SUPPORTED_EUR_TAX_YEAR, SUPPORTED_EUR_TAX_YEARS, eurBookingPreview, type LedgerChart } from '@billme/accounting-shared';
+import { defaultEurTaxYear, eurTaxYearOptions, eurBookingPreview, type LedgerChart } from '@billme/accounting-shared';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { AlertCircle, Search, Check, Info, RotateCcw, Save, Ban, Settings2 } from 'lucide-react';
 import { getRendererProduct, getRendererRuntime, ipc } from '../runtime-api';
@@ -30,7 +30,7 @@ import { useSettingsQuery } from '../hooks/useSettings';
 import { LiteCashPanel } from './eur/LiteCashPanel';
 import { isNeutralEurKind, isSimpleEurCategory, neutralEurKindLabels, neutralEurKindNotes, simpleEurCategoryLabel, type NeutralEurKind } from './eur/categories';
 
-const DEFAULT_YEAR = LATEST_SUPPORTED_EUR_TAX_YEAR;
+const DEFAULT_YEAR = defaultEurTaxYear();
 
 type SourceType = 'transaction' | 'invoice' | 'manual';
 type VatMode = 'none' | 'default';
@@ -53,6 +53,8 @@ type EurItem = {
   counterparty: string;
   purpose: string;
   vatWarning?: string;
+  /** Lite: an Aufteilung of the net amount (e.g. Bewirtung 70/30). */
+  splits?: Array<{ amountNet: number; lineId?: string }>;
   suggestedLineId?: string;
   suggestionReason?: string;
   suggestionLayer?: SuggestionLayer;
@@ -235,6 +237,8 @@ export const EurView: React.FC = () => {
   const [decision, setDecision] = React.useState<Decision>('flow');
   const excluded = decision !== 'flow';
   const [taxNote, setTaxNote] = React.useState('');
+  /** Lite: Bewirtung split 70 % abziehbar (Kz 175) / 30 % nicht abziehbar (Kz 165); the Vorsteuer stays in full. */
+  const [hospitalitySplit, setHospitalitySplit] = React.useState(false);
   const [auditReason, setAuditReason] = React.useState('');
 
   const [query, setQuery] = React.useState('');
@@ -281,6 +285,7 @@ export const EurView: React.FC = () => {
       vatRate?: number;
       note?: string;
       kind?: NeutralEurKind;
+      splits?: Array<{ amountNet: number; deductibility: 'deductible' | 'non-deductible'; lineId?: string; reason: string }>;
       reason: string;
     }) => ipc.eur.upsertClassification(payload),
   });
@@ -376,6 +381,7 @@ export const EurView: React.FC = () => {
     // Pro keeps its own fact workflow (Auswertungen); here it only knows a line or the exclusion.
     setDecision(isProProduct ? (activeItem.classification?.excluded ? 'excluded' : 'flow') : decisionOf(activeItem));
     setTaxNote(activeItem.classification?.note ?? '');
+    setHospitalitySplit(Boolean(activeItem.splits?.length));
   }, [activeItem]);
 
   const applyBulk = async (
@@ -445,13 +451,26 @@ export const EurView: React.FC = () => {
       },
     ];
 
+    const split = splitAllowed && hospitalitySplit && hospitalityDeductible && hospitalityNonDeductible ? (() => {
+      const net = Math.abs(activeItem.amountNet);
+      const deductible = Math.round(net * 70) / 100;
+      return {
+        lineId: hospitalityDeductible.lineId,
+        splits: [
+          { amountNet: deductible, deductibility: 'deductible' as const, lineId: hospitalityDeductible.lineId, reason: '70 % abziehbar (§ 4 Abs. 5 Nr. 2 EStG)' },
+          { amountNet: Math.round((net - deductible) * 100) / 100, deductibility: 'non-deductible' as const, lineId: hospitalityNonDeductible.lineId, reason: '30 % nicht abziehbar' },
+        ],
+      };
+    })() : undefined;
+
     setIsApplying(true);
     try {
       await upsertClassification.mutateAsync({
         sourceType: activeItem.sourceType,
         sourceId: activeItem.sourceId,
         taxYear,
-        eurLineId: excluded ? undefined : selectedLineId || undefined,
+        eurLineId: excluded ? undefined : split?.lineId ?? (selectedLineId || undefined),
+        splits: split?.splits,
         excluded: decision === 'excluded',
         kind: isNeutralEurKind(decision) ? decision : undefined,
         vatMode,
@@ -495,6 +514,9 @@ export const EurView: React.FC = () => {
   };
 
   const activeLine = activeLineOptions.find((line) => line.lineId === selectedLineId);
+  const hospitalityDeductible = lineOptions.find((line) => line.kennziffer === '175');
+  const hospitalityNonDeductible = lineOptions.find((line) => line.kennziffer === '165');
+  const splitAllowed = !isProProduct && !excluded && activeItem?.flowType === 'expense' && (activeLine?.kennziffer === '175' || activeLine?.kennziffer === '165');
   const bulkDisabled = selectedItems.length === 0 || isApplying || auditReason.trim().length === 0;
   const checks = activeItem
     ? [
@@ -502,6 +524,7 @@ export const EurView: React.FC = () => {
         auditReason.trim().length === 0 ? 'Bitte eine Begründung für den Audit-Eintrag eingeben.' : undefined,
         isProProduct && vatMode === 'default' ? activeItem.vatWarning : undefined,
         activeItem.transitHint,
+        !isProProduct && activeLine?.kennziffer === '164' && vatMode === 'default' ? 'Geschenke über 50 €: keine Vorsteuer (§ 15 Abs. 1a UStG). Bitte „Keine USt. Umrechnung“ wählen.' : undefined,
       ].filter((text): text is string => Boolean(text))
     : [];
 
@@ -509,7 +532,7 @@ export const EurView: React.FC = () => {
     <div className="@container">
       <PageHeader
         title="Buchen"
-        description={`Klassifizierung für Steuerjahr ${taxYear}. Die Anlage EÜR steht unter Auswertungen.`}
+        description={`Klassifizierung für Steuerjahr ${taxYear}${report?.catalog?.provisional ? ' (vorläufig, noch keine Anlage EÜR veröffentlicht)' : ''}. Die Anlage EÜR steht unter Auswertungen.`}
         actions={
           <>
             <Select
@@ -517,7 +540,7 @@ export const EurView: React.FC = () => {
               aria-label="Steuerjahr"
               onChange={(e) => setTaxYear(Number(e.target.value))}
             >
-              {SUPPORTED_EUR_TAX_YEARS.map((year) => (
+              {eurTaxYearOptions().map((year) => (
                 <option key={year} value={year}>{year}</option>
               ))}
             </Select>
@@ -871,6 +894,7 @@ export const EurView: React.FC = () => {
                         ))}
                       </Select>
                       {!isProProduct && <Checkbox className="mt-2" label="Weitere Kategorien anzeigen" checked={showAllCategories} onChange={(e) => setShowAllCategories(e.target.checked)} />}
+                      {splitAllowed && <Checkbox className="mt-2" label="Bewirtung aufteilen: 70 % abziehbar, 30 % nicht abziehbar (Vorsteuer bleibt voll abziehbar)" checked={hospitalitySplit} onChange={(e) => setHospitalitySplit(e.target.checked)} />}
                     </div>
                     <Input
                       label="Betrag brutto"

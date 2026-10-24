@@ -18,8 +18,8 @@ import {
  *   audited, an unknown month or status accepted, a status that is lost across
  *   a restart, a month before a closed one that still takes postings
  *   (Festschreibung is cumulative), a reopened soft lock that still blocks
- * - closed period: an invoice, a manual draft, a payment or a reversal that
- *   still posts into it; a refused issue that leaves the invoice half-issued
+ * - closed period: an invoice, a manual draft, a free entry (Buchungssatz), a
+ *   payment, a Zahlungsstorno or a reversal that still posts into it; a refused issue that leaves the invoice half-issued
  *   (number lost, no entry); a correction that is only possible by rewriting the
  *   closed month instead of posting in an open one; an asset activation or a
  *   journal reversal that still posts into it
@@ -174,7 +174,30 @@ test('closed and soft-locked periods stop every posting path, and ledger, open i
     assert.match(refused.body.message, /POSTING_DATE_IN_CLOSED_PERIOD/);
     assert.equal((await journal(h)).length, entries);
     assert.equal((await openItems(h)).find((candidate) => candidate.id === item.id)!.allocatedAmount, 0, 'the refused payment allocated nothing');
-    assert.equal((await payOpenItem(h, item, 50)).status, 200);
+    const paid = await payOpenItem(h, item, 50);
+    assert.equal(paid.status, 200, paid.text);
+    const before = (await journal(h)).length;
+    const storno = await h.raw('POST', `/accounting/open-items/payments/${paid.body.id}/reverse`, { reason: 'Zahlung falsch zugeordnet', postingDate: '2026-01-31' });
+    assert.equal(storno.status, 409, storno.text);
+    assert.match(storno.body.message, /POSTING_DATE_IN_CLOSED_PERIOD/);
+    assert.equal((await journal(h)).length, before, 'the refused Zahlungsstorno posted nothing');
+    assert.equal((await openItems(h)).find((candidate) => candidate.id === item.id)!.allocatedAmount, 50, 'the payment stays allocated');
+  });
+
+  await t.test('a free entry (Buchungssatz) into a closed month is refused, a soft-locked one needs an override with a reason', async () => {
+    const entries = (await journal(h)).length;
+    const body = (documentDate: string, extra: Record<string, unknown> = {}) => ({ reason: 'Buchungssatz', documentDate, reference: `M-${randomUUID().slice(0, 6)}`, bookingText: 'Privatentnahme bar', idempotencyKey: randomUUID(),
+      lines: [{ accountNumber: '1800', debitAmount: 20, creditAmount: 0 }, { accountNumber: '1000', debitAmount: 0, creditAmount: 20 }], ...extra });
+    const closed = await h.raw('POST', '/accounting/journal', body('2026-01-15'));
+    assert.equal(closed.status, 409, closed.text);
+    assert.match(closed.body.message, /POSTING_DATE_IN_CLOSED_PERIOD/);
+    const soft = await h.raw('POST', '/accounting/journal', body('2026-02-15'));
+    assert.equal(soft.status, 409, soft.text);
+    assert.match(soft.body.message, /SOFT_LOCK_OVERRIDE_REQUIRED/);
+    assert.equal((await journal(h)).length, entries);
+    const allowed = await h.raw('POST', '/accounting/journal', body('2026-02-15', { softLockOverride: true, overrideReason: 'Kassenbeleg nachgereicht' }));
+    assert.equal(allowed.status, 200, allowed.text);
+    assert.equal((await journal(h)).length, entries + 1);
   });
 
   await t.test('a payment recorded on the invoice into a closed month is refused and books nothing', async () => {

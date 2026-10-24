@@ -62,12 +62,19 @@ test('Lite import, payment allocation and unlink conserve cash independently of 
     assert.equal((await get(itemsUrl)).length, 2);
     const mirror = await database.query<{ status: string }>('SELECT status FROM bank_transactions WHERE source_transaction_id=$1', [income.id]);
     assert.equal(mirror.rows[0]?.status, 'pending', 'Lite must preserve Pro posting state');
+    // A refund takes back at most what was paid: after the unlink nothing is paid, so it is refused.
     const refund = { id: 'cash-refund', date: '2026-10-04', amount: -100, method: 'Refund' };
+    const unpaidRefund = await app.inject({ method: 'POST', url: '/api/v1/lite/invoices/cash-invoice/payments', headers, payload: { payment: refund, reason: 'Refund without payment' } });
+    assert.equal(unpaidRefund.statusCode, 409, unpaidRefund.body);
+    assert.equal((await get(itemsUrl)).length, 2, 'the refused refund changed nothing');
+    const firstPaid = { id: 'first-paid', date: '2026-10-04', amount: 300, method: 'Bank' };
+    await post('/api/v1/lite/invoices/cash-invoice/payments', { payment: firstPaid, reason: 'Partial payment' });
     await post('/api/v1/lite/invoices/cash-invoice/payments', { payment: refund, reason: 'Customer refund checked' });
     await post('/api/v1/lite/invoices/cash-invoice/payments', { payment: refund, reason: 'Repeat refund command' });
     const refunded = await get(itemsUrl);
-    assert.equal(refunded.find((row: { sourceType: string }) => row.sourceType === 'invoice').amountGross, -100);
+    assert.equal(refunded.filter((row: { sourceType: string }) => row.sourceType === 'invoice').reduce((sum: number, row: { amountGross: number }) => sum + row.amountGross, 0), 200, 'paid 300, refunded 100 once');
     await post('/api/v1/lite/invoices/cash-invoice/payments/cash-refund/reverse', { expectedPayment: refund, reason: 'Reverse erroneous refund' });
+    await post('/api/v1/lite/invoices/cash-invoice/payments/first-paid/reverse', { expectedPayment: firstPaid, reason: 'Reverse partial payment' });
     assert.equal((await get(itemsUrl)).length, 2);
     const paid = { id: 'manual-paid', date: '2026-10-04', amount: 1440, method: 'Bank' };
     await post('/api/v1/lite/invoices/cash-invoice/payments', { payment: paid, reason: 'Pay while dunning renders' });

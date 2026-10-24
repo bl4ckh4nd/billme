@@ -32,7 +32,9 @@ import { addDays, asSmallBusiness, datevEvidence, draftInvoice, draftOffer, issu
  *   settling it, a Skonto entry typed by hand, a removed payment keeping it
  * - payments: draft invoices taking payments, partial vs. full payment status,
  *   a manual payment above the open amount accepted (an overpayment is a credit
- *   the customer is owed, not a settled invoice), stale `expectedPayment`,
+ *   the customer is owed, not a settled invoice), a refund (negative payment)
+ *   larger than what was paid, a payment removed while its refund stands,
+ *   stale `expectedPayment`,
  *   removal reopening the invoice,
  *   bank payments edited outside the bank matching
  * - corrections: credit note / cancellation numbering and status of the source,
@@ -422,6 +424,25 @@ for (const product of PRODUCTS) describe(`invoices (${product})`, () => {
       assert.equal((await h.raw('POST', `/invoices/${open.id}/payments`, { payment: { ...first, amount: open.amount + 1 }, expectedPayment: first, reason: 'zu viel' })).status, 409, 'raising a payment over the open amount is refused too');
       const paid = await h.api.invoices.savePayment({ invoiceId: open.id, payment: { id: randomUUID(), date: today(), amount: Math.round((open.amount - 100) * 100) / 100, method: 'bank' }, reason: 'Restzahlung' });
       assert.equal(paid.status, 'paid');
+    });
+
+    test('a refund (negative payment) takes back at most what was paid', async () => {
+      const open = await issueInvoice(h.api, { client: `Erstattung ${randomUUID().slice(0, 6)}` });
+      const refund = (amount: number) => h.raw('POST', `/invoices/${open.id}/payments`, { payment: { id: randomUUID(), date: today(), amount, method: 'bank' }, reason: 'Erstattung' });
+      const nothingPaid = await refund(-10);
+      assert.equal(nothingPaid.status, 409, nothingPaid.text);
+      assert.match(nothingPaid.text, /bezahlt/);
+      const paid = { id: randomUUID(), date: today(), amount: 100, method: 'bank' };
+      await h.api.invoices.savePayment({ invoiceId: open.id, payment: paid, reason: 'Teilzahlung' });
+      const tooMuch = await refund(-100.01);
+      assert.equal(tooMuch.status, 409, tooMuch.text);
+      assert.equal((await h.api.invoices.list()).find((invoice) => invoice.id === open.id)!.payments.length, 1, 'the refused refunds were not stored');
+      const back = await refund(-100);
+      assert.equal(back.status, 200, back.text);
+      assert.equal(back.body.status, 'open');
+      assert.equal((await refund(-0.01)).status, 409, 'after a full refund nothing is left to pay back');
+      const removePaid = await h.raw('POST', `/invoices/${open.id}/payments/${paid.id}/reverse`, { expectedPayment: paid, reason: 'Zahlung entfernen' });
+      assert.equal(removePaid.status, 409, `a refunded payment is not removed before its refund: ${removePaid.text}`);
     });
 
     test('a draft takes no payments', async () => {

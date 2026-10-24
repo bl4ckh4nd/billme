@@ -733,6 +733,12 @@ export const ProAccountingPage: React.FC<{ view?: unknown; onViewChange?: (view:
       reallocateOpenItemPayment(paymentId, input) {
         return ipc.pro.reallocateOpenItemPayment({ paymentId, ...input });
       },
+      postManualJournalEntry(input) {
+        return ipc.pro.postManualJournalEntry(input);
+      },
+      getBankLedgerReconciliation() {
+        return ipc.pro.getBankLedgerReconciliation();
+      },
       listVendors() {
         return ipc.pro.listVendors();
       },

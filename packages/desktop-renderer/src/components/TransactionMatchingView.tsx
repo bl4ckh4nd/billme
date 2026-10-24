@@ -2,7 +2,7 @@ import {
   Badge, Button, Card, CardHeader, Checkbox, ConfirmDialog, EmptyState, ErrorState, IconButton, Input,
   SegmentedControl, Select, useActionFeedback,
 } from '@billme/ui';
-import { isSupportedEurTaxYear, LATEST_SUPPORTED_EUR_TAX_YEAR, SUPPORTED_EUR_TAX_YEARS } from '@billme/accounting-shared';
+import { defaultEurTaxYear, eurTaxYearOptions } from '@billme/accounting-shared';
 import React, { useEffect, useMemo, useState } from 'react';
 import { Link2, Unlink, CheckCircle2, Search, X, Layers, Check, Ban, TriangleAlert } from 'lucide-react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
@@ -81,10 +81,8 @@ const queueRowCurrent = 'bg-accent-50 shadow-[inset_3px_0_0_var(--color-accent)]
 const cardHead = 'border-b border-border px-3.5 py-3';
 const banner = 'flex items-start gap-2.5 rounded-control border px-3 py-2.5 text-control';
 
-/** The running year when a bundled EÜR catalog exists for it, else the latest one. */
-export const DEFAULT_EUR_TAX_YEAR: number = isSupportedEurTaxYear(new Date().getFullYear())
-  ? new Date().getFullYear()
-  : LATEST_SUPPORTED_EUR_TAX_YEAR;
+/** The running year; a year after the newest bundled form is calculated with it (provisional). */
+export const DEFAULT_EUR_TAX_YEAR: number = defaultEurTaxYear();
 
 /** Invoice matching and EÜR classification of bank transactions: a queue next to its detail. */
 export const TransactionMatchingView: React.FC<{ initialTab?: MatchingTab }> = ({
@@ -509,7 +507,7 @@ export const TransactionMatchingView: React.FC<{ initialTab?: MatchingTab }> = (
         ) : (
           <>
             <Select value={taxYear} aria-label="Steuerjahr" onChange={(e) => setTaxYear(Number(e.target.value))}>
-              {SUPPORTED_EUR_TAX_YEARS.map((year) => <option key={year} value={year}>{year}</option>)}
+              {eurTaxYearOptions().map((year) => <option key={year} value={year}>{year}</option>)}
             </Select>
             <Input
               value={eurQuery}
@@ -659,10 +657,17 @@ export const TransactionMatchingView: React.FC<{ initialTab?: MatchingTab }> = (
                             <Spinner size="md" />
                           </div>
                         ) : !matchData || matchData.suggestions.length === 0 ? (
-                          <EmptyState
-                            title="Keine passende Rechnung gefunden"
-                            description="Es gibt keine offenen Rechnungen mit passendem Betrag oder Verwendungszweck zu dieser Transaktion."
-                          />
+                          !isProProduct && selectedTransaction.amount < 0 ? (
+                            <EmptyState
+                              title="Keine Rechnung zu dieser Ausgabe"
+                              description="Ausgaben gehören zu keiner offenen Rechnung. Ordne die Zahlung einer EÜR-Kategorie zu. Nur eine Rückzahlung an einen Kunden wird hier mit seiner bezahlten Rechnung verknüpft."
+                            />
+                          ) : (
+                            <EmptyState
+                              title="Keine passende Rechnung gefunden"
+                              description="Es gibt keine offenen Rechnungen mit passendem Betrag oder Verwendungszweck zu dieser Transaktion."
+                            />
+                          )
                         ) : (
                           matchData.suggestions.map((suggestion, index) => {
                             const alreadyPaid = suggestion.invoice.payments?.reduce(

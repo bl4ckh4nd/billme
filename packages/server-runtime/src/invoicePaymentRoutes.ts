@@ -63,8 +63,19 @@ export const registerInvoicePaymentRoutes = (app: FastifyInstance, product: 'lit
           if (operation === 'save') payments.push(body.payment!);
           // A payment may settle at most what is open (amount less credit notes and other payments). More is a
           // credit the customer is owed: record what is open and refund or offset the rest separately.
+          const cents = (value: number) => Math.round(Number(value) * 100);
+          // A refund (negative payment) gives back at most what the customer paid on this invoice.
+          if (operation === 'save' && body.payment!.amount < 0) {
+            const paidCents = payments.filter((payment) => payment.id !== paymentId && !isSkontoPayment(payment)).reduce((sum, payment) => sum + cents(payment.amount), 0);
+            if (-cents(body.payment!.amount) > paidCents) {
+              throw new ApiError(409, `Die Erstattung übersteigt den bezahlten Betrag von ${(Math.max(0, paidCents) / 100).toFixed(2).replace('.', ',')} €. Erstattet werden kann höchstens, was bezahlt wurde.`);
+            }
+          }
+          // Nor may a payment be removed or lowered below what was already refunded from it.
+          if (payments.filter((payment) => !isSkontoPayment(payment)).reduce((sum, payment) => sum + cents(payment.amount), 0) < 0) {
+            throw new ApiError(409, 'Von dieser Zahlung wurde bereits erstattet. Bitte zuerst die Erstattung stornieren.');
+          }
           if (operation === 'save' && body.payment!.amount > 0) {
-            const cents = (value: number) => Math.round(Number(value) * 100);
             const openCents = cents(before.amount) - cents(await creditedAmount(transaction, session.scope, before.id))
               - payments.filter((payment) => payment.id !== paymentId && !isSkontoPayment(payment)).reduce((sum, payment) => sum + cents(payment.amount), 0);
             if (cents(body.payment!.amount) > openCents) {

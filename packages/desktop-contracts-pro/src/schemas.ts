@@ -522,6 +522,38 @@ export const journalEntryEntitySchema = z.object({
   lines: z.array(journalLineEntitySchema),
 });
 
+/**
+ * Freie Buchung (Buchungssatz): Beleg (number and date), text and at least two lines. A line with a
+ * Steuerschlüssel is a gross amount; the server splits it into net and VAT line.
+ */
+export const proManualJournalEntryLineSchema = z.object({
+  accountNumber: z.string().trim().min(1),
+  debitAmount: z.number().min(0),
+  creditAmount: z.number().min(0),
+  taxCaseKey: taxCaseKeySchema.optional(),
+  memo: z.string().optional(),
+});
+export const proPostManualJournalEntryArgsSchema = z.object({
+  reason: z.string().trim().min(1),
+  documentDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  postingDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+  reference: z.string().trim().min(1, 'Belegnummer fehlt').max(36),
+  bookingText: z.string().trim().min(1, 'Buchungstext fehlt').max(60, 'Buchungstext höchstens 60 Zeichen (DATEV)'),
+  lines: z.array(proManualJournalEntryLineSchema).min(2),
+  idempotencyKey: z.string().trim().min(1),
+  softLockOverride: z.boolean().optional(),
+  overrideReason: z.string().optional(),
+});
+export const proBankLedgerReconciliationRowSchema = z.object({
+  ledgerAccountNumber: z.string(),
+  bankAccountIds: z.array(z.string()),
+  bookedBankTotal: z.number(),
+  pendingCount: z.number().int(),
+  pendingTotal: z.number(),
+  ledgerBalance: z.number(),
+  difference: z.number(),
+});
+
 export const ledgerBalanceRowSchema = z.object({
   accountNumber: z.string(),
   openingBalance: z.number(),

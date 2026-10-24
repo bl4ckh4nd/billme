@@ -938,6 +938,12 @@ export const createProWebClient = (config: ProWebClientConfig) => {
     reverseOpenItemPayment(paymentId: string, reason: string, postingDate?: string) {
       return requestJson({ method: 'POST', body: { reason, ...(postingDate ? { postingDate } : {}) }, parser: (input) => input }, `/api/v1/pro/accounting/open-items/payments/${encodeURIComponent(paymentId)}/reverse`);
     },
+    postManualJournalEntry(input: unknown) {
+      return requestJson({ method: 'POST', body: input, parser: (payload) => payload }, '/api/v1/pro/accounting/journal');
+    },
+    getBankLedgerReconciliation() {
+      return requestJson({ parser: (payload) => payload }, '/api/v1/pro/accounting/bank-reconciliation');
+    },
     reallocateOpenItemPayment(paymentId: string, input: { reason: string; partyId: string; allocations: unknown; allocationEventId: string }) {
       return requestJson({ method: 'POST', body: input, parser: (payload) => payload }, `/api/v1/pro/accounting/open-items/payments/${encodeURIComponent(paymentId)}/reallocate`);
     },
@@ -1239,6 +1245,13 @@ export const createProHttpBillmeApi = ({ fallback, onInvoke, downloadBlob, ...cl
         case 'pro:reverseOpenItemPayment': {
           const parsedArgs = ipcRoutes[key].args.parse(args) as IpcArgs<'pro:reverseOpenItemPayment'>;
           return ipcRoutes[key].result.parse(await client.reverseOpenItemPayment(parsedArgs.paymentId, parsedArgs.reason, parsedArgs.postingDate)) as IpcResult<K>;
+        }
+        case 'pro:postManualJournalEntry': {
+          const parsedArgs = ipcRoutes[key].args.parse(args);
+          return ipcRoutes[key].result.parse(await client.postManualJournalEntry(parsedArgs)) as IpcResult<K>;
+        }
+        case 'pro:getBankLedgerReconciliation': {
+          return ipcRoutes[key].result.parse(await client.getBankLedgerReconciliation()) as IpcResult<K>;
         }
         case 'pro:reallocateOpenItemPayment': {
           const { paymentId, ...input } = ipcRoutes[key].args.parse(args) as IpcArgs<'pro:reallocateOpenItemPayment'>;

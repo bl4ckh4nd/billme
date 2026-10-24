@@ -315,7 +315,18 @@ const accountExists = async (db: PostgresQueryable, chart: string, account: stri
   // Fail closed: without a catalogue for the chart no account exists.
   return Boolean((await q(db, `SELECT 1 FROM ledger_accounts WHERE chart=$1 AND account_number=$2 LIMIT 1`, [chart, account]))[0]);
 };
-const validateDraft = async (db: PostgresQueryable, scope: TenantScope, draft: BookingDraftEntity, periodStatus: string, chart: 'SKR03'|'SKR04'): Promise<ValidationIssue[]> => {
+type DraftBankLine = { account_id: unknown; amount: unknown; type: string };
+/** The money of a bank line moved on its bank account: the draft books exactly that amount there, on that side. */
+const bankLineIssue = async (db: PostgresQueryable, t: string, draft: BookingDraftEntity, bank: DraftBankLine): Promise<ValidationIssue | undefined> => {
+  const account = await bankLedgerAccount(db, t, bank.account_id);
+  const amount = Math.abs(cents(bank.amount) ?? 0);
+  const expected = bank.type === 'income' ? amount : -amount;
+  const booked = draft.lines.filter((line) => line.accountNumber === account).reduce((sum, line) => sum + (cents(line.debitAmount) ?? 0) - (cents(line.creditAmount) ?? 0), 0);
+  if (booked === expected) return undefined;
+  const euro = (amount / 100).toFixed(2).replace('.', ',');
+  return issue('BANK_LINE_MISMATCH', `Die Bankzeile muss ${euro} € im ${bank.type === 'income' ? 'Soll' : 'Haben'} auf dem Konto ${account} des Bankkontos buchen.`, 'lines');
+};
+const validateDraft = async (db: PostgresQueryable, scope: TenantScope, draft: BookingDraftEntity, periodStatus: string, chart: 'SKR03'|'SKR04', bank?: DraftBankLine): Promise<ValidationIssue[]> => {
   const out: ValidationIssue[] = []; const debit = draft.lines.reduce((sum, l) => sum + (cents(l.debitAmount) ?? 0), 0); const credit = draft.lines.reduce((sum, l) => sum + (cents(l.creditAmount) ?? 0), 0);
   if (!isoDate(draft.postingDate)) out.push(issue('INVALID_POSTING_DATE', 'Buchungsdatum ist ungültig.', 'postingDate'));
   else if (draft.period !== period(draft.postingDate) || draft.fiscalYear !== await reportingFiscalYear(db, tenant(scope), draft.postingDate)) out.push(issue('POSTING_PERIOD_MISMATCH', 'Periode und Geschäftsjahr müssen zum Buchungsdatum passen.', 'period'));
@@ -330,6 +341,7 @@ const validateDraft = async (db: PostgresQueryable, scope: TenantScope, draft: B
     if (d === null || c === null || d < 0 || c < 0 || (d > 0) === (c > 0)) out.push(issue('INVALID_LINE_AMOUNT', 'Beträge müssen Centbeträge mit genau einer Seite sein.', `lines[${index}]`));
     if (line.accountNumber && !(await accountExists(db, chart, line.accountNumber))) out.push(issue('UNKNOWN_ACCOUNT', `Sachkonto ${line.accountNumber} ist im Kontenrahmen nicht vorhanden.`, `lines[${index}].accountNumber`));
   }
+  if (bank) { const mismatch = await bankLineIssue(db, tenant(scope), draft, bank); if (mismatch) out.push(mismatch); }
   if (periodStatus === 'closed') out.push(issue('POSTING_DATE_IN_CLOSED_PERIOD', 'Periode ist geschlossen.'));
   out.push(...await validateJournalLineDatevEvidence(db, draft.lines));
   return out;
@@ -339,8 +351,8 @@ const saveDraftTarget = async (db: PostgresQueryable, scope: TenantScope, draft:
   const { mutation: _ignoredMutation, ...draftData } = draft as BookingDraftEntity & { mutation?: AccountingMutationContext };
   const existing = (await q<any>(db, `SELECT workflow_status FROM booking_drafts WHERE tenant_id=$1 AND id=$2 FOR UPDATE`, [tenant(scope), draft.id]))[0];
   if (existing?.workflow_status === 'posted') throw Object.assign(new Error('POSTED_DRAFT_IMMUTABLE'), { statusCode: 409 });
-  const t = tenant(scope); const transactionOwner = (await q<any>(db, `SELECT tenant_id FROM bank_transactions WHERE id=$1`, [draft.transactionId]))[0]; if (transactionOwner && transactionOwner.tenant_id !== t) throw new Error('BANK_TRANSACTION_NOT_FOUND'); const foreignDraft = (await q<any>(db, `SELECT tenant_id FROM booking_drafts WHERE id=$1 AND tenant_id<>$2`, [draft.id, t]))[0]; if (foreignDraft) throw new Error('DRAFT_NOT_FOUND'); const p = await policy(db, t); const postingDate = draft.postingDate ?? now().slice(0, 10); const normalized = { ...draftData, tenantId: t, lines: (draft.lines ?? []).map((line, i) => ({ ...line, id: line.id || `${draft.id}-${i + 1}`, debitAmount: round(line.debitAmount), creditAmount: round(line.creditAmount) })), period: draft.period || period(postingDate), fiscalYear: isoDate(postingDate) ? await reportingFiscalYear(db, t, postingDate) : draft.fiscalYear || Number((draft.period || period(postingDate)).slice(0, 4)), updatedAt: now() };
-  const periodStatus = await ensurePeriod(db, scope, normalized.period, isoDate(postingDate) ? postingDate : undefined); normalized.validationIssues = await validateDraft(db, scope, normalized, periodStatus, p.activeChart); normalized.workflowStatus = normalized.validationIssues.some((x) => x.blocking) ? periodStatus === 'closed' ? 'period_locked' : 'incomplete' : normalized.workflowStatus;
+  const t = tenant(scope); const transactionOwner = (await q<any>(db, `SELECT tenant_id,account_id,amount,type FROM bank_transactions WHERE id=$1`, [draft.transactionId]))[0]; if (!transactionOwner || transactionOwner.tenant_id !== t) throw new Error('BANK_TRANSACTION_NOT_FOUND: Ein Buchungsentwurf gehört zu einer Bankzeile; ohne Bankzeile ist es eine freie Buchung mit Beleg.'); const foreignDraft = (await q<any>(db, `SELECT tenant_id FROM booking_drafts WHERE id=$1 AND tenant_id<>$2`, [draft.id, t]))[0]; if (foreignDraft) throw new Error('DRAFT_NOT_FOUND'); const p = await policy(db, t); const postingDate = draft.postingDate ?? now().slice(0, 10); const normalized = { ...draftData, tenantId: t, lines: (draft.lines ?? []).map((line, i) => ({ ...line, id: line.id || `${draft.id}-${i + 1}`, debitAmount: round(line.debitAmount), creditAmount: round(line.creditAmount) })), period: draft.period || period(postingDate), fiscalYear: isoDate(postingDate) ? await reportingFiscalYear(db, t, postingDate) : draft.fiscalYear || Number((draft.period || period(postingDate)).slice(0, 4)), updatedAt: now() };
+  const periodStatus = await ensurePeriod(db, scope, normalized.period, isoDate(postingDate) ? postingDate : undefined); normalized.validationIssues = await validateDraft(db, scope, normalized, periodStatus, p.activeChart, transactionOwner); normalized.workflowStatus = normalized.validationIssues.some((x) => x.blocking) ? periodStatus === 'closed' ? 'period_locked' : 'incomplete' : normalized.workflowStatus;
   await q(db, `INSERT INTO booking_drafts (id,tenant_id,transaction_id,workflow_status,draft_json,updated_at) VALUES ($1,$2,$3,$4,$5,$6) ON CONFLICT (id) DO UPDATE SET transaction_id=EXCLUDED.transaction_id,workflow_status=EXCLUDED.workflow_status,draft_json=EXCLUDED.draft_json,updated_at=EXCLUDED.updated_at`, [normalized.id, t, normalized.transactionId, normalized.workflowStatus, JSON.stringify(normalized), normalized.updatedAt]);
   await q(db, `DELETE FROM booking_draft_lines WHERE tenant_id=$1 AND draft_id=$2`, [t, normalized.id]); await q(db, `DELETE FROM draft_validation_issues WHERE tenant_id=$1 AND draft_id=$2`, [t, normalized.id]);
   for (const [index, line] of normalized.lines.entries()) { if (normalized.lines.findIndex((candidate) => candidate.id === line.id) !== index) continue; await q(db, `INSERT INTO booking_draft_lines (id,tenant_id,draft_id,line_no,account_number,debit_amount,credit_amount,tax_code,tax_case_key,tax_rate,net_amount,tax_amount,gross_amount,country_code,counterparty_vat_id,evidence_type,evidence_reference,datev_sachverhalt_ll,cost_center,memo) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20)`, [line.id, t, normalized.id, index + 1, line.accountNumber, line.debitAmount, line.creditAmount, line.taxCode ?? null, line.taxCaseKey ?? null, line.taxRate ?? null, line.netAmount ?? null, line.taxAmount ?? null, line.grossAmount ?? null, line.countryCode ?? null, line.counterpartyVatId ?? null, line.evidenceType ?? null, line.evidenceReference ?? null, line.datevSachverhaltLl ?? null, line.costCenter ?? null, line.memo ?? null]); }
@@ -648,6 +660,8 @@ export type ProAccountingReportRepository = Omit<ProAccountingRepository, 'getGu
   reverseOpenItemPayment(scope: TenantScope, input: { paymentId: string; reason: string; postingDate?: string; mutation?: AccountingMutationContext }): Promise<OpenItemPaymentReversal>;
   reallocateOpenItemPayment(scope: TenantScope, input: { paymentId: string; reason: string; partyId: string; allocations: Array<{ openItemId: string; amount: number }>; allocationEventId: string; mutation?: AccountingMutationContext }): Promise<{ reversal: OpenItemPaymentReversal; payment: OpenItemPaymentEntity }>;
   setAccountingPeriodStatus(scope: TenantScope, input: { period: string; status: AccountingPeriodStatus; mutation: AccountingMutationContext }): Promise<AccountingPeriodStatusChange>;
+  postManualJournalEntry(scope: TenantScope, input: ManualJournalEntryInput): Promise<JournalEntryEntity>;
+  getBankLedgerReconciliation(scope: TenantScope): Promise<BankLedgerReconciliationRow[]>;
   getBwa01Report(scope: TenantScope, args?: { from?: string; to?: string; chart?: 'SKR03' | 'SKR04'; profile?: string }): Promise<ReportResult<Bwa01Report>>;
   getGuvReport(scope: TenantScope, args?: { from?: string; to?: string; chart?: 'SKR03' | 'SKR04'; profile?: 'guv' | 'management-guv' | 'hgb-guv' }): Promise<ReportResult<ManagementGuvReport | HgbGuvReport>>;
   getBilanzReport(scope: TenantScope, args?: { asOfDate?: string; chart?: 'SKR03' | 'SKR04' }): Promise<ReportResult<HgbBilanzReport>>;
@@ -677,9 +691,11 @@ export const createPostgresProAccountingRepository = (db: PostgresQueryable): Pr
   reallocateOpenItemPayment: (scope, input) => inTx(db, async (tx) => {
     const original = (await q<any>(tx, `SELECT * FROM open_item_payments WHERE tenant_id=$1 AND id=$2 FOR UPDATE`, [tenant(scope), input.paymentId]))[0];
     if (!original) throw new Error('OPEN_ITEM_PAYMENT_NOT_FOUND');
-    // A payment recorded on an invoice belongs to that invoice; it is reversed there and recorded on the other one.
-    if (original.source_type === 'invoice_payment') throw new Error('PAYMENT_REALLOCATION_UNSUPPORTED: Eine auf der Rechnung erfasste Zahlung wird dort storniert und auf der richtigen Rechnung neu erfasst.');
+    // A payment recorded on an invoice moves as a whole to another issued invoice: it leaves the list of the
+    // first invoice and joins the list of the second, booked there. A split or a refund is reversed and recorded anew.
+    const listedOn = original.source_type === 'invoice_payment' ? await invoicePaymentListing(tx, tenant(scope), original, input.allocations) : undefined;
     const reversal = await reverseOpenItemPaymentInTransaction(tx, scope, { paymentId: input.paymentId, reason: input.reason, mutation: input.mutation });
+    if (listedOn) await q(tx, `UPDATE invoices SET payments_json=$1,updated_at=$2 WHERE tenant_id=$3 AND id=$4`, [JSON.stringify([...parse<any[]>(listedOn.target.payments_json, []), listedOn.entry]), now(), tenant(scope), listedOn.target.id]);
     const payment = await allocatePayment(tx, scope, {
       sourceType: original.source_type, sourceId: original.source_id, partyType: original.party_type, partyId: input.partyId,
       paymentDate: original.payment_date, amount: Number(original.amount), bankAccountNumber: original.bank_account_number, method: original.method ?? undefined,
@@ -689,6 +705,26 @@ export const createPostgresProAccountingRepository = (db: PostgresQueryable): Pr
     return { reversal, payment };
   }),
   setAccountingPeriodStatus: (scope, input) => setAccountingPeriodStatus(db, scope, input),
+  postManualJournalEntry: (scope, input) => inTx(db, (tx) => postManualJournalEntryInTransaction(tx, scope, input)),
+  async getBankLedgerReconciliation(scope) {
+    const t = tenant(scope);
+    const lines = await q<any>(db, `SELECT account_id, COUNT(*) FILTER (WHERE booked)::int booked_count, COALESCE(SUM(signed) FILTER (WHERE booked),0) booked_total, COUNT(*) FILTER (WHERE NOT booked)::int pending_count, COALESCE(SUM(signed) FILTER (WHERE NOT booked),0) pending_total
+      FROM (SELECT account_id, (status='booked' OR linked_invoice_id IS NOT NULL) booked, CASE WHEN type='income' THEN ABS(amount) ELSE -ABS(amount) END signed FROM bank_transactions WHERE tenant_id=$1) b GROUP BY account_id ORDER BY account_id`, [t]);
+    const rows = new Map<string, BankLedgerReconciliationRow>();
+    for (const line of lines) {
+      const ledgerAccountNumber = await bankLedgerAccount(db, t, line.account_id);
+      const row = rows.get(ledgerAccountNumber) ?? { ledgerAccountNumber, bankAccountIds: [], bookedBankTotal: 0, pendingCount: 0, pendingTotal: 0, ledgerBalance: 0, difference: 0 };
+      if (line.account_id) row.bankAccountIds.push(String(line.account_id));
+      row.bookedBankTotal = round(row.bookedBankTotal + Number(line.booked_total));
+      row.pendingCount += Number(line.pending_count);
+      row.pendingTotal = round(row.pendingTotal + Number(line.pending_total));
+      rows.set(ledgerAccountNumber, row);
+    }
+    if (!rows.size) return [];
+    const balances = await q<any>(db, `SELECT jl.account_number, COALESCE(SUM(jl.debit_amount-jl.credit_amount),0) balance FROM journal_lines jl JOIN journal_entries je ON je.id=jl.entry_id AND je.tenant_id=jl.tenant_id WHERE jl.tenant_id=$1 AND je.status IN ('posted','reversed') AND ${RUNNING_JOURNAL} AND jl.account_number = ANY($2::text[]) GROUP BY jl.account_number`, [t, [...rows.keys()]]);
+    for (const balance of balances) { const row = rows.get(String(balance.account_number)); if (row) row.ledgerBalance = round(balance.balance); }
+    return [...rows.values()].map((row) => ({ ...row, difference: round(row.ledgerBalance - row.bookedBankTotal) })).sort((a, b) => a.ledgerAccountNumber.localeCompare(b.ledgerAccountNumber));
+  },
   async listBankTransactions(scope) {
     const [rows, suggestionContext] = await Promise.all([
       q<any>(db, `SELECT * FROM bank_transactions WHERE tenant_id=$1 ORDER BY date DESC,id`, [tenant(scope)]),
@@ -709,7 +745,7 @@ export const createPostgresProAccountingRepository = (db: PostgresQueryable): Pr
   async saveDraft(scope, draft) { return inTx(db, (tx) => saveDraftTarget(tx, scope, draft, draft.mutation)); },
   async dispatchDraftAction(scope, args) { return inTx(db, async (tx) => { const draft = await getDraft(tx, scope, args.transactionId); if (!draft) throw new Error('Draft not found'); const transitions: Record<string, string[]> = { imported: ['suggested','incomplete','pending_approval'], suggested: ['suggested','incomplete','pending_approval'], incomplete: ['suggested','incomplete','pending_approval'], ready_for_review: ['pending_approval'], pending_approval: ['approved','incomplete'], approved: ['approved'], posted: ['reversed'], reversed: ['corrected'], corrected: ['suggested','incomplete'], period_locked: ['incomplete','suggested'], integration_error: ['incomplete','suggested'] }; const targets: Record<string, string> = { save_draft: 'suggested', submit_for_review: 'pending_approval', approve: 'approved', reject: 'incomplete', post: 'approved', reverse: 'reversed', create_correction: 'corrected', request_receipt: 'incomplete' }; const target = targets[args.action]; if (!transitions[draft.workflowStatus]?.includes(target)) throw new Error(`Invalid workflow transition: ${draft.workflowStatus} -> ${target}`); return saveDraftTarget(tx, scope, { ...draft, workflowStatus: target as BookingDraftEntity['workflowStatus'], validationIssues: args.action === 'reject' && args.rejectReason ? [{ id: randomUUID(), code: 'MANUAL_REVIEW_REJECTED', severity: 'warning', message: args.rejectReason, blocking: false, source: 'user' }] : draft.validationIssues }, args.mutation); }); },
   async validateTaxCompliance(scope, args) { const draft = args.draftId ? (await q<any>(db, `SELECT * FROM booking_drafts WHERE tenant_id=$1 AND id=$2`, [tenant(scope), args.draftId]))[0] : args.transactionId ? await getDraft(db, scope, args.transactionId) : null; if (!draft) throw new Error('Draft not found'); if ('draft_json' in draft) { const lines = await q<any>(db, `SELECT * FROM booking_draft_lines WHERE tenant_id=$1 AND draft_id=$2 ORDER BY line_no`, [tenant(scope), draft.id]); const issues = await q<any>(db, `SELECT * FROM draft_validation_issues WHERE tenant_id=$1 AND draft_id=$2`, [tenant(scope), draft.id]); const parsed = draftFromRows(draft, lines, issues, scope); const saved = await inTx(db, (tx) => saveDraftTarget(tx, scope, parsed, args.mutation)); return { ok: !saved.validationIssues.some((x) => x.blocking), issues: saved.validationIssues }; } return { ok: !(draft as BookingDraftEntity).validationIssues.some((x) => x.blocking), issues: (draft as BookingDraftEntity).validationIssues }; },
-  async postDraft(scope, draftId, options: PostDraftOptions = {}) { return inTx(db, async (tx) => { const t = tenant(scope); const sourceKey = options.idempotencyKey?.trim() || `booking-draft:${draftId}`; const existing = await q<any>(tx, `SELECT id FROM journal_entries WHERE tenant_id=$1 AND source_type='booking_draft' AND source_key=$2`, [t, sourceKey]); if (existing[0]) return { entry: (await loadEntry(tx, scope, existing[0].id))!, issues: [] }; const rows = await q<any>(tx, `SELECT * FROM booking_drafts WHERE tenant_id=$1 AND id=$2`, [t, draftId]); if (!rows[0]) throw new Error('Draft not found'); const lines = await q<any>(tx, `SELECT * FROM booking_draft_lines WHERE tenant_id=$1 AND draft_id=$2 ORDER BY line_no`, [t, draftId]); const savedIssues = await q<any>(tx, `SELECT * FROM draft_validation_issues WHERE tenant_id=$1 AND draft_id=$2`, [t, draftId]); const draft = draftFromRows(rows[0], lines, savedIssues, scope); const bankLine = (await q<any>(tx, `SELECT status,linked_invoice_id FROM bank_transactions WHERE tenant_id=$1 AND id=$2 FOR UPDATE`, [t, draft.transactionId]))[0]; if (bankLine?.status === 'booked' || bankLine?.linked_invoice_id) throw new Error('PAYMENT_SOURCE_ALREADY_BOOKED'); const postingDate = options.postingDate ?? draft.postingDate; const p = await policy(tx, t); const fiscalYear = postingDate && isoDate(postingDate) ? await reportingFiscalYear(tx, t, postingDate) : draft.fiscalYear; const periodStatus = postingDate && isoDate(postingDate) ? await ensurePeriod(tx, scope, period(postingDate), postingDate) : 'open'; const issues = await validateDraft(tx, scope, { ...draft, postingDate, period: postingDate ? period(postingDate) : draft.period, fiscalYear }, periodStatus, p.activeChart); if (rows[0].workflow_status !== 'approved') issues.push(issue('DRAFT_NOT_APPROVED', 'Nur freigegebene Entwürfe dürfen gebucht werden.')); if (periodStatus === 'soft_locked' && (!options.softLockOverride || !options.overrideReason?.trim())) issues.push(issue('SOFT_LOCK_OVERRIDE_REQUIRED', 'Vorläufig gesperrte Periode benötigt Freigabe und Begründung.')); if (issues.some((x) => x.blocking)) return { entry: { id: '', tenantId: t, entryNumber: 0, postingDate: postingDate ?? '', bookingText: draft.bookingText, period: draft.period, fiscalYear, status: 'posted', createdAt: now(), lines: [] }, issues }; const normalized = { ...draft, postingDate: postingDate!, period: period(postingDate!), fiscalYear }; const entryId = await insertEntry(tx, scope, 'booking_draft', sourceKey, postingDate!, normalized.bookingText, normalized.lines, { documentDate: normalized.documentDate, reference: normalized.reference, sourceDraftId: normalized.id, softLockOverride: options.softLockOverride, overrideReason: options.overrideReason, mutation: options.mutation }); await q(tx, `UPDATE booking_drafts SET workflow_status='posted',draft_json=$1,updated_at=$2 WHERE tenant_id=$3 AND id=$4`, [JSON.stringify({ ...normalized, workflowStatus: 'posted' }), now(), t, draftId]); await q(tx, `UPDATE bank_transactions SET status='booked',updated_at=$1 WHERE tenant_id=$2 AND id=$3`, [now(), t, draft.transactionId]); return { entry: (await loadEntry(tx, scope, entryId))!, issues: [] }; }); },
+  async postDraft(scope, draftId, options: PostDraftOptions = {}) { return inTx(db, async (tx) => { const t = tenant(scope); const sourceKey = options.idempotencyKey?.trim() || `booking-draft:${draftId}`; const existing = await q<any>(tx, `SELECT id FROM journal_entries WHERE tenant_id=$1 AND source_type='booking_draft' AND source_key=$2`, [t, sourceKey]); if (existing[0]) return { entry: (await loadEntry(tx, scope, existing[0].id))!, issues: [] }; const rows = await q<any>(tx, `SELECT * FROM booking_drafts WHERE tenant_id=$1 AND id=$2`, [t, draftId]); if (!rows[0]) throw new Error('Draft not found'); const lines = await q<any>(tx, `SELECT * FROM booking_draft_lines WHERE tenant_id=$1 AND draft_id=$2 ORDER BY line_no`, [t, draftId]); const savedIssues = await q<any>(tx, `SELECT * FROM draft_validation_issues WHERE tenant_id=$1 AND draft_id=$2`, [t, draftId]); const draft = draftFromRows(rows[0], lines, savedIssues, scope); const bankLine = (await q<any>(tx, `SELECT status,linked_invoice_id,account_id,amount,type FROM bank_transactions WHERE tenant_id=$1 AND id=$2 FOR UPDATE`, [t, draft.transactionId]))[0]; if (!bankLine) throw new Error('BANK_TRANSACTION_NOT_FOUND: Ein Buchungsentwurf ohne Bankzeile wird nicht gebucht; das ist eine freie Buchung mit Beleg.'); if (bankLine.status === 'booked' || bankLine.linked_invoice_id) throw new Error('PAYMENT_SOURCE_ALREADY_BOOKED'); const postingDate = options.postingDate ?? draft.postingDate; const p = await policy(tx, t); const fiscalYear = postingDate && isoDate(postingDate) ? await reportingFiscalYear(tx, t, postingDate) : draft.fiscalYear; const periodStatus = postingDate && isoDate(postingDate) ? await ensurePeriod(tx, scope, period(postingDate), postingDate) : 'open'; const issues = await validateDraft(tx, scope, { ...draft, postingDate, period: postingDate ? period(postingDate) : draft.period, fiscalYear }, periodStatus, p.activeChart, bankLine); if (rows[0].workflow_status !== 'approved') issues.push(issue('DRAFT_NOT_APPROVED', 'Nur freigegebene Entwürfe dürfen gebucht werden.')); if (periodStatus === 'soft_locked' && (!options.softLockOverride || !options.overrideReason?.trim())) issues.push(issue('SOFT_LOCK_OVERRIDE_REQUIRED', 'Vorläufig gesperrte Periode benötigt Freigabe und Begründung.')); if (issues.some((x) => x.blocking)) return { entry: { id: '', tenantId: t, entryNumber: 0, postingDate: postingDate ?? '', bookingText: draft.bookingText, period: draft.period, fiscalYear, status: 'posted', createdAt: now(), lines: [] }, issues }; const normalized = { ...draft, postingDate: postingDate!, period: period(postingDate!), fiscalYear }; const entryId = await insertEntry(tx, scope, 'booking_draft', sourceKey, postingDate!, normalized.bookingText, normalized.lines, { documentDate: normalized.documentDate, reference: normalized.reference, sourceDraftId: normalized.id, softLockOverride: options.softLockOverride, overrideReason: options.overrideReason, mutation: options.mutation }); await q(tx, `UPDATE booking_drafts SET workflow_status='posted',draft_json=$1,updated_at=$2 WHERE tenant_id=$3 AND id=$4`, [JSON.stringify({ ...normalized, workflowStatus: 'posted' }), now(), t, draftId]); await q(tx, `UPDATE bank_transactions SET status='booked',updated_at=$1 WHERE tenant_id=$2 AND id=$3`, [now(), t, draft.transactionId]); return { entry: (await loadEntry(tx, scope, entryId))!, issues: [] }; }); },
   async reverseJournalEntry(scope, entryId, reason, options: ReverseJournalEntryOptions = {}) { return inTx(db, (tx) => reverseEntryInTransaction(tx, scope, entryId, reason, options)); },
   async listJournalEntries(scope, args = {}) { const t = tenant(scope); const values: unknown[] = [t]; const where = ['tenant_id=$1']; if (args.from) { values.push(args.from); where.push(`posting_date >= $${values.length}`); } if (args.to) { values.push(args.to); where.push(`posting_date <= $${values.length}`); } if (args.accountNumbers?.length) { values.push(args.accountNumbers); where.push(`id IN (SELECT entry_id FROM journal_lines WHERE tenant_id=$1 AND account_number = ANY($${values.length}))`); } values.push(Math.max(1, Math.min(5000, args.limit ?? 500)), Math.max(0, args.offset ?? 0)); const rows = await q<any>(db, `SELECT * FROM journal_entries WHERE ${where.join(' AND ')} ORDER BY posting_date DESC,entry_number DESC LIMIT $${values.length - 1} OFFSET $${values.length}`, values); return Promise.all(rows.map((r) => loadEntry(db, scope, r.id))).then((items) => items.filter(Boolean) as JournalEntryEntity[]); },
   async getJournalEntryById(scope, entryId) { return loadEntry(db, scope, entryId); },
@@ -1570,4 +1606,102 @@ export const bookBankLinkInTransaction = async (db: PostgresQueryable, scope: Te
     paymentDate: bank.date, amount: cash, bankAccountNumber: await bankLedgerAccount(db, t, bank.account_id), method: 'Überweisung',
     allocations: [{ openItemId: target.id, amount: applied }], allocationEventId: `bank-link:${bank.id}`, mutation: input.mutation, reason: input.mutation.reason,
   });
+};
+
+/** Where a payment recorded on an invoice is listed, and the issued invoice it may move to as a whole. */
+const invoicePaymentListing = async (db: PostgresQueryable, t: string, original: any, allocations: Array<{ openItemId: string; amount: number }>): Promise<{ entry: any; target: any }> => {
+  const unsupported = () => new Error('PAYMENT_REALLOCATION_UNSUPPORTED: Eine auf der Rechnung erfasste Zahlung lässt sich nur ganz auf eine andere gestellte Rechnung umbuchen; sonst dort stornieren und neu erfassen.');
+  const only = allocations.length === 1 ? allocations[0]! : undefined;
+  if (original.refund || !only || round(only.amount) !== round(original.amount)) throw unsupported();
+  const item = (await q<any>(db, `SELECT source_type,source_id FROM open_items WHERE tenant_id=$1 AND id=$2`, [t, only.openItemId]))[0];
+  const target = item?.source_type === 'outgoing_invoice' ? (await q<any>(db, `SELECT id,status,accounting_status,payments_json FROM invoices WHERE tenant_id=$1 AND id=$2 FOR UPDATE`, [t, item.source_id]))[0] : undefined;
+  if (!target || target.accounting_status !== 'posted' || target.status === 'cancelled' || target.status === 'draft') throw unsupported();
+  let entry: any;
+  for (const row of await q<any>(db, `SELECT payments_json FROM invoices WHERE tenant_id=$1 AND payments_json LIKE $2`, [t, `%${original.source_id}%`])) {
+    entry = parse<any[]>(row.payments_json, []).find((candidate) => candidate?.id === original.source_id) ?? entry;
+  }
+  if (!entry) throw new Error('PAYMENT_SOURCE_NOT_FOUND');
+  return { entry, target };
+};
+
+export interface ManualJournalEntryLine { accountNumber: string; debitAmount: number; creditAmount: number; taxCaseKey?: string; memo?: string }
+export interface ManualJournalEntryInput {
+  documentDate: string;
+  /** Defaults to the Belegdatum. */
+  postingDate?: string;
+  /** Belegnummer (DATEV Belegfeld 1): the free entry is only posted with its Beleg. */
+  reference: string;
+  bookingText: string;
+  lines: ManualJournalEntryLine[];
+  idempotencyKey: string;
+  softLockOverride?: boolean;
+  overrideReason?: string;
+  mutation?: AccountingMutationContext;
+  /** Another flow (e.g. Geldtransit) posts under its own source identity; default `manual`. */
+  sourceType?: string;
+  sourceKey?: string;
+}
+export interface BankLedgerReconciliationRow {
+  ledgerAccountNumber: string;
+  bankAccountIds: string[];
+  /** Imported bank lines that are booked (draft posted or allocated), signed. */
+  bookedBankTotal: number;
+  pendingCount: number;
+  pendingTotal: number;
+  /** Saldo of the ledger account (Soll − Haben), every posted entry. */
+  ledgerBalance: number;
+  /** Ledger minus booked bank lines: entries on the bank account without a bank line, or the other way round. */
+  difference: number;
+}
+
+/**
+ * Freie Buchung (Buchungssatz / Memorialbuchung): Belegdatum, Belegnummer, Buchungstext and at least two
+ * lines from the chart, Soll = Haben. A line with a Steuerschlüssel (19 % or 7 % Inland) is a gross amount:
+ * it is split into the net line, which carries the tax basis, and the Vorsteuer (Soll) or Umsatzsteuer (Haben)
+ * line. The period locks apply as for every posting; the same idempotency key returns the same entry.
+ */
+export const postManualJournalEntryInTransaction = async (db: PostgresQueryable, scope: TenantScope, input: ManualJournalEntryInput): Promise<JournalEntryEntity> => {
+  const t = tenant(scope);
+  const reference = input.reference?.trim();
+  if (!reference) throw new Error('MISSING_REFERENCE: Ohne Beleg keine Buchung: die Belegnummer fehlt.');
+  const bookingText = input.bookingText?.trim();
+  if (!bookingText) throw new Error('MISSING_BOOKING_TEXT: Der Buchungstext fehlt.');
+  if (bookingText.length > 60) throw new Error('INVALID_BOOKING_TEXT: Der Buchungstext hat höchstens 60 Zeichen (DATEV).');
+  if (!isoDate(input.documentDate)) throw new Error('INVALID_DOCUMENT_DATE: Das Belegdatum ist ungültig.');
+  const postingDate = input.postingDate ?? input.documentDate;
+  if (!isoDate(postingDate)) throw new Error('INVALID_POSTING_DATE');
+  const key = input.idempotencyKey?.trim();
+  if (!key && !input.sourceKey) throw new Error('MISSING_IDEMPOTENCY_KEY');
+  if (!Array.isArray(input.lines) || input.lines.length < 2) throw new Error('UNBALANCED_ENTRY: Eine Buchung hat mindestens zwei Zeilen.');
+  const p = await policy(db, t);
+  const m = await mappings(db, t, p.activeChart);
+  const lines: JournalLineEntity[] = [];
+  for (const [index, line] of input.lines.entries()) {
+    const accountNumber = String(line.accountNumber ?? '').trim();
+    const debit = cents(line.debitAmount ?? 0); const credit = cents(line.creditAmount ?? 0);
+    if (debit === null || credit === null || debit < 0 || credit < 0 || (debit > 0) === (credit > 0)) throw new Error(`INVALID_LINE_AMOUNT: Zeile ${index + 1} braucht einen Centbetrag im Soll oder im Haben.`);
+    if (!accountNumber || !(await accountExists(db, p.activeChart, accountNumber))) throw new Error(`UNKNOWN_ACCOUNT:${accountNumber} ist im Kontenrahmen ${p.activeChart} nicht vorhanden.`);
+    const debitSide = debit > 0;
+    const gross = debitSide ? debit : credit;
+    if (!line.taxCaseKey) {
+      lines.push({ id: randomUUID(), accountNumber, debitAmount: debit / 100, creditAmount: credit / 100, memo: line.memo });
+      continue;
+    }
+    const taxCase = (await q<any>(db, `SELECT mechanism,default_rate,requires_country,active FROM tax_cases WHERE key=$1`, [line.taxCaseKey]))[0];
+    const rate = Number(taxCase?.default_rate ?? 0);
+    if (!taxCase || !taxCase.active || taxCase.mechanism !== 'standard_vat' || !(rate > 0) || taxCase.requires_country) throw new Error(`TAX_CASE_NOT_AUTOMATIC: Steuerschlüssel ${line.taxCaseKey} lässt sich in der freien Buchung nicht automatisch aufteilen; Steuerzeile bitte als eigene Zeile buchen.`);
+    const net = Math.round(gross * 100 / (100 + rate)); const tax = gross - net;
+    // 7 % Vorsteuer has its own account (SKR03 1571, SKR04 1401), like the 7 % Umsatzsteuer.
+    const reducedInput = line.taxCaseKey === 'DE_STD_7' ? (p.activeChart === 'SKR04' ? '1401' : '1571') : m.input_vat!;
+    const taxAccount = debitSide
+      ? await taxCaseAccount(db, t, p.activeChart, line.taxCaseKey, 'input_tax', reducedInput, postingDate)
+      : await taxCaseAccount(db, t, p.activeChart, line.taxCaseKey, 'output_tax', m.output_vat!, postingDate);
+    if (!(await accountExists(db, p.activeChart, taxAccount))) throw new Error(`UNKNOWN_ACCOUNT:${taxAccount} (Steuerkonto) ist im Kontenrahmen ${p.activeChart} nicht vorhanden.`);
+    lines.push({ id: randomUUID(), accountNumber, debitAmount: debitSide ? net / 100 : 0, creditAmount: debitSide ? 0 : net / 100, taxCaseKey: line.taxCaseKey as TaxCaseKey, taxRate: rate, netAmount: net / 100, taxAmount: tax / 100, grossAmount: gross / 100, memo: line.memo });
+    if (tax > 0) lines.push({ id: randomUUID(), accountNumber: taxAccount, debitAmount: debitSide ? tax / 100 : 0, creditAmount: debitSide ? 0 : tax / 100, memo: `${debitSide ? 'Vorsteuer' : 'USt'} ${line.taxCaseKey}` });
+  }
+  const entryId = await insertEntry(db, scope, input.sourceType ?? 'manual', input.sourceKey ?? `manual-entry:${key}`, postingDate, bookingText, lines, {
+    documentDate: input.documentDate, reference, softLockOverride: input.softLockOverride, overrideReason: input.overrideReason, mutation: input.mutation,
+  });
+  return (await loadEntry(db, scope, entryId))!;
 };

@@ -70,6 +70,30 @@ import { bankAccount, configureLite, importBankRows, issueDated, line, pay } fro
  *   the chart or the VAT rate, a BU key on an Automatikkonto (or none on a plain
  *   account), cash entries booked against the bank, amounts with a dot, a
  *   Belegdatum other than TTMM, UTF-8 instead of CP1252, settings.datev lost on save
+ * - Anlage EÜR form: the "abziehbar" and "nicht abziehbar" columns (174/164,
+ *   175/165, 172/162, 177/168) swapped; a davon line (119 in 111, 153 in 151)
+ *   added to the sums a second time; 142/139 added to 199 instead of subtracted;
+ *   a non-deductible part counted as expense
+ * - splits (Lite): Bewirtung 70/30 not adding up to the net, the Vorsteuer cut
+ *   to 70 %, a split on income or with a neutral kind accepted; a gift over 50 €
+ *   accepted with Vorsteuer (§ 15 Abs. 1a UStG)
+ * - unclassified payments silently missing from the EÜR instead of counted and
+ *   named in the report
+ * - tax years: 2027 and later crash or are refused instead of calculated with
+ *   the newest form and marked provisional; the published 2026 form marked
+ *   provisional
+ * - UStVA (Lite): Kz 87/90 labelled as tax-free; Kz 39 deducted without a
+ *   Dauerfristverlängerung, outside December/Q4 or from another year's
+ *   Sondervorauszahlung; Kz 83 not the payable minus Kz 39; the due date
+ *   ignoring the extension; the settings not surviving a refetch; a negative
+ *   Sondervorauszahlung accepted; a Kleinunternehmer told to file without any
+ *   special tax debt; the § 19 limits (25.000 € / 100.000 €) not shown or not
+ *   flagged when exceeded
+ * - Zahlungsart (Lite): a manual entry without method silently booked as Bank or
+ *   Kasse in DATEV; a cash entry not booked to Kasse 1000; a booking without
+ *   money (Pauschale, AfA, Privatanteil) booked as Kasse or Bank, missing from
+ *   the EÜR, asked for a receipt in the VAT, matchable to a bank line or
+ *   carrying a receipt; a bank entry without its bank line exported
  */
 
 const YEAR_LINE = (year: number, code: string) => `E${year}_KZ${code}`;
@@ -1194,6 +1218,18 @@ describe('Zahlungsart manueller Buchungen und Buchungen ohne Geldfluss (Lite)', 
     assert.deepEqual([flatRate[6], flatRate[7]], ['1890', '4674'], 'Privateinlage against Verpflegungsmehraufwand, never Kasse or Bank');
     assert.match(errors.find((error) => error.sourceId === 'm-bank')?.message ?? '', /Bankumsatz/);
     assert.match(errors.find((error) => error.sourceId === 'm-legacy')?.message ?? '', /Zahlungsart/);
+  });
+
+  test('DATEV: a manual Privatentnahme matched to its bank line leaves the bank on the Haben side (only a Geldtransit turns the side)', async () => {
+    assert.equal((await entry('m-private', '2026-06-03', -5000, { paymentMethod: 'bank', purpose: 'Privat bezahlt' })).status, 200);
+    const bank = (await h.api.transactions.list({} as never)).find((t) => t.purpose === 'Kartenzahlung')!;
+    const match = await h.raw('POST', '/cash/entries/m-private/match', { transactionId: bank.id, expectedCashDate: '2026-06-03', reason: 'Abgleich' });
+    assert.equal(match.status, 200, match.text);
+    const kind = await h.raw('PUT', '/reports/eur/classifications', { sourceType: 'manual', sourceId: 'm-private', taxYear: 2026, kind: 'private-withdrawal', reason: 'Privat' });
+    assert.equal(kind.status, 200, kind.text);
+    const row = (await datev()).rows.find((r) => r[10] === '"m-private"');
+    assert.ok(row, 'the Privatentnahme is exported');
+    assert.deepEqual([row[0], row[1], row[6], row[7]], ['50,00', '"H"', '1200', '1800'], 'money left the bank: bank Haben, Privatentnahme Soll');
   });
 });
 

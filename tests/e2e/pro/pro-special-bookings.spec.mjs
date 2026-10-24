@@ -12,6 +12,9 @@ import { appUrl, getDesktopSettings, invokeDesktopIpc, launchDesktopApp, PRO_DOU
  *   (id or invoice number) not taken as the original; a server code shown instead of text
  * - periods: a lock or Festschreibung confirmed without a written reason, a festgeschriebener
  *   month that still offers an action, a list that disagrees with the server after the change
+ * - free entry (Buchungssatz): posted without Belegnummer or unbalanced, the Privat preset on
+ *   the wrong accounts, a posted entry that the journal does not list, the bank/ledger
+ *   reconciliation missing from the Abgleich
  */
 
 let desktop;
@@ -131,4 +134,39 @@ test('a month is soft-locked and festgeschrieben from the period list, each only
   }
   await expect(month('2026-03')).toContainText('Offen');
   await page.screenshot({ path: test.info().outputPath('periods-festgeschrieben.png'), fullPage: true });
+});
+
+test('a Privatentnahme is booked as a free entry with its Beleg, and the Abgleich shows bank against ledger', async () => {
+  const { page, baseUrl } = desktop;
+  await page.goto(appUrl(baseUrl, '/accounting?view=special'));
+  const panel = page.getByTestId('manual-entry-panel');
+  await expect(panel).toBeVisible();
+  const post = panel.getByRole('button', { name: 'Verbindlich buchen' });
+
+  await panel.getByRole('button', { name: 'Privatentnahme bar' }).click();
+  await expect(panel.getByRole('textbox', { name: 'Buchungstext' })).toHaveValue('Privatentnahme');
+  await panel.getByRole('textbox', { name: 'Belegdatum' }).fill('2026-04-20');
+  await panel.getByRole('textbox', { name: 'Betrag Zeile 1' }).fill('50,00');
+  await panel.getByRole('textbox', { name: 'Betrag Zeile 2' }).fill('49,00');
+  await panel.getByRole('textbox', { name: 'Begründung' }).fill('Barentnahme laut Kassenbeleg');
+  await expect(post, 'no posting without Belegnummer and balance').toBeDisabled();
+  await expect(panel.getByTestId('manual-entry-problems')).toContainText('Belegnummer fehlt');
+  await expect(panel.getByTestId('manual-entry-problems')).toContainText('Soll und Haben unterscheiden sich');
+  await panel.getByRole('textbox', { name: 'Belegnummer' }).fill('KB-2026-0420');
+  await panel.getByRole('textbox', { name: 'Betrag Zeile 2' }).fill('50,00');
+  await expect(post).toBeEnabled();
+  await post.click();
+  await expect(panel.getByTestId('manual-entry-feedback')).toHaveText(/Buchung Nr\. \d+ gebucht\./);
+
+  const entries = await invokeDesktopIpc(page, 'pro:listJournalEntries', {});
+  const entry = entries.find((candidate) => candidate.reference === 'KB-2026-0420');
+  expect(entry, 'the journal lists the free entry').toBeTruthy();
+  expect([entry.sourceType, entry.postingDate, entry.bookingText]).toEqual(['manual', '2026-04-20', 'Privatentnahme']);
+  expect(entry.lines.map((line) => [line.accountNumber, line.debitAmount, line.creditAmount])).toEqual([['1800', 50, 0], ['1000', 0, 50]]);
+  await page.screenshot({ path: test.info().outputPath('free-entry-privatentnahme.png'), fullPage: true });
+
+  await page.goto(appUrl(baseUrl, '/accounting?view=reconciliation'));
+  await expect(page.getByTestId('bank-ledger-reconciliation')).toBeVisible();
+  await expect(page.getByTestId('bank-ledger-reconciliation')).toContainText('Abstimmung Bank und Hauptbuch');
+  await page.screenshot({ path: test.info().outputPath('bank-ledger-reconciliation.png'), fullPage: true });
 });

@@ -37,6 +37,17 @@ import {
  *   a draft approved or posted by the client, floating point false alarms on
  *   cents, posting the same draft twice, an entry that can be edited after
  *   posting, a reversal that does not neutralise every line, reversing twice
+ * - bank drafts: a draft whose bank line does not carry the bank amount, books
+ *   another ledger account than the bank account's, or the wrong side; a draft
+ *   for a bank line that does not exist (a journal entry without a source)
+ * - free entries (Buchungssatz): an entry without Belegnummer, Belegdatum or
+ *   Buchungstext, a text DATEV refuses (> 60), an unbalanced, one-sided or
+ *   unknown-account entry posted anyway, a tax key the entry cannot split
+ *   accepted, a Steuerschlüssel without its VAT line or with 7 % on the 19 %
+ *   account, a retry that books twice, an entry that cannot be reversed,
+ *   Privatentnahme/-einlage on accounts the chart does not have
+ * - bank reconciliation: a ledger account that drifts from its bank lines
+ *   without showing it, pending lines counted as booked
  * - OPOS: a payment allocated beyond the open balance or beyond the payment
  *   itself, to the wrong party, to an item that is not there, a retry that
  *   books twice, an overpayment that disappears, a bank line booked twice,
@@ -653,7 +664,7 @@ describe('pro accounting: setup and posting of issued invoices', () => {
         const response = await h.raw(method, `/accounting/journal/${entry.id}`, method === 'DELETE' ? undefined : { bookingText: 'manipuliert' });
         assert.equal(response.status, 404, `${method}: ${response.text}`);
       }
-      assert.equal((await h.raw('POST', '/accounting/journal', { postingDate: '2026-03-07', lines: [] })).status, 404, 'no direct journal insert');
+      assert.equal((await h.raw('POST', '/accounting/journal', { reason: 'Buchungssatz', postingDate: '2026-03-07', lines: [] })).status, 400, 'a free entry is validated, never an empty insert');
       assert.deepEqual(await get(h, `/accounting/journal/${entry.id}`), entry);
     });
 
@@ -677,6 +688,144 @@ describe('pro accounting: setup and posting of issued invoices', () => {
       assert.equal((await h.raw('GET', '/accounting/journal?limit=5001')).status, 400);
       assert.equal((await h.raw('GET', '/accounting/journal?offset=-1')).status, 400);
       assert.equal((await h.raw('GET', '/accounting/journal/nope')).body, null, 'an unknown entry is an empty answer, not a 404');
+    });
+
+    const bankIssue = (body: any) => body.validationIssues.find((issue: any) => issue.code === 'BANK_LINE_MISMATCH');
+    test('a bank draft must book the bank amount on the bank account, on the side the money moved', async () => {
+      const { tx, draft: d } = await newTx({ date: '2026-03-11' });
+      const cases: Array<[string, Draft['lines']]> = [
+        ['another amount than the bank line', lines(d, 100)],
+        ['another ledger account than the bank account', lines(d, 119, 119, { creditAccount: '1000' })],
+        ['the bank on the wrong side', [{ id: `${d.id}-1`, accountNumber: '1200', debitAmount: 119, creditAmount: 0 }, { id: `${d.id}-2`, accountNumber: '4930', debitAmount: 0, creditAmount: 119 }]],
+      ];
+      for (const [label, wrong] of cases) {
+        const saved = await saveDraft(h, d, wrong);
+        assert.equal(saved.status, 200, saved.text);
+        assert.ok(bankIssue(saved.body)?.blocking, `${label}: ${saved.text}`);
+        assert.match(bankIssue(saved.body).message, /1200/, 'the issue names the bank account');
+        assert.equal((await draftAction(h, tx.id, 'submit_for_review')).body.workflowStatus, 'incomplete', label);
+      }
+      const entries = (await journal(h)).length;
+      assert.equal((await postDraft(h, d.id, { postingDate: '2026-03-11' })).body.entry.id, '', 'nothing is posted');
+      assert.equal((await journal(h)).length, entries);
+      const fixed = await saveDraft(h, d, lines(d, 119));
+      assert.deepEqual(fixed.body.validationIssues, []);
+    });
+
+    test('a bank account with its own ledger account is booked there, not on the bank role', async () => {
+      const own = await addBankAccount(h, 'bank-manual-1240', '1240');
+      const counterparty = `Eigenes Konto ${randomUUID().slice(0, 6)}`;
+      await importCsv(h, own, [{ date: '2026-03-12', amount: -119, counterparty, purpose: 'Eingangsrechnung' }]);
+      const tx = await bankTx(h, counterparty);
+      const d = await getDraft(h, tx.id);
+      assert.ok(bankIssue((await saveDraft(h, d, lines(d, 119))).body)?.blocking, 'the bank role 1200 is not this bank account');
+      await approveDraft(h, d, lines(d, 119, 119, { creditAccount: '1240' }));
+      const posted = await postDraft(h, d.id, { postingDate: '2026-03-12' });
+      assert.deepEqual(shape(posted.body.entry), [['4930', 119, 0], ['1240', 0, 119]]);
+    });
+
+    test('a draft for a bank line that does not exist is refused: that is a free entry with a Beleg', async () => {
+      const entries = (await journal(h)).length;
+      const ghost = { id: 'draft-ghost', tenantId: 'billme-local-tenant', transactionId: 'no-such-bank-line', workflowStatus: 'suggested', postingDate: '2026-03-12', documentDate: '2026-03-12', bookingText: 'ohne Bankzeile', period: '2026-03', fiscalYear: 2026, validationIssues: [], updatedAt: '2026-03-12T00:00:00.000Z' } as unknown as Draft;
+      const saved = await saveDraft(h, ghost, [{ id: 'ghost-1', accountNumber: '4930', debitAmount: 50, creditAmount: 0 }, { id: 'ghost-2', accountNumber: '1200', debitAmount: 0, creditAmount: 50 }]);
+      assert.equal(saved.status, 404, saved.text);
+      assert.equal((await h.raw('POST', '/accounting/drafts/draft-ghost/post', { reason: 'Buchen' })).status, 404, 'there is no draft to post');
+      assert.equal((await journal(h)).length, entries);
+    });
+  });
+
+  describe('free entries (Buchungssatz) and the bank reconciliation', () => {
+    type FreeLine = { accountNumber: string; debitAmount: number; creditAmount: number; taxCaseKey?: string };
+    const freeEntry = (lines: FreeLine[], extra: Record<string, unknown> = {}) => h.raw('POST', '/accounting/journal', {
+      reason: 'Buchungssatz', documentDate: '2026-03-10', reference: `B-${randomUUID().slice(0, 6)}`, bookingText: 'Umbuchung', idempotencyKey: randomUUID(), lines, ...extra,
+    });
+    const vat19 = async () => (await get<{ rows: Array<{ taxCaseKey: string; netAmount: number; taxAmount: number }> }>(h, '/accounting/vat/summary')).rows.find((row) => row.taxCaseKey === 'DE_STD_19') ?? { netAmount: 0, taxAmount: 0 };
+
+    test('a split entry with a Steuerschlüssel posts net, VAT line and Privatentnahme, once per key, and is reversible once', async () => {
+      const vatBefore = await vat19();
+      const key = randomUUID();
+      const body = { idempotencyKey: key, reference: 'KB-2026-031', documentDate: '2026-03-09', postingDate: '2026-03-10', bookingText: 'Barkauf Büro und Privatanteil' };
+      const lines: FreeLine[] = [
+        { accountNumber: '4930', debitAmount: 119, creditAmount: 0, taxCaseKey: 'DE_STD_19' },
+        { accountNumber: '1800', debitAmount: 30, creditAmount: 0 },
+        { accountNumber: '1000', debitAmount: 0, creditAmount: 149 },
+      ];
+      const response = await freeEntry(lines, body);
+      assert.equal(response.status, 200, response.text);
+      const entry: JournalEntry = response.body;
+      assert.deepEqual(shape(entry), [['4930', 100, 0], ['1576', 19, 0], ['1800', 30, 0], ['1000', 0, 149]]);
+      assert.deepEqual([entry.sourceType, entry.reference, entry.documentDate, entry.postingDate, entry.bookingText], ['manual', 'KB-2026-031', '2026-03-09', '2026-03-10', 'Barkauf Büro und Privatanteil']);
+      assert.deepEqual([entry.lines[0]!.taxCaseKey, entry.lines[0]!.netAmount, entry.lines[0]!.taxAmount, entry.lines[0]!.grossAmount], ['DE_STD_19', 100, 19, 119]);
+      const vatAfter = await vat19();
+      assert.deepEqual([money(vatAfter.netAmount - vatBefore.netAmount), money(vatAfter.taxAmount - vatBefore.taxAmount)], [100, 19]);
+      assertBalanced([entry]);
+
+      const entries = (await journal(h)).length;
+      const again = await freeEntry(lines, body);
+      assert.equal(again.body.id, entry.id, 'the same key returns the same entry');
+      assert.equal((await journal(h)).length, entries);
+
+      const reversed = await h.raw('POST', `/accounting/journal/${entry.id}/reverse`, { reason: 'falsch erfasst', postingDate: '2026-03-20' });
+      assert.equal(reversed.status, 200, reversed.text);
+      assert.equal((await h.raw('POST', `/accounting/journal/${entry.id}/reverse`, { reason: 'nochmal' })).status, 409);
+      const vatReversed = await vat19();
+      assert.deepEqual([money(vatReversed.netAmount), money(vatReversed.taxAmount)], [money(vatAfter.netAmount - 100), money(vatAfter.taxAmount - 19)], 'the reversal neutralises the tax basis');
+      await assertLedgerConsistent(h);
+    });
+
+    test('7 % input VAT lands on the 7 % account, a Privateinlage on 1890', async () => {
+      const response = await freeEntry([
+        { accountNumber: '4930', debitAmount: 107, creditAmount: 0, taxCaseKey: 'DE_STD_7' },
+        { accountNumber: '1890', debitAmount: 0, creditAmount: 107 },
+      ], { bookingText: 'Fachbuch privat bezahlt' });
+      assert.equal(response.status, 200, response.text);
+      assert.deepEqual(shape(response.body), [['4930', 100, 0], ['1571', 7, 0], ['1890', 0, 107]]);
+    });
+
+    test('a free entry needs Beleg, text, balance, known accounts and a key the entry can split; refused ones post nothing', async () => {
+      const ok: FreeLine[] = [{ accountNumber: '4930', debitAmount: 50, creditAmount: 0 }, { accountNumber: '1000', debitAmount: 0, creditAmount: 50 }];
+      const entries = (await journal(h)).length;
+      const cases: Array<[string, Promise<{ status: number; text: string }>, number]> = [
+        ['no Belegnummer', freeEntry(ok, { reference: '  ' }), 400],
+        ['no Belegdatum', freeEntry(ok, { documentDate: undefined }), 400],
+        ['an impossible date', freeEntry(ok, { documentDate: '2026-02-30' }), 400],
+        ['no Buchungstext', freeEntry(ok, { bookingText: ' ' }), 400],
+        ['a text DATEV refuses', freeEntry(ok, { bookingText: 'x'.repeat(61) }), 400],
+        ['no reason', freeEntry(ok, { reason: ' ' }), 400],
+        ['no idempotency key', freeEntry(ok, { idempotencyKey: undefined }), 400],
+        ['one line', freeEntry([ok[0]!]), 400],
+        ['unbalanced', freeEntry([ok[0]!, { ...ok[1]!, creditAmount: 49.99 }]), 422],
+        ['debit and credit on one line', freeEntry([{ ...ok[0]!, creditAmount: 50 }, ok[1]!]), 422],
+        ['a fraction of a cent', freeEntry([{ ...ok[0]!, debitAmount: 50.001 }, ok[1]!]), 422],
+        ['an account the chart does not have', freeEntry([{ ...ok[0]!, accountNumber: '99999' }, ok[1]!]), 422],
+        ['a reverse-charge key it cannot split', freeEntry([{ ...ok[0]!, taxCaseKey: 'DE_RC_13B_DOMESTIC' }, ok[1]!]), 422],
+        ['an unknown key', freeEntry([{ ...ok[0]!, taxCaseKey: 'DE_FANTASY' }, ok[1]!]), 400],
+      ];
+      for (const [label, request, status] of cases) {
+        const response = await request;
+        assert.equal(response.status, status, `${label}: ${response.text}`);
+      }
+      assert.equal((await journal(h)).length, entries, 'nothing was posted');
+    });
+
+    test('the bank reconciliation compares booked bank lines with the ledger account and shows the drift', async () => {
+      const own = await addBankAccount(h, 'bank-reconcile-1250', '1250');
+      const counterparty = `Abgleich ${randomUUID().slice(0, 6)}`;
+      await importCsv(h, own, [
+        { date: '2026-03-13', amount: -119, counterparty, purpose: 'Eingangsrechnung' },
+        { date: '2026-03-14', amount: 500, counterparty: `${counterparty} Eingang`, purpose: 'Zahlung' },
+      ]);
+      const row = async () => (await get<Array<{ ledgerAccountNumber: string; bankAccountIds: string[]; bookedBankTotal: number; pendingCount: number; pendingTotal: number; ledgerBalance: number; difference: number }>>(h, '/accounting/bank-reconciliation'))
+        .find((candidate) => candidate.ledgerAccountNumber === '1250')!;
+      assert.deepEqual(await row(), { ledgerAccountNumber: '1250', bankAccountIds: [own], bookedBankTotal: 0, pendingCount: 2, pendingTotal: 381, ledgerBalance: 0, difference: 0 });
+      const tx = await bankTx(h, counterparty);
+      const d = await getDraft(h, tx.id);
+      await approveDraft(h, d, [{ id: `${d.id}-1`, accountNumber: '4930', debitAmount: 119, creditAmount: 0 }, { id: `${d.id}-2`, accountNumber: '1250', debitAmount: 0, creditAmount: 119 }]);
+      assert.equal((await postDraft(h, d.id, { postingDate: '2026-03-13' })).status, 200);
+      assert.deepEqual(await row(), { ledgerAccountNumber: '1250', bankAccountIds: [own], bookedBankTotal: -119, pendingCount: 1, pendingTotal: 500, ledgerBalance: -119, difference: 0 });
+      // A Privateinlage booked on the bank account without a bank line: the ledger and the statement disagree.
+      assert.equal((await freeEntry([{ accountNumber: '1250', debitAmount: 50, creditAmount: 0 }, { accountNumber: '1890', debitAmount: 0, creditAmount: 50 }])).status, 200);
+      assert.deepEqual(await row(), { ledgerAccountNumber: '1250', bankAccountIds: [own], bookedBankTotal: -119, pendingCount: 1, pendingTotal: 500, ledgerBalance: -69, difference: 50 });
     });
   });
 
@@ -980,6 +1129,29 @@ describe('pro accounting: setup and posting of issued invoices', () => {
       assert.equal(twice.status, 409, 'a payment is reversed once');
       assert.equal((await reversePayment('nope')).status, 404);
       assert.equal((await reversePayment(moved.body.payment.id, null)).status, 400, 'a Zahlungsstorno needs a reason');
+      await assertLedgerConsistent(h);
+    });
+
+    test('Umbuchung of a payment recorded on the invoice moves the whole payment to the right invoice; a split is refused', async () => {
+      const wrong = await issue(h, { client: `Kunde A ${randomUUID().slice(0, 6)}` });
+      const right = await issue(h, { client: `Kunde B ${randomUUID().slice(0, 6)}` });
+      const paymentId = randomUUID();
+      assert.equal((await invoicePayment(wrong.id, { id: paymentId, amount: GROSS })).status, 200);
+      const booked = (await paymentsList()).find((payment) => payment.sourceId === paymentId)!;
+      const rightItem = await itemOf(right.id);
+      const call = (allocations: Array<{ openItemId: string; amount: number }>) => h.raw('POST', `/accounting/open-items/payments/${booked.id}/reallocate`, { reason: 'Rechnung verwechselt', partyId: right.client, allocationEventId: `um-${randomUUID()}`, allocations });
+      const entries = (await journal(h)).length;
+      const split = await call([{ openItemId: rightItem.id, amount: GROSS - 1 }]);
+      assert.equal(split.status, 400, split.text);
+      assert.match(split.text, /PAYMENT_REALLOCATION_UNSUPPORTED/);
+      assert.equal((await journal(h)).length, entries, 'the refused Umbuchung books nothing');
+
+      const moved = await call([{ openItemId: rightItem.id, amount: GROSS }]);
+      assert.equal(moved.status, 200, moved.text);
+      assert.deepEqual([(await invoiceOf(h, wrong.id)).status, (await invoiceOf(h, right.id)).status], ['open', 'paid']);
+      assert.deepEqual((await invoiceOf(h, wrong.id)).payments ?? [], []);
+      assert.deepEqual(((await invoiceOf(h, right.id)).payments ?? []).map((payment) => [payment.id, payment.amount]), [[paymentId, GROSS]], 'the right invoice lists the same payment');
+      assert.equal((await journal(h)).length, entries + 2, 'one Storno entry and one new payment entry');
       await assertLedgerConsistent(h);
     });
 

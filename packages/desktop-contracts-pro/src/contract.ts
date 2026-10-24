@@ -71,6 +71,8 @@ import {
   accountingPeriodSchema,
   accountingPeriodStatusChangeSchema,
   accountingPeriodStatusSchema,
+  proPostManualJournalEntryArgsSchema,
+  proBankLedgerReconciliationRowSchema,
 } from './schemas';
 
 const okSchema = z.object({ ok: z.literal(true) });
@@ -672,6 +674,8 @@ export const ipcRoutes = {
   'pro:allocateRemainingPayment': { channel: 'pro:allocateRemainingPayment', args: proAllocateRemainingPaymentArgsSchema, result: proOpenItemPaymentSchema },
   'pro:listOpenItemPayments': { channel: 'pro:listOpenItemPayments', args: z.undefined(), result: z.array(proOpenItemPaymentSchema) },
   'pro:reverseOpenItemPayment': { channel: 'pro:reverseOpenItemPayment', args: proReverseOpenItemPaymentArgsSchema, result: proOpenItemPaymentReversalSchema },
+  'pro:postManualJournalEntry': { channel: 'pro:postManualJournalEntry', args: proPostManualJournalEntryArgsSchema, result: journalEntryEntitySchema },
+  'pro:getBankLedgerReconciliation': { channel: 'pro:getBankLedgerReconciliation', args: z.undefined(), result: z.array(proBankLedgerReconciliationRowSchema) },
   'pro:reallocateOpenItemPayment': { channel: 'pro:reallocateOpenItemPayment', args: proReallocateOpenItemPaymentArgsSchema, result: z.object({ reversal: proOpenItemPaymentReversalSchema, payment: proOpenItemPaymentSchema }) },
   'pro:reverseDocumentAccounting': { channel: 'pro:reverseDocumentAccounting', args: proReverseDocumentAccountingArgsSchema, result: z.object({ ok: z.literal(true), reversalEntryId: z.string() }) },
   'pro:previewAccountingBackfill': { channel: 'pro:previewAccountingBackfill', args: z.undefined(), result: accountingBackfillPreviewSchema },

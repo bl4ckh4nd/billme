@@ -6,11 +6,14 @@ import type { IpcArgs } from '@billme/desktop-contracts/contract';
 import { localIsoDate } from '@billme/desktop-utils';
 import { ipc } from '../../runtime-api';
 import { EinvoiceReview, receiptFromEinvoice } from './EinvoiceReview';
+import { nonCashPresets } from './categories';
 
 const money = (value: number) => (value / 100).toLocaleString('de-DE', { style: 'currency', currency: 'EUR' });
 const parseCents = (value: string) => Math.round(Number(value.trim().replace(',', '.')) * 100);
 const fileToBase64 = (file: File) => new Promise<string>((resolve, reject) => { const reader = new FileReader(); reader.onload = () => resolve(String(reader.result).split(',')[1] ?? ''); reader.onerror = reject; reader.readAsDataURL(file); });
 const failureText = (failure: unknown) => (failure instanceof Error ? failure.message : String(failure));
+type PaymentMethod = NonNullable<LiteCashEntry['paymentMethod']>;
+const paymentMethodLabels: Record<PaymentMethod, string> = { bank: 'Bank', cash: 'Bar (Kasse)', non_cash: 'Ohne Geldfluss' };
 type OriginalFile = { fileName: string; mimeType: 'application/xml' | 'application/pdf'; contentBase64: string };
 const blankReceipt = (): LiteReceipt => ({ id: crypto.randomUUID(), number: '', counterparty: '', documentDate: localIsoDate(), receivedDate: localIsoDate(), serviceDate: localIsoDate(), grossAmountCents: 0, taxMode: 'domestic', deductiblePercent: 100, reviewed: false, taxBreakdown: [{ rate: 19, netAmountCents: 0, vatAmountCents: 0 }], updatedAt: '', fileCount: 0 });
 
@@ -25,7 +28,7 @@ export const LiteCashPanel: React.FC = () => {
   const [open, setOpen] = React.useState(false);
   const [receiptOnly, setReceiptOnly] = React.useState(false);
   const [editing, setEditing] = React.useState<LiteCashEntry>();
-  const [form, setForm] = React.useState({ id: '', cashDate: '', amount: '', flowType: 'expense' as 'income' | 'expense', refund: false, counterparty: '', purpose: '', receiptId: '' });
+  const [form, setForm] = React.useState({ id: '', cashDate: '', amount: '', flowType: 'expense' as 'income' | 'expense', refund: false, counterparty: '', purpose: '', receiptId: '', paymentMethod: '' as PaymentMethod | '', preset: '' });
   const [receipt, setReceipt] = React.useState<LiteReceipt>();
   const [reason, setReason] = React.useState('');
   const [error, setError] = React.useState('');
@@ -47,7 +50,7 @@ export const LiteCashPanel: React.FC = () => {
   const start = (entry?: LiteCashEntry) => {
     setEditing(entry); setReceipt(undefined); setReceiptOnly(false); setError(''); setReason('');
     setEinvoice(undefined); setEinvoiceProblems([]); setPendingOriginal(undefined);
-    setForm({ id: entry?.id ?? crypto.randomUUID(), cashDate: entry?.originalCashDate ?? localIsoDate(), amount: entry ? String(Math.abs(entry.amountCents) / 100) : '', flowType: entry?.flowType ?? 'expense', refund: entry ? (entry.flowType === 'expense' ? entry.amountCents > 0 : entry.amountCents < 0) : false, counterparty: entry?.counterparty ?? '', purpose: entry?.purpose ?? '', receiptId: entry?.receiptId ?? '' }); setOpen(true);
+    setForm({ id: entry?.id ?? crypto.randomUUID(), cashDate: entry?.originalCashDate ?? localIsoDate(), amount: entry ? String(Math.abs(entry.amountCents) / 100) : '', flowType: entry?.flowType ?? 'expense', refund: entry ? (entry.flowType === 'expense' ? entry.amountCents > 0 : entry.amountCents < 0) : false, counterparty: entry?.counterparty ?? '', purpose: entry?.purpose ?? '', receiptId: entry?.receiptId ?? '', paymentMethod: entry?.paymentMethod ?? '', preset: '' }); setOpen(true);
   };
   const persistReceipt = async () => {
     if (!receipt) return form.receiptId || undefined;
@@ -82,8 +85,22 @@ export const LiteCashPanel: React.FC = () => {
     if (receiptOnly) return persistReceipt();
     const amount = parseCents(form.amount);
     if (!Number.isSafeInteger(amount) || amount <= 0 || !reason.trim()) throw new Error('Betrag größer null und eine Begründung sind erforderlich.');
-    const receiptId = await persistReceipt();
-    return ipc.cash.saveEntry({ entry: { id: form.id, cashDate: form.cashDate, amountCents: amount * (form.flowType === 'expense' ? -1 : 1) * (form.refund ? -1 : 1), currency: 'EUR', flowType: form.flowType, counterparty: form.counterparty, purpose: form.purpose, receiptId }, expectedUpdatedAt: editing?.updatedAt, reason: reason.trim() });
+    if (!form.paymentMethod) throw new Error('Bitte die Zahlungsart wählen: Bank, Bar oder ohne Geldfluss.');
+    const nonCash = form.paymentMethod === 'non_cash';
+    const preset = nonCash ? nonCashPresets.find((item) => item.code === form.preset) : undefined;
+    if (nonCash && !editing && !preset) throw new Error('Bitte wählen, was gebucht wird (Pauschale, Abschreibung oder Privatanteil).');
+    const flowType = preset?.flowType ?? form.flowType;
+    const receiptId = nonCash ? undefined : await persistReceipt();
+    const saved = await ipc.cash.saveEntry({ entry: { id: form.id, cashDate: form.cashDate, amountCents: amount * (flowType === 'expense' ? -1 : 1) * (form.refund && !nonCash ? -1 : 1), currency: 'EUR', flowType, counterparty: form.counterparty || (settings.data?.company.owner?.trim() || 'Eigenbeleg'), purpose: form.purpose || preset?.purpose || '', receiptId, paymentMethod: form.paymentMethod }, expectedUpdatedAt: editing?.updatedAt, reason: reason.trim() });
+    // A booking without money has no bank line to classify later: it goes to its EÜR line right away.
+    // The line id comes from that year's form: a year without its own form (2027 on) uses the newest one.
+    if (preset) {
+      const taxYear = Number(form.cashDate.slice(0, 4));
+      const eurLineId = (await ipc.eur.getReport({ taxYear })).rows.find((row) => row.kennziffer === preset.code && row.kind === preset.flowType)?.lineId;
+      if (!eurLineId) throw new Error(`Die Buchung ist gespeichert, aber die EÜR-Zeile ${preset.code} fehlt für ${taxYear}. Bitte unter Buchen zuordnen.`);
+      await ipc.eur.upsertClassification({ sourceType: 'manual', sourceId: saved.id, taxYear, eurLineId, vatMode: 'none', reason: reason.trim() });
+    }
+    return saved;
   }, onSuccess: async () => { setOpen(false); setEditing(undefined); setManageReceiptId(''); await refresh(); }, onError: (failure: Error) => setError(failure.message) });
   const action = useMutation({ mutationFn: async (work: () => Promise<unknown>) => work(), onSuccess: refresh, onError: (failure: Error) => setError(failure.message) });
   const upload = async (file: File) => {
@@ -110,7 +127,7 @@ export const LiteCashPanel: React.FC = () => {
   };
   const candidates = matching ? (transactions.data ?? []).filter((bank) => !bank.linkedInvoiceId && bank.status === 'booked' && Math.round(bank.amount * 100) === (transitMatch ? -1 : 1) * matching.amountCents && !(entries.data ?? []).some((entry) => entry.matchedTransactionId === bank.id)) : [];
   return <Card className="mb-4">
-    <div className="flex flex-wrap items-center justify-between gap-3"><p className="text-control text-muted">Barzahlungen und Zahlungen außerhalb des Bankimports mit Beleg erfassen.</p><Button onClick={() => start()}>Manuelle Buchung</Button></div>
+    <div className="flex flex-wrap items-center justify-between gap-3"><p className="text-control text-muted">Barzahlungen, Zahlungen außerhalb des Bankimports und Buchungen ohne Geldfluss (Pauschalen, Abschreibung, Privatanteile) erfassen.</p><Button onClick={() => start()}>Manuelle Buchung</Button></div>
     <details className="mt-3"><summary className="cursor-pointer text-control">Monate festschreiben ({closedPeriods.data?.length ?? 0} festgeschrieben)</summary>
       <p className="mt-2 text-caption text-muted">Ein festgeschriebener Monat nimmt keine manuellen Buchungen, Zahlungen, Bankumsätze, Bankzuordnungen, Importrücknahmen, EÜR-Zuordnungen und Belegänderungen mehr an. Rechnungen und Einstellungen sperrt die Festschreibung nicht. Das lässt sich nicht rückgängig machen; Korrekturen gehören in einen offenen Monat.</p>
       <div className="mt-2 flex flex-wrap items-end gap-2">
@@ -124,21 +141,26 @@ export const LiteCashPanel: React.FC = () => {
     <details className="mt-3"><summary className="cursor-pointer text-control">Manuelle Zahlungen und Belege ({entries.data?.length ?? 0})</summary>
       <div className="mt-3 flex flex-col gap-3">{(entries.data ?? []).map((entry) => <div key={entry.id} className="flex flex-wrap items-center gap-2 border-b border-border pb-3">
         <span className="min-w-0 flex-1 text-control">{entry.cashDate} · {entry.counterparty} · {entry.purpose} · {money(entry.amountCents)}</span>
-        {entry.matchedTransactionId ? <><Badge tone="success">Mit Bank abgeglichen</Badge><Button variant="secondary" size="sm" disabled={action.isPending} onClick={() => { setError(''); void action.mutateAsync(() => ipc.cash.unmatchEntry({ id: entry.id, reason: 'Manuellen Bankabgleich rückgängig gemacht' })).catch(() => undefined); }}>Abgleich aufheben</Button></> : <><Button variant="secondary" size="sm" onClick={() => start(entry)}>Bearbeiten</Button><Button variant="secondary" size="sm" onClick={() => { setMatching(entry); setBankId(''); setTransitMatch(false); setError(''); }}>Mit Bank abgleichen</Button><Button variant="danger" size="sm" onClick={() => { setEditing(entry); setReason(''); setError(''); }}>Löschen</Button></>}
+        {entry.paymentMethod ? <Badge tone="neutral">{paymentMethodLabels[entry.paymentMethod]}</Badge> : !entry.matchedTransactionId && <Badge tone="warning">Zahlungsart fehlt</Badge>}
+        {entry.matchedTransactionId ? <><Badge tone="success">Mit Bank abgeglichen</Badge><Button variant="secondary" size="sm" disabled={action.isPending} onClick={() => { setError(''); void action.mutateAsync(() => ipc.cash.unmatchEntry({ id: entry.id, reason: 'Manuellen Bankabgleich rückgängig gemacht' })).catch(() => undefined); }}>Abgleich aufheben</Button></> : <><Button variant="secondary" size="sm" onClick={() => start(entry)}>Bearbeiten</Button>{entry.paymentMethod !== 'non_cash' && <Button variant="secondary" size="sm" onClick={() => { setMatching(entry); setBankId(''); setTransitMatch(false); setError(''); }}>Mit Bank abgleichen</Button>}<Button variant="danger" size="sm" onClick={() => { setEditing(entry); setReason(''); setError(''); }}>Löschen</Button></>}
         {entry.receiptId && <Button variant="secondary" size="sm" onClick={() => { setManageReceiptId(entry.receiptId!); setReceipt(undefined); setReason(''); setViewing(undefined); }}>Beleg</Button>}
       </div>)}</div>
     </details>
     <Modal open={open} onClose={() => { if (!save.isPending && !uploading) { setOpen(false); setEditing(undefined); setManageReceiptId(''); } }} titleId="manual-cash-title" className="max-w-3xl">
       <div className="p-5"><h2 id="manual-cash-title" className="text-section">{receiptOnly ? 'Beleg bearbeiten' : editing ? 'Manuelle Buchung bearbeiten' : 'Manuelle Buchung'}</h2>
         {!receiptOnly && <div className="mt-4 grid gap-3 sm:grid-cols-2">
-          <Select label="Art" value={form.flowType} onChange={(e) => setForm({ ...form, flowType: e.target.value as 'income' | 'expense' })}><option value="expense">Ausgabe</option><option value="income">Einnahme</option></Select>
+          <Select label="Zahlungsart" value={form.paymentMethod} onChange={(e) => setForm({ ...form, paymentMethod: e.target.value as PaymentMethod | '', receiptId: e.target.value === 'non_cash' ? '' : form.receiptId })}><option value="">Bitte wählen</option><option value="bank">Bank (später mit dem Bankumsatz abgleichen)</option><option value="cash">Bar (Kasse)</option><option value="non_cash">Ohne Geldfluss (Pauschale, Abschreibung, Privatanteil)</option></Select>
+          {form.paymentMethod === 'non_cash' && !editing
+            ? <Select label="Was wird gebucht?" value={form.preset} onChange={(e) => setForm({ ...form, preset: e.target.value })}><option value="">Bitte wählen</option>{nonCashPresets.map((item) => <option key={item.code} value={item.code}>{item.purpose}</option>)}</Select>
+            : <Select label="Art" value={form.flowType} onChange={(e) => setForm({ ...form, flowType: e.target.value as 'income' | 'expense' })}><option value="expense">Ausgabe</option><option value="income">Einnahme</option></Select>}
+          {form.paymentMethod === 'non_cash' && <p className="text-caption text-muted sm:col-span-2">Zählt in der EÜR, aber nicht als Kasse oder Bank. {nonCashPresets.find((item) => item.code === form.preset)?.hint ?? ''} Umsatzsteuer auf Privatanteile rechnet die App nicht; bitte mit der Steuerberatung klären.</p>}
           <Input label="Zahlungsdatum" type="date" value={form.cashDate} onChange={(e) => setForm({ ...form, cashDate: e.target.value })} />
           <Input label="Betrag in EUR" inputMode="decimal" value={form.amount} onChange={(e) => setForm({ ...form, amount: e.target.value })} />
           <Input label="Empfänger oder Kunde" value={form.counterparty} onChange={(e) => setForm({ ...form, counterparty: e.target.value })} />
           <Input label="Verwendungszweck" value={form.purpose} onChange={(e) => setForm({ ...form, purpose: e.target.value })} />
-          <Checkbox label="Rückzahlung" checked={form.refund} onChange={(e) => setForm({ ...form, refund: e.target.checked })} />
+          {form.paymentMethod !== 'non_cash' && <><Checkbox label="Rückzahlung" checked={form.refund} onChange={(e) => setForm({ ...form, refund: e.target.checked })} />
           <Select label="Vorhandener Beleg" value={form.receiptId} disabled={!!receipt} onChange={(e) => setForm({ ...form, receiptId: e.target.value })}><option value="">Noch kein Beleg</option>{(receipts.data ?? []).map((item) => <option key={item.id} value={item.id}>{item.counterparty} · {item.number} · {money(item.grossAmountCents)}</option>)}</Select>
-          <Button variant="secondary" onClick={() => { const next = blankReceipt(); if (form.flowType === 'income' && settings.data?.legal.smallBusinessRule) { next.taxMode = 'small_business'; next.deductiblePercent = 0; next.taxBreakdown = [{ rate: 0, netAmountCents: 0, vatAmountCents: 0 }]; } setReceipt(next); }}>Neuen Beleg erfassen</Button>
+          <Button variant="secondary" onClick={() => { const next = blankReceipt(); if (form.flowType === 'income' && settings.data?.legal.smallBusinessRule) { next.taxMode = 'small_business'; next.deductiblePercent = 0; next.taxBreakdown = [{ rate: 0, netAmountCents: 0, vatAmountCents: 0 }]; } setReceipt(next); }}>Neuen Beleg erfassen</Button></>}
         </div>}
         <div className="mt-4 flex flex-wrap items-center gap-3">
           <Button variant="secondary" loading={readingEinvoice} disabled={save.isPending || uploading} onClick={() => einvoiceInput.current?.click()}>E-Rechnung einlesen</Button>

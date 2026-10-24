@@ -152,6 +152,10 @@ export interface ProAccountingDataAdapter {
   reverseOpenItemPayment?: (paymentId: string, reason: string) => Promise<unknown>;
   /** Umbuchung: Storno and new allocation of the same payment under one reason. */
   reallocateOpenItemPayment?: (paymentId: string, input: { reason: string; partyId: string; allocations: Array<{ openItemId: string; amount: number }>; allocationEventId: string }) => Promise<unknown>;
+  /** Freie Buchung (Buchungssatz) with Beleg, text and reason; a line with a tax key is gross. */
+  postManualJournalEntry?: (input: ManualJournalEntryInput) => Promise<JournalEntryEntity>;
+  /** Booked bank lines against the ledger account of their bank account. */
+  getBankLedgerReconciliation?: () => Promise<BankLedgerReconciliationRow[]>;
   listVendors?: () => Promise<VendorEntity[]>;
   upsertVendor?: (vendor: Omit<VendorEntity, 'tenantId' | 'createdAt' | 'updatedAt'>, reason: string) => Promise<VendorEntity>;
   listIncomingInvoices?: () => Promise<IncomingInvoiceEntity[]>;
@@ -164,6 +168,28 @@ export interface ProAccountingDataAdapter {
   postIncomingInvoiceAccounting?: (invoiceId: string, options: { reason: string; softLockOverride?: boolean; overrideReason?: string }) => Promise<AccountingPostingPreview>;
   findInvoiceMatches?: (transactionId: string) => Promise<InvoiceMatchCandidate[]>;
   listAccountSuggestionRules?: () => Promise<AccountSuggestionRuleSummary[]>;
+}
+
+export interface ManualJournalEntryInput {
+  reason: string;
+  documentDate: string;
+  postingDate?: string;
+  reference: string;
+  bookingText: string;
+  lines: Array<{ accountNumber: string; debitAmount: number; creditAmount: number; taxCaseKey?: 'DE_STD_19' | 'DE_STD_7' }>;
+  idempotencyKey: string;
+  softLockOverride?: boolean;
+  overrideReason?: string;
+}
+
+export interface BankLedgerReconciliationRow {
+  ledgerAccountNumber: string;
+  bankAccountIds: string[];
+  bookedBankTotal: number;
+  pendingCount: number;
+  pendingTotal: number;
+  ledgerBalance: number;
+  difference: number;
 }
 
 /** An open invoice the bank payment could settle, as the existing invoice matcher reports it. */

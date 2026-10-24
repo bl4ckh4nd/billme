@@ -3,7 +3,7 @@ import {
   Button, Card, EMPTY_VALUE, EmptyState, ErrorState, Metric, Select,
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow, useActionFeedback,
 } from '@billme/ui';
-import { LATEST_SUPPORTED_EUR_TAX_YEAR, SUPPORTED_EUR_TAX_YEARS } from '@billme/accounting-shared';
+import { defaultEurTaxYear, eurTaxYearOptions } from '@billme/accounting-shared';
 import { useQuery } from '@tanstack/react-query';
 import { Download } from 'lucide-react';
 import { ipc } from '../runtime-api';
@@ -38,7 +38,7 @@ type DatevExportResult = Awaited<ReturnType<typeof ipc.eur.exportDatev>>;
 
 /** Anlage EÜR for one tax year: totals, lines by Kennziffer, CSV, PDF and DATEV export. */
 export const EurReportPanel: React.FC = () => {
-  const [taxYear, setTaxYear] = React.useState<number>(LATEST_SUPPORTED_EUR_TAX_YEAR);
+  const [taxYear, setTaxYear] = React.useState<number>(() => defaultEurTaxYear());
   const [isPdfExporting, setIsPdfExporting] = React.useState(false);
   const [datevPeriod, setDatevPeriod] = React.useState('year');
   const [isDatevExporting, setIsDatevExporting] = React.useState(false);
@@ -116,7 +116,7 @@ export const EurReportPanel: React.FC = () => {
           <div className="flex flex-wrap items-center gap-2 border-b border-border px-3.5 py-3">
             <h2 id="eur-report-title" className="mr-auto text-section">Anlage EÜR {taxYear}</h2>
             <Select value={taxYear} aria-label="Steuerjahr" onChange={(e) => setTaxYear(Number(e.target.value))}>
-              {SUPPORTED_EUR_TAX_YEARS.map((year) => <option key={year} value={year}>{year}</option>)}
+              {eurTaxYearOptions().map((year) => <option key={year} value={year}>{year}</option>)}
             </Select>
             <Button variant="secondary" onClick={() => void exportCsv()}>
               <Download size={16} aria-hidden="true" />
@@ -142,6 +142,20 @@ export const EurReportPanel: React.FC = () => {
               DATEV-Export
             </Button>
           </div>
+          {report?.catalog?.provisional && (
+            <p role="status" className="border-b border-border bg-warning-bg px-3.5 py-3 text-control text-foreground">
+              Für {taxYear} ist noch keine Anlage EÜR veröffentlicht. Die Werte sind vorläufig mit der neuesten veröffentlichten Anlage berechnet.
+            </p>
+          )}
+          {report?.unclassified && report.unclassified.incomeCount + report.unclassified.expenseCount > 0 && (
+            <p role="status" aria-label="Fehlende Zahlungen" className="border-b border-border bg-warning-bg px-3.5 py-3 text-control text-foreground">
+              Noch nicht zugeordnet und deshalb nicht in der EÜR:{' '}
+              {report.unclassified.incomeCount > 0 && <>{report.unclassified.incomeCount} {report.unclassified.incomeCount === 1 ? 'Einnahme' : 'Einnahmen'} über {formatCurrency(report.unclassified.incomeAmount)}</>}
+              {report.unclassified.incomeCount > 0 && report.unclassified.expenseCount > 0 && ', '}
+              {report.unclassified.expenseCount > 0 && <>{report.unclassified.expenseCount} {report.unclassified.expenseCount === 1 ? 'Ausgabe' : 'Ausgaben'} über {formatCurrency(report.unclassified.expenseAmount)}</>}
+              . Bitte unter Buchen zuordnen.
+            </p>
+          )}
           {datevResult && datevResult.errors.length > 0 && (
             <div role="status" aria-label="Nicht exportierte Posten" className="border-b border-border bg-warning-bg px-3.5 py-3">
               <p className="text-label text-foreground">

@@ -95,6 +95,7 @@ test('a received UBL XRechnung is read, checked, taken over into a receipt and a
   await expect(dialog.getByLabel('Gesamtbetrag des Belegs in EUR', { exact: true })).toHaveValue('140.4');
   await expect(dialog.getByText('Die Originaldatei xrechnung-ubl.xml wird beim Speichern an den Beleg angehängt.')).toBeVisible();
 
+  await dialog.getByLabel('Zahlungsart', { exact: true }).selectOption('cash');
   await dialog.getByLabel('Zahlungsdatum', { exact: true }).fill('2026-03-12');
   await dialog.getByLabel('Betrag in EUR', { exact: true }).fill('140.40');
   await dialog.getByLabel('Begründung', { exact: true }).fill('E-Rechnung Bürobedarf erfasst');

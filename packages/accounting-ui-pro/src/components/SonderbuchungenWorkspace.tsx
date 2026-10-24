@@ -2,8 +2,9 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Button, Card, CardHeader, EmptyState, Field, Input, Select, Stepper, Textarea, formatEmptyValue } from '@billme/ui';
 import { JournalEntryDetailModal } from './JournalEntryDetail';
 import PeriodLockPanel from './PeriodLockPanel';
+import ManualEntryPanel from './ManualEntryPanel';
 import { userFacingReference } from '../domain/references';
-import type { UserRole } from '../types';
+import type { Account, UserRole } from '../types';
 import { permissionContextForRole } from '../domain/permissions';
 import { localToday } from '../domain/reportDates';
 import type { ProAccountingDataAdapter } from '../services/accountingDataAdapter';
@@ -287,9 +288,11 @@ const toSource = (form: FormState): DomainAccountingSourceFact => ({
 type Props = {
   dataAdapter?: ProAccountingDataAdapter;
   role?: UserRole;
+  accounts?: Account[];
+  chart?: 'SKR03' | 'SKR04';
 };
 
-export default function SonderbuchungenWorkspace({ dataAdapter, role = 'admin' }: Props) {
+export default function SonderbuchungenWorkspace({ dataAdapter, role = 'admin', accounts = [], chart = 'SKR03' }: Props) {
   const [form, setForm] = useState<FormState>(initialForm);
   const [feedback, setFeedback] = useState<{ kind: 'success' | 'error'; text: string } | null>(null);
   const [history, setHistory] = useState<AccountingSourceRun[]>([]);
@@ -470,6 +473,7 @@ export default function SonderbuchungenWorkspace({ dataAdapter, role = 'admin' }
 
       {!dataAdapter?.postAccountingCommand ? <p className={`border-border bg-surface-muted text-muted ${bannerClass}`} role="status">Sonderbuchungen sind in dieser Verbindung nur lesbar.</p> : null}
       {!canMutate ? <p className={`border-border bg-surface-muted text-muted ${bannerClass}`} role="status">Diese Rolle darf Sonderbuchungen nur lesen.</p> : null}
+      <ManualEntryPanel dataAdapter={dataAdapter} accounts={accounts} chart={chart} canMutate={canMutate} onPosted={(entryId) => { setSelectedJournalEntryId(entryId); setPeriodRefresh((value) => value + 1); }} />
       <section aria-labelledby="special-entry-form-heading">
         <Card padding="none">
           <CardHeader className={cardHeadClass} title={<span id="special-entry-form-heading">1. Vorgang und Angaben</span>} subtitle={selectedWorkflow.description} />

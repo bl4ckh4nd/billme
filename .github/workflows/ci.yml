@@ -12,6 +12,7 @@ on:
       - 'playwright.config.mjs'
       - 'pnpm-lock.yaml'
       - 'pnpm-workspace.yaml'
+      - '.oxlintrc.json'
       - '.github/workflows/ci.yml'
       - '.github/workflows/e2e-nightly.yml'
   pull_request:
@@ -25,6 +26,7 @@ on:
       - 'playwright.config.mjs'
       - 'pnpm-lock.yaml'
       - 'pnpm-workspace.yaml'
+      - '.oxlintrc.json'
       - '.github/workflows/ci.yml'
       - '.github/workflows/e2e-nightly.yml'
 
@@ -54,6 +56,9 @@ jobs:
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
+
+      - name: Lint
+        run: pnpm lint
 
       - name: Design token guard
         run: pnpm check:design-tokens

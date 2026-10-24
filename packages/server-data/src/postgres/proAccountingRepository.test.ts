@@ -253,6 +253,7 @@ test('real Postgres DATEV exports return the exact persisted bytes after source 
       await pool.query('COMMIT');
     } catch (error) {
       await pool.query('ROLLBACK');
+      // oxlint-disable-next-line no-unsafe-finally -- a failed cleanup must fail the test
       throw error;
     }
     await pool.end();

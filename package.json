@@ -25,6 +25,7 @@
     "preview": "pnpm -C apps/desktop preview",
     "preview:landing": "pnpm -C apps/landing-page preview",
     "pglite:migrate": "node packages/pglite-migration-cli/bin/billme-pglite-migrate.mjs",
+    "lint": "oxlint",
     "check:raw-sql": "node scripts/raw-sql-guard.mjs",
     "check:design-tokens": "node scripts/design-token-guard.mjs",
     "ci:prepare-sqlite-tests": "node scripts/prepare-better-sqlite3.mjs",
@@ -55,6 +56,7 @@
     "test:e2e:artifact-hygiene": "node tests/e2e/server/artifact-hygiene.mjs"
   },
   "devDependencies": {
-    "@playwright/test": "^1.58.2"
+    "@playwright/test": "^1.58.2",
+    "oxlint": "^1.87.0"
   }
 }

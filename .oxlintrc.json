@@ -1,0 +1,39 @@
+{
+  "$schema": "./node_modules/oxlint/configuration_schema.json",
+  "plugins": ["typescript", "react"],
+  "categories": { "correctness": "error" },
+  "env": { "browser": true, "node": true, "es2022": true },
+  "ignorePatterns": [
+    "**/dist/**",
+    "**/out/**",
+    "**/.wrangler/**",
+    "**/coverage/**",
+    "**/test-results/**",
+    "**/playwright-report/**",
+    "**/*.config.js",
+    "**/*.config.ts",
+    "tools/visual-audit/layout-probe.js"
+  ],
+  "rules": {
+    "typescript/no-explicit-any": "off",
+    "no-unused-vars": ["warn", { "argsIgnorePattern": "^_", "varsIgnorePattern": "^_" }],
+    "no-empty": ["error", { "allowEmptyCatch": true }],
+    "no-control-regex": "off",
+    "no-useless-rename": "off",
+    "no-unsafe-optional-chaining": "off",
+    "react-hooks/rules-of-hooks": "error",
+    "react-hooks/exhaustive-deps": "warn",
+    "react/purity": "warn",
+    "react/refs": "warn",
+    "react/immutability": "warn",
+    "react/set-state-in-effect": "warn",
+    "react/static-components": "warn",
+    "react/preserve-manual-memoization": "warn"
+  },
+  "overrides": [
+    {
+      "files": ["tests/e2e/**/*.spec.mjs"],
+      "rules": { "no-empty-pattern": "off" }
+    }
+  ]
+}

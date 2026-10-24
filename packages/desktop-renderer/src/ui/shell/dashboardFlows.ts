@@ -1,8 +1,12 @@
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query';
 import { getRendererApi, ipc } from '../../runtime-api';
 
 type Transaction = Awaited<ReturnType<typeof ipc.transactions.list>>[number];
 type EurItem = Awaited<ReturnType<typeof ipc.eur.listItems>>[number];
+
+// Shares the EÜR workbench's key, so the overview's queries and the open-item badge make one request per year.
+const fetchEurItems = (queryClient: QueryClient, taxYear: number) =>
+  queryClient.fetchQuery({ queryKey: ['eur', 'items', taxYear], queryFn: () => ipc.eur.listItems({ taxYear }), staleTime: 30_000 });
 
 export interface MonthFlow {
   key: string;
@@ -103,8 +107,9 @@ export const aggregateFlows = (
  * ponytail: aggregates in the renderer over the full transaction list; move into
  * a server-runtime overview route if transaction counts make this slow.
  */
-export const useDashboardFlows = (profitDetermination: 'eur' | 'double_entry' | undefined) =>
-  useQuery({
+export const useDashboardFlows = (profitDetermination: 'eur' | 'double_entry' | undefined) => {
+  const queryClient = useQueryClient();
+  return useQuery({
     queryKey: ['dashboard-flows', profitDetermination],
     enabled: Boolean(profitDetermination),
     staleTime: 30_000,
@@ -117,7 +122,7 @@ export const useDashboardFlows = (profitDetermination: 'eur' | 'double_entry' | 
       const [accounts, transactions, itemLists] = await Promise.all([
         ipc.accounts.list(),
         ipc.transactions.list({}),
-        Promise.all(years.map((taxYear) => ipc.eur.listItems({ taxYear }))),
+        Promise.all(years.map((taxYear) => fetchEurItems(queryClient, taxYear))),
       ]);
       return {
         ...aggregateFlows(transactions, years.length > 0 ? itemLists.flat() : null, now),
@@ -126,6 +131,7 @@ export const useDashboardFlows = (profitDetermination: 'eur' | 'double_entry' | 
       };
     },
   });
+};
 
 /**
  * Ergebnis of the current month, Umsatz minus Aufwand: the GuV net result for
@@ -135,6 +141,7 @@ export const useDashboardFlows = (profitDetermination: 'eur' | 'double_entry' | 
 export const useMonthResult = (profitDetermination: 'eur' | 'double_entry' | undefined, profileChart?: string) => {
   const now = new Date();
   const month = monthKey(now);
+  const queryClient = useQueryClient();
   return useQuery({
     queryKey: ['dashboard-month-result', profitDetermination, profileChart, month],
     enabled: Boolean(profitDetermination),
@@ -155,7 +162,7 @@ export const useMonthResult = (profitDetermination: 'eur' | 'double_entry' | und
       if (now.getFullYear() < EUR_MIN_TAX_YEAR) throw new Error('EUR_TAX_YEAR_UNSUPPORTED');
       // ponytail: the EÜR report only accepts whole calendar years, so the month sums classified items
       // (net, income minus expense) instead of calculateEurRows; use the report once it takes month ranges.
-      const items = await ipc.eur.listItems({ taxYear: now.getFullYear() });
+      const items = await fetchEurItems(queryClient, now.getFullYear());
       const result = items
         .filter((item) => item.date.slice(0, 7) === month && item.classification?.eurLineId && !item.classification.excluded)
         .reduce((sum, item) => sum + (item.flowType === 'income' ? item.amountNet : -item.amountNet), 0);

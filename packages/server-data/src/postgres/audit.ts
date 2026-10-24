@@ -1,6 +1,6 @@
 import crypto from "node:crypto";
 import type { Pool } from "pg";
-import { asc, desc, eq } from "drizzle-orm";
+import { and, asc, desc, eq } from "drizzle-orm";
 import { createDrizzle, schema, tryCreateDrizzle } from "./drizzle.js";
 import type {
   AuditEntry,
@@ -275,14 +275,13 @@ export const createPostgresAuditLogPort = (
     const rows = await db
       .select()
       .from(schema.auditLog)
-      .where(eq(schema.auditLog.tenantId, subject.tenantId ?? scope.tenantId))
+      .where(and(
+        eq(schema.auditLog.tenantId, subject.tenantId ?? scope.tenantId),
+        eq(schema.auditLog.entityType, subject.entityType),
+        eq(schema.auditLog.entityId, subject.entityId),
+      ))
       .orderBy(desc(schema.auditLog.sequence));
     return rows
-      .filter(
-        (row) =>
-          row.entityType === subject.entityType &&
-          row.entityId === subject.entityId,
-      )
       .map((row) =>
         rowToAuditEntry(
           scope,

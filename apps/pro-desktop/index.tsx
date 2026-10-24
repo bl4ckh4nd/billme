@@ -21,7 +21,7 @@ const ensureDebugOverlay = () => {
     el.style.borderRadius = '12px';
     el.style.background = 'rgba(0,0,0,0.85)';
     el.style.color = 'white';
-    el.style.fontFamily = 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, \"Liberation Mono\", \"Courier New\", monospace';
+    el.style.fontFamily = 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace';
     el.style.fontSize = '12px';
     el.style.lineHeight = '1.4';
     el.style.whiteSpace = 'pre-wrap';

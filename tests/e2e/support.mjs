@@ -572,6 +572,10 @@ export async function seedDesktopData(page, options = {}) {
   await invokeDesktopIpc(page, 'recurring:upsert', {
     profile: BASE_RECURRING,
   });
+
+  // The renderer starts before the backend and queries settings ahead of the seed; react-query
+  // keeps that empty profile, so a hash navigation would still show the onboarding wizard.
+  await page.reload();
 }
 
 export async function importPendingProTransaction(page, label, options = {}) {

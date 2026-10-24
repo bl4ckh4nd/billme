@@ -5,6 +5,7 @@ import {
   createRootRoute,
   createRoute,
   createRouter,
+  lazyRouteComponent,
   redirect,
   useNavigate,
   useRouterState,
@@ -18,27 +19,20 @@ import {
   TemplateEditorPage,
   TemplatesPage,
 } from '@billme/desktop-renderer/components/AppPages';
-import { ClientsView } from '@billme/desktop-renderer/components/ClientsView';
-import { ArticlesView } from '@billme/desktop-renderer/components/ArticlesView';
-import { SettingsView } from '@billme/desktop-renderer/components/SettingsView';
-import { RecurringView } from '@billme/desktop-renderer/components/RecurringView';
-import { ProjectsView } from '@billme/desktop-renderer/components/ProjectsView';
-import { ProjectDetailView } from '@billme/desktop-renderer/components/ProjectDetailView';
-import { EurView } from '@billme/desktop-renderer/components/EurView';
-import { TaxFilingCenter } from '@billme/desktop-renderer/components/TaxFilingCenter';
 import { DashboardLayout } from './components/DashboardLayout';
-import { AccountsView } from './components/AccountsView';
 import { OnboardingWizard } from './components/OnboardingWizard';
-import { ProAccountingPage } from './components/ProAccountingPage';
 
-const AccountsPage: React.FC = () => <AccountsView />;
-const EurPage: React.FC = () => <EurView />;
-const ClientsPage: React.FC = () => <ClientsView />;
-const ProjectsPage: React.FC = () => <ProjectsView />;
-const ArticlesPage: React.FC = () => <ArticlesView />;
-const SettingsPage: React.FC = () => <SettingsView />;
-const RecurringPage: React.FC = () => <RecurringView />;
-const TaxFilingPage: React.FC = () => <TaxFilingCenter />;
+// Views outside the dashboard load on first visit, so the start bundle stays small.
+const AccountsPage = lazyRouteComponent(() => import('./components/AccountsView'), 'AccountsView');
+const EurPage = lazyRouteComponent(() => import('@billme/desktop-renderer/components/EurView'), 'EurView');
+const ClientsPage = lazyRouteComponent(() => import('@billme/desktop-renderer/components/ClientsView'), 'ClientsView');
+const ProjectsPage = lazyRouteComponent(() => import('@billme/desktop-renderer/components/ProjectsView'), 'ProjectsView');
+const ProjectDetailPage = lazyRouteComponent(() => import('@billme/desktop-renderer/components/ProjectDetailView'), 'ProjectDetailView');
+const ArticlesPage = lazyRouteComponent(() => import('@billme/desktop-renderer/components/ArticlesView'), 'ArticlesView');
+const SettingsPage = lazyRouteComponent(() => import('@billme/desktop-renderer/components/SettingsView'), 'SettingsView');
+const RecurringPage = lazyRouteComponent(() => import('@billme/desktop-renderer/components/RecurringView'), 'RecurringView');
+const TaxFilingPage = lazyRouteComponent(() => import('@billme/desktop-renderer/components/TaxFilingCenter'), 'TaxFilingCenter');
+const ProAccountingPage = React.lazy(() => import('./components/ProAccountingPage').then((module) => ({ default: module.ProAccountingPage })));
 
 const RootLayout: React.FC = () => <AppRootLayout Layout={DashboardLayout} Onboarding={OnboardingWizard} />;
 
@@ -70,7 +64,11 @@ const financeRoute = createRoute({
 const AccountingPage: React.FC = () => {
   const view = useRouterState({ select: (state) => (state.location.search as { view?: unknown }).view });
   const navigate = useNavigate();
-  return <ProAccountingPage view={view ?? 'inbox'} onViewChange={(next) => void navigate({ to: '/accounting', search: { view: next } })} />;
+  return (
+    <React.Suspense fallback={null}>
+      <ProAccountingPage view={view ?? 'inbox'} onViewChange={(next) => void navigate({ to: '/accounting', search: { view: next } })} />
+    </React.Suspense>
+  );
 };
 
 const accountingRoute = createRoute({
@@ -133,7 +131,7 @@ const projectsRoute = createRoute({
 const projectDetailRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/projects/$projectId',
-  component: ProjectDetailView,
+  component: ProjectDetailPage,
 });
 
 const articlesRoute = createRoute({

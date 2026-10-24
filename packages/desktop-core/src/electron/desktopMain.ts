@@ -1,4 +1,5 @@
 import { app, BrowserWindow, ipcMain, nativeTheme, type IpcMain } from 'electron';
+import { enableCompileCache } from 'node:module';
 import path from 'path';
 import type { EmbeddedConnectionResult } from '@billme/desktop-contracts/embeddedConnection';
 import { initAutoUpdater } from './updater';
@@ -50,6 +51,8 @@ export const startDesktopMain = <TBackend extends DesktopBackend>(options: Deskt
   const isDev = Boolean(process.env.VITE_DEV_SERVER_URL || process.env.ELECTRON_RENDERER_URL);
 
   app.setName(profile.appName);
+  // Keeps V8 bytecode of the lazily imported backend chunk (~4 MB) between starts; saves ~60 ms each start.
+  enableCompileCache?.();
 
   let userDataPath: string | null = null;
   let mainWindow: BrowserWindow | null = null;
@@ -144,8 +147,13 @@ export const startDesktopMain = <TBackend extends DesktopBackend>(options: Deskt
 
   let stopAutomation: (() => Promise<void>) | undefined;
 
+  // The renderer asks for the connection while PGlite is still booting. The preload caches the first
+  // answer for the whole session, so the handshake waits for the backend instead of answering `null`.
+  let resolveBackendReady!: (backend: TBackend) => void;
+  const backendReady = new Promise<TBackend>((resolve) => { resolveBackendReady = resolve; });
+
   const unregisterEmbeddedConnection = registerEmbeddedConnectionHandler(ipcMain, {
-    resolveConnection: () => localBackend?.embeddedConnection() ?? null,
+    resolveConnection: () => backendReady.then((backend) => backend.embeddedConnection()),
     isTrustedSender: (sender) => mainWindow?.webContents === sender || isPdfPrintWebContents(sender),
   });
 
@@ -199,6 +207,9 @@ export const startDesktopMain = <TBackend extends DesktopBackend>(options: Deskt
     }
 
     userDataPath = app.getPath('userData');
+    // Load the window before booting PGlite: both need the main thread, and PGlite blocks it for
+    // hundreds of milliseconds (seconds on first start). This way the shell paints first.
+    await createWindow();
     localBackend = await options.createBackend({
       userDataPath,
       desktopIntegration: createDesktopIntegration({
@@ -211,13 +222,12 @@ export const startDesktopMain = <TBackend extends DesktopBackend>(options: Deskt
       }),
     });
     const backend = localBackend;
+    resolveBackendReady(backend);
     stopAutomation = startEmbeddedAutomationTicker({
       product,
       connection: () => backend.embeddedConnection(),
       logger,
     });
-
-    await createWindow();
 
     // Auto-updater (only in packaged builds)
     if (!isDev) {

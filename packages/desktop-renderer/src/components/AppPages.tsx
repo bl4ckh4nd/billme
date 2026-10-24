@@ -15,8 +15,12 @@ import { useCreateIntent } from '../hooks/useCreateIntent';
 import { useUiStore } from '../ui-store';
 import { ipc } from '../runtime-api';
 import { DocumentsView } from './InvoicesView';
-import { TemplateEditor } from './TemplateEditor';
-import { InvoiceDocumentEditor } from './InvoiceDocumentEditor';
+
+// The editors pull in the designer and drag-and-drop; they load when first opened.
+const TemplateEditor = React.lazy(() => import('./TemplateEditor').then((module) => ({ default: module.TemplateEditor })));
+const InvoiceDocumentEditor = React.lazy(() =>
+  import('./InvoiceDocumentEditor').then((module) => ({ default: module.InvoiceDocumentEditor })),
+);
 
 // Pages both products mount unchanged. Route trees stay in each app because
 // TanStack's `Register` declaration must be unique per program.
@@ -105,12 +109,14 @@ export const TemplateEditorPage: React.FC<{ templateId: string }> = ({ templateI
   const search = useRouterState({ select: (s) => s.location.search }) as Record<string, unknown>;
   const kind = templateKindSchema.safeParse(search.kind);
   return (
-    <TemplateEditor
-      templateId={templateId}
-      kind={kind.success ? kind.data : 'invoice'}
-      onBack={() => navigate({ to: '/templates' })}
-      onCreated={(id) => navigate({ to: '/templates/$id', params: { id }, replace: true })}
-    />
+    <React.Suspense fallback={null}>
+      <TemplateEditor
+        templateId={templateId}
+        kind={kind.success ? kind.data : 'invoice'}
+        onBack={() => navigate({ to: '/templates' })}
+        onCreated={(id) => navigate({ to: '/templates/$id', params: { id }, replace: true })}
+      />
+    </React.Suspense>
   );
 };
 
@@ -258,55 +264,57 @@ export const DocumentEditorPage: React.FC<{ reasonSuggestions?: readonly string[
 
   return (
     <>
-      <InvoiceDocumentEditor
-        invoice={invoice}
-        templateType={docType === 'offer' ? 'offer' : 'invoice'}
-        mode={docMode ?? 'edit'}
-        onSave={(updated, meta) => {
-          const numberNote = meta?.numberChangeReason ? `Nummer manuell geändert: ${meta.numberChangeReason}` : undefined;
-          if (docMode === 'create') {
-            const numbers = ipc.numbers;
-            const persistedDoc = { ...updated };
+      <React.Suspense fallback={null}>
+        <InvoiceDocumentEditor
+          invoice={invoice}
+          templateType={docType === 'offer' ? 'offer' : 'invoice'}
+          mode={docMode ?? 'edit'}
+          onSave={(updated, meta) => {
+            const numberNote = meta?.numberChangeReason ? `Nummer manuell geändert: ${meta.numberChangeReason}` : undefined;
+            if (docMode === 'create') {
+              const numbers = ipc.numbers;
+              const persistedDoc = { ...updated };
 
-            void (async () => {
-              try {
-                const mutation = docType === 'offer' ? upsertOffer : upsertInvoice;
-                const vars =
-                  docType === 'offer'
-                    ? { offer: persistedDoc, reason: numberNote ? `create; ${numberNote}` : 'create' }
-                    : { invoice: persistedDoc, reason: numberNote ? `create; ${numberNote}` : 'create' };
-                await (mutation as any).mutateAsync(vars);
-                if (ipc.numbers !== numbers) return;
-                clearEditingInvoice();
-                navigate({ to: '/documents', search: docType === 'offer' ? { kind: 'offer' } : {} });
-              } catch (error) {
-                notify('error', `Speichern fehlgeschlagen: ${error instanceof Error ? error.message : String(error)}`);
-              }
-            })();
-            return;
-          }
-
-          setPendingDoc(updated);
-          // The number unlock reason is the audit reason unless the user writes another.
-          setReason(numberNote ?? '');
-          setIsReasonOpen(true);
-        }}
-        onCancel={() => {
-          const numbers = ipc.numbers;
-          void (async () => {
-            if (docMode === 'create' && invoice.numberReservationId) {
-              try {
-                await numbers.release({ reservationId: invoice.numberReservationId });
-              } catch {
-                // Ignore release failures to avoid trapping users in editor.
-              }
+              void (async () => {
+                try {
+                  const mutation = docType === 'offer' ? upsertOffer : upsertInvoice;
+                  const vars =
+                    docType === 'offer'
+                      ? { offer: persistedDoc, reason: numberNote ? `create; ${numberNote}` : 'create' }
+                      : { invoice: persistedDoc, reason: numberNote ? `create; ${numberNote}` : 'create' };
+                  await (mutation as any).mutateAsync(vars);
+                  if (ipc.numbers !== numbers) return;
+                  clearEditingInvoice();
+                  navigate({ to: '/documents', search: docType === 'offer' ? { kind: 'offer' } : {} });
+                } catch (error) {
+                  notify('error', `Speichern fehlgeschlagen: ${error instanceof Error ? error.message : String(error)}`);
+                }
+              })();
+              return;
             }
-            if (ipc.numbers !== numbers) return;
-            clearEditingInvoice();
-            navigate({ to: '/documents', search: { kind: docType } });
-          })();
-        }}
-      />
+
+            setPendingDoc(updated);
+            // The number unlock reason is the audit reason unless the user writes another.
+            setReason(numberNote ?? '');
+            setIsReasonOpen(true);
+          }}
+          onCancel={() => {
+            const numbers = ipc.numbers;
+            void (async () => {
+              if (docMode === 'create' && invoice.numberReservationId) {
+                try {
+                  await numbers.release({ reservationId: invoice.numberReservationId });
+                } catch {
+                  // Ignore release failures to avoid trapping users in editor.
+                }
+              }
+              if (ipc.numbers !== numbers) return;
+              clearEditingInvoice();
+              navigate({ to: '/documents', search: { kind: docType } });
+            })();
+          }}
+        />
+      </React.Suspense>
 
       <ConfirmDialog
         open={isReasonOpen}

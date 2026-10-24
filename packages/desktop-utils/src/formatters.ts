@@ -24,12 +24,15 @@ export const formatAddressMultiline = (a: AddressFormatInput): string => {
   return formatAddressLines(a).join('\n');
 };
 
-export const formatCurrency = (amount: number): string => {
-  return new Intl.NumberFormat('de-DE', { style: 'currency', currency: 'EUR' }).format(amount);
-};
+const currencyFormat = new Intl.NumberFormat('de-DE', { style: 'currency', currency: 'EUR' });
+const dateFormat = new Intl.DateTimeFormat('de-DE', { day: '2-digit', month: '2-digit', year: 'numeric' });
+
+export const formatCurrency = (amount: number): string => currencyFormat.format(amount);
 
 export const formatDate = (dateString: string): string => {
-  return new Date(dateString).toLocaleDateString('de-DE', { day: '2-digit', month: '2-digit', year: 'numeric' });
+  const date = new Date(dateString);
+  // format() throws on an invalid date where toLocaleDateString answered "Invalid Date".
+  return Number.isNaN(date.getTime()) ? date.toLocaleDateString('de-DE') : dateFormat.format(date);
 };
 export const localIsoDate = (date = new Date()): string =>
   `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;

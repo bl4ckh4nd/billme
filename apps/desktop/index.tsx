@@ -1,5 +1,7 @@
 /// <reference types="vite/client" />
-import { mountDesktopRendererApp } from '@billme/desktop-renderer';
+import { mountRendererApp } from '@billme/desktop-renderer';
+// Static on purpose: a dynamic import would wait for the main process, which is busy booting PGlite.
+import App from './App';
 
 const ensureDebugOverlay = () => {
   const id = '__app_debug_overlay';
@@ -63,7 +65,7 @@ const boot = async () => {
   if (import.meta.env.DEV && !(globalThis as { billmeApi?: unknown }).billmeApi) {
     (await import('@billme/desktop-renderer/dev-mock')).installDevMockApi('lite');
   }
-  await mountDesktopRendererApp(rootElement);
+  await mountRendererApp(rootElement, async () => ({ default: App }));
 };
 
 void boot();

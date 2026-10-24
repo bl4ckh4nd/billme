@@ -339,6 +339,15 @@ export const listServerEurCashItems = async (db: PostgresQueryable, scope: Tenan
     const lines = getCatalogForYear(taxYear);
     const valid = new Set(lines.map((line) => line.id));
     const rules = (await listServerEurRules(db, scope, taxYear)).filter((rule) => rule.active && valid.has(rule.targetEurLineId));
+    // Lines already chosen per partner, built once: a lookup per item was quadratic in the year's payments.
+    const partnerKey = (item: ServerEurCashItem) => `${item.flowType}\u0000${item.counterparty.trim().toLocaleLowerCase('de-DE')}`;
+    const partnerLines = new Map<string, Set<string>>();
+    for (const other of items) {
+      const id = other.classification?.eurLineId;
+      if (other.classification?.excluded || !id || !valid.has(id)) continue;
+      const key = partnerKey(other);
+      partnerLines.set(key, (partnerLines.get(key) ?? new Set()).add(id));
+    }
     for (const item of items) {
       if (item.classification?.eurLineId || item.classification?.excluded) continue;
       const rule = rules.find((rule) => {
@@ -348,7 +357,7 @@ export const listServerEurCashItems = async (db: PostgresQueryable, scope: Tenan
         return rule.operator === 'equals' ? text === value : rule.operator === 'startsWith' ? text.startsWith(value) : text.includes(value);
       });
       if (rule) { item.suggestedLineId = rule.targetEurLineId; item.suggestionReason = 'Ihre Zuordnungsregel'; item.suggestionLayer = 'rule'; continue; }
-      const previous = new Set(items.filter((other) => other.flowType === item.flowType && other.counterparty.trim().toLocaleLowerCase('de-DE') === item.counterparty.trim().toLocaleLowerCase('de-DE') && !other.classification?.excluded).map((other) => other.classification?.eurLineId).filter((id): id is string => !!id && valid.has(id)));
+      const previous = partnerLines.get(partnerKey(item)) ?? new Set<string>();
       if (previous.size === 1 && item.counterparty.trim()) { item.suggestedLineId = [...previous][0]; item.suggestionReason = 'Bisherige Zuordnung dieses Geschäftspartners'; item.suggestionLayer = 'counterparty'; continue; }
       if (previous.size > 1) { item.suggestionReason = 'Mehrere bisherige Kategorien: bitte prüfen'; continue; }
       const suggestion = item.flowType === 'income' && item.sourceType === 'invoice'

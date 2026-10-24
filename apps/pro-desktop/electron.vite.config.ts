@@ -61,6 +61,8 @@ export default defineConfig(({ mode }) => {
       },
       build: {
         outDir: 'dist/renderer',
+        // electron-vite leaves the renderer unminified; minified code parses noticeably faster at startup.
+        minify: true,
         // In production, keep asset paths relative for `loadFile(...)`.
         base: './',
         rollupOptions: {

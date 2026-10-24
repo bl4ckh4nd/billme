@@ -50,10 +50,37 @@ export const historyFromAudit = async (
     entityId,
     tenantId: scope.tenantId,
   });
-  return entries.map((entry) => ({
-    date: entry.occurredAt.split('T')[0] ?? entry.occurredAt,
-    action: entry.reason ? `${entry.action} (${entry.reason})` : entry.action,
-  }));
+  return entries.map((entry) => toHistoryEntry(entry.occurredAt, entry.action, entry.reason));
+};
+
+const toHistoryEntry = (occurredAt: string, action: string, reason?: string | null) => ({
+  date: occurredAt.split('T')[0] ?? occurredAt,
+  action: reason ? `${action} (${reason})` : action,
+});
+
+// One query for a whole list instead of one audit read per document.
+const historiesFromAudit = async (db: ServerDatabase, scope: TenantScope, entityType: 'invoice' | 'offer') => {
+  const { rows } = await db.query<{ entity_id: string; ts: string; action: string; reason: string | null }>(
+    'SELECT entity_id, ts, action, reason FROM audit_log WHERE tenant_id = $1 AND entity_type = $2 ORDER BY sequence DESC',
+    [scope.tenantId, entityType],
+  );
+  const histories = new Map<string, Array<{ date: string; action: string }>>();
+  for (const row of rows) {
+    const history = histories.get(row.entity_id) ?? [];
+    history.push(toHistoryEntry(row.ts, row.action, row.reason));
+    histories.set(row.entity_id, history);
+  }
+  return histories;
+};
+
+export const withInvoiceHistories = async (db: ServerDatabase, scope: TenantScope, invoices: Array<z.infer<typeof invoiceSchema>>) => {
+  const histories = await historiesFromAudit(db, scope, 'invoice');
+  return invoices.map((invoice) => ({ ...invoice, history: histories.get(invoice.id) ?? [] }));
+};
+
+export const withOfferHistories = async (db: ServerDatabase, scope: TenantScope, offers: Array<z.infer<typeof offerSchema>>) => {
+  const histories = await historiesFromAudit(db, scope, 'offer');
+  return offers.map((offer) => ({ ...offer, history: histories.get(offer.id) ?? [] }));
 };
 
 export const withInvoiceHistory = async (db: ServerDatabase, scope: TenantScope, invoice: z.infer<typeof invoiceSchema>) => {

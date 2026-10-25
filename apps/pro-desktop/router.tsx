@@ -21,8 +21,7 @@ import {
 import { ClientsView } from '@billme/desktop-renderer/components/ClientsView';
 import { ArticlesView } from '@billme/desktop-renderer/components/ArticlesView';
 import { SettingsView, type SettingsExtraSection } from '@billme/desktop-renderer/components/SettingsView';
-import { ArrowRightLeft, ListChecks } from 'lucide-react';
-import { ProTransferSettings } from './components/ProTransferSettings';
+import { ListChecks } from 'lucide-react';
 import { ProBookingRulesSettings } from './components/ProBookingRulesSettings';
 import { RecurringView } from '@billme/desktop-renderer/components/RecurringView';
 import { ProjectsView } from '@billme/desktop-renderer/components/ProjectsView';
@@ -41,7 +40,6 @@ const ProjectsPage: React.FC = () => <ProjectsView />;
 const ArticlesPage: React.FC = () => <ArticlesView />;
 const PRO_SETTINGS: SettingsExtraSection[] = [
   { group: 'Buchhaltung', id: 'rules', label: 'Buchungsregeln', icon: ListChecks, desc: 'Regeln, Overrides & Probelauf', render: () => <ProBookingRulesSettings /> },
-  { group: 'Buchhaltung', id: 'transfers', label: 'Umbuchungen', icon: ArrowRightLeft, desc: 'Geldtransit & Erkennung', render: () => <ProTransferSettings /> },
 ];
 const SettingsPage: React.FC = () => <SettingsView extraSections={PRO_SETTINGS} />;
 const RecurringPage: React.FC = () => <RecurringView />;

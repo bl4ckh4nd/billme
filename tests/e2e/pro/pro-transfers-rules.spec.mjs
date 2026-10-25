@@ -46,38 +46,41 @@ const importCsv = async (page, accountId, rows) => {
 
 const lineBy = async (page, accountId, amount) => (await invokeDesktopIpc(page, 'pro:listBankTransactions')).find((row) => row.accountId === accountId && row.amount === amount);
 
-test('a transfer between own accounts is booked over Geldtransit, and an open side finds its partner in Ausnahmen', async () => {
+/** Review, approval and posting of one line; the browser part of these tests is elsewhere. */
+const post = async (page, transactionId) => {
+  await invokeDesktopIpc(page, 'pro:dispatchDraftAction', { transactionId, action: 'submit_for_review' });
+  const approved = await invokeDesktopIpc(page, 'pro:dispatchDraftAction', { transactionId, action: 'approve' });
+  expect((await invokeDesktopIpc(page, 'pro:postDraft', { draftId: approved.id, postingDate: approved.postingDate })).issues).toEqual([]);
+};
+
+test('a payment to an own IBAN is proposed on Geldtransit by the built-in rule, and Ausnahmen shows Geldtransit open until the other side is booked', async () => {
   const { page, baseUrl } = desktop;
-  await importCsv(page, 'acc1', ['03.10.2026;American Express;DE21 5001 0517 0000 0040 21;Kartenabrechnung 09/2026;-1.248,30;EUR', '21.10.2026;Gutschrift American Express;;Rückzahlung Guthaben;42,10;EUR']);
-  await importCsv(page, 'acc-card', ['05.10.2026;Zahlung erhalten;;Vielen Dank;1.248,30;EUR', '12.10.2026;Guthaben zurückerstattet;;Rückzahlung;-42,10;EUR']);
-  // A side booked on Geldtransit earlier; its partner arrived nine days later, outside the 7-day window.
-  const cardRefund = await lineBy(page, 'acc-card', -42.1);
-  expect(cardRefund.transfer).toBeUndefined();
-  await invokeDesktopIpc(page, 'pro:confirmTransfer', { transactionId: cardRefund.id, post: true });
+  await importCsv(page, 'acc1', ['03.10.2026;American Express;DE21 5001 0517 0000 0040 21;Kartenabrechnung 09/2026;-1.248,30;EUR']);
+  // The card statement names no IBAN: that side is booked like any other line.
+  await importCsv(page, 'acc-card', ['05.10.2026;Zahlung erhalten;;Vielen Dank;1.248,30;EUR']);
   await page.reload();
 
   await page.goto(appUrl(baseUrl, '/accounting?view=reconciliation'));
-  const amexRow = page.getByRole('button', { name: /American Express.*Umbuchung · Firmenkarte/ });
-  await expect(amexRow).toBeVisible();
-  await amexRow.click();
-  const section = page.getByRole('region', { name: 'Umbuchung zwischen eigenen Konten' });
-  await expect(section.getByText('Gegen-IBAN ist Ihr Konto „Firmenkarte“', { exact: false })).toBeVisible();
-  await expect(section.getByText('Kein Steuerfall, kein Beleg nötig.', { exact: false })).toBeVisible();
+  await page.getByRole('button', { name: /American Express/ }).click();
+  await expect(page.getByText(/1360\s*Kontierungsvorschlag/)).toBeVisible();
+  await expect(page.getByRole('list', { name: 'Regel-Trace' })).toContainText('Basis „Umbuchung zwischen eigenen Konten“ setzt Konto, Buchungstext');
   await page.screenshot({ path: test.info().outputPath('01-bankabgleich-umbuchung.png') });
-  await section.getByRole('button', { name: 'Als Umbuchung buchen' }).click();
-  await expect.poll(async () => [(await lineBy(page, 'acc1', -1248.3)).status, (await lineBy(page, 'acc-card', 1248.3)).status]).toEqual(['booked', 'booked']);
 
+  const giroSide = await lineBy(page, 'acc1', -1248.3);
+  await post(page, giroSide.id);
   await page.goto(appUrl(baseUrl, '/accounting?view=exceptions'));
   await page.getByRole('button', { name: /Geldtransit offen/ }).click();
-  await expect(page.getByText('Partner gesucht').first()).toBeVisible();
-  await expect(page.getByText('außerhalb des Zeitfensters')).toBeVisible();
+  await expect(page.getByRole('cell', { name: '1.248,30 €' }).last()).toBeVisible();
   await page.screenshot({ path: test.info().outputPath('02-ausnahmen-geldtransit-offen.png') });
-  await page.getByRole('button', { name: 'Als Gegenseite zuordnen' }).click();
+
+  const cardSide = await lineBy(page, 'acc-card', 1248.3);
+  const cardDraft = await invokeDesktopIpc(page, 'pro:getDraftByTransactionId', { transactionId: cardSide.id });
+  await invokeDesktopIpc(page, 'pro:saveDraft', { draft: { ...cardDraft, lines: cardDraft.lines.map((line) => (line.accountNumber === '1240' ? line : { ...line, accountNumber: '1360', taxCaseKey: undefined })) } });
+  await post(page, cardSide.id);
+  await page.reload();
+  await page.getByRole('button', { name: /Geldtransit offen/ }).click();
   await expect(page.getByText('Geldtransit ist ausgeglichen.')).toBeVisible();
-  const transit = await invokeDesktopIpc(page, 'pro:getTransitOverview');
-  expect(transit.transitAccountNumber).toBe('1360');
-  expect(transit.openBalance).toBe(0);
-  expect(transit.months.find((month) => month.period === '2026-10')).toMatchObject({ balance: 0 });
+  expect((await invokeDesktopIpc(page, 'pro:getTransitOverview')).openBalance).toBe(0);
   await page.screenshot({ path: test.info().outputPath('03-geldtransit-ausgeglichen.png') });
 });
 

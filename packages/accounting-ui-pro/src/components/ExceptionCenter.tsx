@@ -1,11 +1,10 @@
 import { useEffect, useMemo, useState } from 'react';
-import { AlertTriangle, ArrowRightLeft, FileSearch, RefreshCw } from 'lucide-react';
+import { AlertTriangle, FileSearch, RefreshCw } from 'lucide-react';
 import { Badge, Button, Card, CardHeader, EmptyState, Input, Textarea, cn, formatEmptyValue } from '@billme/ui';
 import { getFlagLabel } from '../domain/selectors';
 import { useAccountingWorkspace } from '../AccountingWorkspaceContext';
 import { Transaction, UserRole } from '../types';
 import type { ProAccountingDataAdapter, TransitOverview } from '../services/accountingDataAdapter';
-import { permissionContextForRole } from '../domain/permissions';
 import { StatusBadge } from './IssueBadges';
 
 type ExceptionFilter = 'all' | 'open' | 'snoozed' | 'resolved' | 'errors' | 'warnings' | 'missing_receipt' | 'duplicates' | 'period_locked' | 'transit';
@@ -74,10 +73,11 @@ export default function ExceptionCenter({ role, canMutateExceptions = true, tran
   const [mutationError, setMutationError] = useState<string | null>(null);
 
   const [transit, setTransit] = useState<TransitOverview | null>(null);
-  const loadTransit = () => {
+  useEffect(() => {
     void dataAdapter?.getTransitOverview?.().then(setTransit).catch(() => setTransit(null));
-  };
-  useEffect(loadTransit, [dataAdapter, transactions]);
+  }, [dataAdapter, transactions]);
+  // Months still open at their end; none when the transfers net out across months.
+  const openTransitMonths = transit && transit.openBalance !== 0 ? transit.months.filter((month) => month.cumulative !== 0).length : 0;
   const filters = (Object.keys(filterLabels) as ExceptionFilter[]).filter((key) => key !== 'transit' || Boolean(dataAdapter?.getTransitOverview));
   const items = useMemo(() => transactions.filter((tx) => matchesFilter(tx, filter)), [transactions, filter]);
   const selectedTx = items.find((tx) => tx.id === selectedId) ?? items[0] ?? null;
@@ -133,13 +133,13 @@ export default function ExceptionCenter({ role, canMutateExceptions = true, tran
                   )}
                 >
                   {filterLabels[key]}
-                  {key === 'transit' && transit && transit.openSides.length > 0 && <span className="ml-1.25 font-mono tabular-nums">{transit.openSides.length}</span>}
+                  {key === 'transit' && openTransitMonths > 0 && <span className="ml-1.25 font-mono tabular-nums">{openTransitMonths}</span>}
                 </button>
               ))}
             </div>
           </div>
           {filter === 'transit' ? (
-            <TransitSides overview={transit} selectedId={selectedId} onSelect={setSelectedId} />
+            <TransitMonths overview={transit} />
           ) : items.length === 0 ? (
             <EmptyState title="Keine Einträge für den Filter." />
           ) : (
@@ -187,17 +187,14 @@ export default function ExceptionCenter({ role, canMutateExceptions = true, tran
 
         <div className="flex min-w-0 flex-col gap-3.5">
           {filter === 'transit' ? (
-            <TransitDetail
-              overview={transit}
-              selectedId={selectedId}
-              canMutate={permissionContextForRole(role).canMutate && Boolean(dataAdapter?.confirmTransfer)}
-              onOpenTransaction={onOpenTransaction}
-              onAssign={async (transactionId, partnerTransactionId) => {
-                await dataAdapter!.confirmTransfer!({ transactionId, partnerTransactionId, post: true });
-                loadTransit();
-                onRefresh();
-              }}
-            />
+            <Card padding="sm">
+              <p className="text-control text-foreground">
+                Umbuchungen zwischen eigenen Konten laufen über Geldtransit {transit?.transitAccountNumber}. Sind beide Seiten gebucht, steht das Konto auf null.
+              </p>
+              <p className="mt-1.5 text-caption text-muted">
+                Bleibt ein Saldo, fehlt eine Seite: Buchen Sie den Gegenumsatz im Bankabgleich auf {transit?.transitAccountNumber}, oder importieren Sie die Umsätze des anderen Kontos.
+              </p>
+            </Card>
           ) : !selectedTx || !selectedDraft ? (
             <Card padding="none">
               <EmptyState title="Keine Ausnahme ausgewählt." />
@@ -412,154 +409,40 @@ export default function ExceptionCenter({ role, canMutateExceptions = true, tran
   );
 }
 
-type OpenSide = TransitOverview['openSides'][number];
-
 const money = (amount: number) => new Intl.NumberFormat('de-DE', { style: 'currency', currency: 'EUR' }).format(amount);
 const monthLabel = (period: string) => new Date(`${period}-01T00:00:00Z`).toLocaleDateString('de-DE', { month: 'short', year: 'numeric', timeZone: 'UTC' });
 
-/** Posted Geldtransit sides whose partner is not posted yet. */
-function TransitSides({ overview, selectedId, onSelect }: { overview: TransitOverview | null; selectedId: string | null; onSelect: (id: string) => void }) {
-  if (!overview || overview.openSides.length === 0) {
+/** Geldtransit per month; the running balance shows where a side is missing. */
+function TransitMonths({ overview }: { overview: TransitOverview | null }) {
+  if (!overview) return <EmptyState title="Geldtransit wird geladen." />;
+  if (overview.openBalance === 0) {
     return <EmptyState title="Geldtransit ist ausgeglichen." description="Jede gebuchte Umbuchung hat ihre Gegenseite." />;
   }
-  const current = overview.openSides.find((side) => side.transactionId === selectedId) ?? overview.openSides[0];
-  return (
-    <ul className="max-h-140 overflow-y-auto">
-      {overview.openSides.map((side) => (
-        <li key={side.transactionId} className="border-b border-border last:border-b-0">
-          <button
-            type="button"
-            onClick={() => onSelect(side.transactionId)}
-            aria-current={current?.transactionId === side.transactionId ? 'true' : undefined}
-            className={cn(
-              'block w-full px-3 py-2.5 text-left focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-focus-ring',
-              current?.transactionId === side.transactionId ? 'bg-accent-50 shadow-[inset_3px_0_0_var(--color-accent)]' : 'hover:bg-surface-muted',
-            )}
-          >
-            <span className="flex items-baseline gap-2">
-              <span className="min-w-0 flex-1 truncate text-label font-semibold text-foreground">{side.counterparty || side.purpose}</span>
-              <span className="font-mono text-label tabular-nums text-foreground">{money(side.amount)}</span>
-            </span>
-            <span className="mt-0.75 block truncate text-caption text-muted">
-              {side.accountName} · {new Date(side.date).toLocaleDateString('de-DE')} · Buchung {side.entryNumber}
-            </span>
-            <span className="mt-0.75 flex flex-wrap gap-1.5">
-              <Badge tone="accent"><ArrowRightLeft size={12} aria-hidden="true" /> {side.partnerAccountName ? `Gegenseite ${side.partnerAccountName}` : 'Gegenkonto offen'}</Badge>
-              {side.partnerTransactionId ? <Badge tone="info">Gegenseite nicht gebucht</Badge> : <Badge tone="warning">Partner gesucht</Badge>}
-            </span>
-          </button>
-        </li>
-      ))}
-    </ul>
-  );
-}
-
-/** Geldtransit balance per month plus the candidates for the selected open side. */
-function TransitDetail({ overview, selectedId, canMutate, onOpenTransaction, onAssign }: {
-  overview: TransitOverview | null;
-  selectedId: string | null;
-  canMutate: boolean;
-  onOpenTransaction: (transactionId: string) => void;
-  onAssign: (transactionId: string, partnerTransactionId: string) => Promise<void>;
-}) {
-  const [error, setError] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
-  if (!overview) return <Card padding="none"><EmptyState title="Geldtransit wird geladen." /></Card>;
-  const side: OpenSide | undefined = overview.openSides.find((entry) => entry.transactionId === selectedId) ?? overview.openSides[0];
-  const assign = async (partnerTransactionId: string) => {
-    setBusy(true);
-    setError(null);
-    try {
-      await onAssign(side!.transactionId, partnerTransactionId);
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : 'Zuordnung konnte nicht gespeichert werden.');
-    } finally {
-      setBusy(false);
-    }
-  };
-  const cardHead = 'border-b border-border px-3.5 py-3';
   return (
     <>
-      <Card padding="none">
-        <CardHeader as="h3" title={`Saldo Geldtransit ${overview.transitAccountNumber} je Monat`} className={cardHead} />
-        {overview.months.length === 0 ? (
-          <div className="p-3.5 text-control text-muted">Noch keine Buchung auf Geldtransit.</div>
-        ) : (
-          <table className="w-full text-control">
-            <thead>
-              <tr className="text-caption text-muted">
-                <th scope="col" className="px-3.5 py-1.5 text-left font-medium">Monat</th>
-                <th scope="col" className="px-3.5 py-1.5 text-right font-medium">Soll</th>
-                <th scope="col" className="px-3.5 py-1.5 text-right font-medium">Haben</th>
-                <th scope="col" className="px-3.5 py-1.5 text-right font-medium">Saldo</th>
-              </tr>
-            </thead>
-            <tbody>
-              {overview.months.map((month) => (
-                <tr key={month.period} className="border-t border-border">
-                  <td className="px-3.5 py-1.5 text-foreground">{monthLabel(month.period)}</td>
-                  <td className="px-3.5 py-1.5 text-right font-mono tabular-nums">{money(month.debit)}</td>
-                  <td className="px-3.5 py-1.5 text-right font-mono tabular-nums">{money(month.credit)}</td>
-                  <td className={cn('px-3.5 py-1.5 text-right font-mono font-semibold tabular-nums', month.balance === 0 ? 'text-success-text' : 'text-warning-text')}>
-                    {month.balance === 0 ? 'ausgeglichen' : money(month.balance)}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
-        <div className="border-t border-border px-3.5 py-2 text-caption text-muted">
-          Offen insgesamt: <span className="font-mono font-semibold tabular-nums text-foreground">{money(overview.openBalance)}</span>. Ein Saldo bleibt, solange eine Seite ohne Gegenseite gebucht ist.
-        </div>
-      </Card>
-
-      {side && (
-        <Card padding="none">
-          <div className={cn('flex flex-wrap items-start gap-x-3 gap-y-2', cardHead)}>
-            <div className="min-w-0 flex-1">
-              <div className="text-eyebrow uppercase text-muted">Offene Seite</div>
-              <h3 className="text-section text-foreground">{side.counterparty || side.purpose}</h3>
-              <p className="text-caption text-muted">{side.accountName} · {new Date(side.date).toLocaleDateString('de-DE')} · {money(side.amount)}</p>
-            </div>
-            <Button variant="secondary" size="sm" onClick={() => onOpenTransaction(side.transactionId)}>Im Editor öffnen</Button>
-          </div>
-          <div className="flex flex-col gap-2.5 p-3.5">
-            {error && <div className="rounded-control border border-error-border bg-error-bg px-3 py-2.5 text-control text-error-text" role="alert">{error}</div>}
-            {side.partnerTransactionId ? (
-              <div className="flex flex-wrap items-center justify-between gap-2 text-control">
-                <span className="text-foreground">Die Gegenseite ist zugeordnet, aber noch nicht gebucht.</span>
-                <Button size="sm" onClick={() => onOpenTransaction(side.partnerTransactionId!)}>Gegenseite öffnen</Button>
-              </div>
-            ) : (
-              <>
-                <div className="text-label text-foreground">Partner gesucht</div>
-                {side.candidates.length === 0 ? (
-                  <div className="text-control text-muted">Kein Umsatz mit Gegenbetrag auf einem anderen eigenen Konto. Importieren Sie die Umsätze von {side.partnerAccountName ?? 'dem anderen Konto'}.</div>
-                ) : (
-                  <ul className="flex flex-col gap-2">
-                    {side.candidates.map((candidate) => (
-                      <li key={candidate.transactionId} className="flex flex-wrap items-center gap-2 rounded-control border border-border px-2.75 py-2">
-                        <div className="min-w-0 flex-1 basis-56">
-                          <div className="truncate text-label text-foreground">{candidate.counterparty || candidate.purpose}</div>
-                          <div className="text-caption text-muted">
-                            {candidate.accountName} · {new Date(candidate.date).toLocaleDateString('de-DE')} · {Math.abs(candidate.days)} {Math.abs(candidate.days) === 1 ? 'Tag' : 'Tage'} {candidate.days >= 0 ? 'später' : 'früher'}
-                          </div>
-                        </div>
-                        {candidate.outsideWindow && <Badge tone="warning">außerhalb des Zeitfensters</Badge>}
-                        <span className="font-mono text-label tabular-nums text-foreground">{money(candidate.amount)}</span>
-                        <Button size="sm" onClick={() => void assign(candidate.transactionId)} disabled={busy || !canMutate}>
-                          Als Gegenseite zuordnen
-                        </Button>
-                      </li>
-                    ))}
-                  </ul>
-                )}
-                <p className="text-caption text-muted">Zuordnen bucht die Gegenseite sofort über Geldtransit.</p>
-              </>
-            )}
-          </div>
-        </Card>
-      )}
+      <CardHeader as="h3" title={`Saldo Geldtransit ${overview.transitAccountNumber} je Monat`} className="border-b border-border px-3.5 py-3" />
+      <table className="w-full text-control">
+        <thead>
+          <tr className="text-caption text-muted">
+            <th scope="col" className="px-3.5 py-1.5 text-left font-medium">Monat</th>
+            <th scope="col" className="px-3.5 py-1.5 text-right font-medium">Soll</th>
+            <th scope="col" className="px-3.5 py-1.5 text-right font-medium">Haben</th>
+            <th scope="col" className="px-3.5 py-1.5 text-right font-medium">Stand</th>
+          </tr>
+        </thead>
+        <tbody>
+          {overview.months.map((month) => (
+            <tr key={month.period} className="border-t border-border">
+              <td className="px-3.5 py-1.5 text-foreground">{monthLabel(month.period)}</td>
+              <td className="px-3.5 py-1.5 text-right font-mono tabular-nums">{money(month.debit)}</td>
+              <td className="px-3.5 py-1.5 text-right font-mono tabular-nums">{money(month.credit)}</td>
+              <td className={cn('px-3.5 py-1.5 text-right font-mono font-semibold tabular-nums', month.cumulative === 0 ? 'text-success-text' : 'text-warning-text')}>
+                {month.cumulative === 0 ? 'ausgeglichen' : money(month.cumulative)}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
     </>
   );
 }

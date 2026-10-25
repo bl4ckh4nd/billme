@@ -29,9 +29,8 @@ import type {
 import { businessReportingProfileSchema } from '@billme/server-core';
 import { AccountingPolicyError } from '@billme/accounting-shared';
 import { runInTransaction, type PostgresQueryable, type PostgresTransactionClient } from './connection.js';
-import { suggestAccountForTransaction, type AccountSuggestion, type AccountSuggestionContext } from '@billme/finance-intelligence';
+import { suggestAccountForTransaction, type AccountSuggestion, type AccountSuggestionContext, type AccountSuggestionRuleInput } from '@billme/finance-intelligence';
 import { loadAccountSuggestionContext } from './accountSuggestions.js';
-import { createPostgresTransferRepository, loadTransferState, transferInfo, type TransferRepository } from './proTransfers.js';
 import { createPostgresBookingRuleRepository, draftFingerprint, type BookingRuleRepository } from './proBookingRules.js';
 import { appendWithClient } from './audit.js';
 import {
@@ -641,7 +640,9 @@ const recognizeIstVat = async (
   if (payableLines.length) await insertEntry(db, scope, 'payment_vat', `payment-vat:${paymentId}:${allocationId}`, paymentDate, 'USt Vereinnahmung', payableLines, {});
 };
 
-export type ProAccountingReportRepository = Omit<ProAccountingRepository, 'getGuvReport' | 'getBilanzReport'> & ProAccountingAssetRepository & AccountingSourceRunRepository & TransferRepository & BookingRuleRepository & {
+export type ProAccountingReportRepository = Omit<ProAccountingRepository, 'getGuvReport' | 'getBilanzReport'> & ProAccountingAssetRepository & AccountingSourceRunRepository & BookingRuleRepository & {
+  /** Geldtransit per month; a balance left over means one side of a transfer is not booked yet. */
+  getTransitOverview(scope: TenantScope): Promise<TransitOverview>;
   getBwa01Report(scope: TenantScope, args?: { from?: string; to?: string; chart?: 'SKR03' | 'SKR04'; profile?: string }): Promise<ReportResult<Bwa01Report>>;
   getGuvReport(scope: TenantScope, args?: { from?: string; to?: string; chart?: 'SKR03' | 'SKR04'; profile?: 'guv' | 'management-guv' | 'hgb-guv' }): Promise<ReportResult<ManagementGuvReport | HgbGuvReport>>;
   getBilanzReport(scope: TenantScope, args?: { asOfDate?: string; chart?: 'SKR03' | 'SKR04' }): Promise<ReportResult<HgbBilanzReport>>;
@@ -664,10 +665,33 @@ export type ProAccountingReportRepository = Omit<ProAccountingRepository, 'getGu
 
 // Draft for a bank line: the stored one, else a suggestion with the account's own ledger account as bank side.
 const draftForTransaction = async (tx: PostgresQueryable, scope: TenantScope, transactionId: string): Promise<BookingDraftEntity | null> => { const existing = await getDraft(tx, scope, transactionId); if (existing) return existing; return createDraftForTransaction(tx, scope, transactionId); };
-// Roles whose accounts are never the "other side" of a bank line; memory and Bayes must not learn them.
-const NON_COUNTER_ROLES = ['accounts_receivable', 'accounts_payable', 'bank', 'output_vat', 'output_vat_deferred', 'input_vat', 'transit'];
+// Roles whose accounts are never the "other side" of a bank line; memory and Bayes must not learn them. Geldtransit may be learned: a card statement without IBAN is remembered by its counterparty.
+const NON_COUNTER_ROLES = ['accounts_receivable', 'accounts_payable', 'bank', 'output_vat', 'output_vat_deferred', 'input_vat'];
 const suggestionExclusions = (m: Record<string, string>) => NON_COUNTER_ROLES.map((role) => m[role]).filter((account): account is string => Boolean(account));
-const loadSuggestionContext = async (db: PostgresQueryable, scope: TenantScope) => loadAccountSuggestionContext(db, scope, suggestionExclusions(await mappings(db, tenant(scope), (await policy(db, tenant(scope))).activeChart)));
+export const OWN_ACCOUNTS_RULE_NAME = 'Umbuchung zwischen eigenen Konten';
+/**
+ * Suggestion context plus one built-in rule ahead of all others: a counterparty IBAN
+ * of an own account is a transfer, booked on Geldtransit without a tax case. It stops
+ * the chain, so no override adds a tax case to it.
+ */
+const loadSuggestionContext = async (db: PostgresQueryable, scope: TenantScope): Promise<AccountSuggestionContext> => {
+  const t = tenant(scope); const chart = (await policy(db, t)).activeChart; const m = await mappings(db, t, chart);
+  const context = await loadAccountSuggestionContext(db, scope, suggestionExclusions(m));
+  const ibans = (await q<any>(db, `SELECT iban FROM accounts WHERE tenant_id=$1 AND COALESCE(iban,'')<>''`, [t])).map((row) => String(row.iban));
+  if (!ibans.length || !m.transit) return context;
+  const ownAccounts: AccountSuggestionRuleInput = {
+    id: 'own-accounts', name: OWN_ACCOUNTS_RULE_NAME, chart, priority: Number.MIN_SAFE_INTEGER, stage: 'base', logic: 'or', flowType: 'any', active: true, stop: true,
+    conditions: ibans.map((iban) => ({ field: 'iban', operator: 'equals', value: iban })),
+    actions: { accountNumber: m.transit, memo: 'Umbuchung: {Gegenpartei} {Verwendungszweck}' },
+  };
+  return { ...context, rules: [ownAccounts, ...context.rules] };
+};
+export interface TransitOverview {
+  transitAccountNumber: string;
+  /** Posted movements on Geldtransit per month; `cumulative` is the running balance. */
+  months: Array<{ period: string; debit: number; credit: number; balance: number; cumulative: number }>;
+  openBalance: number;
+}
 const bankItem = (row: any) => ({ flowType: (row.type === 'income' ? 'income' : 'expense') as 'income' | 'expense', counterparty: row.counterparty ?? '', purpose: row.purpose ?? '', amount: Number(row.amount), accountId: row.account_id, counterpartyIban: row.counterparty_iban ?? null });
 
 /**
@@ -696,12 +720,12 @@ const proposalLines = async (db: PostgresQueryable, t: string, chart: 'SKR03' | 
   return order(rest);
 };
 
-/** The draft the suggestion layers would write for a bank line now, unsaved; transfers are handled by the caller. */
-const proposeDraft = async (tx: PostgresQueryable, scope: TenantScope, row: any, context?: AccountSuggestionContext, options: { transit?: string } = {}): Promise<BookingDraftEntity & { autoPost?: boolean }> => {
+/** The draft the suggestion layers would write for a bank line now, unsaved. */
+const proposeDraft = async (tx: PostgresQueryable, scope: TenantScope, row: any, context?: AccountSuggestionContext): Promise<BookingDraftEntity & { autoPost?: boolean }> => {
   const t = tenant(scope); const p = await policy(tx, t); const m = await mappings(tx, t, p.activeChart);
   const bank = row.default_skr_account_number ?? (await q<any>(tx, `SELECT default_skr_account_number FROM accounts WHERE tenant_id=$1 AND id=$2`, [t, row.account_id]))[0]?.default_skr_account_number;
   const booked = row.status === 'booked';
-  const suggestion: AccountSuggestion = booked ? {} : options.transit ? { accountNumber: options.transit, layer: 'transfer' } : suggestAccountForTransaction(context ?? await loadSuggestionContext(tx, scope), bankItem(row));
+  const suggestion: AccountSuggestion = booked ? {} : suggestAccountForTransaction(context ?? await loadSuggestionContext(tx, scope), bankItem(row));
   const suggested = suggestion.layer && suggestion.layer !== 'fallback' ? suggestion.accountNumber : undefined;
   const moneyIn = row.type === 'income';
   const flow = suggestion.flowType ?? (moneyIn ? 'income' : 'expense');
@@ -719,42 +743,49 @@ const proposeDraft = async (tx: PostgresQueryable, scope: TenantScope, row: any,
 
 const createDraftForTransaction = async (tx: PostgresQueryable, scope: TenantScope, transactionId: string): Promise<BookingDraftEntity | null> => {
   const row = (await q<any>(tx, `SELECT * FROM bank_transactions WHERE tenant_id=$1 AND id=$2`, [tenant(scope), transactionId]))[0]; if (!row) return null;
-  if (row.status !== 'booked') {
-    const m = await mappings(tx, tenant(scope), (await policy(tx, tenant(scope))).activeChart);
-    const transfer = (await loadTransferState(tx, scope, m.transit!)).matches.get(row.id);
-    const { autoPost: _autoPost, ...draft } = await proposeDraft(tx, scope, row, undefined, { transit: transfer ? m.transit : undefined });
-    return saveDraftTarget(tx, scope, draft);
-  }
-  const draft = await proposeDraft(tx, scope, row);
+  const { autoPost: _autoPost, ...draft } = await proposeDraft(tx, scope, row);
+  if (row.status !== 'booked') return saveDraftTarget(tx, scope, draft);
   const postedSourceDraft = (await q<any>(tx, `SELECT id FROM journal_entries WHERE tenant_id=$1 AND source_draft_id=$2 AND status='posted' LIMIT 1`, [tenant(scope), draft.id]))[0];
   return postedSourceDraft ? draft : { ...draft, isVirtualProjection: true };
 };
 
 export const createPostgresProAccountingRepository = (db: PostgresQueryable): ProAccountingReportRepository => ({
   ...createPostgresAccountingSourceRunRepository(db),
-  ...createPostgresTransferRepository(db, { getDraft, createDraft: createDraftForTransaction, saveDraft: saveDraftTarget, roleAccounts: async (client, scope) => mappings(client, tenant(scope), (await policy(client, tenant(scope))).activeChart) }),
   ...createPostgresBookingRuleRepository(db, {
     getDraft, saveDraft: saveDraftTarget, proposeDraft: (client, scope, row, context) => proposeDraft(client, scope, row, context), loadContext: loadSuggestionContext,
-    transitAccount: async (client, scope) => (await mappings(client, tenant(scope), (await policy(client, tenant(scope))).activeChart)).transit!,
     postDraft: (scope, draftId, options) => createPostgresProAccountingRepository(db).postDraft(scope, draftId, options),
-    confirmTransfer: (scope, input) => createPostgresProAccountingRepository(db).confirmTransfer(scope, input),
   }),
+  async getTransitOverview(scope) {
+    const t = tenant(scope);
+    const transit = (await mappings(db, t, (await policy(db, t)).activeChart)).transit!;
+    const rows = await q<any>(db,
+      `SELECT je.period, COALESCE(SUM(jl.debit_amount),0) AS debit, COALESCE(SUM(jl.credit_amount),0) AS credit
+         FROM journal_lines jl JOIN journal_entries je ON je.id=jl.entry_id AND je.tenant_id=jl.tenant_id
+        WHERE jl.tenant_id=$1 AND jl.account_number=$2 AND je.status IN ('posted','reversed')
+        GROUP BY je.period ORDER BY je.period`, [t, transit]);
+    let cumulative = 0;
+    const months = rows.map((row) => {
+      const balance = round(Number(row.debit) - Number(row.credit));
+      cumulative = round(cumulative + balance);
+      return { period: row.period, debit: round(row.debit), credit: round(row.credit), balance, cumulative };
+    });
+    return { transitAccountNumber: transit, months, openBalance: months.at(-1)?.cumulative ?? 0 };
+  },
   async listBankTransactions(scope) {
     const [rows, suggestionContext, roles] = await Promise.all([
       q<any>(db, `SELECT * FROM bank_transactions WHERE tenant_id=$1 ORDER BY date DESC,id`, [tenant(scope)]),
       loadSuggestionContext(db, scope),
       policy(db, tenant(scope)).then((p) => mappings(db, tenant(scope), p.activeChart)),
     ]);
-    const transfers = await loadTransferState(db, scope, roles.transit!);
     return rows.map((r) => {
       const type: 'income' | 'expense' = r.type === 'income' ? 'income' : 'expense';
-      // Layers: transfer, rule (base stage), remembered counterparty, Bayes, keyword, fallback; rule overrides last.
-      const transfer = transferInfo(transfers, r.id);
-      const suggestion = transfer ? { accountNumber: roles.transit, reason: transfer.reasons.join(' · '), layer: 'transfer' as const, confidence: transfer.level === 'sicher' ? 0.99 : 0.8 } : suggestAccountForTransaction(suggestionContext, bankItem(r));
+      // Layers: rule (base stage, own accounts first), remembered counterparty, Bayes, keyword, fallback; rule overrides last.
+      const suggestion = suggestAccountForTransaction(suggestionContext, bankItem(r));
       return {
         id: r.id, tenantId: r.tenant_id, accountId: r.account_id, date: r.date, amount: Number(r.amount), type,
         counterparty: r.counterparty, purpose: r.purpose, status: r.status === 'booked' ? 'booked' : 'pending', linkedInvoiceId: r.linked_invoice_id ?? undefined,
-        suggestedAccountNumber: suggestion.accountNumber, suggestionReason: suggestion.reason, suggestionLayer: suggestion.layer, suggestionConfidence: suggestion.confidence, counterpartyIban: r.counterparty_iban ?? undefined, transfer,
+        suggestedAccountNumber: suggestion.accountNumber, suggestionReason: suggestion.reason, suggestionLayer: suggestion.layer, suggestionConfidence: suggestion.confidence, counterpartyIban: r.counterparty_iban ?? undefined,
+        ...(suggestion.accountNumber && suggestion.accountNumber === roles.transit ? { isTransfer: true } : {}),
       };
     });
   },

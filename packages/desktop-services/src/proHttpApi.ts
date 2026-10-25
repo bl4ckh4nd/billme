@@ -34,8 +34,6 @@ import {
   taxCaseAccountMappingSchema,
   taxCaseDefinitionSchema,
   transactionSchema,
-  proBookingSettingsSchema,
-  proSaveBookingSettingsArgsSchema,
   transitOverviewSchema,
   ruleApplicationPreviewSchema,
   openRouterVlmAnalyzeInputSchema,
@@ -626,20 +624,8 @@ export const createProWebClient = (config: ProWebClientConfig) => {
     listAccountingTransactions() {
       return requestJson({ parser: parseArray(transactionSchema) }, '/api/v1/pro/accounting/transactions');
     },
-    getBookingSettings() {
-      return requestJson({ parser: proBookingSettingsSchema }, '/api/v1/pro/accounting/booking-settings');
-    },
-    saveBookingSettings(settings: unknown, reason: string) {
-      return requestJson({ method: 'PUT', body: { ...proSaveBookingSettingsArgsSchema.parse(settings), reason }, parser: proBookingSettingsSchema }, '/api/v1/pro/accounting/booking-settings');
-    },
-    confirmTransfer(args: { transactionId: string; partnerTransactionId?: string; post?: boolean }, reason: string) {
-      return requestJson({ method: 'POST', body: { ...args, reason }, parser: parseArray(bookingDraftEntitySchema) }, '/api/v1/pro/accounting/transfers/confirm');
-    },
-    rejectTransfer(transactionId: string, reason: string) {
-      return requestJson({ method: 'POST', body: { transactionId, reason }, parser: z.object({ ok: z.literal(true) }) }, '/api/v1/pro/accounting/transfers/reject');
-    },
     getTransitOverview() {
-      return requestJson({ parser: transitOverviewSchema }, '/api/v1/pro/accounting/transfers/transit');
+      return requestJson({ parser: transitOverviewSchema }, '/api/v1/pro/accounting/transit');
     },
     previewRuleApplication() {
       return requestJson({ parser: ruleApplicationPreviewSchema }, '/api/v1/pro/accounting/rules/preview');
@@ -1320,22 +1306,6 @@ export const createProHttpBillmeApi = ({ fallback, onInvoke, downloadBlob, ...cl
           ipcRoutes[key].args.parse(args);
           const result = await client.listAccountingTransactions();
           return ipcRoutes[key].result.parse(result) as IpcResult<K>;
-        }
-        case 'pro:getBookingSettings': {
-          ipcRoutes[key].args.parse(args);
-          return ipcRoutes[key].result.parse(await client.getBookingSettings()) as IpcResult<K>;
-        }
-        case 'pro:saveBookingSettings': {
-          const parsedArgs = ipcRoutes[key].args.parse(args) as IpcArgs<'pro:saveBookingSettings'>;
-          return ipcRoutes[key].result.parse(await client.saveBookingSettings(parsedArgs, 'Buchungseinstellungen geändert')) as IpcResult<K>;
-        }
-        case 'pro:confirmTransfer': {
-          const parsedArgs = ipcRoutes[key].args.parse(args) as IpcArgs<'pro:confirmTransfer'>;
-          return ipcRoutes[key].result.parse(await client.confirmTransfer(parsedArgs, 'Umbuchung bestätigt')) as IpcResult<K>;
-        }
-        case 'pro:rejectTransfer': {
-          const parsedArgs = ipcRoutes[key].args.parse(args) as IpcArgs<'pro:rejectTransfer'>;
-          return ipcRoutes[key].result.parse(await client.rejectTransfer(parsedArgs.transactionId, 'Keine Umbuchung')) as IpcResult<K>;
         }
         case 'pro:getTransitOverview': {
           ipcRoutes[key].args.parse(args);

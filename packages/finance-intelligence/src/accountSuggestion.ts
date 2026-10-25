@@ -11,7 +11,7 @@ import { bookingRuleMatches, evaluateBookingRules, fillRuleMemo, ruleName, type 
 
 type FlowType = 'income' | 'expense';
 
-export type AccountSuggestionLayer = 'transfer' | 'rule' | 'counterparty' | 'bayes' | 'keyword' | 'fallback';
+export type AccountSuggestionLayer = 'rule' | 'counterparty' | 'bayes' | 'keyword' | 'fallback';
 
 export interface AccountSuggestion {
   accountNumber?: string;

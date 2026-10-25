@@ -15,8 +15,9 @@ import { createPostgresProAccountingRepository } from './proAccountingRepository
 // - regex, amount range, sign or financial-account conditions ignored; OR treated as AND
 // - "Auf Bestand anwenden" rewriting a hand-edited or approved draft, or touching a posted entry
 // - applying a stale preview after the data changed underneath it
-// - auto-post firing with only one of the two switches on, or in a closed period
-// - counterparty memory learning from Vorsteuer, bank or Geldtransit lines
+// - auto-post firing without the rule's switch, or in a closed period
+// - counterparty memory learning from Vorsteuer or bank lines
+// - a transfer to an own IBAN getting a tax case or an override, or Geldtransit not netting to zero
 
 const stamp = '2026-10-01T09:00:00.000Z';
 const scope = createSingleTenantScope('tenant-a', 'pro');
@@ -45,11 +46,16 @@ async function withFixture<T>(work: (fixture: Fixture) => Promise<T>): Promise<T
   }
 }
 
-const bankLine = (database: PgliteServerDatabase, id: string, account: string, date: string, amount: number, counterparty: string, purpose = '') =>
+const bankLine = (database: PgliteServerDatabase, id: string, account: string, date: string, amount: number, counterparty: string, purpose = '', iban: string | null = null) =>
   database.query(
-    `INSERT INTO bank_transactions (id,tenant_id,account_id,date,amount,type,counterparty,purpose,status,created_at,updated_at) VALUES ($1,'tenant-a',$2,$3,$4,$5,$6,$7,'pending',$8,$8)`,
-    [id, account, date, amount, amount < 0 ? 'expense' : 'income', counterparty, purpose, stamp],
+    `INSERT INTO bank_transactions (id,tenant_id,account_id,date,amount,type,counterparty,purpose,status,counterparty_iban,created_at,updated_at) VALUES ($1,'tenant-a',$2,$3,$4,$5,$6,$7,'pending',$8,$9,$9)`,
+    [id, account, date, amount, amount < 0 ? 'expense' : 'income', counterparty, purpose, iban, stamp],
   );
+
+const approve = async (repository: Repo, transactionId: string) => {
+  await repository.dispatchDraftAction(scope, { transactionId, action: 'submit_for_review', mutation } as never);
+  return repository.dispatchDraftAction(scope, { transactionId, action: 'approve', mutation } as never);
+};
 
 const lines = (draft: { lines: Array<{ accountNumber: string; debitAmount: number; creditAmount: number }> }) =>
   draft.lines.map((line) => `${line.accountNumber}:${line.debitAmount > 0 ? 'S' : 'H'}${line.debitAmount || line.creditAmount}`);
@@ -121,12 +127,8 @@ test('Auf Bestand anwenden: Probelauf mit Diff, Handänderungen und Freigaben ge
     for (const id of ['untouched', 'edited', 'approved', 'posted']) await repository.getDraftByTransactionId(scope, id);
     const edited = (await repository.getDraftByTransactionId(scope, 'edited'))!;
     await repository.saveDraft(scope, { ...edited, lines: edited.lines.map((line) => line.accountNumber === '1800' ? line : { ...line, accountNumber: '6815' }), mutation });
-    const approve = async (transactionId: string) => {
-      await repository.dispatchDraftAction(scope, { transactionId, action: 'submit_for_review', mutation } as never);
-      return repository.dispatchDraftAction(scope, { transactionId, action: 'approve', mutation } as never);
-    };
-    await approve('approved');
-    const toPost = await approve('posted');
+    await approve(repository, 'approved');
+    const toPost = await approve(repository, 'posted');
     assert.deepEqual((await repository.postDraft(scope, toPost.id, { postingDate: '2026-10-06', mutation })).issues, []);
 
     await catalog.upsertAccountSuggestionRule(scope, {
@@ -157,7 +159,7 @@ test('Auf Bestand anwenden: Probelauf mit Diff, Handänderungen und Freigaben ge
   });
 });
 
-test('Automatisch buchen nur mit globalem Schalter und Regel-Schalter; geschlossene Perioden bleiben offen', async () => {
+test('Automatisch buchen nur mit Regel-Schalter; geschlossene Perioden bleiben offen', async () => {
   await withFixture(async ({ database, repository, catalog }) => {
     await catalog.upsertAccountSuggestionRule(scope, {
       ...legacy, chart: 'SKR04', priority: 1, name: 'Hosting', stage: 'base', flowType: 'expense', autoPost: true,
@@ -172,9 +174,7 @@ test('Automatisch buchen nur mit globalem Schalter und Regel-Schalter; geschloss
     await bankLine(database, 'h-closed', 'giro', '2026-08-05', -23.8, 'Hetzner Online GmbH');
     await database.query(`INSERT INTO accounting_periods (id,tenant_id,period,fiscal_year,status,starts_at,ends_at,created_at,updated_at) VALUES ('p-2026-08','tenant-a','2026-08',2026,'closed','2026-08-01','2026-08-31',$1,$1) ON CONFLICT (tenant_id,period) DO UPDATE SET status='closed'`, [stamp]);
 
-    assert.deepEqual(await repository.autoPostAfterImport(scope, mutation), { transfers: 0, rules: 0 }, 'global switch off');
-    await repository.saveBookingSettings(scope, { autoPostRules: true, mutation });
-    assert.deepEqual(await repository.autoPostAfterImport(scope, mutation), { transfers: 0, rules: 1 });
+    assert.deepEqual(await repository.autoPostAfterImport(scope, mutation), { rules: 1 });
     const status = new Map((await repository.listBankTransactions(scope)).map((row) => [row.id, row.status]));
     assert.deepEqual([status.get('h1'), status.get('s1'), status.get('h-closed')], ['booked', 'pending', 'pending']);
 
@@ -183,5 +183,46 @@ test('Automatisch buchen nur mit globalem Schalter und Regel-Schalter; geschloss
     await catalog.deleteAccountSuggestionRule(scope, (await catalog.listAccountSuggestionRules(scope)).find((rule) => rule.name === 'Hosting')!.id, mutation);
     const h2 = (await repository.listBankTransactions(scope)).find((row) => row.id === 'h2')!;
     assert.deepEqual([h2.suggestionLayer, h2.suggestedAccountNumber], ['counterparty', '6815']);
+  });
+});
+
+test('Umbuchung auf eigene IBAN: eingebaute erste Regel bucht über Geldtransit ohne Steuerfall; der Saldo zeigt die fehlende Seite', async () => {
+  await withFixture(async ({ database, repository, catalog }) => {
+    // An override that would put a tax case on anything mentioning AMEX must not reach the transfer.
+    await catalog.upsertAccountSuggestionRule(scope, {
+      ...legacy, chart: 'SKR04', priority: 1, name: 'Amex Steuer', stage: 'override', flowType: 'any',
+      conditions: [{ field: 'purpose', operator: 'contains', value: 'amex' }], actions: { taxCaseKey: 'DE_STD_19' }, mutation,
+    });
+    await bankLine(database, 'g-amex', 'giro', '2026-10-03', -1248.3, 'American Express Europe S.A.', 'AMEX Abrechnung 09/2026', 'DE21 5001 0517 0000 0040 21');
+    // The card statement names no IBAN: this side is booked like any other line.
+    await bankLine(database, 'a-in', 'amex', '2026-10-05', 1248.3, 'Zahlung erhalten', 'Vielen Dank');
+
+    const giro = (await repository.getDraftByTransactionId(scope, 'g-amex'))!;
+    assert.deepEqual(lines(giro), ['1460:S1248.3', '1800:H1248.3']);
+    assert.ok(giro.lines.every((line) => !line.taxCaseKey));
+    assert.equal(giro.bookingText, 'Umbuchung: American Express Europe S.A. AMEX Abrechnung 09/2026');
+    assert.deepEqual(giro.ruleTrace?.map((entry) => [entry.name, entry.matched, entry.skipped ?? null]), [
+      ['Umbuchung zwischen eigenen Konten', true, null],
+      ['Amex Steuer', false, 'stopped'],
+    ]);
+    const rows = new Map((await repository.listBankTransactions(scope)).map((row) => [row.id, row]));
+    assert.equal(rows.get('g-amex')!.isTransfer, true);
+    assert.equal(rows.get('a-in')!.isTransfer, undefined);
+
+    assert.deepEqual((await repository.postDraft(scope, (await approve(repository, 'g-amex')).id, { postingDate: '2026-10-03', mutation })).issues, []);
+    assert.equal((await repository.getTransitOverview(scope)).openBalance, 1248.3, 'one side booked: Geldtransit is open');
+
+    const card = (await repository.getDraftByTransactionId(scope, 'a-in'))!;
+    await repository.saveDraft(scope, { ...card, lines: card.lines.map((line) => line.accountNumber === '1820' ? line : { ...line, accountNumber: '1460', taxCaseKey: undefined }), mutation });
+    assert.deepEqual((await repository.postDraft(scope, (await approve(repository, 'a-in')).id, { postingDate: '2026-10-05', mutation })).issues, []);
+    const overview = await repository.getTransitOverview(scope);
+    assert.equal(overview.transitAccountNumber, '1460');
+    assert.deepEqual(overview.months, [{ period: '2026-10', debit: 1248.3, credit: 1248.3, balance: 0, cumulative: 0 }]);
+    assert.equal(overview.openBalance, 0);
+
+    // Next month the card side is remembered by its counterparty.
+    await bankLine(database, 'a-in-11', 'amex', '2026-11-05', 980, 'Zahlung erhalten', 'Vielen Dank');
+    const next = (await repository.listBankTransactions(scope)).find((row) => row.id === 'a-in-11')!;
+    assert.deepEqual([next.suggestionLayer, next.suggestedAccountNumber, next.isTransfer], ['counterparty', '1460', true]);
   });
 });

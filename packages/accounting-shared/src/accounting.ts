@@ -269,19 +269,11 @@ export interface ProBankTransaction {
   linkedInvoiceId?: string;
   suggestedAccountNumber?: string;
   suggestionReason?: string;
-  suggestionLayer?: 'transfer' | 'rule' | 'counterparty' | 'bayes' | 'keyword' | 'fallback';
+  suggestionLayer?: 'rule' | 'counterparty' | 'bayes' | 'keyword' | 'fallback';
   suggestionConfidence?: number;
   counterpartyIban?: string;
-  /** Transfer to or from another own account, suggested or confirmed. */
-  transfer?: {
-    status: 'suggested' | 'confirmed';
-    level: 'sicher' | 'wahrscheinlich';
-    reasons: string[];
-    partnerAccountId?: string;
-    partnerAccountName?: string;
-    partnerLedgerAccountNumber?: string;
-    partnerTransactionId?: string;
-  };
+  /** The suggestion books on Geldtransit: a transfer between own accounts, which needs no receipt. */
+  isTransfer?: boolean;
 }
 
 export type LedgerChart = 'SKR03' | 'SKR04';

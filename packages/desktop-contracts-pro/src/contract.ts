@@ -67,10 +67,6 @@ import {
   openRouterVlmConfigSchema,
   openRouterVlmAnalyzeInputSchema,
   openRouterVlmAnalyzeResultSchema,
-  bankTransferInfoSchema,
-  proBookingSettingsSchema,
-  proSaveBookingSettingsArgsSchema,
-  proTransferArgsSchema,
   transitOverviewSchema,
   ruleApplicationPreviewSchema,
   proApplyRulesArgsSchema,
@@ -93,10 +89,10 @@ const transactionSchema = z.object({
   importBatchId: z.string().optional(),
   suggestedAccountNumber: z.string().optional(),
   suggestionReason: z.string().optional(),
-  suggestionLayer: z.enum(['transfer', 'rule', 'counterparty', 'bayes', 'keyword', 'fallback']).optional(),
+  suggestionLayer: z.enum(['rule', 'counterparty', 'bayes', 'keyword', 'fallback']).optional(),
   suggestionConfidence: z.number().optional(),
   counterpartyIban: z.string().optional(),
-  transfer: bankTransferInfoSchema.optional(),
+  isTransfer: z.boolean().optional(),
 });
 
 const invoiceMatchSuggestionSchema = z.object({
@@ -492,26 +488,6 @@ export const ipcRoutes = {
   'pro:deleteAccountSuggestionRule': {
     channel: 'pro:deleteAccountSuggestionRule',
     args: proDeleteAccountSuggestionRuleArgsSchema,
-    result: okSchema,
-  },
-  'pro:getBookingSettings': {
-    channel: 'pro:getBookingSettings',
-    args: z.undefined(),
-    result: proBookingSettingsSchema,
-  },
-  'pro:saveBookingSettings': {
-    channel: 'pro:saveBookingSettings',
-    args: proSaveBookingSettingsArgsSchema,
-    result: proBookingSettingsSchema,
-  },
-  'pro:confirmTransfer': {
-    channel: 'pro:confirmTransfer',
-    args: proTransferArgsSchema,
-    result: z.array(bookingDraftEntitySchema),
-  },
-  'pro:rejectTransfer': {
-    channel: 'pro:rejectTransfer',
-    args: z.object({ transactionId: z.string().min(1) }),
     result: okSchema,
   },
   'pro:getTransitOverview': {

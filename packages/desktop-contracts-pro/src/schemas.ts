@@ -91,63 +91,10 @@ const isAllowedPortalBaseUrl = (value: string): boolean => {
   }
 };
 
-export const bankTransferInfoSchema = z.object({
-  status: z.enum(['suggested', 'confirmed']),
-  level: z.enum(['sicher', 'wahrscheinlich']),
-  reasons: z.array(z.string()),
-  partnerAccountId: z.string().optional(),
-  partnerAccountName: z.string().optional(),
-  partnerLedgerAccountNumber: z.string().optional(),
-  partnerTransactionId: z.string().optional(),
-});
-
-export const proBookingSettingsSchema = z.object({
-  transferDetection: z.boolean(),
-  transferWindowDays: z.number().int().min(0).max(31),
-  autoPostTransfers: z.boolean(),
-  autoPostRules: z.boolean(),
-  updatedAt: z.string().optional(),
-});
-
-export const proSaveBookingSettingsArgsSchema = proBookingSettingsSchema.omit({ updatedAt: true }).partial();
-
-export const proTransferArgsSchema = z.object({
-  transactionId: z.string().min(1),
-  partnerTransactionId: z.string().min(1).optional(),
-  /** Post the approved sides right away (Bankabgleich); otherwise they wait in Buchen. */
-  post: z.boolean().optional(),
-});
-
 export const transitOverviewSchema = z.object({
   transitAccountNumber: z.string(),
   months: z.array(z.object({ period: z.string(), debit: z.number(), credit: z.number(), balance: z.number(), cumulative: z.number() })),
   openBalance: z.number(),
-  openSides: z.array(z.object({
-    transactionId: z.string(),
-    accountId: z.string(),
-    accountName: z.string(),
-    ledgerAccountNumber: z.string(),
-    date: z.string(),
-    amount: z.number(),
-    counterparty: z.string(),
-    purpose: z.string(),
-    entryNumber: z.number(),
-    postingDate: z.string(),
-    partnerAccountId: z.string().optional(),
-    partnerAccountName: z.string().optional(),
-    partnerTransactionId: z.string().optional(),
-    candidates: z.array(z.object({
-      transactionId: z.string(),
-      accountId: z.string(),
-      accountName: z.string(),
-      date: z.string(),
-      amount: z.number(),
-      counterparty: z.string(),
-      purpose: z.string(),
-      days: z.number(),
-      outsideWindow: z.boolean(),
-    })),
-  })),
 });
 
 export const transactionSchema = z.object({
@@ -164,10 +111,10 @@ export const transactionSchema = z.object({
   importBatchId: z.string().optional(),
   suggestedAccountNumber: z.string().optional(),
   suggestionReason: z.string().optional(),
-  suggestionLayer: z.enum(['transfer', 'rule', 'counterparty', 'bayes', 'keyword', 'fallback']).optional(),
+  suggestionLayer: z.enum(['rule', 'counterparty', 'bayes', 'keyword', 'fallback']).optional(),
   suggestionConfidence: z.number().optional(),
   counterpartyIban: z.string().optional(),
-  transfer: bankTransferInfoSchema.optional(),
+  isTransfer: z.boolean().optional(),
 });
 
 export const eurClassificationSchema = z.object({

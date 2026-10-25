@@ -133,23 +133,8 @@ export interface Transaction {
   owner?: string;
   exceptionCase?: ExceptionCase;
   isVirtualPosted?: boolean;
-  /** Which layer proposed `suggestion`: an own-account transfer, a rule, the remembered counterparty, … */
-  suggestionLayer?: 'transfer' | 'rule' | 'counterparty' | 'bayes' | 'keyword' | 'fallback';
-  suggestionReason?: string;
-  /** Name of the own financial account the line was imported into. */
-  accountName?: string;
-  transfer?: TransferInfo;
-}
-
-/** A transfer to or from another own financial account (Geldtransit). */
-export interface TransferInfo {
-  status: 'suggested' | 'confirmed';
-  level: 'sicher' | 'wahrscheinlich';
-  reasons: string[];
-  partnerAccountId?: string;
-  partnerAccountName?: string;
-  partnerLedgerAccountNumber?: string;
-  partnerTransactionId?: string;
+  /** Which layer proposed `suggestion`: a rule, the remembered counterparty, … */
+  suggestionLayer?: 'rule' | 'counterparty' | 'bayes' | 'keyword' | 'fallback';
 }
 
 export interface JournalLine {

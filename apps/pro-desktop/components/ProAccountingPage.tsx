@@ -135,7 +135,6 @@ const mapTransactions = (
   rows: Awaited<ReturnType<typeof ipc.pro.listBankTransactions>>,
   virtualPostedTransactionIds: ReadonlySet<string> = new Set(),
   draftsByTransactionId: ReadonlyMap<string, NonNullable<IpcResult<'pro:getDraftByTransactionId'>>> = new Map(),
-  accountNamesById: ReadonlyMap<string, string> = new Map(),
 ): ProUiTransaction[] => {
   return rows.map((row) => {
     // The persisted booking draft owns the workflow state and its validation
@@ -144,7 +143,7 @@ const mapTransactions = (
     const workflowStatus: ProUiTransaction['workflowStatus'] =
       row.status === 'booked' || row.linkedInvoiceId ? 'posted' : draft?.workflowStatus ?? 'imported';
     // A transfer between own accounts has no receipt: the other bank statement is the evidence.
-    const missingReceipt = !row.linkedInvoiceId && !row.transfer;
+    const missingReceipt = !row.linkedInvoiceId && !row.isTransfer;
     const draftIssues = draft?.validationIssues ?? [];
     const draftErrors = draftIssues.filter((issue) => issue.severity === 'error').length;
     const draftWarnings = draftIssues.filter((issue) => issue.severity === 'warning').length;
@@ -161,9 +160,6 @@ const mapTransactions = (
       suggestion: row.suggestedAccountNumber,
       suggestionConfidence: row.suggestionConfidence,
       suggestionLayer: row.suggestionLayer,
-      suggestionReason: row.suggestionReason,
-      accountName: accountNamesById.get(row.accountId),
-      transfer: row.transfer,
       hasReceipt: !missingReceipt,
       issueCounts: {
         errors: draftErrors,
@@ -373,7 +369,6 @@ export const ProAccountingPage: React.FC<{ view?: unknown; onViewChange?: (view:
       transactionRows,
       virtualPostedTransactionIds,
       new Map(draftRows.map((draft) => [draft.transactionId, draft])),
-      new Map(bankAccounts.map((account) => [account.id, account.name])),
     );
     const mergedTransactions = baseTransactions;
     const bankAccountNumberByTransactionId = Object.fromEntries(
@@ -770,12 +765,6 @@ export const ProAccountingPage: React.FC<{ view?: unknown; onViewChange?: (view:
       },
       listAccountSuggestionRules() {
         return ipc.pro.listAccountSuggestionRules({ chart: activeChart });
-      },
-      confirmTransfer(args) {
-        return runMutation(() => ipc.pro.confirmTransfer(args));
-      },
-      rejectTransfer(transactionId) {
-        return runMutation(() => ipc.pro.rejectTransfer({ transactionId }));
       },
       getTransitOverview() {
         return ipc.pro.getTransitOverview();

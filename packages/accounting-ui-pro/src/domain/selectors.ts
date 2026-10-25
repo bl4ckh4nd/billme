@@ -8,8 +8,7 @@ export type InboxQueueKey =
   | 'posted'
   | 'errors'
   | 'missing_receipt'
-  | 'duplicates'
-  | 'transfers';
+  | 'duplicates';
 
 export const inboxQueueLabels: Record<InboxQueueKey, string> = {
   all: 'Alle',
@@ -20,7 +19,6 @@ export const inboxQueueLabels: Record<InboxQueueKey, string> = {
   errors: 'Fehler',
   missing_receipt: 'Ohne Beleg',
   duplicates: 'Dubletten',
-  transfers: 'Umbuchungen',
 };
 
 export const bookingActionLabels: Record<BookingAction, string> = {
@@ -48,8 +46,6 @@ export function txMatchesQueue(tx: Transaction, queue: InboxQueueKey): boolean {
       return ['posted', 'reversed', 'corrected'].includes(tx.workflowStatus);
     case 'errors':
       return tx.issueCounts.errors > 0 || tx.workflowStatus === 'integration_error';
-    case 'transfers':
-      return Boolean(tx.transfer) && !['posted', 'reversed', 'corrected'].includes(tx.workflowStatus);
     case 'missing_receipt':
       return tx.flags.includes('missing_receipt');
     case 'duplicates':

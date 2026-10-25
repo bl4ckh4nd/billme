@@ -4,7 +4,6 @@ import type { AccountSuggestionContext } from '@billme/finance-intelligence';
 import type { TenantScope } from '@billme/server-core';
 import { appendWithClient } from './audit.js';
 import { runInTransaction, type PostgresQueryable } from './connection.js';
-import { loadBookingSettings, loadTransferState } from './proTransfers.js';
 
 /**
  * "Auf Bestand anwenden" and automatic posting for booking rules.
@@ -49,15 +48,14 @@ export interface RuleDraftHelpers {
   /** The draft the engine would write now, unsaved. */
   proposeDraft(db: PostgresQueryable, scope: TenantScope, row: Record<string, any>, context: AccountSuggestionContext): Promise<BookingDraftEntity & { autoPost?: boolean }>;
   loadContext(db: PostgresQueryable, scope: TenantScope): Promise<AccountSuggestionContext>;
-  transitAccount(db: PostgresQueryable, scope: TenantScope): Promise<string>;
   postDraft(scope: TenantScope, draftId: string, options: { postingDate?: string; mutation?: AccountingMutationContext }): Promise<{ issues: unknown[] }>;
-  confirmTransfer(scope: TenantScope, input: { transactionId: string; partnerTransactionId?: string; mutation: AccountingMutationContext }): Promise<BookingDraftEntity[]>;
 }
 
 export interface BookingRuleRepository {
   previewRuleApplication(scope: TenantScope): Promise<RuleApplicationPreview>;
   applyRules(scope: TenantScope, input: { previewHash: string; mutation: AccountingMutationContext }): Promise<{ updated: number }>;
-  autoPostAfterImport(scope: TenantScope, mutation: AccountingMutationContext): Promise<{ transfers: number; rules: number }>;
+  /** Posts lines whose account came from a rule with automatic posting. */
+  autoPostAfterImport(scope: TenantScope, mutation: AccountingMutationContext): Promise<{ rules: number }>;
 }
 
 const q = async (db: PostgresQueryable, text: string, values: unknown[]): Promise<any[]> => (await db.query(text, values)).rows as any[];
@@ -88,7 +86,6 @@ export const createPostgresBookingRuleRepository = (db: PostgresQueryable, helpe
   const compute = async (client: PostgresQueryable, scope: TenantScope) => {
     const t = scope.tenantId;
     const context = await helpers.loadContext(client, scope);
-    const transfers = await loadTransferState(client, scope, await helpers.transitAccount(client, scope));
     const lines = await q(client,
       `SELECT bt.*, a.default_skr_account_number FROM bank_transactions bt LEFT JOIN accounts a ON a.id=bt.account_id AND a.tenant_id=bt.tenant_id
         WHERE bt.tenant_id=$1 AND bt.linked_invoice_id IS NULL ORDER BY bt.date, bt.id`, [t]);
@@ -96,8 +93,6 @@ export const createPostgresBookingRuleRepository = (db: PostgresQueryable, helpe
     const proposals = new Map<string, BookingDraftEntity>();
     const fingerprints: unknown[] = [];
     for (const row of lines) {
-      // Transfers are decided by the transfer layer, never by rules.
-      if (transfers.matches.has(row.id)) continue;
       // Booked lines too: the preview names them as a Hinweis when a rule would book them differently now.
       const proposal = await helpers.proposeDraft(client, scope, { ...row, status: 'pending' }, context);
       if (!proposal.ruleTrace?.some((entry) => entry.matched)) continue;
@@ -153,42 +148,25 @@ export const createPostgresBookingRuleRepository = (db: PostgresQueryable, helpe
     },
 
     async autoPostAfterImport(scope, mutation) {
-      const settings = await loadBookingSettings(db, scope.tenantId);
-      let transfers = 0;
       let rules = 0;
-      if (settings.autoPostTransfers) {
-        const state = await loadTransferState(db, scope, await helpers.transitAccount(db, scope));
-        const done = new Set<string>();
-        for (const match of state.matches.values()) {
-          if (match.status !== 'suggested' || match.level !== 'sicher' || !match.partnerTransactionId || done.has(match.transactionId)) continue;
-          done.add(match.transactionId).add(match.partnerTransactionId);
-          for (const draft of await helpers.confirmTransfer(scope, { transactionId: match.transactionId, partnerTransactionId: match.partnerTransactionId, mutation })) {
-            if ((await helpers.postDraft(scope, draft.id, { postingDate: draft.postingDate, mutation })).issues.length === 0) transfers += 1;
-          }
-        }
+      const pending = await q(db, `SELECT id FROM bank_transactions WHERE tenant_id=$1 AND status<>'booked' AND linked_invoice_id IS NULL ORDER BY date, id`, [scope.tenantId]);
+      // Loaded once: auto-post only follows a rule's account, which memory and Bayes never set.
+      const context = await helpers.loadContext(db, scope);
+      for (const { id } of pending) {
+        const approved = await runInTransaction(db, async (tx) => {
+          const row = (await q(tx, `SELECT bt.*, a.default_skr_account_number FROM bank_transactions bt LEFT JOIN accounts a ON a.id=bt.account_id AND a.tenant_id=bt.tenant_id WHERE bt.tenant_id=$1 AND bt.id=$2`, [scope.tenantId, id]))[0];
+          const proposal = await helpers.proposeDraft(tx, scope, row, context);
+          if (!proposal.autoPost) return null;
+          const existing = await helpers.getDraft(tx, scope, id);
+          if (existing && (!draftIsEngineOwned(existing) || draftFingerprint(existing) !== draftFingerprint(proposal))) return null;
+          const saved = await helpers.saveDraft(tx, scope, existing ?? proposal, mutation);
+          // Validation decides: a closed period or a blocking issue leaves the draft for manual work.
+          if (saved.workflowStatus !== 'suggested') return null;
+          return helpers.saveDraft(tx, scope, { ...saved, workflowStatus: 'approved' }, mutation);
+        });
+        if (approved && (await helpers.postDraft(scope, approved.id, { postingDate: approved.postingDate, mutation })).issues.length === 0) rules += 1;
       }
-      if (settings.autoPostRules) {
-        const pending = await q(db, `SELECT id FROM bank_transactions WHERE tenant_id=$1 AND status<>'booked' AND linked_invoice_id IS NULL ORDER BY date, id`, [scope.tenantId]);
-        const transferIds = (await loadTransferState(db, scope, await helpers.transitAccount(db, scope))).matches;
-        // Loaded once: auto-post only follows a rule's account, which memory and Bayes never set.
-        const context = await helpers.loadContext(db, scope);
-        for (const { id } of pending) {
-          if (transferIds.has(id)) continue;
-          const approved = await runInTransaction(db, async (tx) => {
-            const row = (await q(tx, `SELECT bt.*, a.default_skr_account_number FROM bank_transactions bt LEFT JOIN accounts a ON a.id=bt.account_id AND a.tenant_id=bt.tenant_id WHERE bt.tenant_id=$1 AND bt.id=$2`, [scope.tenantId, id]))[0];
-            const proposal = await helpers.proposeDraft(tx, scope, row, context);
-            if (!proposal.autoPost) return null;
-            const existing = await helpers.getDraft(tx, scope, id);
-            if (existing && (!draftIsEngineOwned(existing) || draftFingerprint(existing) !== draftFingerprint(proposal))) return null;
-            const saved = await helpers.saveDraft(tx, scope, existing ?? proposal, mutation);
-            // Validation decides: a closed period or a blocking issue leaves the draft for manual work.
-            if (saved.workflowStatus !== 'suggested') return null;
-            return helpers.saveDraft(tx, scope, { ...saved, workflowStatus: 'approved' }, mutation);
-          });
-          if (approved && (await helpers.postDraft(scope, approved.id, { postingDate: approved.postingDate, mutation })).issues.length === 0) rules += 1;
-        }
-      }
-      return { transfers, rules };
+      return { rules };
     },
   };
 };

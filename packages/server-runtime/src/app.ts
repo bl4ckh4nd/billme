@@ -89,7 +89,7 @@ import { assertOfferContentEditable, assertInvoiceContentEditable, cancelUnpaidR
 import { ApiError, registerErrorHandler, typedRoute } from './http.js';
 import { registerServerApiOrpc } from './orpc.js';
 import { registerProAccountingRoutes, type ProAccountingRouteOptions } from './proAccountingRoutes.js';
-import { mapped as mappedBookingError, registerProTransferRoutes } from './proTransferRoutes.js';
+import { mapped as mappedBookingError, registerProBookingRuleRoutes } from './proBookingRuleRoutes.js';
 import { registerTaxFilingRoutes } from './taxFilingRoutes.js';
 import { registerLiteEurRoutes } from './liteEurRoutes.js';
 import { registerLiteCashRoutes } from './liteCashRoutes.js';
@@ -1651,7 +1651,7 @@ export const buildServerApi = async (options: BuildServerApiOptions = {}): Promi
     registerProRoutes(app);
     registerTaxAuditExportRoute(app);
     registerProAccountingRoutes(app, { openRouterVlmService: options.openRouterVlmService });
-    registerProTransferRoutes(app);
+    registerProBookingRuleRoutes(app);
     registerLiteEurRoutes(app);
     registerLiteCashRoutes(app);
     registerLiteVatRoutes(app);
@@ -1682,7 +1682,7 @@ export const buildServerApi = async (options: BuildServerApiOptions = {}): Promi
       registerProRoutes(app);
       registerTaxAuditExportRoute(app);
       registerProAccountingRoutes(app, { openRouterVlmService: options.openRouterVlmService });
-      registerProTransferRoutes(app);
+      registerProBookingRuleRoutes(app);
       registerAuditRoutes(app, 'pro');
       registerEurRuleRoutes(app, 'pro');
     } else {

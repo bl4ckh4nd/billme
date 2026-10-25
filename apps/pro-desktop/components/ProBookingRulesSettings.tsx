@@ -385,7 +385,7 @@ function RuleEditor({ draft, onChange, onCancel, onSave, busy, accountListId, ta
         </Select>
         <Input label="Vorsteuer abzugsfähig (%)" type="number" min={0} max={100} value={draft.deductiblePercent} onChange={(event) => set({ deductiblePercent: event.target.value })} placeholder="100" hint="Der Rest bleibt auf dem Aufwandskonto, etwa bei gemischt genutztem Telefon." fullWidth />
         <Input label="Buchungstext" value={draft.memo} onChange={(event) => set({ memo: event.target.value })} placeholder="{Gegenpartei} – {Verwendungszweck}" fullWidth />
-        <Switch checked={draft.autoPost} onCheckedChange={(autoPost) => set({ autoPost })} label="Automatisch buchen" description="Wirkt nur, wenn unter Einstellungen › Umbuchungen auch „Regeltreffer beim Import buchen“ an ist. Nie in festgeschriebenen Monaten." />
+        <Switch checked={draft.autoPost} onCheckedChange={(autoPost) => set({ autoPost })} label="Automatisch buchen" description="Treffer werden beim Import gleich gebucht. Nie in festgeschriebenen Monaten." />
         <Switch checked={draft.stop} onCheckedChange={(stop) => set({ stop })} label="Danach keine weiteren Regeln" />
         <BookingPreview sample={sample} accountNumber={draft.accountNumber || '…'} rate={taxCase?.mechanism === 'standard_vat' ? taxCase.defaultRate : 0} deductible={draft.deductiblePercent ? Number(draft.deductiblePercent) : 100} />
       </fieldset>

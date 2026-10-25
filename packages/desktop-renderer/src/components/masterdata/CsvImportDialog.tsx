@@ -33,14 +33,27 @@ export const CsvImportDialog: React.FC<Props> = (props) => {
   const [readError, setReadError] = useState<string | null>(null);
   const [importing, setImporting] = useState(false);
   const [summary, setSummary] = useState<string | null>(null);
+  const [encodingNote, setEncodingNote] = useState<string | null>(null);
+  const [failures, setFailures] = useState<string[]>([]);
   const titleId = `csv-import-${kind}-title`;
 
   const readFile = async (file: File) => {
     setSummary(null);
     setReadError(null);
+    setEncodingNote(null);
+    setFailures([]);
     setFileName(file.name);
     try {
-      const table = readMasterdataCsv(await file.text());
+      // Excel saves CSV as Windows-1252 by default; reading that as UTF-8 would store "W�hrungs GmbH".
+      const bytes = await file.arrayBuffer();
+      let text: string;
+      try {
+        text = new TextDecoder('utf-8', { fatal: true }).decode(bytes);
+      } catch {
+        text = new TextDecoder('windows-1252').decode(bytes);
+        setEncodingNote('Die Datei ist nicht UTF-8 kodiert und wurde als Windows-1252 (Excel-Standard) gelesen. Bitte prüfe die Umlaute in der Vorschau.');
+      }
+      const table = readMasterdataCsv(text);
       if (table.rows.length === 0) throw new Error('Die Datei enthält keine Datenzeilen.');
       setRows(props.kind === 'clients'
         ? mapClientCsv(table, props.existing, uuidv4)
@@ -59,16 +72,19 @@ export const CsvImportDialog: React.FC<Props> = (props) => {
     setImporting(true);
     let imported = 0;
     let failed = 0;
+    const reasons: string[] = [];
     // ponytail: one upsert per row, not one transaction; a bulk route is needed once imports exceed ~1000 rows.
     for (const row of ready) {
       try {
         if (kind === 'clients') await ipc.clients.upsert({ client: row.record as Client, reason: `CSV-Import ${fileName}` });
         else await ipc.articles.upsert({ article: row.record as Article });
         imported += 1;
-      } catch {
+      } catch (error) {
         failed += 1;
+        reasons.push(`Zeile ${row.rowIndex} (${row.label}): ${(error instanceof Error ? error.message : String(error)).replace(/^(?:Error:\s*)+/, '')}`);
       }
     }
+    setFailures(reasons);
     await queryClient.invalidateQueries({ queryKey: [kind] });
     setRows([]);
     setImporting(false);
@@ -108,7 +124,13 @@ export const CsvImportDialog: React.FC<Props> = (props) => {
         </div>
 
         {readError && <p role="alert" className="text-control text-error">{readError}</p>}
+        {encodingNote && <p role="status" className="text-control text-foreground">{encodingNote}</p>}
         {summary && <p role="status" className="text-control font-medium text-foreground">{summary}</p>}
+        {failures.length > 0 && (
+          <ul aria-label="Nicht importiert" className="list-disc pl-5 text-caption text-error">
+            {failures.map((failure) => <li key={failure}>{failure}</li>)}
+          </ul>
+        )}
 
         {rows.length > 0 && (
           <>

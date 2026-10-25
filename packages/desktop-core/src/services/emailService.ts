@@ -226,9 +226,22 @@ export const testEmailConfig = async (
       };
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
+      const code = String((error as { code?: unknown; responseCode?: unknown } | null)?.code ?? '');
+      // What to do next, not the Node error code.
+      const hint = code === 'EDNS' || /ENOTFOUND|EAI_AGAIN/.test(message)
+        ? `Der Server „${config.host}“ wurde nicht gefunden. Bitte den SMTP-Server prüfen.`
+        : /ECONNREFUSED/.test(message)
+          ? `Der Server nimmt auf Port ${config.port} keine Verbindung an. Bitte Port prüfen (meist 587 oder 465).`
+          : code === 'ETIMEDOUT' || /timeout|ETIMEDOUT/i.test(message)
+            ? 'Der Server antwortet nicht. Bitte Server, Port und Firewall prüfen.'
+            : code === 'EAUTH' || /\b535\b|auth/i.test(message)
+              ? 'Die Anmeldung wurde abgelehnt. Bitte Benutzername und Passwort prüfen.'
+              : /wrong version number|ssl|tls/i.test(message)
+                ? 'SSL/TLS passt nicht zum Port: Port 465 mit SSL/TLS, Port 587 ohne (STARTTLS).'
+                : message;
       return {
         success: false,
-        error: `SMTP-Verbindung fehlgeschlagen: ${message}`,
+        error: `SMTP-Verbindung fehlgeschlagen. ${hint}`,
       };
     }
   } else {

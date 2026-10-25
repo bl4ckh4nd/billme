@@ -39,7 +39,7 @@ test('Lite stays on EÜR: no GmbH, no double-entry switch, no Kontenrahmen', asy
   await page.goto(appUrl(baseUrl, '/settings'));
   await section(page, 'Rechtliches').click();
   await expect(page.getByTestId('profit-determination-value')).toHaveText('EÜR');
-  await expect(page.getByLabel('Rechtsform').locator('option')).toHaveText(['Einzelunternehmen']);
+  await expect(page.getByLabel('Rechtsform').locator('option'), 'the EÜR forms, the same list as onboarding').toHaveText(['Einzelunternehmen', 'GbR', 'e.K.']);
   await expect(page.getByRole('button', { name: 'Ändern…' })).toHaveCount(0);
   await expect(page.getByText('Doppelte Buchführung mit Kontenrahmen gibt es in billme Pro.')).toBeVisible();
   await expect(page.getByLabel('Kontenrahmen')).toHaveCount(0);
@@ -63,7 +63,7 @@ test('a Lite GmbH profile left on double-entry gets back to EÜR through the leg
   await page.reload();
   await page.goto(appUrl(baseUrl, '/settings'));
   await section(page, 'Rechtliches').click();
-  await expect(page.getByLabel('Rechtsform').locator('option'), 'GmbH is gone once left').toHaveText(['Einzelunternehmen']);
+  await expect(page.getByLabel('Rechtsform').locator('option'), 'GmbH is gone once left').toHaveText(['Einzelunternehmen', 'GbR', 'e.K.']);
 });
 
 test('categories, payment term and dunning fee are saved; the mail test, the audit check, the theme and the shortcuts work', async () => {

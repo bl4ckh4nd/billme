@@ -11,6 +11,7 @@ import { useInvoicesQuery } from '../hooks/useInvoices';
 import { billingDocuments } from '../billingDocuments';
 import { useOffersQuery } from '../hooks/useOffers';
 import { useProjectsQuery } from '../hooks/useProjects';
+import { formatProjectPeriod } from './ProjectsView';
 
 const kpiTile = 'rounded-tile border border-border bg-surface px-4 py-3.5';
 
@@ -270,8 +271,8 @@ export const ProjectDetailView: React.FC = () => {
               <dd className="font-medium text-foreground">{statusLabel[project.status]}</dd>
             </div>
             <div className="flex items-baseline gap-1.5">
-              <dt className="text-caption text-muted">Start</dt>
-              <dd className="font-medium text-foreground tabular-nums">{project.startDate}</dd>
+              <dt className="text-caption text-muted">Zeitraum</dt>
+              <dd className="font-medium text-foreground tabular-nums">{formatProjectPeriod(project)}</dd>
             </div>
           </dl>
 

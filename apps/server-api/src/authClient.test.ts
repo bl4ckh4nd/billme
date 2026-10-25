@@ -92,6 +92,6 @@ test('createServerApiClient.validateVatId keeps non-EU IDs out of VIES', async (
       vatNumber: 'CHE 123.456.789 MWST',
     });
     assert.equal(result.status, 'unavailable');
-    assert.equal(result.normalizedVatId, 'CHE123.456.789MWST');
+    assert.equal(result.normalizedVatId, 'CHE123456789MWST', 'compacted like the forms: spaces, dots and hyphens go');
   });
 });

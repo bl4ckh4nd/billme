@@ -13,6 +13,11 @@ import { useCreateIntent } from '../hooks/useCreateIntent';
 import { SkeletonLoader } from '../ui/components/SkeletonLoader';
 import { localIsoDate } from '@billme/desktop-utils';
 
+/** Calendar day as 01.10.2026; the ISO string is a local business date, so no Date parsing (time zones). */
+export const formatIsoDay = (iso: string) => `${iso.slice(8, 10)}.${iso.slice(5, 7)}.${iso.slice(0, 4)}`;
+export const formatProjectPeriod = (project: Pick<Project, 'startDate' | 'endDate'>) =>
+  project.endDate ? `${formatIsoDay(project.startDate)} – ${formatIsoDay(project.endDate)}` : `ab ${formatIsoDay(project.startDate)}`;
+
 type EditorMode = 'create' | 'edit';
 
 export const ProjectsView: React.FC = () => {
@@ -31,6 +36,9 @@ export const ProjectsView: React.FC = () => {
     isError: isProjectsError,
     refetch: refetchProjects,
   } = useProjectsQuery({ includeArchived });
+  // The empty state tells "never created" apart from "all archived".
+  const { data: allProjects = [] } = useProjectsQuery({ includeArchived: true });
+  const allProjectsCount = allProjects.length;
   const upsertProject = useUpsertProjectMutation();
   const archiveProject = useArchiveProjectMutation();
 
@@ -50,6 +58,8 @@ export const ProjectsView: React.FC = () => {
   const [draft, setDraft] = React.useState<Project | null>(null);
   const [reason, setReason] = React.useState('');
   const [reasonError, setReasonError] = React.useState<string | null>(null);
+  /** Field errors of the editor; `form` holds what the server refused. */
+  const [fieldErrors, setFieldErrors] = React.useState<Partial<Record<'clientId' | 'name' | 'endDate' | 'form', string>>>({});
 
   const [archiveTarget, setArchiveTarget] = React.useState<Project | null>(null);
   const [archiveReason, setArchiveReason] = React.useState('');
@@ -75,8 +85,9 @@ export const ProjectsView: React.FC = () => {
       endDate: undefined,
       description: '',
     });
-    setReason('Erstellung');
+    setReason('Projekt angelegt');
     setReasonError(null);
+    setFieldErrors({});
     setIsEditorOpen(true);
   };
 
@@ -85,6 +96,7 @@ export const ProjectsView: React.FC = () => {
     setDraft({ ...p });
     setReason('');
     setReasonError(null);
+    setFieldErrors({});
     setIsEditorOpen(true);
   };
 
@@ -96,25 +108,21 @@ export const ProjectsView: React.FC = () => {
   };
 
   const submit = () => {
-    const trimmed = reason.trim();
-    if (!trimmed) {
-      setReasonError('Grund ist Pflicht (Audit).');
-      return;
-    }
     if (!draft) return;
-    if (!draft.clientId) {
-      setReasonError('Bitte einen Kunden auswählen.');
-      return;
-    }
-    if (!draft.name.trim()) {
-      setReasonError('Bitte einen Projektnamen eingeben.');
-      return;
-    }
+    const trimmed = reason.trim();
+    const errors: typeof fieldErrors = {};
+    if (!draft.clientId) errors.clientId = 'Bitte einen Kunden auswählen.';
+    if (!draft.name.trim()) errors.name = 'Bitte einen Projektnamen eingeben.';
+    if (draft.endDate && draft.endDate < draft.startDate) errors.endDate = 'Das Ende darf nicht vor dem Start liegen.';
+    setFieldErrors(errors);
+    setReasonError(trimmed ? null : 'Bitte gib einen Grund für die Änderung an (Audit).');
+    if (Object.keys(errors).length > 0 || !trimmed) return;
 
     upsertProject.mutate(
       { project: draft, reason: trimmed },
       {
         onSuccess: () => closeEditor(),
+        onError: (error) => setFieldErrors({ form: `Nicht gespeichert: ${(error instanceof Error ? error.message : String(error)).replace(/^(?:Error:\s*)+/, '')}` }),
       },
     );
   };
@@ -208,12 +216,17 @@ export const ProjectsView: React.FC = () => {
         <Card padding="none">
           {projects.length === 0 ? (
             <EmptyState
-              title={includeArchived ? 'Noch keine Projekte angelegt' : 'Noch keine aktiven Projekte'}
+              title={includeArchived || allProjectsCount === 0 ? 'Noch keine Projekte angelegt' : 'Keine aktiven Projekte'}
               description={
-                includeArchived
-                  ? 'Ein Projekt bündelt alle Dokumente eines Kunden, damit Rechnungen und Angebote zuordenbar bleiben. Lege das erste Projekt über "Neues Projekt" oben rechts an.'
-                  : 'Archivierte Projekte sind ausgeblendet. Aktiviere "Archivierte anzeigen" oder lege über "Neues Projekt" ein neues an.'
+                includeArchived || allProjectsCount === 0
+                  ? 'Ein Projekt bündelt alle Dokumente eines Kunden, damit Rechnungen und Angebote zuordenbar bleiben.'
+                  : 'Alle Projekte sind archiviert. Aktiviere „Archivierte anzeigen“, um sie zu sehen.'
               }
+              action={(
+                <Button size="sm" onClick={openCreate}>
+                  <Plus size={16} aria-hidden="true" /> Erstes Projekt anlegen
+                </Button>
+              )}
             />
           ) : (
             <EmptyState
@@ -234,7 +247,7 @@ export const ProjectsView: React.FC = () => {
               <TableHead>Projekt</TableHead>
               <TableHead>Kunde</TableHead>
               <TableHead>Status</TableHead>
-              <TableHead className="hidden md:table-cell">Start</TableHead>
+              <TableHead className="hidden md:table-cell">Zeitraum</TableHead>
               <TableHead className="w-12"><span className="sr-only">Aktionen</span></TableHead>
             </TableRow>
           </TableHeader>
@@ -253,7 +266,7 @@ export const ProjectsView: React.FC = () => {
                       {statusLabel[p.status]}
                     </Badge>
                   </TableCell>
-                  <TableCell muted className="hidden tabular-nums md:table-cell">{p.startDate}</TableCell>
+                  <TableCell muted className="hidden tabular-nums md:table-cell">{formatProjectPeriod(p)}</TableCell>
                   <TableCell className="py-1 text-right" onClick={(event) => event.stopPropagation()}>
                     <Menu
                       aria-label={`Aktionen für ${p.name}`}
@@ -313,6 +326,7 @@ export const ProjectsView: React.FC = () => {
                   label="Kunde (Pflicht)"
                   value={draft.clientId ?? ''}
                   onChange={(e) => setDraft({ ...draft, clientId: e.target.value })}
+                  error={fieldErrors.clientId}
                   disabled={editorMode === 'edit'}
                   hint={editorMode === 'edit' ? 'Kunden-Zuordnung ist nachträglich nicht änderbar.' : undefined}
                   fullWidth
@@ -354,6 +368,7 @@ export const ProjectsView: React.FC = () => {
                   label="Projektname (Pflicht)"
                   value={draft.name}
                   onChange={(e) => setDraft({ ...draft, name: e.target.value })}
+                  error={fieldErrors.name}
                   fullWidth
                 />
               </div>
@@ -372,6 +387,7 @@ export const ProjectsView: React.FC = () => {
                 type="date"
                 value={draft.endDate ?? ''}
                 onChange={(e) => setDraft({ ...draft, endDate: e.target.value || undefined })}
+                error={fieldErrors.endDate}
                 fullWidth
               />
 
@@ -412,6 +428,7 @@ export const ProjectsView: React.FC = () => {
                   fullWidth
                 />
               </div>
+              {fieldErrors.form && <p role="alert" className="col-span-2 text-caption text-error-text">{fieldErrors.form}</p>}
             </div>
 
             <div className="flex flex-wrap justify-end gap-2 border-t border-border px-4.5 py-3">

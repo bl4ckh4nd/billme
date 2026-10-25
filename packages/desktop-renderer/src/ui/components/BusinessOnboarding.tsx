@@ -1,6 +1,7 @@
 import React from 'react';
 import { Button, Checkbox, EMPTY_VALUE, Input, Select, ValidationSummary } from '@billme/ui';
 import { Check } from 'lucide-react';
+import { bicError, ibanError, vatIdError, zipError } from '@billme/server-core';
 
 export type BusinessReportingProfile = {
   jurisdiction: 'DE';
@@ -22,8 +23,11 @@ const DEFAULT_BUSINESS_REPORTING_PROFILE: BusinessReportingProfile = {
 };
 
 const CAPITAL_LEGAL_FORMS: BusinessReportingProfile['legalForm'][] = ['gmbh', 'ug'];
-const EUR_ONLY_LEGAL_FORMS: BusinessReportingProfile['legalForm'][] = ['sole_proprietor', 'gbr', 'ek'];
-const LEGAL_FORM_OPTIONS: Array<{ value: BusinessReportingProfile['legalForm']; label: string; editions: Array<'lite' | 'pro'> }> = [
+/**
+ * The one legal-form list of wizard and settings. Lite keeps an EÜR and offers the forms that may;
+ * Pro adds GmbH/UG (always double entry), and there a sole proprietor, GbR or e.K. may also keep books.
+ */
+export const LEGAL_FORM_OPTIONS: Array<{ value: BusinessReportingProfile['legalForm']; label: string; editions: Array<'lite' | 'pro'> }> = [
   { value: 'sole_proprietor', label: 'Einzelunternehmen', editions: ['lite', 'pro'] },
   { value: 'gbr', label: 'GbR', editions: ['lite', 'pro'] },
   { value: 'ek', label: 'e.K.', editions: ['lite', 'pro'] },
@@ -31,7 +35,13 @@ const LEGAL_FORM_OPTIONS: Array<{ value: BusinessReportingProfile['legalForm']; 
   { value: 'ug', label: 'UG (haftungsbeschränkt)', editions: ['pro'] },
 ];
 
-const isCapitalLegalForm = (value: BusinessReportingProfile['legalForm']) => CAPITAL_LEGAL_FORMS.includes(value);
+export const isCapitalLegalForm = (value: BusinessReportingProfile['legalForm']) => CAPITAL_LEGAL_FORMS.includes(value);
+
+/** Only %Y (the year) is replaced in a number prefix; anything else would be printed as typed. */
+export const numberPrefixError = (prefix: string): string | undefined =>
+  /%(?!Y)/.test(prefix) ? 'Als Platzhalter gibt es nur %Y (Jahr), z. B. RE-%Y-.' : undefined;
+
+const examplePrefix = (prefix: string) => prefix.replace(/%Y/g, String(new Date().getFullYear()));
 
 export type BusinessOnboardingDraft = {
   company: {
@@ -81,12 +91,14 @@ type FieldPath =
   | 'company.city'
   | 'company.email'
   | 'finance.taxId'
+  | 'finance.vatId'
   | 'numbers.invoicePrefix'
   | 'numbers.offerPrefix'
   | 'legal.paymentTermsDays'
   | 'legal.defaultVatRate'
   | 'finance.bankName'
   | 'finance.iban'
+  | 'finance.bic'
   | 'businessReportingProfile.legalForm'
   | 'businessReportingProfile.profitDetermination'
   | 'businessReportingProfile.hgbSizeClass'
@@ -102,12 +114,14 @@ const FIELD_IDS: Record<FieldPath, string> = {
   'company.city': 'onboarding-company-city',
   'company.email': 'onboarding-company-email',
   'finance.taxId': 'onboarding-finance-tax-id',
+  'finance.vatId': 'onboarding-finance-vat-id',
   'numbers.invoicePrefix': 'onboarding-invoice-prefix',
   'numbers.offerPrefix': 'onboarding-offer-prefix',
   'legal.paymentTermsDays': 'onboarding-payment-terms-days',
   'legal.defaultVatRate': 'onboarding-default-vat-rate',
   'finance.bankName': 'onboarding-bank-name',
   'finance.iban': 'onboarding-iban',
+  'finance.bic': 'onboarding-finance-bic',
   'businessReportingProfile.legalForm': 'onboarding-reporting-legal-form',
   'businessReportingProfile.profitDetermination': 'onboarding-reporting-profit-determination',
   'businessReportingProfile.hgbSizeClass': 'onboarding-reporting-hgb-size-class',
@@ -124,12 +138,14 @@ const FIELD_LABELS: Record<FieldPath, string> = {
   'company.city': 'Stadt',
   'company.email': 'E-Mail für Angebote und Rechnungen',
   'finance.taxId': 'Steuernummer',
+  'finance.vatId': 'USt-IdNr.',
   'numbers.invoicePrefix': 'Rechnungs-Präfix',
   'numbers.offerPrefix': 'Angebots-Präfix',
   'legal.paymentTermsDays': 'Zahlungsziel in Tagen',
   'legal.defaultVatRate': 'Standard-MwSt. in Prozent',
   'finance.bankName': 'Bankname',
   'finance.iban': 'IBAN',
+  'finance.bic': 'BIC',
   'businessReportingProfile.legalForm': 'Rechtsform',
   'businessReportingProfile.profitDetermination': 'Gewinnermittlung',
   'businessReportingProfile.hgbSizeClass': 'GmbH-Größenklasse',
@@ -149,6 +165,7 @@ const STEP_FIELDS: Record<StepId, readonly FieldPath[]> = {
   ],
   billing: [
     'finance.taxId',
+    'finance.vatId',
     'numbers.invoicePrefix',
     'numbers.offerPrefix',
     'legal.paymentTermsDays',
@@ -160,7 +177,7 @@ const STEP_FIELDS: Record<StepId, readonly FieldPath[]> = {
     'businessReportingProfile.chart',
     'businessReportingProfile.vatMethod',
   ],
-  details: ['finance.bankName', 'finance.iban'],
+  details: ['finance.bankName', 'finance.iban', 'finance.bic'],
 };
 
 type StepDefinition = {
@@ -227,26 +244,33 @@ const validateIdentityStep = (draft: BusinessOnboardingDraft): Partial<Record<Fi
   if (!trim(draft.company.owner)) errors['company.owner'] = 'Bitte gib die verantwortliche Person ein.';
   if (!trim(draft.company.street)) errors['company.street'] = 'Bitte gib Straße und Hausnummer ein.';
   if (!trim(draft.company.zip)) errors['company.zip'] = 'Bitte gib die Postleitzahl ein.';
+  else if (zipError(draft.company.zip, 'DE')) errors['company.zip'] = zipError(draft.company.zip, 'DE');
   if (!trim(draft.company.city)) errors['company.city'] = 'Bitte gib die Stadt ein.';
   if (!trim(draft.company.email)) {
     errors['company.email'] = 'Bitte gib eine E-Mail-Adresse ein.';
   } else if (!EMAIL_PATTERN.test(trim(draft.company.email))) {
-    errors['company.email'] = 'Die E-Mail-Adresse braucht ein @ und eine gueltige Domain.';
+    errors['company.email'] = 'Die E-Mail-Adresse braucht ein @ und eine gültige Domain.';
   }
 
   return errors;
 };
 
-const validateBillingStep = (draft: BusinessOnboardingDraft): Partial<Record<FieldPath, string>> => {
+const validateBillingStep = (draft: BusinessOnboardingDraft, edition: 'lite' | 'pro'): Partial<Record<FieldPath, string>> => {
   const errors: Partial<Record<FieldPath, string>> = {};
   const profile = reportingProfileOf(draft);
 
   if (!hasTaxNumber(draft)) errors['finance.taxId'] = 'Bitte gib die Steuernummer oder die USt-IdNr. ein.';
+  const vatIdProblem = vatIdError(draft.finance.vatId);
+  if (vatIdProblem) errors['finance.vatId'] = vatIdProblem;
   if (!trim(draft.numbers.invoicePrefix)) {
     errors['numbers.invoicePrefix'] = 'Bitte lege ein Rechnungs-Präfix fest.';
+  } else if (numberPrefixError(draft.numbers.invoicePrefix)) {
+    errors['numbers.invoicePrefix'] = numberPrefixError(draft.numbers.invoicePrefix);
   }
   if (!trim(draft.numbers.offerPrefix)) {
     errors['numbers.offerPrefix'] = 'Bitte lege ein Angebots-Präfix fest.';
+  } else if (numberPrefixError(draft.numbers.offerPrefix)) {
+    errors['numbers.offerPrefix'] = numberPrefixError(draft.numbers.offerPrefix);
   }
   if (draft.legal.paymentTermsDays === null || !Number.isFinite(draft.legal.paymentTermsDays) || draft.legal.paymentTermsDays < 1) {
     errors['legal.paymentTermsDays'] = 'Bitte gib ein Zahlungsziel von mindestens 1 Tag an.';
@@ -261,8 +285,8 @@ const validateBillingStep = (draft: BusinessOnboardingDraft): Partial<Record<Fie
   if (isCapitalLegalForm(profile.legalForm) && profile.profitDetermination !== 'double_entry') {
     errors['businessReportingProfile.profitDetermination'] = 'GmbH und UG müssen in diesem Umfang doppelte Buchführung verwenden.';
   }
-  if (EUR_ONLY_LEGAL_FORMS.includes(profile.legalForm) && profile.profitDetermination !== 'eur') {
-    errors['businessReportingProfile.profitDetermination'] = 'Diese Rechtsform wird im aktuellen Umfang mit EÜR eingerichtet.';
+  if (edition === 'lite' && profile.profitDetermination !== 'eur') {
+    errors['businessReportingProfile.profitDetermination'] = 'billme Lite rechnet mit EÜR. Doppelte Buchführung gibt es in billme Pro.';
   }
   if (isCapitalLegalForm(profile.legalForm) && !profile.hgbSizeClass) {
     errors['businessReportingProfile.hgbSizeClass'] = 'Für GmbH und UG bitte Micro oder Small auswählen.';
@@ -291,6 +315,10 @@ const validateDetailsStep = (draft: BusinessOnboardingDraft): Partial<Record<Fie
   if (trim(draft.finance.bankName) && !trim(draft.finance.iban)) {
     errors['finance.iban'] = 'Bitte gib die IBAN an, wenn du ein Bankkonto hinterlegst.';
   }
+  const ibanProblem = ibanError(draft.finance.iban);
+  if (ibanProblem) errors['finance.iban'] = ibanProblem;
+  const bicProblem = bicError(draft.finance.bic);
+  if (bicProblem) errors['finance.bic'] = bicProblem;
 
   return errors;
 };
@@ -298,11 +326,29 @@ const validateDetailsStep = (draft: BusinessOnboardingDraft): Partial<Record<Fie
 const validateStep = (
   stepIndex: number,
   draft: BusinessOnboardingDraft,
+  edition: 'lite' | 'pro',
 ): Partial<Record<FieldPath, string>> => {
   if (stepIndex === 0) return validateIdentityStep(draft);
-  if (stepIndex === 1) return validateBillingStep(draft);
+  if (stepIndex === 1) return validateBillingStep(draft, edition);
   return validateDetailsStep(draft);
 };
+
+/** A saved draft may be incomplete, but what is filled in must be storable (the server refuses it otherwise). */
+const validateDraftFormats = (draft: BusinessOnboardingDraft): Partial<Record<FieldPath, string>> => {
+  const errors: Partial<Record<FieldPath, string>> = {};
+  const checks: Array<[FieldPath, string | undefined]> = [
+    ['company.zip', zipError(draft.company.zip, 'DE')],
+    ['finance.vatId', vatIdError(draft.finance.vatId)],
+    ['finance.iban', ibanError(draft.finance.iban)],
+    ['finance.bic', bicError(draft.finance.bic)],
+  ];
+  for (const [field, error] of checks) if (error) errors[field] = error;
+  return errors;
+};
+
+const stepOfField = (field: FieldPath) => (Object.keys(STEP_FIELDS) as StepId[]).findIndex((step) => STEP_FIELDS[step].includes(field));
+
+const errorText = (error: unknown) => (error instanceof Error ? error.message : String(error)).replace(/^(?:Error:\s*)+/, '');
 
 const countEssentials = (draft: BusinessOnboardingDraft) => {
   const essentials = [
@@ -353,6 +399,7 @@ export const BusinessOnboarding: React.FC<BusinessOnboardingProps> = ({
   const [reportingProfileExpanded, setReportingProfileExpanded] = React.useState(false);
   const [dismissed, setDismissed] = React.useState(false);
   const [savingDraft, setSavingDraft] = React.useState(false);
+  const [submitError, setSubmitError] = React.useState<string | null>(null);
 
   React.useEffect(() => {
     setDraft(withReportingProfile(initialData));
@@ -443,6 +490,13 @@ export const BusinessOnboarding: React.FC<BusinessOnboardingProps> = ({
           },
         };
       }
+      if (field === 'legalForm' && edition === 'pro' && profile.profitDetermination === 'double_entry') {
+        // A sole proprietor, GbR or e.K. may keep books in Pro (§ 238 HGB or voluntarily).
+        return {
+          ...current,
+          businessReportingProfile: { ...profile, legalForm: value as BusinessReportingProfile['legalForm'], hgbSizeClass: undefined },
+        };
+      }
       if (field === 'legalForm') {
         return {
           ...current,
@@ -453,6 +507,12 @@ export const BusinessOnboarding: React.FC<BusinessOnboardingProps> = ({
             hgbSizeClass: undefined,
             chart: undefined,
           },
+        };
+      }
+      if (field === 'profitDetermination' && value === 'double_entry') {
+        return {
+          ...current,
+          businessReportingProfile: { ...profile, profitDetermination: 'double_entry', chart: profile.chart ?? 'SKR03' },
         };
       }
       if (field === 'profitDetermination' && value === 'eur') {
@@ -474,7 +534,7 @@ export const BusinessOnboarding: React.FC<BusinessOnboardingProps> = ({
   };
 
   const handleNext = () => {
-    const stepErrors = validateStep(stepIndex, draft);
+    const stepErrors = validateStep(stepIndex, draft, edition);
     setErrors(stepErrors);
     const firstError = Object.keys(stepErrors)[0] as FieldPath | undefined;
     if (firstError) {
@@ -486,7 +546,7 @@ export const BusinessOnboarding: React.FC<BusinessOnboardingProps> = ({
 
   const handleSubmit = async () => {
     const identityErrors = validateIdentityStep(draft);
-    const billingErrors = validateBillingStep(draft);
+    const billingErrors = validateBillingStep(draft, edition);
     const detailsErrors = validateDetailsStep(draft);
     const allErrors = { ...identityErrors, ...billingErrors, ...detailsErrors };
     if (Object.keys(allErrors).length > 0) {
@@ -503,14 +563,30 @@ export const BusinessOnboarding: React.FC<BusinessOnboardingProps> = ({
       if (firstError) setPendingFocusId(FIELD_IDS[firstError]);
       return;
     }
-    await onSubmit(withReportingProfile(draft));
+    setSubmitError(null);
+    try {
+      await onSubmit(withReportingProfile(draft));
+    } catch (error) {
+      setSubmitError(`Die Einrichtung wurde nicht gespeichert: ${errorText(error)}`);
+    }
   };
 
   const handleSaveAndExit = async () => {
+    const formatErrors = validateDraftFormats(draft);
+    const firstError = Object.keys(formatErrors)[0] as FieldPath | undefined;
+    if (firstError) {
+      setErrors(formatErrors);
+      setStepIndex(stepOfField(firstError));
+      setPendingFocusId(FIELD_IDS[firstError]);
+      return;
+    }
+    setSubmitError(null);
     setSavingDraft(true);
     try {
       await onSaveAndExit?.(withReportingProfile(draft));
       setDismissed(true);
+    } catch (error) {
+      setSubmitError(`Der Entwurf wurde nicht gespeichert: ${errorText(error)}`);
     } finally {
       setSavingDraft(false);
     }
@@ -521,7 +597,7 @@ export const BusinessOnboarding: React.FC<BusinessOnboardingProps> = ({
   // Intentionally stays in this tree: onboarding owns its shell-relative layout and mounts outside transformed shells.
   return (
     <div
-      className="fixed inset-0 z-[var(--z-overlay)] overflow-y-auto bg-ink-950/45 px-4 pb-4 pt-[8vh]"
+      className="fixed inset-x-0 bottom-0 top-10 z-[var(--z-overlay)] overflow-y-auto bg-ink-950/45 px-4 pb-4 pt-[8vh]"
       role="dialog"
       aria-modal="true"
       aria-labelledby="onboarding-title"
@@ -730,6 +806,7 @@ export const BusinessOnboarding: React.FC<BusinessOnboardingProps> = ({
                       value={draft.finance.vatId}
                       onChange={(event) => updateFinance('vatId', event.target.value)}
                       placeholder="DE123456789"
+                      error={errors['finance.vatId']}
                     />
                     <Input
                       id={FIELD_IDS['legal.paymentTermsDays']}
@@ -805,7 +882,9 @@ export const BusinessOnboarding: React.FC<BusinessOnboardingProps> = ({
                     <div className="max-w-2xl">
                       <h3 className="text-section text-foreground">Berichtswesen</h3>
                       <p className="mt-1 text-pretty text-control text-muted">
-                        Wähle zuerst deine Rechtsform. Die übrigen Angaben werden danach eingeblendet. Der Kontenrahmen prägt deine Buchungen dauerhaft – entscheide dich deshalb sorgfältig.
+                        {edition === 'pro'
+                          ? 'Wähle zuerst deine Rechtsform. Die übrigen Angaben werden danach eingeblendet. Der Kontenrahmen prägt deine Buchungen dauerhaft – entscheide dich deshalb sorgfältig.'
+                          : 'Wähle deine Rechtsform. billme Lite ermittelt deinen Gewinn mit der Einnahmen-Überschuss-Rechnung (EÜR).'}
                       </p>
                     </div>
                     {!reportingProfileExpanded && (
@@ -843,7 +922,7 @@ export const BusinessOnboarding: React.FC<BusinessOnboardingProps> = ({
                         hint="EÜR erfasst Einnahmen und Ausgaben bei Zahlung. Doppelte Buchführung arbeitet mit Konten und Bilanz."
                       >
                         <option value="eur" disabled={isCapitalLegalForm(reportingProfile.legalForm)}>EÜR</option>
-                        <option value="double_entry" disabled={EUR_ONLY_LEGAL_FORMS.includes(reportingProfile.legalForm)}>Doppelte Buchführung</option>
+                        <option value="double_entry">Doppelte Buchführung</option>
                       </Select>
                     )}
 
@@ -890,7 +969,7 @@ export const BusinessOnboarding: React.FC<BusinessOnboardingProps> = ({
                         value={reportingProfile.fiscalYearStart}
                         onChange={(event) => updateReportingProfile('fiscalYearStart', event.target.value)}
                         placeholder="01-01"
-                        hint="Bei EÜR beginnt dein Wirtschaftsjahr am 01-01. Bei doppelter Buchführung kann ein anderes Datum gelten."
+                        hint={edition === 'pro' ? 'Bei EÜR beginnt dein Wirtschaftsjahr am 01-01. Bei doppelter Buchführung kann ein anderes Datum gelten.' : 'Bei der EÜR beginnt dein Wirtschaftsjahr am 01-01.'}
                         error={errors['businessReportingProfile.fiscalYearStart']}
                       />
                     )}
@@ -960,6 +1039,7 @@ export const BusinessOnboarding: React.FC<BusinessOnboardingProps> = ({
                     value={draft.finance.bic}
                     onChange={(event) => updateFinance('bic', event.target.value)}
                     placeholder="GENODEF1XXX"
+                    error={errors['finance.bic']}
                   />
                   <div className="md:col-span-2">
                     <Input
@@ -997,9 +1077,9 @@ export const BusinessOnboarding: React.FC<BusinessOnboardingProps> = ({
                       </p>
                     </div>
                     <div className="border-b border-dashed border-border py-2.5">
-                      <p className="text-caption text-muted">Nummernkreis</p>
+                      <p className="text-caption text-muted">Erste Nummern</p>
                       <p className="mt-0.5 text-control text-foreground">
-                        {trim(draft.numbers.invoicePrefix) || 'RE-'} / {trim(draft.numbers.offerPrefix) || 'ANG-'}
+                        Rechnung {examplePrefix(trim(draft.numbers.invoicePrefix) || 'RE-')}001 · Angebot {examplePrefix(trim(draft.numbers.offerPrefix) || 'ANG-')}001
                       </p>
                     </div>
                   </div>
@@ -1008,15 +1088,16 @@ export const BusinessOnboarding: React.FC<BusinessOnboardingProps> = ({
             )}
           </div>
 
-          <div className="border-t border-border px-4.5 py-3">
+          <div className="sticky bottom-0 border-t border-border bg-surface px-4.5 py-3">
+            {(firstStepError || submitError) && <p id="onboarding-action-error" className="mb-2 text-caption text-error-text" role="status" aria-live="assertive">{firstStepError ?? submitError}</p>}
             <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
               <p className="text-caption text-muted">
                 {stepIndex === STEPS.length - 1
                   ? 'Weitere Einstellungen findest du später im Bereich Einstellungen.'
                   : 'Die Pflichtfelder werden für deine Dokumente benötigt.'}
+                {' '}„Später fortsetzen“ speichert deinen Stand, die Einrichtung öffnet sich beim nächsten Start wieder.
               </p>
               <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
-                {firstStepError && <p id="onboarding-action-error" className="max-w-sm text-caption text-error-text" role="status" aria-live="assertive">{firstStepError}</p>}
                 <Button
                   variant="ghost"
                   onClick={() => void handleSaveAndExit()}
@@ -1033,11 +1114,11 @@ export const BusinessOnboarding: React.FC<BusinessOnboardingProps> = ({
                   </Button>
                 )}
                 {stepIndex < STEPS.length - 1 ? (
-                  <Button onClick={handleNext} aria-describedby={firstStepError ? 'onboarding-action-error' : undefined}>
+                  <Button onClick={handleNext} aria-describedby={firstStepError || submitError ? 'onboarding-action-error' : undefined}>
                     Weiter zu {STEPS[stepIndex + 1]?.label}
                   </Button>
                 ) : (
-                  <Button onClick={() => void handleSubmit()} disabled={saving} aria-describedby={firstStepError ? 'onboarding-action-error' : undefined}>
+                  <Button onClick={() => void handleSubmit()} disabled={saving} aria-describedby={firstStepError || submitError ? 'onboarding-action-error' : undefined}>
                     {saving ? 'Einrichtung wird gespeichert ...' : submitLabel}
                   </Button>
                 )}

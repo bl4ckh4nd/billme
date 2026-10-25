@@ -3,6 +3,7 @@ import { Search, Plus, Edit3, Trash2, LayoutGrid, List, Check, X, Copy, FileUp }
 import type { Article } from '@billme/desktop-core/types';
 import { v4 as uuidv4 } from 'uuid';
 import { useArticlesQuery, useDeleteArticleMutation, useUpsertArticleMutation } from '../hooks/useArticles';
+import { READ_ONLY_HINT, canMutate } from '../runtime-api';
 import { useCreateIntent } from '../hooks/useCreateIntent';
 import { useDeferredDelete } from '../hooks/useDeferredDelete';
 import { useSettingsQuery } from '../hooks/useSettings';
@@ -125,7 +126,8 @@ export const ArticlesView: React.FC = () => {
 
   const calculateDisplayPrice = (article: Article) => {
       if (isNetPrice) return article.price;
-      return article.price * (1 + article.taxRate / 100);
+      // Rounded half up to the cent like the invoice (85,50 € + 19 % = 101,75 €, not the float 101,7449…).
+      return Math.round(article.price * (100 + article.taxRate)) / 100;
   };
 
   const handleOpenForm = (article?: Article) => {
@@ -295,14 +297,18 @@ export const ArticlesView: React.FC = () => {
         description={
           isFiltered
             ? `Suche und Kategorie-Filter schließen alle ${visibleArticles.length} vorhandenen Artikel aus.`
-            : 'Artikel sind die Positionen, die du in Rechnungen und Angeboten auswählst. Lege den ersten über das + oben rechts an.'
+            : 'Artikel sind die Positionen, die du in Rechnungen und Angeboten auswählst.'
         }
         action={
           isFiltered ? (
             <Button variant="secondary" size="sm" onClick={resetFilters}>
               Filter zurücksetzen
             </Button>
-          ) : undefined
+          ) : (
+            <Button size="sm" onClick={() => handleOpenForm()}>
+              <Plus size={16} aria-hidden="true" /> Ersten Artikel anlegen
+            </Button>
+          )
         }
       />
     </Card>
@@ -326,7 +332,7 @@ export const ArticlesView: React.FC = () => {
               <Button variant="secondary" onClick={() => setIsImportOpen(true)}>
                 <FileUp size={16} aria-hidden="true" /> Importieren (CSV)
               </Button>
-              <Button onClick={() => handleOpenForm()}>
+              <Button onClick={() => handleOpenForm()} disabled={!canMutate()} title={canMutate() ? undefined : READ_ONLY_HINT}>
                 <Plus size={16} aria-hidden="true" /> Neuer Artikel
               </Button>
             </>

@@ -219,8 +219,14 @@ const TemplateEditorForm: React.FC<{
         setLogoError('Das Logo ist zu groß. Bitte eine Datei unter 140 KB wählen, z. B. als SVG oder verkleinertes PNG.');
         return;
       }
-      setLogoError(null);
-      setBody((previous) => ({ ...previous, logo: { dataUrl, position: previous.logo?.position ?? 'right', widthMm: previous.logo?.widthMm ?? 45 } }));
+      // The type comes from the file name; only decoding proves it is an image ("notimage.png" with text inside).
+      const probe = new Image();
+      probe.onload = () => {
+        setLogoError(null);
+        setBody((previous) => ({ ...previous, logo: { dataUrl, position: previous.logo?.position ?? 'right', widthMm: previous.logo?.widthMm ?? 45 } }));
+      };
+      probe.onerror = () => setLogoError('Die Datei lässt sich nicht als Bild öffnen. Bitte ein PNG, JPG oder SVG wählen.');
+      probe.src = dataUrl;
     };
     reader.readAsDataURL(file);
   };

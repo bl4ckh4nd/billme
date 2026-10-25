@@ -17,6 +17,7 @@ export interface DraftItem {
   category?: string;
   unit?: string;
   discountPercent?: number;
+  discountAmount?: number;
   taxRate?: number;
   note?: string;
   optionNote?: string;
@@ -89,6 +90,8 @@ export interface ClientLike {
     vatId?: string;
     vatIdValidation?: 'valid' | 'invalid' | 'unavailable' | 'manual_override';
     vatIdValidationAt?: string;
+    /** BT-10 Käuferreferenz (Leitweg-ID) of a public buyer. */
+    buyerReference?: string;
   };
 }
 

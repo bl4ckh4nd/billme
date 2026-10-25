@@ -30,6 +30,7 @@ export interface LegacyInvoiceItem {
   category?: string;
   unit?: string;
   discountPercent?: number;
+  discountAmount?: number;
   taxRate?: number;
   kind?: 'item' | 'time' | 'optional' | 'text' | 'group' | 'summary';
   note?: string;
@@ -159,6 +160,7 @@ export const toLegacyLine = (item: Invoice['items'][number]): LegacyInvoiceItem 
   category: item.category,
   unit: item.unit,
   discountPercent: item.discountPercent,
+  discountAmount: item.discountAmount,
   taxRate: item.taxRate,
   ...extractLineMeta(item),
 });
@@ -224,6 +226,7 @@ export const toDomainInvoice = (
       category: item.category,
       unit: item.unit,
       discountPercent: item.discountPercent,
+      discountAmount: item.discountAmount,
       taxRate: item.taxRate,
       kind: item.kind,
       note: item.note,
@@ -301,6 +304,7 @@ export const toDomainOffer = (
       category: item.category,
       unit: item.unit,
       discountPercent: item.discountPercent,
+      discountAmount: item.discountAmount,
       taxRate: item.taxRate,
       kind: item.kind,
       note: item.note,

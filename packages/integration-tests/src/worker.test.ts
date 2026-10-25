@@ -467,7 +467,7 @@ describe('server worker', () => {
       const w = await worker(tenant.tenantId);
       const result = await w.runDunningJob();
       assert.equal(result.status, 'blocked');
-      assert.match(result.message, /Email provider not configured/);
+      assert.match(result.message, /^Kein E-Mail-Versand eingerichtet/);
       assert.equal((await h.http('GET', `/api/v1/lite/invoices/${invoice.id}`, { token: tenant.token })).body.dunningLevel ?? 0, 0);
     });
   });
@@ -537,10 +537,10 @@ describe('server worker', () => {
       const invoice = await issueInvoice(tenant.api, { client: 'Blockiert' });
       await queue(tenant, invoice.id);
       const noPassword = await (await worker(tenant.tenantId, { smtpPassword: null })).runQueuedEmailJob();
-      assert.deepEqual({ status: noPassword.status, message: noPassword.message }, { status: 'blocked', message: 'SMTP password not configured' });
+      assert.deepEqual({ status: noPassword.status, message: noPassword.message }, { status: 'blocked', message: 'SMTP-Passwort fehlt. Der Betreiber hinterlegt den Wert am Server (SMTP_PASSWORD).' });
       await updateSettings(tenant, { email: { ...smtpSettings(), provider: 'none' } });
       const noProvider = await (await worker(tenant.tenantId)).runQueuedEmailJob();
-      assert.deepEqual({ status: noProvider.status, message: noProvider.message }, { status: 'blocked', message: 'Email provider not configured' });
+      assert.deepEqual({ status: noProvider.status, message: noProvider.message }, { status: 'blocked', message: 'Kein E-Mail-Anbieter eingerichtet. Wähle SMTP oder Resend unter Einstellungen → E-Mail.' });
       assert.equal((await outbox(tenant))[0]!.status, 'pending', 'the mail is still waiting');
     });
 

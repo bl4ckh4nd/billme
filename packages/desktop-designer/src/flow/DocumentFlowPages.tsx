@@ -21,7 +21,7 @@ const COLUMN_WIDTHS: Record<DocumentColumn['id'], string> = {
   qty: '20mm',
   unit: '14mm',
   price: '23mm',
-  discount: '14mm',
+  discount: '20mm',
   taxRate: '12mm',
   total: '25mm',
   date: '31mm',

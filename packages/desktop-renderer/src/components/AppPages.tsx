@@ -1,5 +1,5 @@
 import React from 'react';
-import { Outlet, useNavigate, useRouterState } from '@tanstack/react-router';
+import { Outlet, useBlocker, useNavigate, useRouterState } from '@tanstack/react-router';
 import { Button, Card, ConfirmDialog, EmptyState, useActionFeedback } from '@billme/ui';
 import type { AppSettings, Invoice, Offer } from '@billme/desktop-core/types';
 import { templateKindSchema } from '@billme/server-core/domain';
@@ -129,6 +129,10 @@ export const DocumentsPage: React.FC = () => {
   const initialDocumentType = locationSearch.kind === 'offer' ? 'offer' : 'invoice';
   const initialSelectedId = typeof locationSearch.id === 'string' ? locationSearch.id : undefined;
   const initialStatus = locationSearch.status === 'overdue' ? 'overdue' as const : undefined;
+  const dueWithinDays = Number(locationSearch.due);
+  const initialScope = Number.isInteger(dueWithinDays) && dueWithinDays > 0
+    ? { dueWithinDays }
+    : locationSearch.unpaid !== undefined ? 'unpaid' as const : undefined;
 
   const handleCreateDocument = (type: 'invoice' | 'offer') => {
     const numbers = ipc.numbers;
@@ -186,6 +190,7 @@ export const DocumentsPage: React.FC = () => {
       initialDocumentType={initialDocumentType}
       initialSelectedId={initialSelectedId}
       initialStatus={initialStatus}
+      initialScope={initialScope}
     />
   );
 };
@@ -206,6 +211,16 @@ export const DocumentEditorPage: React.FC<{ reasonSuggestions?: readonly string[
   const [isReasonOpen, setIsReasonOpen] = React.useState(false);
   const [pendingDoc, setPendingDoc] = React.useState<Invoice | Offer | null>(null);
   const [reason, setReason] = React.useState('');
+  // Back navigation (browser back, Alt+Left) with unsaved changes asks first; the editor's own
+  // Zurück/Speichern set `leavingRef` because they already confirmed or saved.
+  const dirtyRef = React.useRef(false);
+  const leavingRef = React.useRef(false);
+  const onDirtyChange = React.useCallback((dirty: boolean) => { dirtyRef.current = dirty; }, []);
+  const blocker = useBlocker({
+    shouldBlockFn: () => dirtyRef.current && !leavingRef.current,
+    enableBeforeUnload: false,
+    withResolver: true,
+  });
 
   // Leaving a new document without saving or cancelling (back navigation, hash change)
   // gives its reserved number back. The deferred check skips StrictMode's remount.
@@ -256,6 +271,7 @@ export const DocumentEditorPage: React.FC<{ reasonSuggestions?: readonly string[
         setPendingDoc(null);
         setReason('');
         clearEditingInvoice();
+        leavingRef.current = true;
         navigate({ to: '/documents', search: docType === 'offer' ? { kind: 'offer' } : {} });
       },
       onError: (error: unknown) => notify('error', `Speichern fehlgeschlagen: ${error instanceof Error ? error.message : String(error)}`),
@@ -285,6 +301,7 @@ export const DocumentEditorPage: React.FC<{ reasonSuggestions?: readonly string[
                   await (mutation as any).mutateAsync(vars);
                   if (ipc.numbers !== numbers) return;
                   clearEditingInvoice();
+                  leavingRef.current = true;
                   navigate({ to: '/documents', search: docType === 'offer' ? { kind: 'offer' } : {} });
                 } catch (error) {
                   notify('error', `Speichern fehlgeschlagen: ${error instanceof Error ? error.message : String(error)}`);
@@ -298,6 +315,7 @@ export const DocumentEditorPage: React.FC<{ reasonSuggestions?: readonly string[
             setReason(numberNote ?? '');
             setIsReasonOpen(true);
           }}
+          onDirtyChange={onDirtyChange}
           onCancel={() => {
             const numbers = ipc.numbers;
             void (async () => {
@@ -310,12 +328,23 @@ export const DocumentEditorPage: React.FC<{ reasonSuggestions?: readonly string[
               }
               if (ipc.numbers !== numbers) return;
               clearEditingInvoice();
+              leavingRef.current = true;
               navigate({ to: '/documents', search: { kind: docType } });
             })();
           }}
         />
       </React.Suspense>
 
+      <ConfirmDialog
+        open={blocker.status === 'blocked'}
+        title="Ungespeicherte Änderungen verwerfen?"
+        description="Du verlässt den Editor. Deine bisher eingetragenen Änderungen gehen verloren."
+        confirmLabel="Änderungen verwerfen"
+        cancelLabel="Weiter bearbeiten"
+        destructive
+        onConfirm={() => blocker.proceed?.()}
+        onCancel={() => blocker.reset?.()}
+      />
       <ConfirmDialog
         open={isReasonOpen}
         title="Grund der Änderung"

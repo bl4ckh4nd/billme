@@ -3,7 +3,7 @@ import { createEmbeddedConnectionResolver, type EmbeddedConnectionResolver } fro
 
 type RouteDefinition = {
   channel: string;
-  args: { parse: (value: unknown) => unknown };
+  args: { safeParse: (value: unknown) => { success: true; data: unknown } | { success: false; error: { issues: Array<{ message: string }> } } };
   result: { parse: (value: unknown) => unknown };
 };
 
@@ -25,10 +25,21 @@ export const installDesktopPreload = <TApi>(options: {
     }
     const route = options.routes[key];
     if (!route) throw new Error(`Unknown IPC route: ${key}`);
-    const parsedArgs = route.args.parse(args);
-    const result = parsedArgs === undefined
-      ? await ipcRenderer.invoke(route.channel)
-      : await ipcRenderer.invoke(route.channel, parsedArgs);
+    const checked = route.args.safeParse(args);
+    // The schema messages are the German field sentences ("Ungültige IBAN."); the raw ZodError is JSON.
+    if (!checked.success) throw new Error([...new Set(checked.error.issues.map((issue) => issue.message))].join(' '));
+    const parsedArgs = checked.data;
+    let result: unknown;
+    try {
+      result = parsedArgs === undefined
+        ? await ipcRenderer.invoke(route.channel)
+        : await ipcRenderer.invoke(route.channel, parsedArgs);
+    } catch (error) {
+      // Electron wraps main-process errors as "Error invoking remote method 'x': Error: …";
+      // the user only needs the message the backend wrote.
+      const message = error instanceof Error ? error.message : String(error);
+      throw new Error(message.replace(/^Error invoking remote method '[^']*':\s*/, '').replace(/^(?:Error:\s*)+/, ''));
+    }
     return route.result.parse(result);
   };
 

@@ -45,7 +45,7 @@ import {
   type ServerDatabase,
   type ServerDatabaseSession,
 } from '@billme/server-data';
-import { assertPinnedEndpoint, runRecurringInvoiceRun } from '@billme/server-core';
+import { assertPinnedEndpoint, localIsoDate, recurringRunBlocker, runRecurringInvoiceRun } from '@billme/server-core';
 import type { AuthSession } from './auth.js';
 import { ApiError, typedRoute } from './http.js';
 import { requireAutomationMutationSession, toMutationActor } from './runtimeContext.js';
@@ -426,7 +426,7 @@ export const registerAutomationRoutes = (
         : await renderOnServer(session, { kind: 'eur', ...query }));
     },
   });
-  const missingSecretSuffix = integration ? 'Bitte in den Einstellungen hinterlegen.' : 'Bitte auf dem Server konfigurieren.';
+  const missingSecretSuffix = (envName: string) => integration ? 'Bitte in den Einstellungen hinterlegen.' : `Der Betreiber hinterlegt den Wert am Server (${envName}).`;
 
   const resolveEmailDelivery = async (settings: RuntimeSettings) => {
     const from = {
@@ -438,7 +438,7 @@ export const registerAutomationRoutes = (
     }
     if (settings.email.provider === 'smtp') {
       const pass = await secretFor('smtp.password');
-      if (!pass) throw new Error(`SMTP-Passwort fehlt. ${missingSecretSuffix}`);
+      if (!pass) throw new Error(`SMTP-Passwort fehlt. ${missingSecretSuffix('SMTP_PASSWORD')}`);
       if (hosted) {
         assertPinnedEndpoint({ configured: settings.email.smtpHost, pinned: process.env.SMTP_HOST, pinnedEnvName: 'SMTP_HOST', label: 'SMTP-Server' });
       }
@@ -454,7 +454,7 @@ export const registerAutomationRoutes = (
       };
     }
     const apiKey = await secretFor('resend.apiKey');
-    if (!apiKey) throw new Error(`Resend-API-Key fehlt. ${missingSecretSuffix}`);
+    if (!apiKey) throw new Error(`Resend-API-Key fehlt. ${missingSecretSuffix('RESEND_API_KEY')}`);
     return { provider: 'resend' as const, config: { apiKey }, from };
   };
 
@@ -535,8 +535,24 @@ export const registerAutomationRoutes = (
     async handler({ request, query }) {
       await sessionFor(request.headers.authorization);
       try {
-        return await portalClient.health(query.baseUrl);
+        const health = await portalClient.health(query.baseUrl);
+        // Reachable is not enough: the test must fail when publishing would.
+        const apiKey = await portalApiKeyFor(query.baseUrl);
+        const access = await portalClient.checkPublishAccess(query.baseUrl, apiKey);
+        const keyHint = hosted
+          ? 'Der Betreiber setzt ihn am Server in BILLME_PORTAL_PUBLISH_API_KEY (derselbe Wert wie PUBLISH_API_KEY im Portal).'
+          : 'Hinterlege ihn hier unter „Publish-API-Schlüssel“ und speichere die Einstellungen.';
+        if (access === 'rejected') {
+          throw new ApiError(409, apiKey
+            ? `Das Portal ist erreichbar, hat den Publish-Schlüssel aber abgelehnt. ${keyHint}`
+            : `Das Portal ist erreichbar, verlangt einen Schlüssel zum Veröffentlichen, es ist aber keiner hinterlegt. ${keyHint}`);
+        }
+        if (access === 'not_configured') {
+          throw new ApiError(409, 'Das Portal ist erreichbar, dort ist aber kein Publish-Schlüssel eingerichtet (PUBLISH_API_KEY). Ohne ihn nimmt es keine Angebote an.');
+        }
+        return health;
       } catch (error) {
+        if (error instanceof ApiError) throw error;
         if (error instanceof Error) {
           if (/^(?:Die )?Portal-Basis-URL /.test(error.message)) {
             throw new ApiError(400, error.message);
@@ -752,7 +768,7 @@ export const registerAutomationRoutes = (
       const settings = await requireSettings(database(), session.scope);
       if (body.provider === 'smtp') {
         const pass = await secretFor('smtp.password');
-        if (!pass) return { success: false, error: `SMTP-Passwort fehlt. ${missingSecretSuffix}` };
+        if (!pass) return { success: false, error: `SMTP-Passwort fehlt. ${missingSecretSuffix('SMTP_PASSWORD')}` };
         const host = body.smtpHost ?? settings.settings.email.smtpHost;
         if (hosted) {
           try {
@@ -769,7 +785,7 @@ export const registerAutomationRoutes = (
         });
       }
       const apiKey = await secretFor('resend.apiKey');
-      if (!apiKey) return { success: false, error: `Resend-API-Key fehlt. ${missingSecretSuffix}` };
+      if (!apiKey) return { success: false, error: `Resend-API-Key fehlt. ${missingSecretSuffix('RESEND_API_KEY')}` };
       return testEmailConfig('resend', { apiKey });
     },
   });
@@ -862,11 +878,16 @@ export const registerAutomationRoutes = (
   typedRoute(app, {
     method: 'POST',
     url: `${prefix}/recurring/manual-run`,
-    body: z.undefined(),
+    body: z.object({ profileId: z.string().min(1) }).strict().optional(),
     response: recurringRunResponseSchema,
-    async handler({ request }) {
+    async handler({ request, body }) {
       const session = await requireAutomationMutationSession(sessionFor, request.headers.authorization);
       const db = database();
+      if (body?.profileId) {
+        const profile = await createServerRecurringDependencies(db, session.scope, { actor: actorFor(session) }).recurringProfileStore.getById(session.scope, body.profileId);
+        const blocker = recurringRunBlocker(profile, localIsoDate(new Date()));
+        if (blocker) throw new ApiError(blocker.statusCode, blocker.message);
+      }
       try {
         const result = await runRecurringInvoiceRun(
           session.scope,
@@ -876,6 +897,7 @@ export const registerAutomationRoutes = (
             actor: actorFor(session),
             reason: 'manual',
             action: 'recurring.manual_run',
+            ...(body?.profileId ? { profileId: body.profileId } : {}),
           },
         );
         return { success: true, result };

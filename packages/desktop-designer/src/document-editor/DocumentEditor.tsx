@@ -40,6 +40,8 @@ export interface DocumentEditorProps {
   /** `numberChangeReason` is set when the user unlocked and may have edited the document number. */
   onSave: (document: DocumentDraft, meta?: { numberChangeReason?: string }) => void;
   onCancel: () => void;
+  /** Reports unsaved changes so the host can guard navigation it owns (browser back, Alt+Left). */
+  onDirtyChange?: (dirty: boolean) => void;
 }
 
 interface FieldErrors {
@@ -161,6 +163,7 @@ export const DocumentEditor: React.FC<DocumentEditorProps> = ({
   onSelectedClientChange,
   onSave,
   onCancel,
+  onDirtyChange,
 }) => {
   const history = useHistory<DocumentDraft>(document);
   const [baseline, setBaseline] = useState(document);
@@ -308,7 +311,8 @@ export const DocumentEditor: React.FC<DocumentEditorProps> = ({
       client: client.company,
       clientEmail: billingEmail?.email ?? client.email ?? previous.clientEmail,
       clientAddress: formattedAddress !== undefined
-        ? [contactName ? `z. Hd. ${contactName}` : '', formattedAddress].filter(Boolean).join('\n')
+        // A private client's contact is the client itself: "Max Mustermann / z. Hd. Max Mustermann" says it twice.
+        ? [contactName && contactName !== client.company.trim() ? `z. Hd. ${contactName}` : '', formattedAddress].filter(Boolean).join('\n')
         : previous.clientAddress,
       billingAddressJson: billingAddress ? { ...billingAddress, ...(contactName ? { contactPerson: contactName } : {}) } : previous.billingAddressJson,
       shippingAddressJson: shippingAddress ?? previous.shippingAddressJson,
@@ -320,6 +324,7 @@ export const DocumentEditor: React.FC<DocumentEditorProps> = ({
         buyerVatId: client.taxProfile?.vatId ?? previous.taxMeta?.buyerVatId,
         vatIdValidation: client.taxProfile?.vatIdValidation,
         vatIdValidationAt: client.taxProfile?.vatIdValidationAt,
+        buyerReference: client.taxProfile?.buyerReference || previous.taxMeta?.buyerReference,
         sellerCountryCode,
         sellerVatId: previous.taxMeta?.sellerVatId ?? effectiveSettings.finance.vatId,
         taxRuleConfirmed: false,
@@ -463,6 +468,10 @@ export const DocumentEditor: React.FC<DocumentEditorProps> = ({
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [handleSave, history.redo, history.undo]);
+
+  useEffect(() => {
+    onDirtyChange?.(dirty);
+  }, [dirty, onDirtyChange]);
 
   useEffect(() => {
     if (!dirty) return;

@@ -77,13 +77,13 @@ const buildProviderConfig = async <TSettings extends DunningSettings>(
     }
 > => {
   if (settings.email.provider === 'none') {
-    throw new Error('Email provider not configured. Cannot send dunning reminders.');
+    throw new Error('Kein E-Mail-Versand eingerichtet. Mahnungen können erst versendet werden, wenn unter Einstellungen › E-Mail ein Anbieter (SMTP oder Resend) eingetragen ist.');
   }
 
   if (settings.email.provider === 'smtp') {
     const smtpPassword = await secretStore.get('smtp.password');
     if (!smtpPassword) {
-      throw new Error('SMTP password not configured');
+      throw new Error('SMTP-Passwort fehlt. Bitte unter Einstellungen › E-Mail eintragen.');
     }
 
     return {
@@ -102,7 +102,7 @@ const buildProviderConfig = async <TSettings extends DunningSettings>(
 
   const resendApiKey = await secretStore.get('resend.apiKey');
   if (!resendApiKey) {
-    throw new Error('Resend API key not configured');
+    throw new Error('Resend-API-Schlüssel fehlt. Bitte unter Einstellungen › E-Mail eintragen.');
   }
 
   return {
@@ -196,7 +196,7 @@ export const summarizeInvoiceDunningStatus = (
   now = new Date(),
 ): InvoiceDunningStatus => {
   if (!invoice) {
-    throw new Error('Invoice not found');
+    throw new Error('Rechnung nicht gefunden.');
   }
 
   const daysOverdue = isInvoiceOverdue(invoice, now) ? calculateDaysOverdue(invoice.dueDate, now) : 0;
@@ -228,16 +228,16 @@ export const processDunningRun = async <TSettings extends DunningSettings>(
 
   const settings = await dependencies.settingsRepo.get(scope);
   if (!settings) {
-    throw new Error('Settings not configured');
+    throw new Error('Einstellungen fehlen.');
   }
 
   if (!settings.automation.dunningEnabled) {
-    throw new Error('Dunning automation is not enabled');
+    throw new Error('Das automatische Mahnwesen ist ausgeschaltet. Einschalten unter Einstellungen › Mahnwesen, oder Mahnungen einzeln in der Rechnung erstellen.');
   }
 
   const enabledLevels = settings.dunning.levels.filter((level) => level.enabled);
   if (enabledLevels.length === 0) {
-    throw new Error('No dunning levels are enabled');
+    throw new Error('Keine Mahnstufe ist aktiv. Mahnstufen unter Einstellungen › Mahnwesen anlegen oder aktivieren.');
   }
 
   const clock = dependencies.clock ?? systemClock;

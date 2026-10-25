@@ -9,7 +9,7 @@ import type {
 } from '@billme/desktop-designer/document-editor';
 import { ErrorState } from '@billme/ui';
 import { Spinner } from '../ui/components/Spinner';
-import { TEMPLATE_KIND_LABELS, resolveDocumentTemplate, templateKindForDocument } from '@billme/server-core/domain';
+import { SHIPPED_TEMPLATE_ID, TEMPLATE_KIND_LABELS, resolveDocumentTemplate, templateKindForDocument } from '@billme/server-core/domain';
 import { useArticlesQuery } from '../hooks/useArticles';
 import { useClientsQuery } from '../hooks/useClients';
 import { useProjectsQuery } from '../hooks/useProjects';
@@ -24,6 +24,7 @@ interface InvoiceDocumentEditorProps {
   mode?: 'create' | 'edit';
   onSave: (invoice: Invoice | Offer, meta?: { numberChangeReason?: string }) => void;
   onCancel: () => void;
+  onDirtyChange?: (dirty: boolean) => void;
 }
 
 export const InvoiceDocumentEditor: React.FC<InvoiceDocumentEditorProps> = ({
@@ -32,6 +33,7 @@ export const InvoiceDocumentEditor: React.FC<InvoiceDocumentEditorProps> = ({
   mode = 'edit',
   onSave,
   onCancel,
+  onDirtyChange,
 }) => {
   const [selectedClientId, setSelectedClientId] = useState(invoice.clientId ?? '');
   useEffect(() => {
@@ -47,9 +49,15 @@ export const InvoiceDocumentEditor: React.FC<InvoiceDocumentEditorProps> = ({
   const { data: templates = [] } = useDocumentTemplatesQuery();
   const { data: defaults = {} } = useDocumentTemplateDefaultsQuery();
   const templateKind = templateType === 'offer' ? 'offer' : templateKindForDocument({ documentKind: invoice.documentKind });
+  const hasDefaultTemplate = templates.some((template) => template.id === defaults[templateKind] && template.kind === templateKind);
   const templateOptions = useMemo(
-    () => templates.filter((template) => template.kind === templateKind).map(({ id, name }) => ({ id, name })),
-    [templateKind, templates],
+    () => [
+      // Once a default is set, the shipped look stays choosable for a single document.
+      ...(hasDefaultTemplate ? [{ id: SHIPPED_TEMPLATE_ID, name: `Mitgeliefert: ${TEMPLATE_KIND_LABELS[templateKind]}` }] : []),
+      // The default itself is the "Standard (…)" entry; listing it again would show it twice.
+      ...templates.filter((template) => template.kind === templateKind && template.id !== defaults[templateKind]).map(({ id, name }) => ({ id, name })),
+    ],
+    [defaults, hasDefaultTemplate, templateKind, templates],
   );
   const resolveTemplateBody = useCallback(
     (templateId?: string) => resolveDocumentTemplate(templateKind, { templateId, templates, defaults }).body,
@@ -103,6 +111,7 @@ export const InvoiceDocumentEditor: React.FC<InvoiceDocumentEditorProps> = ({
       onSelectedClientChange={setSelectedClientId}
       onSave={(document, meta) => onSave(document as unknown as Invoice | Offer, meta)}
       onCancel={onCancel}
+      onDirtyChange={onDirtyChange}
     />
   );
 };

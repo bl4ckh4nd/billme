@@ -100,13 +100,50 @@ const scaleLineItems = (
   return items.map((line) => {
     if (!isBillable(line)) return line;
     const total = euros(getBillingLineAmount(line) * factor);
-    const effectivePrice = line.price * (1 - (line.discountPercent ?? 0) / 100);
-    return {
-      ...line,
-      quantity: effectivePrice ? total / effectivePrice : line.quantity * factor,
-      total,
-    };
+    const scaled = line.discountAmount ? { ...line, discountAmount: euros(line.discountAmount * factor) } : line;
+    return { ...scaled, quantity: quantityForTotal(scaled, total, line.quantity * factor), total };
   });
+};
+
+/** The quantity that bills `total` at the line's unit price and discount (the price itself never changes). */
+const quantityForTotal = (line: BillingLineItem, total: number, fallback: number): number => {
+  const effectivePrice = line.price * (1 - (line.discountPercent ?? 0) / 100);
+  return effectivePrice ? (total + (line.discountAmount ?? 0)) / effectivePrice : fallback;
+};
+
+/**
+ * Prorated lines round per line, and with several tax rates the gross can then
+ * miss the requested amount by a cent or two. Shift the largest line of up to two
+ * rates by a few cents (the quantity follows, the unit price stays) until net plus
+ * VAT hits the cent; leave the lines alone when no such split exists.
+ */
+const fitLinesToGross = (source: Invoice | Offer, items: BillingLineItem[], amount: number): BillingLineItem[] => {
+  const grossOf = (candidate: BillingLineItem[]) => cents(calculateInvoiceTaxSnapshot(
+    { items: candidate, taxMode: source.taxMode, taxMeta: source.taxMeta },
+    { legal: { defaultVatRate: source.taxSnapshot?.vatRateApplied } },
+  ).grossAmount);
+  const target = cents(amount);
+  if (grossOf(items) === target) return items;
+  const ranked = items
+    .map((line, index) => ({ line, index }))
+    .filter(({ line }) => isBillable(line) && line.price > 0)
+    .sort((a, b) => Math.abs(b.line.total) - Math.abs(a.line.total));
+  const first = ranked[0];
+  if (!first) return items;
+  const second = ranked.find(({ line }) => line.taxRate !== first.line.taxRate) ?? ranked[1];
+  const shift = (line: BillingLineItem, deltaCents: number): BillingLineItem => {
+    const total = (cents(line.total) + deltaCents) / 100;
+    return { ...line, total, quantity: quantityForTotal(line, total, line.quantity) };
+  };
+  const deltas = [0, -1, 1, -2, 2, -3, 3];
+  const pairs = deltas.flatMap((a) => (second ? deltas : [0]).map((b) => [a, b] as const))
+    .sort((x, y) => Math.abs(x[0]) + Math.abs(x[1]) - Math.abs(y[0]) - Math.abs(y[1]));
+  for (const [a, b] of pairs) {
+    const candidate = items.map((line, index) =>
+      index === first.index ? shift(line, a) : second && index === second.index ? shift(line, b) : line);
+    if (grossOf(candidate) === target) return candidate;
+  }
+  return items;
 };
 
 const acceptedOffer = (offer: Offer): boolean => offer.status === 'accepted' || offer.share?.decision === 'accepted';
@@ -383,7 +420,7 @@ const buildSettlement = (order: Invoice, documents: Invoice[], params: CreateSet
     const percent = total > 0 ? Math.round((amount / total) * 1000) / 10 : 0;
     const items = [
       textLine(`${SETTLEMENT_TITLES[params.kind]} zur Auftragsbestätigung ${order.number} vom ${formatDay(order.date)}: ${formatEuro(amount)} von ${formatEuro(total)} (${String(percent).replace('.', ',')} %).`),
-      ...scaleLineItems(order.items, order.amount, amount),
+      ...fitLinesToGross(order, scaleLineItems(order.items, order.amount, amount), amount),
     ];
     document = copyParty(order, params, items, amount);
   }
@@ -429,7 +466,7 @@ const buildCorrection = (source: Invoice, documents: Invoice[], params: CreateCo
   const items = params.items ?? [
     textLine(`${CORRECTION_TITLES[params.kind]} zur Rechnung ${source.number} vom ${formatDay(source.date)}${params.kind === 'credit_note' && cents(amount) !== cents(source.amount) ? ` über ${formatEuro(amount)} von ${formatEuro(source.amount)}` : ''}.`),
     // A final invoice with deduction lines cannot be prorated line by line; correct it per tax rate.
-    ...(source.items.some((line) => isBillable(line) && line.price < 0) ? breakdownLines(source, amount) : scaleLineItems(source.items, source.amount, amount)),
+    ...(source.items.some((line) => isBillable(line) && line.price < 0) ? breakdownLines(source, amount) : fitLinesToGross(source, scaleLineItems(source.items, source.amount, amount), amount)),
   ];
   const document = copyParty(source, params, items, amount);
   return { ...document, documentKind: params.kind, sourceDocumentId: source.id, rootDocumentId: source.rootDocumentId ?? source.id };

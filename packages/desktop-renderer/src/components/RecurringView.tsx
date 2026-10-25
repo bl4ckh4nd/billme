@@ -14,6 +14,14 @@ import { useDeferredDelete } from '../hooks/useDeferredDelete';
 import { useQueryClient } from '@tanstack/react-query';
 import { ipc } from '../runtime-api';
 import { localIsoDate } from '@billme/desktop-utils';
+import { useSettingsQuery } from '../hooks/useSettings';
+import { getInvoiceTaxModeDefinition } from '@billme/server-core/services';
+
+/** Tax treatments a subscription can carry without further evidence on the invoice. */
+const RECURRING_TAX_MODES = [
+    { value: 'standard_vat', label: 'Regelbesteuerung (USt laut Position)' },
+    { value: 'small_business_19_ustg', label: 'Kleinunternehmer (§19 UStG, ohne USt)' },
+] as const;
 
 type RecurringValidationError = {
     message: string;
@@ -60,6 +68,8 @@ export const RecurringView: React.FC = () => {
         label: (count) => count === 1 ? 'Abo gelöscht' : `${count} Abos gelöscht`,
     });
     const queryClient = useQueryClient();
+    const settingsQuery = useSettingsQuery();
+    const isSmallBusiness = Boolean(settingsQuery.data?.legal.smallBusinessRule);
     const { notify } = useActionFeedback('recurring');
     const [isEditModalOpen, setIsEditModalOpen] = useState(false);
     const [editingProfile, setEditingProfile] = useState<RecurringProfile | null>(null);
@@ -113,7 +123,8 @@ export const RecurringView: React.FC = () => {
                 interval: 'monthly',
                 nextRun: localIsoDate(),
                 items: [{ description: 'Neue Position', quantity: 1, price: 0, total: 0 }],
-                amount: 0
+                amount: 0,
+                taxMode: isSmallBusiness ? 'small_business_19_ustg' : 'standard_vat',
             });
         }
         setIsEditModalOpen(true);
@@ -239,8 +250,7 @@ export const RecurringView: React.FC = () => {
         try {
             setRunningNowId(id);
 
-            // Call real IPC endpoint
-            const result = await ipc.recurring.manualRun();
+            const result = await ipc.recurring.manualRun({ profileId: id });
 
             if (result.success && result.result) {
                 const skippedProfiles = result.result.errors.length;
@@ -254,8 +264,9 @@ export const RecurringView: React.FC = () => {
             } else {
                 notify('error', 'Abo-Lauf konnte nicht abgeschlossen werden.');
             }
-        } catch {
-            notify('error', 'Abo-Lauf konnte nicht abgeschlossen werden.');
+        } catch (error) {
+            const message = error instanceof Error ? error.message.replace(/^(Error:\s*)+/, '') : '';
+            notify('error', message || 'Abo-Lauf konnte nicht abgeschlossen werden.');
         } finally {
             setRunningNowId(null);
         }
@@ -292,7 +303,12 @@ export const RecurringView: React.FC = () => {
                 <Card padding="none">
                     <EmptyState
                         title="Keine wiederkehrenden Rechnungen eingerichtet"
-                        description="Ein Abo erstellt Rechnungen automatisch in einem festen Intervall, zum Beispiel monatlich für einen Wartungsvertrag. Lege es über 'Neues Abo' an."
+                        description="Ein Abo erstellt Rechnungen automatisch in einem festen Intervall, zum Beispiel monatlich für einen Wartungsvertrag."
+                        action={(
+                            <Button size="sm" onClick={() => handleEdit()}>
+                                <Plus size={16} aria-hidden="true" /> Erstes Abo anlegen
+                            </Button>
+                        )}
                     />
                 </Card>
             ) : (
@@ -351,7 +367,7 @@ export const RecurringView: React.FC = () => {
                                 <dd className="mt-0.5 text-control font-medium tabular-nums">{formatDate(profile.nextRun)}</dd>
                             </div>
                             <div className="sm:text-right">
-                                <dt className="text-caption text-muted">Betrag</dt>
+                                <dt className="text-caption text-muted">Betrag (netto)</dt>
                                 <dd className="mt-0.5 text-section font-bold tabular-nums">{formatCurrency(profile.amount)}</dd>
                             </div>
                         </dl>
@@ -364,7 +380,8 @@ export const RecurringView: React.FC = () => {
                                 variant="ghost"
                                 size="sm"
                                 onClick={() => handleRunNow(profile.id)}
-                                disabled={runningNowId !== null}
+                                disabled={runningNowId !== null || !profile.active}
+                                title={profile.active ? 'Rechnung für dieses Abo jetzt erstellen' : 'Pausierte Abos erstellen keine Rechnung'}
                              >
                                  {runningNowId === profile.id ? 'Generiere …' : 'Jetzt ausführen'}
                              </Button>
@@ -450,6 +467,25 @@ export const RecurringView: React.FC = () => {
                                 value={formData.nextRun}
                                 onChange={e => setFormData({ ...formData, nextRun: e.target.value })}
                             />
+                            <div className="col-span-2">
+                                <Select
+                                    id={inputId('taxMode')}
+                                    label="Steuerbehandlung"
+                                    fullWidth
+                                    value={formData.taxMode ?? (isSmallBusiness ? 'small_business_19_ustg' : 'standard_vat')}
+                                    onChange={e => setFormData({ ...formData, taxMode: e.target.value as RecurringProfile['taxMode'] })}
+                                >
+                                    {RECURRING_TAX_MODES.map((mode) => <option key={mode.value} value={mode.value}>{mode.label}</option>)}
+                                    {formData.taxMode && !RECURRING_TAX_MODES.some((mode) => mode.value === formData.taxMode) && (
+                                        <option value={formData.taxMode}>{getInvoiceTaxModeDefinition(formData.taxMode).label}</option>
+                                    )}
+                                </Select>
+                                {formData.taxMode === 'small_business_19_ustg' && !isSmallBusiness && (
+                                    <p className="mt-1.5 text-caption text-warning-text" role="note">
+                                        Du bist laut Einstellungen nicht mehr Kleinunternehmer. Die nächsten Rechnungen dieses Abos werden deshalb mit Umsatzsteuer erstellt.
+                                    </p>
+                                )}
+                            </div>
                             <Input
                                 id={inputId('endDate')}
                                 label="Endet am (optional)"

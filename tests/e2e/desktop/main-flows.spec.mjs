@@ -113,7 +113,8 @@ test('invoice lifecycle: draft, issue, refused edit, partial and full payment, P
   await draftRow.click();
   await expect(pageTitle(page)).toHaveText(reservedNumber);
   await expect(page.getByRole('button', { name: 'Zahlung', exact: true })).toBeDisabled();
-  await page.getByRole('button', { name: 'Als gestellt markieren (Entwurf zu Offen)' }).click();
+  await page.getByRole('button', { name: 'Stellen', exact: true }).click();
+  await page.getByRole('dialog', { name: 'Rechnung stellen' }).getByRole('button', { name: 'Stellen', exact: true }).click();
   await expect(alertRegion(page).getByText('Rechnung als gestellt markiert')).toBeVisible();
   await expect(page.getByRole('main')).toContainText('Offen');
   await expect(page.getByRole('button', { name: 'Zahlung', exact: true })).toBeEnabled();
@@ -123,23 +124,18 @@ test('invoice lifecycle: draft, issue, refused edit, partial and full payment, P
   expect(issued).toMatchObject({ status: 'open', number: reservedNumber, amount: 291.5 });
   expect(issued.layout?.snapshot).toBeTruthy();
 
-  // --- An issued invoice cannot be changed in place; the UI points to revision / cancellation. ---
-  await page.getByRole('banner').getByRole('button', { name: 'Bearbeiten', exact: true }).click();
-  await expect(pageTitle(page)).toHaveText('Rechnung bearbeiten');
-  await page.getByRole('spinbutton', { name: 'Einzelpreis 1' }).fill('1000');
-  await page.getByRole('button', { name: 'Speichern' }).click();
-  const reasonDialog = page.getByRole('dialog', { name: 'Grund der Änderung' });
-  await reasonDialog.getByRole('button', { name: 'Betrag angepasst' }).click();
-  await reasonDialog.getByRole('button', { name: 'Speichern' }).click();
-  await expect(alertRegion(page).getByRole('alert')).toContainText('Gestellte Rechnungen bleiben unverändert');
-  await expect(alertRegion(page).getByRole('alert')).toContainText('Revision');
-  await shot('edit-refused');
+  // --- An issued invoice opens read-only: no editor, a hint to revision / cancellation, and the backend refuses a change. ---
+  await expect(page.getByRole('banner').getByRole('button', { name: 'Bearbeiten', exact: true })).toHaveCount(0);
+  await expect(page.getByRole('note').filter({ hasText: 'schreibgeschützt' })).toContainText('Gutschrift, Storno oder Revision');
+  await shot('issued-read-only');
+  const refusedEdit = await invokeDesktopIpc(page, 'invoices:upsert', { reason: 'Betrag angepasst', invoice: { ...issued, items: issued.items.map((item, index) => (index === 0 ? { ...item, price: 1000 } : item)) } })
+    .then(() => null, (error) => String(error));
+  expect(refusedEdit).toContain('Gestellte Rechnungen bleiben unverändert');
   const afterRefusedEdit = byId(await listInvoices(page), created.id);
   expect(afterRefusedEdit).toMatchObject({ status: 'open', amount: 291.5 });
   expect(afterRefusedEdit.items.map((item) => item.price)).toEqual([100, 50]);
-  await reasonDialog.getByRole('button', { name: 'Abbrechen' }).click();
-  await page.getByRole('button', { name: 'Zurück' }).click();
-  await page.getByRole('button', { name: 'Änderungen verwerfen' }).click();
+  await page.getByRole('button', { name: 'Zurück zur Liste' }).click();
+  await page.getByRole('radiogroup', { name: 'Status' }).getByRole('radio', { name: 'Alle' }).click();
 
   // --- Partial payment keeps it open, the rest pays it. ---
   await page.getByRole('row', { name: `Rechnung ${reservedNumber} öffnen` }).click();

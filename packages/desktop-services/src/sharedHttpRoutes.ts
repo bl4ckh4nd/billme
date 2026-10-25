@@ -144,6 +144,7 @@ const buildDraftFromClient = (
     clientAddress: billingAddress ? formatAddressMultiline(billingAddress) : client.address,
     billingAddressJson: billingAddress ?? undefined,
     shippingAddressJson: shippingAddress ?? undefined,
+    ...(client.taxProfile?.buyerReference ? { taxMeta: { buyerReference: client.taxProfile.buyerReference } } : {}),
     date: today,
     dueDate: kind === 'offer' ? today : addDays(today, paymentTermsDays),
     amount: 0,
@@ -364,8 +365,10 @@ export const createSharedHttpInvoke = ({ product, routes, reasons, transport }: 
         const parsed = args as IpcArgs<'recurring:delete'>;
         return requestJson('DELETE', `${prefix}/recurring/${encodeURIComponent(parsed.id)}`, okSchema, { reason: reasons.recurringDelete });
       }
-      case 'recurring:manualRun':
-        return requestJson('POST', `${prefix}/recurring/manual-run`, resultOf(key));
+      case 'recurring:manualRun': {
+        const parsed = args as IpcArgs<'recurring:manualRun'>;
+        return requestJson('POST', `${prefix}/recurring/manual-run`, resultOf(key), parsed?.profileId ? { profileId: parsed.profileId } : undefined);
+      }
       case 'settings:get':
         return getSettings();
       case 'settings:set': {

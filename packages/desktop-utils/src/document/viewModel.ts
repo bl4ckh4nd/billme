@@ -127,7 +127,7 @@ const buildItemRows = (input: DocumentRenderInput, unitColumnVisible: boolean): 
     position += 1;
     const unit = item.unit ?? '';
     const quantity = formatNumber(item.quantity, 6);
-    const lineAmount = item.quantity * item.price * (1 - (item.discountPercent ?? 0) / 100);
+    const lineAmount = item.quantity * item.price * (1 - (item.discountPercent ?? 0) / 100) - (item.discountAmount ?? 0);
     const optional = item.kind === 'optional';
     return {
       id,
@@ -138,7 +138,7 @@ const buildItemRows = (input: DocumentRenderInput, unitColumnVisible: boolean): 
         qty: unitColumnVisible || !unit ? quantity : `${quantity} ${unit}`,
         unit,
         price: formatCurrency(item.price),
-        discount: item.discountPercent ? `${formatNumber(item.discountPercent)} %` : '',
+        discount: item.discountPercent ? `${formatNumber(item.discountPercent)} %` : item.discountAmount ? `−\u00a0${formatCurrency(item.discountAmount)}` : '',
         taxRate: item.taxRate !== undefined ? `${formatNumber(item.taxRate)} %` : '',
         total: optional ? `(${formatCurrency(lineAmount)})` : formatCurrency(resolved.lines[index]?.amount ?? lineAmount),
       },
@@ -212,8 +212,10 @@ export const buildDocumentViewModel = (input: DocumentRenderInput): DocumentView
   const text = (value: string) => trimBlankEdges(resolveLines(value, resolve)).join('\n');
 
   const priceHidden = kind === 'delivery_note';
+  // A discounted position always shows its discount (§14 Abs. 4 Nr. 7 UStG), even if the template hides the column.
+  const hasDiscount = (document.items ?? []).some((item) => (item.discountPercent ?? 0) > 0 || (item.discountAmount ?? 0) > 0);
   const templateColumns = template.columns.filter((column) =>
-    column.visible && !(priceHidden && PRICE_COLUMNS.includes(column.id)),
+    (column.visible || (column.id === 'discount' && hasDiscount)) && !(priceHidden && PRICE_COLUMNS.includes(column.id)),
   );
   const unitColumnVisible = templateColumns.some((column) => column.id === 'unit');
   const columns = templateColumns.map((column) => ({

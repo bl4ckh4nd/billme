@@ -57,7 +57,12 @@ export const buildZugferdXml = (doc: NormalizedEinvoice, options: { profile?: 'e
           <ram:TypeCode>VAT</ram:TypeCode>
           <ram:CategoryCode>${line.taxCategoryCode}</ram:CategoryCode>
           <ram:RateApplicablePercent>${formatAmount(line.taxRate)}</ram:RateApplicablePercent>
-        </ram:ApplicableTradeTax>
+        </ram:ApplicableTradeTax>${line.allowance ? `
+        <ram:SpecifiedTradeAllowanceCharge>
+          <ram:ChargeIndicator><udt:Indicator>false</udt:Indicator></ram:ChargeIndicator>
+          <ram:ActualAmount>${formatAmount(line.allowance.amount)}</ram:ActualAmount>
+          <ram:Reason>${xmlEscape(line.allowance.reason)}</ram:Reason>
+        </ram:SpecifiedTradeAllowanceCharge>` : ''}
         <ram:SpecifiedTradeSettlementLineMonetarySummation>
           <ram:LineTotalAmount>${formatAmount(line.netLineTotal)}</ram:LineTotalAmount>
         </ram:SpecifiedTradeSettlementLineMonetarySummation>

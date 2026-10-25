@@ -190,6 +190,8 @@ export interface InvoiceItem {
   category?: string;
   unit?: string;
   discountPercent?: number;
+  /** Line discount as a net EUR amount. */
+  discountAmount?: number;
   taxRate?: number;
   note?: string;
   optionNote?: string;
@@ -313,6 +315,7 @@ export interface RecurringProfile {
     endDate?: string;
     amount: number;
     items: InvoiceItem[]; // Template items
+    taxMode?: InvoiceTaxMode;
 }
 
 // --- CRM Data Types ---
@@ -403,6 +406,8 @@ export interface Client {
     vatId?: string;
     vatIdValidation?: 'valid' | 'invalid' | 'unavailable' | 'manual_override';
     vatIdValidationAt?: string;
+    /** BT-10 Käuferreferenz (Leitweg-ID) of a public buyer. */
+    buyerReference?: string;
   };
 }
 

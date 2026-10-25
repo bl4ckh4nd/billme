@@ -17,6 +17,13 @@ const ACTION_LABELS: Record<string, string> = {
   portal_decision: 'Entscheidung im Kundenportal',
   dunning_reminder_sent: 'Mahnung per E-Mail versendet',
   dunning_reminder_failed: 'Mahnung konnte nicht versendet werden',
+  'payment.create': 'Zahlung erfasst',
+  'payment.update': 'Zahlung geändert',
+  'payment.reverse': 'Zahlung storniert',
+  cancelled_by_correction: 'Durch Stornorechnung storniert',
+  cancelled_for_revision: 'Durch Revision ersetzt',
+  settled_by_credit_note: 'Durch Gutschrift ausgeglichen',
+  xml: 'E-Rechnung (XML) erzeugt',
 };
 
 /** Reason codes that describe the whole event and replace the action label. */
@@ -38,6 +45,8 @@ const REASON_LABELS: Record<string, string> = {
 
 const REASON_PATTERNS: Array<[RegExp, (match: RegExpExecArray) => string]> = [
   [/^Converted from offer (.+)$/, (m) => `aus Angebot ${m[1]} übernommen`],
+  // The profile id is internal; the timeline only says where the invoice came from.
+  [/^Auto-generated from recurring profile /, () => 'aus wiederkehrender Rechnung erstellt'],
 ];
 
 const ENTRY_PATTERN = /^(?:invoice|offer)\.([a-z_.]+)(?: \(([\s\S]*)\))?$/;

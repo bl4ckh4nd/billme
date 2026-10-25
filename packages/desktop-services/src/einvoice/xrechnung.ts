@@ -42,7 +42,7 @@ export const buildXRechnung = (
     xml = buildZugferdXml(normalizeInvoiceForEinvoice(invoice, settings, source), { profile: 'xrechnung' });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    throw new EinvoiceRequestError(message.replace('ZUGFeRD Export fehlgeschlagen', 'XRechnung nicht möglich'), 422);
+    throw new EinvoiceRequestError(message.replace('ZUGFeRD Export fehlgeschlagen', 'XRechnung nicht möglich').replace(/ Ein normales PDF .*$/, ''), 422);
   }
   return { fileName: `${invoice.number.trim().replace(/[^\w.-]+/g, '_')}_xrechnung.xml`, xml };
 };

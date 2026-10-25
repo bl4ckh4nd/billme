@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { after, before, describe, test } from 'node:test';
 import type { BillmeApi } from '@billme/desktop-contracts/api';
-import { createDefaultTemplateBody, resolveInvoiceTaxMode } from '@billme/server-core';
+import { createDefaultTemplateBody, resolveInvoiceTaxMode, SHIPPED_TEMPLATE_ID } from '@billme/server-core';
 import { mapArticleCsv, mapClientCsv, parseGermanNumber, readMasterdataCsv } from '@billme/desktop-services/masterdataCsv';
 import { PRODUCTS, startProduct, type LiteHarness } from './harness.js';
 import { addDays, datevEvidence, draftInvoice, draftOffer, ISSUER, issueInvoice, newClient, today } from './fixtures.js';
@@ -17,7 +17,8 @@ import { addDays, datevEvidence, draftInvoice, draftOffer, ISSUER, issueInvoice,
  *   update that drops the assigned number, manual numbers stored untrimmed
  * - clients: addresses/e-mails/tax profile (VAT ID) lost on save, the wrong
  *   default address or e-mail taken for a new document, invalid payloads
- *   accepted, a client delete that damages the invoices written for it, or
+ *   accepted, a German PLZ or a USt-IdNr. that cannot be right accepted, the
+ *   Leitweg-ID (BT-10) of a public buyer lost or not carried into a new document, a client delete that damages the invoices written for it, or
  *   deletes a client its invoices and bookings still point at
  * - contact persons: the list lost on save or restart, two primary contacts
  *   accepted, none primary left without a primary, the legacy contactPerson
@@ -34,12 +35,15 @@ import { addDays, datevEvidence, draftInvoice, draftOffer, ISSUER, issueInvoice,
  *   nonsense numbering) accepted or half-saved, a number format change touching
  *   numbers already issued, a lowered counter handing out a used number,
  *   the Kleinunternehmer rule not reaching new documents or altering issued
- *   ones, changes missing from the audit log
+ *   ones, changes missing from the audit log; a PLZ, USt-IdNr. or BIC that
+ *   cannot be right (it lands in the letterhead of every invoice, §14 UStG)
+ *   accepted through the API/CLI, or refused with an English or raw Zod message
  * - templates: no new version per save, two defaults per kind, a template of
  *   another kind used for a document, a draft not following template/company
  *   changes, an issued invoice changing its look or sender after the fact,
  *   a forged layout snapshot accepted, dunning letters built from the wrong
- *   level, fee or template
+ *   level, fee or template; the shipped preset not choosable for one document
+ *   once a default template is set
  * - audit: broken hash chain, CSV columns changed, missing reason/actor
  * - access: master data readable without the local token
  * - persistence: any of the above gone after the app restarts
@@ -133,7 +137,10 @@ for (const product of PRODUCTS) describe(`masterdata (${product})`, () => {
       assert.equal(s.legal.taxAccountingMethod, 'soll');
       assert.equal(s.email.provider, 'none');
       assert.deepEqual(s.automation, { dunningEnabled: false, dunningRunTime: '09:00', recurringEnabled: false, recurringRunTime: '03:00' });
-      assert.deepEqual(s.dunning.levels, []);
+      // Without levels no reminder is possible, and the settings only edit existing ones.
+      assert.deepEqual(s.dunning.levels.map((level) => [level.id, level.name, level.daysAfterDueDate, level.fee, level.enabled]), [
+        [1, 'Zahlungserinnerung', 7, 0, true], [2, '1. Mahnung', 21, 2.5, true], [3, '2. Mahnung', 35, 5, true],
+      ]);
       assert.equal(s.portal.baseUrl, '');
       assert.equal(s.eInvoice.enabled, false);
       assert.deepEqual(s.businessReportingProfile, { jurisdiction: 'DE', legalForm: 'sole_proprietor', profitDetermination: 'eur', fiscalYearStart: '01-01', vatMethod: 'soll' });
@@ -194,6 +201,39 @@ for (const product of PRODUCTS) describe(`masterdata (${product})`, () => {
       }
       assert.equal((await h.raw('PUT', '/settings', {})).status, 400);
       assert.deepEqual(await getSettings(), before);
+    });
+
+    test('settings refuse a PLZ, USt-IdNr. or BIC that cannot be right, with a German reason', async () => {
+      const original = await getSettings();
+      const cases: Array<[string, (s: Settings) => Settings, RegExp]> = [
+        ['letters as PLZ', (s) => ({ ...s, company: { ...s.company, zip: 'ABC' } }), /PLZ/],
+        ['four-digit German PLZ', (s) => ({ ...s, company: { ...s.company, zip: '1011' } }), /PLZ/],
+        ['USt-IdNr. without country code', (s) => ({ ...s, finance: { ...s.finance, vatId: 'XX123' } }), /USt-IdNr/],
+        ['German USt-IdNr. too short', (s) => ({ ...s, finance: { ...s.finance, vatId: 'DE12345' } }), /USt-IdNr/],
+        ['BIC of two letters', (s) => ({ ...s, finance: { ...s.finance, bic: 'XX' } }), /BIC/],
+      ];
+      try {
+        for (const [label, patch, reason] of cases) {
+          const response = await h.raw('PUT', '/settings', { settings: patch(structuredClone(original)) });
+          assert.equal(response.status, 400, `${label}: ${response.text}`);
+          const message = String((response.body as { message?: string } | undefined)?.message ?? '');
+          assert.match(message, reason, `${label}: ${message}`);
+          assert.doesNotMatch(message, /"code"|Expected|Invalid/, `${label}: no raw validation text`);
+        }
+      } finally {
+        await setSettings(original);
+      }
+      assert.deepEqual(await getSettings(), original);
+    });
+
+    test('well-formed PLZ, USt-IdNr. (with spaces, AT) and BIC are accepted', async () => {
+      await withSettings((s) => ({ ...s, company: { ...s.company, zip: '04109' }, finance: { ...s.finance, vatId: 'DE 123 456 789', bic: 'COBADEFFXXX' } }), async () => {
+        const stored = await getSettings();
+        assert.deepEqual([stored.company.zip, stored.finance.vatId, stored.finance.bic], ['04109', 'DE 123 456 789', 'COBADEFFXXX']);
+      });
+      await withSettings((s) => ({ ...s, finance: { ...s.finance, vatId: 'ATU12345678' } }), async () => {
+        assert.equal((await getSettings()).finance.vatId, 'ATU12345678');
+      });
     });
 
     test('a valid GmbH profile (double entry, SKR04, fiscal year from April) is accepted and decides the VAT method', async () => {
@@ -505,6 +545,32 @@ for (const product of PRODUCTS) describe(`masterdata (${product})`, () => {
       ];
       for (const [label, response] of cases) assert.equal(response.status, 400, `${label}: ${response.text}`);
       assert.equal((await h.raw('POST', '/clients', { reason: 'x' })).status, 400, 'missing client');
+    });
+
+    test('clients refuse a German PLZ or a USt-IdNr. that cannot be right, with a German reason', async () => {
+      const post = (client: unknown) => h.raw('POST', '/clients', { reason: 'test', client });
+      const address = (zip: string, country: string) => [{ id: 'a-1', clientId: 'c', label: 'Rechnung', kind: 'billing', street: 'Hafenstraße 1', zip, city: 'Hamburg', country, isDefaultBilling: true }];
+      const cases: Array<[string, unknown, RegExp]> = [
+        ['letters as German PLZ', newClient({ company: `PLZ ${uid()}`, addresses: address('XYZ', 'DE') }), /PLZ/],
+        ['nonsense USt-IdNr.', newClient({ company: `USt ${uid()}`, taxProfile: { type: 'business', vatId: 'NONSENSE' } }), /USt-IdNr/],
+      ];
+      for (const [label, client, reason] of cases) {
+        const response = await post(client);
+        assert.equal(response.status, 400, `${label}: ${response.text}`);
+        assert.match(String((response.body as { message?: string } | undefined)?.message ?? ''), reason, label);
+      }
+      // A foreign address keeps its own format, an Austrian one has four digits.
+      assert.equal((await post(newClient({ company: `NL ${uid()}`, addresses: address('1012 AB', 'NL') }))).status, 200);
+      assert.equal((await post(newClient({ company: `AT ${uid()}`, addresses: address('1010', 'AT'), taxProfile: { type: 'business', countryCode: 'AT', vatId: 'ATU12345678' } }))).status, 200);
+    });
+
+    test('the Leitweg-ID of a public buyer is kept and goes into a new invoice for that client', async () => {
+      const id = randomUUID();
+      await makeClient({ id, company: `Stadt Musterhausen ${uid()}`, taxProfile: { type: 'business', buyerReference: '04011000-12345-67' } });
+      assert.equal((await clientById(id))?.taxProfile?.buyerReference, '04011000-12345-67');
+      const draft = await h.api.documents.createFromClient({ kind: 'invoice', clientId: id });
+      assert.equal((draft.taxMeta as { buyerReference?: string } | undefined)?.buyerReference, '04011000-12345-67');
+      await h.api.numbers.release({ reservationId: draft.numberReservationId! });
     });
 
     test('contact persons round-trip, keep one primary and mirror it into contactPerson', async () => {
@@ -1012,6 +1078,24 @@ for (const product of PRODUCTS) describe(`masterdata (${product})`, () => {
       assert.ok(!(await h.api.documentTemplates.list({})).some((template) => template.id.startsWith('preset-')));
       const second = await issueInvoice(h.api, { client: `Preset 2 ${uid()}` });
       assert.equal(second.layout!.snapshot!.templateVersion, 1, 'the unchanged preset body keeps its version');
+    });
+
+    test('one document can choose the shipped preset although a default template is set', async () => {
+      await resetDefaults();
+      const template = await saveTemplate('invoice', `Standard ${uid()}`, klassisch('#aa00aa'));
+      await h.api.documentTemplates.setDefault({ kind: 'invoice', templateId: template.id });
+      try {
+        const draft = await draftInvoice(h.api, { client: `Mitgeliefert ${uid()}` });
+        const chosen = await h.api.invoices.upsert({ reason: 'Vorlage', invoice: { ...draft, layout: { templateId: SHIPPED_TEMPLATE_ID } } });
+        const draftContext = await h.api.documents.renderContext({ kind: 'invoice', id: chosen.id });
+        assert.deepEqual(draftContext.template.body, createDefaultTemplateBody('invoice'), 'the draft renders the shipped preset');
+        const issued = await h.api.invoices.upsert({ reason: 'stellen', invoice: { ...chosen, status: 'open' } });
+        assert.match(issued.layout!.snapshot!.templateId, /^preset-.*-invoice$/, 'frozen on the preset, not on the default');
+        const other = await draftInvoice(h.api, { client: `Standard ${uid()}` });
+        assert.equal((await h.api.documents.renderContext({ kind: 'invoice', id: other.id })).template.body.accentColor, '#aa00aa', 'other documents keep the default');
+      } finally {
+        await resetDefaults();
+      }
     });
 
     test('the dunning letter claims Verzugszinsen and, from a business, the 40 € Pauschale (§288 BGB)', async () => {

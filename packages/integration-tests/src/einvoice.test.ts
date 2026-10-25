@@ -19,8 +19,12 @@ import { configureLite, issueDated, line } from './reports-fixtures.js';
  *
  * How this can fail (each one has a test below):
  * - the XML differs from the invoice: totals, VAT per rate, VAT groups whose
- *   sum is not the tax total, discounts, optional lines billed, dates, number
- * - parties: seller VAT ID / tax number missing, buyer address cut, a special
+ *   sum is not the tax total, discounts, optional lines billed, dates, number;
+ *   a position discount (percent or EUR amount) lost, not stored, or folded into
+ *   the unit price instead of a line allowance (BG-27)
+ * - parties: seller VAT ID / tax number missing, buyer address cut, a buyer
+ *   address in one line ("Straße 1, 12345 Ort", as clients are often typed)
+ *   refused as "Käufer PLZ fehlt", a refusal without a way out, a special
  *   character (& < > ") breaking the XML, a non-German country ignored
  * - references: no delivery date (BT-72) or service period (BG-14) although the
  *   invoice states one, a correction without the invoice it corrects (BT-25),
@@ -405,6 +409,29 @@ describe('e-invoice export (Lite)', () => {
       assert.deepEqual([Number(first(optional, 'ram:ChargeAmount')), Number(first(optional, 'ram:LineTotalAmount'))], [0, 0], 'listed, but not billed');
     });
 
+    test('a position discount in percent or EUR is stored, priced and exported as line allowance (BG-27)', async () => {
+      const invoice = await issueDated(h.api, {
+        client: 'Positionsrabatt Kunde', date: '2026-06-22', servicePeriod: '2026-06-22',
+        items: [
+          { kind: 'item', description: 'Leuchte', quantity: 2, price: 89, discountPercent: 10, total: 160.2, taxRate: 19 },
+          { kind: 'item', description: 'Montage', quantity: 1, price: 100, discountAmount: 20, total: 80, taxRate: 19 },
+        ],
+      });
+      const saved = await stored(invoice.id);
+      assert.deepEqual(saved.items.map((item) => [item.discountPercent, item.discountAmount]), [[10, undefined], [undefined, 20]], 'both kinds of discount are kept');
+      assert.deepEqual([saved.taxSnapshot!.netAmount, saved.taxSnapshot!.vatAmount, saved.taxSnapshot!.grossAmount], [240.2, 45.64, 285.84]);
+      const { xml } = await exportInvoice(invoice.id);
+      const lines = blocks(xml, 'ram:IncludedSupplyChainTradeLineItem');
+      const lineFacts = lines.map((line) => {
+        const allowance = blocks(line, 'ram:SpecifiedTradeAllowanceCharge')[0] ?? '';
+        return [Number(first(line, 'ram:ChargeAmount')), Number(first(allowance, 'ram:ActualAmount')), first(allowance, 'udt:Indicator'), Number(first(line, 'ram:LineTotalAmount'))];
+      });
+      assert.deepEqual(lineFacts, [[89, 17.8, 'false', 160.2], [100, 20, 'false', 80]]);
+      const monetary = blocks(xml, 'ram:SpecifiedTradeSettlementHeaderMonetarySummation')[0]!;
+      assert.equal(Number(first(monetary, 'ram:LineTotalAmount')), 240.2);
+      assert.equal(Number(first(monetary, 'ram:GrandTotalAmount')), 285.84);
+    });
+
     test('a seller in Austria or Switzerland puts its own country code into the XML', async () => {
       await configureLite(h.api, { eInvoice: true, countryCode: 'AT' });
       try {
@@ -475,6 +502,20 @@ describe('e-invoice export (Lite)', () => {
       await assert.rejects(prepare('invoice', incomplete.id), /Pflichtfeld "Käufer PLZ"/);
       // Without any address the invoice is not issued at all (§14 Abs. 4 Nr. 1 UStG).
       await assert.rejects(h.api.invoices.upsert({ reason: 'Ohne Adresse', invoice: { ...(await draftInvoice(h.api, { client: 'Ohne Adresse' })), clientAddress: '', status: 'open' } }), /Anschrift des Kunden fehlt/);
+    });
+
+    test('a buyer address typed in one line ("Straße, PLZ Ort") is split into street, postal code and city', async () => {
+      const draft = await draftInvoice(h.api, { client: 'Einzeilig GmbH', items: [line('Leistung', 10, 19)] });
+      const issued = await h.api.invoices.upsert({ reason: 'einzeilige Adresse', invoice: { ...draft, clientAddress: 'Musterstrasse 123, 12345 Musterstadt', billingAddressJson: undefined, status: 'open' } as never });
+      const { xml } = await exportInvoice(issued.id);
+      const buyer = blocks(xml, 'ram:BuyerTradeParty')[0]!;
+      assert.deepEqual([first(buyer, 'ram:LineOne'), first(buyer, 'ram:PostcodeCode'), first(buyer, 'ram:CityName')], ['Musterstrasse 123', '12345', 'Musterstadt']);
+    });
+
+    test('a buyer address that cannot be read names the fix and the way to a normal PDF', async () => {
+      const draft = await draftInvoice(h.api, { client: 'Ohne PLZ', items: [line('Leistung', 10, 19)] });
+      const incomplete = await h.api.invoices.upsert({ reason: 'Adresse ohne PLZ', invoice: { ...draft, clientAddress: 'Hauptstraße 1\nBerlin', status: 'open' } });
+      await assert.rejects(prepare('invoice', incomplete.id), /Käufer PLZ.*Kundenadresse.*ZUGFeRD.*ausschalten/s);
     });
 
     test('an invoice with nothing billable is not issued, so there is no e-invoice', async () => {

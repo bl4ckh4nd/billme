@@ -13,6 +13,16 @@ import { createShooter, readEditorTotals } from './lite-support.mjs';
  *   not linked to its source, the cancelled source still shown (and dunned) as open,
  *   no trace in the history, a refusal shown as an English technical error
  * - editor: removing a position not changing the totals, "discard" saving anyway
+ * - list: "Offen" listing order confirmations or delivery notes, no period filter,
+ *   invoice chips (Bezahlt/Überfällig) on the offer tab
+ * - detail: a credit note shown as a positive payment request; the source not
+ *   showing what is left after the credit; a delivery note with prices; the chain
+ *   of an invoice from an offer without the offer
+ * - issuing: one icon click issues a draft without asking; an issued invoice opening
+ *   the editor only to fail with 409 on save; browser back leaving the editor and
+ *   dropping unsaved changes without asking
+ * - payments: a partial payment shown as "Noch nicht bezahlt", an overpayment taken or
+ *   refused without a reason, raw audit keys (invoice.payment.create) in the history
  */
 
 let desktop;
@@ -161,4 +171,145 @@ test('removing a position changes the totals, and "Änderungen verwerfen" leaves
   const stored = (await invoices(page)).find((invoice) => invoice.id === draft.id);
   expect(stored.items.map((item) => item.description)).toEqual(['Erste Position', 'Zweite Position']);
   expect(stored.amount).toBe(150);
+});
+
+const localToday = () => {
+  const now = new Date();
+  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+};
+
+test('"Offen" lists only invoices, the period filter narrows by date, and the offer tab has offer chips', async () => {
+  const { page, baseUrl } = desktop;
+  const shot = createShooter(page);
+  const open = await numberOf(page, 'inv-open-1');
+  const current = await createDraft(page, 'Aktueller Monat', [{ kind: 'item', description: 'Leistung', quantity: 1, price: 50, total: 50 }]);
+  await invokeDesktopIpc(page, 'invoices:upsert', { reason: 'gestellt', invoice: { ...current, date: localToday(), dueDate: localToday(), status: 'open' } });
+  const order = await invokeDesktopIpc(page, 'documents:chainIssue', { id: crypto.randomUUID(), operation: 'order_confirmation', offerId: 'offer-open-1', date: '2026-03-06', reason: 'E2E AB' });
+  await page.reload();
+  await page.goto(appUrl(baseUrl, '/documents'));
+  const status = page.getByRole('radiogroup', { name: 'Status' });
+  await status.getByRole('radio', { name: 'Offen' }).click();
+  await expect(page.getByRole('row', { name: `Rechnung ${current.number} öffnen` })).toBeVisible();
+  await expect(page.getByRole('row', { name: new RegExp(`${order.number} öffnen`) }), 'an order confirmation is no open receivable').toHaveCount(0);
+
+  await status.getByRole('radio', { name: 'Alle' }).click();
+  await expect(page.getByRole('row', { name: new RegExp(`${order.number} öffnen`) })).toBeVisible();
+  await page.getByRole('combobox', { name: 'Zeitraum' }).selectOption({ label: 'Dieser Monat' });
+  await expect(page.getByRole('row', { name: `Rechnung ${current.number} öffnen` })).toBeVisible();
+  await expect(page.getByRole('row', { name: `Rechnung ${open} öffnen` })).toHaveCount(0);
+  await shot('period-this-month');
+  await page.getByRole('combobox', { name: 'Zeitraum' }).selectOption({ label: 'Gesamter Zeitraum' });
+
+  await page.getByRole('radiogroup', { name: 'Dokumentart' }).getByRole('radio', { name: 'Angebote' }).click();
+  await expect(status.getByRole('radio', { name: 'Bezahlt' })).toHaveCount(0);
+  await status.getByRole('radio', { name: 'Angenommen' }).click();
+  await expect(page.getByRole('row', { name: 'Angebot ANG-2026-001 öffnen' })).toBeVisible();
+  await status.getByRole('radio', { name: 'Abgelehnt' }).click();
+  await expect(page.getByRole('row', { name: 'Angebot ANG-2026-001 öffnen' })).toHaveCount(0);
+  await shot('offer-chips');
+});
+
+test('a credit note reads as a correction, the source shows the rest, a delivery note has no prices and the chain starts at the offer', async () => {
+  const { page, baseUrl } = desktop;
+  const shot = createShooter(page);
+  const open = await numberOf(page, 'inv-open-1');
+  const credit = await invokeDesktopIpc(page, 'documents:chainIssue', { id: crypto.randomUUID(), operation: 'correction', kind: 'credit_note', invoiceId: 'inv-open-1', amount: 450.5, date: '2026-02-10', reason: 'E2E Gutschrift' });
+  const order = await invokeDesktopIpc(page, 'documents:chainIssue', { id: crypto.randomUUID(), operation: 'order_confirmation', offerId: 'offer-open-1', date: '2026-03-06', reason: 'E2E AB' });
+  const delivery = await invokeDesktopIpc(page, 'documents:chainIssue', { id: crypto.randomUUID(), operation: 'delivery_note', orderId: order.id, date: '2026-03-07', reason: 'E2E LS' });
+  await page.reload();
+  await page.goto(appUrl(baseUrl, '/documents'));
+
+  await page.getByRole('row', { name: `Gutschrift ${credit.number} öffnen` }).click();
+  const main = page.getByRole('main');
+  await expect(main).toContainText('Keine Zahlungsaufforderung');
+  await expect(main).not.toContainText('Bitte überweisen');
+  await expect(main).toContainText(/[-−]\s?450,50/);
+  await shot('credit-note');
+
+  await page.getByRole('button', { name: 'Zurück zur Liste' }).click();
+  await page.getByRole('row', { name: `Rechnung ${open} öffnen` }).click();
+  await expect(main.getByText('Gutgeschrieben')).toBeVisible();
+  await expect(main).toContainText(/Noch offen\s*3\.000,00/);
+  await shot('source-after-credit');
+
+  await page.getByRole('button', { name: 'Zurück zur Liste' }).click();
+  await page.getByRole('row', { name: `Lieferschein ${delivery.number} öffnen` }).click();
+  await expect(main).toContainText('Lieferschein ohne Preise');
+  await expect(main.getByRole('columnheader', { name: /Einzel/ })).toHaveCount(0);
+  const chain = page.getByTestId('document-chain-panel');
+  await expect(chain).toContainText('Angebot · ANG-2026-001');
+  await expect(chain).toContainText('3 Dokumente');
+  await shot('delivery-note-chain');
+});
+
+test('"Stellen" asks first, an issued invoice opens read-only, and browser back from the editor warns about unsaved changes', async () => {
+  const { page, baseUrl } = desktop;
+  const shot = createShooter(page);
+  const draft = await createDraft(page, 'Stellen Kunde', [{ kind: 'item', description: 'Leistung', quantity: 1, price: 80, total: 80 }]);
+  const other = await createDraft(page, 'Zurück Kunde', [{ kind: 'item', description: 'Leistung', quantity: 1, price: 20, total: 20 }]);
+  await page.reload();
+  await page.goto(appUrl(baseUrl, '/documents'));
+  await page.getByRole('row', { name: `Rechnung ${draft.number} öffnen` }).click();
+  await page.getByRole('button', { name: 'Stellen', exact: true }).click();
+  const confirm = page.getByRole('dialog', { name: 'Rechnung stellen' });
+  await expect(confirm).toContainText('nicht mehr bearbeiten');
+  await confirm.getByRole('button', { name: 'Abbrechen' }).click();
+  expect((await invoices(page)).find((invoice) => invoice.id === draft.id).status, 'cancel keeps the draft').toBe('draft');
+  await page.getByRole('button', { name: 'Stellen', exact: true }).click();
+  await confirm.getByRole('button', { name: 'Stellen', exact: true }).click();
+  await expect.poll(async () => (await invoices(page)).find((invoice) => invoice.id === draft.id).status).toBe('open');
+  await expect(page.getByRole('banner').getByRole('button', { name: 'Bearbeiten', exact: true })).toHaveCount(0);
+  await expect(page.getByRole('note').filter({ hasText: 'schreibgeschützt' })).toBeVisible();
+  await shot('issued-read-only');
+
+  await page.getByRole('button', { name: 'Zurück zur Liste' }).click();
+  await expect(page.getByRole('button', { name: `${draft.number} bearbeiten` }), 'no editor for an issued invoice').toHaveCount(0);
+  await page.getByRole('button', { name: `${other.number} bearbeiten` }).click();
+  await expect(page).toHaveURL(/#\/documents\/edit/);
+  await page.getByRole('textbox', { name: 'Einzelpreis 1' }).or(page.getByRole('spinbutton', { name: 'Einzelpreis 1' })).fill('25');
+  await page.goBack();
+  const discard = page.getByRole('dialog', { name: 'Ungespeicherte Änderungen verwerfen?' });
+  await expect(discard).toBeVisible();
+  await shot('back-warns');
+  await discard.getByRole('button', { name: 'Weiter bearbeiten' }).click();
+  await expect(page).toHaveURL(/#\/documents\/edit/);
+  await page.goBack();
+  await discard.getByRole('button', { name: 'Änderungen verwerfen' }).click();
+  await expect(page).not.toHaveURL(/#\/documents\/edit/);
+  expect((await invoices(page)).find((invoice) => invoice.id === other.id).items[0].price, 'nothing saved').toBe(20);
+
+  // Saving a draft change still asks for the GoBD reason, with one-click suggestions.
+  await page.getByRole('button', { name: `${other.number} bearbeiten` }).click();
+  await page.getByRole('textbox', { name: 'Einzelpreis 1' }).or(page.getByRole('spinbutton', { name: 'Einzelpreis 1' })).fill('25');
+  await page.locator('button').filter({ hasText: 'Speichern' }).click();
+  const reason = page.getByRole('dialog', { name: 'Grund der Änderung' });
+  await reason.getByRole('button', { name: 'Betrag angepasst' }).click();
+  await reason.getByRole('button', { name: 'Speichern' }).click();
+  await expect.poll(async () => (await invoices(page)).find((invoice) => invoice.id === other.id).items[0].price).toBe(25);
+});
+
+test('a partial payment reads "Teilbezahlt", an overpayment is refused with the reason, and the history has no raw keys', async () => {
+  const { page, baseUrl } = desktop;
+  const shot = createShooter(page);
+  const draft = await createDraft(page, 'Teilzahler', [{ kind: 'item', description: 'Leistung', quantity: 1, price: 300, total: 300 }]);
+  await invokeDesktopIpc(page, 'invoices:upsert', { reason: 'gestellt', invoice: { ...draft, date: localToday(), dueDate: '2099-12-31', status: 'open' } });
+  await invokeDesktopIpc(page, 'invoices:savePayment', { invoiceId: draft.id, payment: { id: crypto.randomUUID(), date: localToday(), amount: 200, method: 'Überweisung' }, reason: 'E2E Teilzahlung' });
+  await page.reload();
+  await page.goto(appUrl(baseUrl, '/documents'));
+  await page.getByRole('row', { name: `Rechnung ${draft.number} öffnen` }).click();
+  const main = page.getByRole('main');
+  await expect(main.getByText('Teilbezahlt').first()).toBeVisible();
+  await expect(main).toContainText('Zahlung erfasst');
+  await expect(main).not.toContainText('invoice.payment');
+  await shot('partial');
+
+  await page.getByRole('button', { name: 'Zahlung', exact: true }).click();
+  const payment = page.getByRole('dialog', { name: 'Zahlung erfassen' });
+  await payment.getByLabel('Betrag (EUR)').fill('300,00');
+  await payment.getByLabel('Grund (Pflicht)').fill('Überzahlung');
+  await payment.getByRole('button', { name: 'Speichern' }).click();
+  await expect(page.getByText(/übersteigt den offenen Betrag von 100,00 €.*Guthaben/)).toBeVisible();
+  await expect(page.getByText(/Error:/)).toHaveCount(0);
+  expect((await invoices(page)).find((invoice) => invoice.id === draft.id).payments.map((entry) => entry.amount)).toEqual([200]);
+  await shot('overpaid');
 });

@@ -335,7 +335,11 @@ const buildInvoiceFromProfile = (
     const billingEmail = chooseDefaultBillingEmail(client.emails ?? []);
     const items = buildInvoiceItems(profile);
     const today = localIsoDate(now);
-    const taxMode = resolveIssueTaxMode(profile.taxMode, settings);
+    // §19 is the business's status, not the customer's: a profile stamped while the business was a
+    // Kleinunternehmer bills with VAT once it no longer is (otherwise the invoice omits owed VAT).
+    const taxMode = profile.taxMode === 'small_business_19_ustg' && !settings.legal.smallBusinessRule
+      ? resolveIssueTaxMode(undefined, settings)
+      : resolveIssueTaxMode(profile.taxMode, settings);
     const taxSnapshot = calculateInvoiceTaxSnapshot({ items, taxMode, taxMeta: profile.taxMeta }, settings);
 
     return chainMaybePromise(dependencies.projectPort.ensureDefaultProject(profile.clientId), (project) => ({
@@ -518,14 +522,38 @@ const isProfileDue = (profile: RecurringProfile, today: string): boolean => {
   return profile.active && profile.nextRun <= today && (!profile.endDate || profile.endDate > today);
 };
 
+export class RecurringRunRefusedError extends Error {
+  constructor(message: string, readonly statusCode: 404 | 409) {
+    super(message);
+    this.name = 'RecurringRunRefusedError';
+  }
+}
+
+const formatGermanDay = (isoDate: string): string => isoDate.split('-').reverse().join('.');
+
+/** Why a single profile cannot run today, or null when it is due. */
+export const recurringRunBlocker = (profile: RecurringProfile | null, today: string): RecurringRunRefusedError | null => {
+  if (!profile) return new RecurringRunRefusedError('Das Abo wurde nicht gefunden.', 404);
+  if (!profile.active) return new RecurringRunRefusedError(`Das Abo „${profile.name}“ ist pausiert. Aktiviere es, um eine Rechnung zu erstellen.`, 409);
+  if (profile.endDate && profile.endDate <= today) return new RecurringRunRefusedError(`Das Abo „${profile.name}“ ist am ${formatGermanDay(profile.endDate)} ausgelaufen.`, 409);
+  if (profile.nextRun > today) return new RecurringRunRefusedError(`Das Abo „${profile.name}“ ist erst am ${formatGermanDay(profile.nextRun)} fällig.`, 409);
+  return null;
+};
+
 export const processRecurringRun = async (
   scope: TenantScope,
   dependencies: RecurringDomainDependencies,
+  options: { profileId?: string } = {},
 ): Promise<RecurringResult> => {
   const result: RecurringResult = { generated: 0, deactivated: 0, errors: [] };
   const runNow = getClock(dependencies).now();
   const today = localIsoDate(runNow);
-  const profiles = (await dependencies.recurringProfileStore.list(scope)).filter((profile) => isProfileDue(profile, today));
+  if (options.profileId) {
+    const blocker = recurringRunBlocker(await dependencies.recurringProfileStore.getById(scope, options.profileId), today);
+    if (blocker) throw blocker;
+  }
+  const profiles = (await dependencies.recurringProfileStore.list(scope))
+    .filter((profile) => (!options.profileId || profile.id === options.profileId) && isProfileDue(profile, today));
 
   for (const profile of profiles) {
     let currentProfile = profile;

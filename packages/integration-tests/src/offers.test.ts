@@ -33,7 +33,9 @@ import { documentIdFromUrl, newToken, startPortal, type PortalHandle } from './o
  *   a declined or draft offer converted, a request id that belongs to
  *   another document
  * - mixed VAT settlements: a requested partial credit rounded to a different
- *   gross amount, changing the residual debt by a cent
+ *   gross amount, changing the residual debt by a cent; a round gross amount
+ *   (500, 200) on a 19 %/7 % order or invoice refused as "nicht centgenau"
+ *   although a cent-exact split of the lines exists
  * - order chain: an order confirmation from an unaccepted offer or twice from
  *   one offer, settlements over the order amount, a final invoice that does not
  *   settle exactly the remainder, a zero amount document, a cancelled advance
@@ -58,7 +60,8 @@ import { documentIdFromUrl, newToken, startPortal, type PortalHandle } from './o
  *   twice, or overwriting a manual decision), expired and declined offers, an
  *   offer expiring on its last valid day, a decision lost by re-publishing,
  *   customer access links not scoped to the customer or surviving rotation,
- *   invoices published stale or decidable
+ *   invoices published stale or decidable, a connection test that answers OK
+ *   although the portal refuses the key (or no key is configured at all)
  * - Pro: order-chain billing documents not posted (or posted twice on replay,
  *   or with the wrong amount), non-billing documents posted, corrections not
  *   allocated against the source open item
@@ -940,6 +943,30 @@ for (const product of PRODUCTS) describe(`offers and the document chain (${produ
       }
     });
 
+    test('round gross amounts on mixed 19 %/7 % documents are split cent-exactly instead of refused', async () => {
+      const offer = await draftOffer(h.api, { client: 'Gemischte Sätze', items: [
+        { kind: 'item', description: 'Leistung 19', quantity: 2, price: 500, total: 1000, taxRate: 19 },
+        { kind: 'item', description: 'Buch 7', quantity: 3, price: 40, total: 120, taxRate: 7 },
+      ] });
+      await accept(offer);
+      const order = await issue({ operation: 'order_confirmation', offerId: offer.id });
+      for (const amount of [500, 400]) {
+        const advance = await settle(order, 'advance_invoice', amount);
+        assert.equal(advance.taxSnapshot?.grossAmount, amount, `advance of ${amount}`);
+        assert.equal(advance.amount, amount);
+        const lines = billable(advance);
+        assert.equal(Math.round(lines.reduce((sum, line) => sum + line.total, 0) * 100), Math.round(advance.taxSnapshot!.netAmount * 100), 'the lines add up to the net');
+      }
+      const invoice = await issueInvoice(h.api, { client: 'Gemischte Rechnung', items: [
+        { kind: 'item', description: 'Beratung', quantity: 10, price: 95.5, total: 955, taxRate: 19 },
+        { kind: 'item', description: 'Material', quantity: 4, price: 24.9, total: 99.6, taxRate: 7 },
+      ] });
+      for (const amount of [200, 100]) {
+        const credit = await issue({ operation: 'correction', kind: 'credit_note', invoiceId: invoice.id, amount });
+        assert.equal(credit.taxSnapshot?.grossAmount, amount, `credit of ${amount}`);
+      }
+    });
+
     test('discounted partial credits preserve unit prices and reject an unrepresentable gross cent before saving', async () => {
       const offer = await draftOffer(h.api, { client: 'Discount cents', items: [
         { kind: 'item', description: 'Rabattierte Leistung', quantity: 1, price: 200, discountPercent: 50, total: 100, taxRate: 19 },
@@ -1237,6 +1264,16 @@ for (const product of PRODUCTS) describe(`offers and the document chain (${produ
       await assert.rejects(h.api.portal.health({ baseUrl: 'http://example.com' }), /https/);
       await assert.rejects(h.api.portal.health({ baseUrl: 'not a url' }), /ungültig/);
       await assert.rejects(h.api.portal.health({ baseUrl: 'http://127.0.0.1:1' }), /nicht erreichbar/);
+    });
+
+    test('the connection test checks the publish key, not only that the portal answers', async () => {
+      process.env.PORTAL_API_KEY = 'wrong-key';
+      try {
+        await assert.rejects(h.api.portal.health({ baseUrl: portal.baseUrl }), /Schlüssel.*abgelehnt/);
+        delete process.env.PORTAL_API_KEY;
+        await assert.rejects(h.api.portal.health({ baseUrl: portal.baseUrl }), /verlangt einen Schlüssel/);
+      } finally { process.env.PORTAL_API_KEY = portal.apiKey!; }
+      assert.equal((await h.api.portal.health({ baseUrl: portal.baseUrl })).ok, true);
     });
 
     test('publishing needs a configured portal and a known offer', async () => {

@@ -10,6 +10,7 @@ type InvoiceItemLike = {
   total?: number;
   unit?: string;
   discountPercent?: number;
+  discountAmount?: number;
   taxRate?: number;
   optionNote?: string;
   summaryMetric?: 'amount' | 'quantity';
@@ -203,7 +204,7 @@ export const calculateInvoiceItemTotal = (item: InvoiceItemLike): number => {
   const price = toFiniteNumber(item.price);
   if (quantity !== null && price !== null) {
     const discountPercent = Math.min(100, Math.max(0, toFiniteNumber(item.discountPercent) ?? 0));
-    return round2(quantity * price * (1 - discountPercent / 100));
+    return round2(quantity * price * (1 - discountPercent / 100) - Math.max(0, toFiniteNumber(item.discountAmount) ?? 0));
   }
 
   const total = toFiniteNumber(item.total);

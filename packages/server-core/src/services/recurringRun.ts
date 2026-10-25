@@ -9,6 +9,8 @@ export interface RecurringRunOptions {
   readonly reason: string;
   readonly action?: string;
   readonly clock?: Clock;
+  /** Runs only this profile (the card's "Jetzt ausführen"); refused when it is paused or not due. */
+  readonly profileId?: string;
   /** Runs in the finalization transaction, before the run audit entry is appended. */
   readonly afterProcess?: (result: RecurringResult) => Promise<void> | void;
 }
@@ -21,7 +23,7 @@ export const runRecurringInvoiceRun = async (
   const result = await processRecurringRun(scope, {
     ...dependencies,
     ...(options.clock ? { clock: options.clock } : {}),
-  });
+  }, { profileId: options.profileId });
 
   // Profile transactions have already committed independently. Keep settings
   // progression and the summary audit together, while allowing infrastructure

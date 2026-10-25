@@ -15,6 +15,8 @@ const commonLineFields = {
   category: z.string().optional(),
   unit: z.string().optional(),
   discountPercent: z.number().min(0).max(100).optional(),
+  /** Line discount as a net amount in EUR (instead of a percentage). */
+  discountAmount: z.number().min(0).optional(),
   taxRate: z.number().min(0).optional(),
   note: z.string().optional(),
 };
@@ -86,6 +88,7 @@ export type BillingLineInput = {
   total?: number;
   unit?: string;
   discountPercent?: number;
+  discountAmount?: number;
   taxRate?: number;
 };
 
@@ -103,7 +106,7 @@ export const getBillingLineAmount = (line: BillingLineInput): number => {
   const quantity = finite(line.quantity);
   const price = finite(line.price);
   const discount = Math.min(100, Math.max(0, finite(line.discountPercent)));
-  if (line.quantity !== undefined && line.price !== undefined) return round2(quantity * price * (1 - discount / 100));
+  if (line.quantity !== undefined && line.price !== undefined) return round2(quantity * price * (1 - discount / 100) - Math.max(0, finite(line.discountAmount)));
   return round2(finite(line.total));
 };
 

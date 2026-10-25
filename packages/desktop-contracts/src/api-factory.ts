@@ -31,7 +31,9 @@ type MethodFn<
   K extends RouteKey<TRoutes>,
 > = RouteArgs<TRoutes, K> extends undefined
   ? () => Promise<RouteResult<TRoutes, K>>
-  : (args: RouteArgs<TRoutes, K>) => Promise<RouteResult<TRoutes, K>>;
+  : undefined extends RouteArgs<TRoutes, K>
+    ? (args?: RouteArgs<TRoutes, K>) => Promise<RouteResult<TRoutes, K>>
+    : (args: RouteArgs<TRoutes, K>) => Promise<RouteResult<TRoutes, K>>;
 
 export type ContractInvoke<TRoutes extends ContractRouteMap> = <
   K extends RouteKey<TRoutes>,

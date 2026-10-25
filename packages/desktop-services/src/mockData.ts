@@ -7,9 +7,41 @@ import type {
   AppSettings,
   Article,
   Client,
+  DunningLevel,
   Invoice,
   RecurringProfile,
 } from '@billme/desktop-core/types';
+
+/** Levels every new profile and workspace starts with; the settings can also restore them. */
+export const DEFAULT_DUNNING_LEVELS: DunningLevel[] = [
+  {
+    id: 1,
+    name: 'Zahlungserinnerung',
+    enabled: true,
+    daysAfterDueDate: 7,
+    fee: 0,
+    subject: 'Zahlungserinnerung zur Rechnung %N',
+    text: 'Die Rechnung %N vom %D über %A ist noch offen. Vielleicht ist sie Ihnen entgangen; bitte überweisen Sie den Betrag innerhalb von 7 Tagen.',
+  },
+  {
+    id: 2,
+    name: '1. Mahnung',
+    enabled: true,
+    daysAfterDueDate: 21,
+    fee: 2.5,
+    subject: '1. Mahnung zur Rechnung %N',
+    text: 'Für die Rechnung %N vom %D konnten wir leider noch keinen Zahlungseingang feststellen. Bitte überweisen Sie %A zuzüglich der Mahngebühr innerhalb von 7 Tagen.',
+  },
+  {
+    id: 3,
+    name: '2. Mahnung',
+    enabled: true,
+    daysAfterDueDate: 35,
+    fee: 5,
+    subject: '2. Mahnung zur Rechnung %N',
+    text: 'Trotz unserer Erinnerungen ist die Rechnung %N vom %D über %A weiterhin offen. Bitte begleichen Sie den Betrag zuzüglich der Mahngebühr umgehend, spätestens innerhalb von 7 Tagen.',
+  },
+];
 
 export const MOCK_SETTINGS: AppSettings = {
   // Mustermann GmbH is a capital company, so the demo workspace reports under
@@ -184,7 +216,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
     nextDeliveryNoteNumber: 1,
   },
   dunning: {
-    levels: [],
+    levels: DEFAULT_DUNNING_LEVELS.map((level) => ({ ...level })),
   },
   legal: {
     smallBusinessRule: false,

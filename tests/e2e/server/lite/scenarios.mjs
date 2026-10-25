@@ -597,7 +597,10 @@ export const runLiteLegalScenario = async (page, scenarioKey = 'legal') => {
     await page.getByText(number).first().click();
     await expect(page.getByRole('heading', { name: number })).toBeVisible();
   };
-  const markIssued = () => page.getByRole('button', { name: 'Als gestellt markieren (Entwurf zu Offen)' }).click();
+  const markIssued = async () => {
+    await page.getByRole('button', { name: 'Stellen', exact: true }).click();
+    await page.getByRole('dialog', { name: 'Rechnung stellen' }).getByRole('button', { name: 'Stellen', exact: true }).click();
+  };
 
   // §14: the customer address is a Pflichtangabe.
   const missing = await draftFor({ clientAddress: '', billingAddressJson: undefined });

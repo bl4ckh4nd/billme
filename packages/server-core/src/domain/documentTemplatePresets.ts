@@ -202,6 +202,9 @@ export type ResolvedDocumentTemplate = { id?: string; version?: number; name?: s
  * used (an invoice template on a credit note). Frozen snapshots are resolved
  * by the caller before this, because they need the version log.
  */
+/** `layout.templateId` of a document that uses the shipped preset although a default template is set. */
+export const SHIPPED_TEMPLATE_ID = 'shipped';
+
 export const resolveDocumentTemplate = (
   kind: TemplateKind,
   input: {
@@ -210,6 +213,7 @@ export const resolveDocumentTemplate = (
     defaults: Partial<Record<TemplateKind, string | null>>;
   },
 ): ResolvedDocumentTemplate => {
+  if (input.templateId === SHIPPED_TEMPLATE_ID) return { body: createDefaultTemplateBody(kind) };
   const chosen = [input.templateId, input.defaults[kind]]
     .map((id) => (id ? input.templates.find((template) => template.id === id && template.kind === kind) : undefined))
     .find(Boolean);

@@ -12,7 +12,11 @@ import { newClient } from './fixtures.js';
  * How this can fail (each one has a test below):
  * - sign-up: a workspace created without or with a wrong setup code, an existing
  *   email signing up again (account takeover), a short password, a new workspace
- *   without settings (no onboarding), unthrottled attempts
+ *   without settings (no onboarding) or without dunning levels (Mahnwesen
+ *   impossible, the settings only edit existing levels), unthrottled attempts,
+ *   a person with a Lite account stuck at the Pro set-up screen (the existing
+ *   account's own password must add the workspace, a wrong one must not, and
+ *   guessing it must be throttled per address like the login)
  * - workspaces: one person's second workspace reading the first one's data, a
  *   switch into a workspace the person does not (or no longer) belong to, a Lite
  *   token switched into a Pro workspace, someone else's workspaces listed
@@ -24,7 +28,8 @@ import { newClient } from './fixtures.js';
  *   a name or with a short password, an invitation for someone who already is a
  *   member, the mail not carrying a working link
  * - password reset: known and unknown addresses told apart, a link used twice or
- *   after expiry, the old password still working, a lockout surviving the reset
+ *   after expiry, the old password still working, a lockout surviving the reset,
+ *   a server without platform mail telling nobody that no link will arrive
  */
 
 type Mail = { to: string; subject: string; text: string; html: string; idempotencyKey: string };
@@ -76,6 +81,11 @@ describe('workspaces, team and password reset', () => {
       assert.equal(created.response.body.user.role, 'owner');
       const settings = await h.http('GET', '/api/v1/lite/settings', { token: created.token });
       assert.equal(settings.body.company.name, '', 'default settings, so the wizard opens');
+      assert.deepEqual(
+        settings.body.dunning.levels.map((level: { id: number; name: string; fee: number; enabled: boolean }) => [level.id, level.name, level.fee, level.enabled]),
+        [[1, 'Zahlungserinnerung', 0, true], [2, '1. Mahnung', 2.5, true], [3, '2. Mahnung', 5, true]],
+        'a new workspace can dun right away',
+      );
       const workspaces = await h.http('GET', '/api/v1/auth/workspaces', { token: created.token });
       assert.deepEqual(workspaces.body.map((w: { name: string; role: string }) => [w.name, w.role]), [['signup GmbH', 'owner']]);
     });
@@ -108,6 +118,52 @@ describe('workspaces, team and password reset', () => {
     });
   });
 
+  // Own server: the sign-up limiter counts per IP and route, and these tests sign up often.
+  describe('an existing account at the set-up screen of the other product', () => {
+    let x: HostedServer;
+    before(async () => { x = await startHostedServer('workspaces-existing', { setupToken: SETUP, platformMailer: async () => ({ sent: true }) }); });
+    after(async () => { await x.close(); });
+    const signUpOn = async (server: HostedServer, label: string) => {
+      const email = uniqueEmail(label);
+      const response = await server.http('POST', '/api/v1/auth/signup?product=lite', {
+        body: { email, password: PASSWORD, fullName: `${label} Person`, workspaceName: `${label} GmbH`, setupToken: SETUP },
+      });
+      assert.equal(response.status, 200, response.text);
+      return { email, userId: response.body.user.id as string };
+    };
+
+    test('an existing account adds a workspace of the other product with its own password', async () => {
+      const lite = await signUpOn(x, 'signup-existing');
+      const attempt = (password: string, setupToken: string | undefined = SETUP) => x.http('POST', '/api/v1/auth/signup?product=pro', {
+        body: { email: lite.email, password, fullName: 'Egal', workspaceName: 'Pro Ableger', setupToken },
+      });
+      assert.equal((await attempt(PASSWORD, 'wrong')).status, 403, 'the setup code still applies');
+      assert.equal((await attempt('not-the-password-1')).status, 409, 'a wrong password adds nothing');
+      const pro = await attempt(PASSWORD);
+      assert.equal(pro.status, 200, pro.text);
+      assert.deepEqual([pro.body.product, pro.body.user.id, pro.body.user.role, pro.body.user.fullName], ['pro', lite.userId, 'owner', 'signup-existing Person']);
+      const workspaces = await x.http('GET', '/api/v1/auth/workspaces', { token: pro.body.token });
+      assert.deepEqual(workspaces.body.map((w: { name: string; product: string }) => [w.name, w.product]).sort(), [['Pro Ableger', 'pro'], ['signup-existing GmbH', 'lite']]);
+      assert.equal((await x.http('POST', '/api/v1/pro/auth/login', { body: { email: lite.email, password: PASSWORD } })).status, 200, 'the Pro login works now');
+      assert.equal((await x.http('GET', '/api/v1/pro/settings', { token: pro.body.token })).body.company.name, '', 'the new workspace opens the wizard');
+    });
+
+    test('guessing an existing account\'s password through the sign-up is throttled per address', async () => {
+      const lite = await signUpOn(x, 'signup-guess');
+      const statuses: number[] = [];
+      for (let attempt = 0; attempt < 6; attempt += 1) {
+        statuses.push((await x.http('POST', '/api/v1/auth/signup?product=pro', {
+          body: { email: lite.email, password: `wrong-guess-${attempt}-xyz`, fullName: 'G', workspaceName: 'G', setupToken: SETUP },
+        })).status);
+      }
+      assert.deepEqual(statuses, [409, 409, 409, 409, 409, 429]);
+      const right = await x.http('POST', '/api/v1/auth/signup?product=pro', {
+        body: { email: lite.email, password: PASSWORD, fullName: 'G', workspaceName: 'G', setupToken: SETUP },
+      });
+      assert.equal(right.status, 429, 'locked out like the login');
+    });
+});
+
   describe('several workspaces per person', () => {
     test('a second workspace is separate, switching needs a membership and the right product', async () => {
       const owner = await signUp('multi');
@@ -115,6 +171,7 @@ describe('workspaces, team and password reset', () => {
       const second = await h.http('POST', '/api/v1/auth/workspaces', { token: owner.token, body: { name: 'Zweitfirma', product: 'lite', setupToken: SETUP } });
       assert.equal(second.status, 200, second.text);
       assert.notEqual(second.body.tenantId, owner.tenantId);
+      assert.equal((await h.http('GET', '/api/v1/lite/settings', { token: second.body.token })).body.dunning.levels.length, 3, 'a further workspace gets the default levels too');
 
       const { id: clientId } = await h.liteApi(owner.token).clients.upsert({ client: newClient({ company: 'Nur in Firma A' }) as never });
       const inB = await h.http('GET', '/api/v1/lite/clients', { token: second.body.token });
@@ -280,6 +337,24 @@ describe('workspaces, team and password reset', () => {
       assert.equal(known.status, 202);
       assert.equal(mails.length, before + 1);
       assert.equal(mails.at(-1)!.to, owner.email);
+    });
+
+    test('without platform mail the answer says so, still the same for known and unknown addresses', async () => {
+      const silent = await startHostedServer('workspaces-nomail', {
+        setupToken: SETUP,
+        platformMailer: Object.assign(async () => ({ sent: false, error: 'Platform mail is not configured' }), { configured: false }),
+      });
+      try {
+        const email = uniqueEmail('nomail');
+        assert.equal((await silent.http('POST', '/api/v1/auth/signup?product=lite', { body: { email, password: PASSWORD, fullName: 'N', workspaceName: 'N', setupToken: SETUP } })).status, 200);
+        const known = await silent.http('POST', '/api/v1/auth/password-reset?product=lite', { body: { email } });
+        const unknown = await silent.http('POST', '/api/v1/auth/password-reset?product=lite', { body: { email: uniqueEmail('nobody') } });
+        assert.deepEqual([known.status, known.text], [unknown.status, unknown.text]);
+        assert.deepEqual([known.status, known.body], [202, { ok: true, mailConfigured: false }]);
+      } finally {
+        await silent.close();
+      }
+      assert.deepEqual((await h.http('POST', '/api/v1/auth/password-reset?product=lite', { body: { email: uniqueEmail('nobody') } })).body, { ok: true, mailConfigured: true });
     });
 
     test('the link sets a new password once, voids the old one and lifts a lockout', async () => {

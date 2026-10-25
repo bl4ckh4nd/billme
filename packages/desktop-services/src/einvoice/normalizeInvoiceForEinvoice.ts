@@ -55,6 +55,8 @@ export type NormalizedEinvoice = {
     taxCategoryCode: 'S' | 'E' | 'AE' | 'O' | 'K' | 'G';
     taxExemptionReason?: string;
     lineKind: 'item' | 'time' | 'optional';
+    /** BG-27 line allowance: the position's own discount (BT-136 amount, BT-139 reason). */
+    allowance?: { amount: number; reason: string };
   }>;
   allowances?: Array<Pick<NormalizedEinvoice['lines'][number], 'taxRate' | 'taxCategoryCode' | 'taxExemptionReason'> & {
     amount: number;
@@ -116,11 +118,17 @@ const normalizeBuyerAddress = (invoice: Invoice): NormalizedAddress => {
 
   const lines = (invoice.clientAddress ?? '')
     .split('\n')
+    // A client address is often typed in one line: "Straße 1, 12345 Ort".
+    .flatMap((v) => v.split(','))
     .map((v) => v.trim())
     // The editor puts the primary contact as "z. Hd. …" above the street.
     .filter((v) => Boolean(v) && !/^z\.\s?Hd\./i.test(v));
-  const street = lines[0] ?? '';
-  const cityLine = lines[1] ?? '';
+  // The company name may lead the block (generated invoices print it above the street).
+  const company = (invoice.client || '').trim();
+  const addressLines = company && lines[0] === company ? lines.slice(1) : lines;
+  const cityIndex = addressLines.findIndex((v, index) => index > 0 && /^\d{4,6}\s+\S/.test(v));
+  const street = addressLines[0] ?? '';
+  const cityLine = addressLines[cityIndex >= 0 ? cityIndex : 1] ?? '';
   const parsed = parseAddressFromLine(cityLine);
   return {
     name: (invoice.client || '').trim(),
@@ -156,7 +164,10 @@ const normalizeSellerAddress = (settings: AppSettings): NormalizedEinvoice['sell
 
 const assertRequired = (label: string, value: string) => {
   if (!value.trim()) {
-    throw new Error(`ZUGFeRD Export fehlgeschlagen: Pflichtfeld "${label}" fehlt.`);
+    const hint = label.startsWith('Käufer')
+      ? ' Bitte die Kundenadresse mit Straße, PLZ und Ort ergänzen (z. B. „Musterstraße 1, 12345 Musterstadt“). Ein normales PDF ohne E-Rechnung erhalten Sie, wenn Sie ZUGFeRD unter Einstellungen › Rechtliches ausschalten.'
+      : '';
+    throw new Error(`ZUGFeRD Export fehlgeschlagen: Pflichtfeld "${label}" fehlt.${hint}`);
   }
 };
 
@@ -203,7 +214,13 @@ export const normalizeInvoiceForEinvoice = (
     const optional = isOptionalLine(item);
     const quantity = toAmount(item.quantity) || 1;
     const netLineTotal = optional ? 0 : round2(getBillingLineAmount(item));
-    const netUnitPrice = round2(quantity === 0 ? 0 : netLineTotal / quantity);
+    // A position discount is a line allowance (BG-27): the unit price stays the agreed price.
+    const discountPercent = Math.min(100, Math.max(0, toAmount(item.discountPercent)));
+    const discountAmount = Math.max(0, toAmount(item.discountAmount));
+    const price = toAmount(item.price);
+    const discounted = !optional && price > 0 && netLineTotal >= 0 && (discountPercent > 0 || discountAmount > 0);
+    const allowanceAmount = discounted ? round2(round2(quantity * round2(price)) - netLineTotal) : 0;
+    const netUnitPrice = discounted && allowanceAmount >= 0 ? round2(price) : round2(quantity === 0 ? 0 : netLineTotal / quantity);
     const taxRate = isZeroVatMode ? 0 : item.taxRate ?? (invoice.taxMeta?.defaultVatRate ?? defaultTaxRate);
     return {
       lineId: String(idx + 1),
@@ -216,6 +233,9 @@ export const normalizeInvoiceForEinvoice = (
       taxCategoryCode: definition.einvoiceCategoryCode,
       taxExemptionReason,
       lineKind: (optional ? 'optional' : item.kind === 'time' ? 'time' : 'item') as 'item' | 'time' | 'optional',
+      ...(discounted && allowanceAmount > 0
+        ? { allowance: { amount: allowanceAmount, reason: discountPercent > 0 ? `Rabatt ${String(discountPercent).replace('.', ',')} %` : 'Rabatt' } }
+        : {}),
     };
   });
 

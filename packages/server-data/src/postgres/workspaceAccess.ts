@@ -149,10 +149,32 @@ const ownerCount = async (session: ServerDatabaseSession, tenantId: string): Pro
   )).rows[0]!.n);
 
 export const createWorkspaceAccess = (database: ServerDatabase, options: { initialSettingsJson: string }) => ({
-  /** A new person and their first workspace in one step. */
+  /**
+   * A new person and their first workspace in one step. An existing account
+   * (e.g. Lite only, at the Pro set-up screen) adds the workspace with its own
+   * password; wrong guesses count against the address like failed logins.
+   */
   async signUp(input: { email: string; password: string; fullName: string; workspaceName: string; product: ServerProduct }): Promise<WorkspacePrincipal> {
+    const email = normalizeEmailAddress(input.email);
+    const existing = await findUserByEmail(database, email);
+    if (existing) {
+      const attempts = await database.query<{ attempt_count: number }>(`
+        INSERT INTO login_attempts (product, email, attempt_count, window_started_at) VALUES ($1,$2,1,$3)
+        ON CONFLICT (product,email) DO UPDATE SET
+          attempt_count = CASE WHEN login_attempts.window_started_at <= $3::bigint - 900000 THEN 1 ELSE login_attempts.attempt_count + 1 END,
+          window_started_at = CASE WHEN login_attempts.window_started_at <= $3::bigint - 900000 THEN $3::bigint ELSE login_attempts.window_started_at END
+        RETURNING attempt_count`, [input.product, email, Date.now()]);
+      if (Number(attempts.rows[0]!.attempt_count) > 5) fail(429, 'Zu viele Anmeldeversuche. Bitte in 15 Minuten erneut versuchen.');
+      if (existing.status !== 'active' || !passwordMatches(input.password, existing.password_salt, existing.password_hash)) {
+        fail(409, 'A user with this email already exists');
+      }
+      await database.query('DELETE FROM login_attempts WHERE product = $1 AND email = $2', [input.product, email]);
+      return database.transaction({}, async (session) => {
+        const tenantId = await insertWorkspace(session, { name: input.workspaceName.trim(), product: input.product, ownerUserId: existing.id, initialSettingsJson: options.initialSettingsJson, now: new Date().toISOString() });
+        return principal(tenantId, input.product, 'owner', await userOf(session, existing.id));
+      });
+    }
     return database.transaction({ isolation: 'serializable' }, async (session) => {
-      const email = normalizeEmailAddress(input.email);
       if (await findUserByEmail(session, email)) {
         fail(409, 'A user with this email already exists');
       }

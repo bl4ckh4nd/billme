@@ -30,6 +30,10 @@ export const createRendererQueryClient = (): QueryClient =>
 // render or clear the shared globals; an older one clearing billmeApi would drop
 // the renderer onto the mock fallback while the newer app is still showing.
 let latestMountId = 0;
+// The browser shell remounts from its own effect cleanup (workspace switch, new
+// session). Unmounting a root synchronously there is a React error, so the old
+// root goes after the current render, and the next mount waits for that.
+let pendingUnmount: Promise<void> = Promise.resolve();
 
 export type RendererMountOptions = { api?: BillmeApi | ProBillmeApi; runtime?: DesktopRendererRuntime; signal?: AbortSignal };
 
@@ -47,6 +51,7 @@ export const mountRendererApp = async (
   };
 
   const { default: App } = await loadApp();
+  await pendingUnmount;
   if (mountId !== latestMountId || options?.signal?.aborted) {
     return () => {};
   }
@@ -63,7 +68,7 @@ export const mountRendererApp = async (
   );
 
   return () => {
-    root.unmount();
+    pendingUnmount = new Promise((resolve) => setTimeout(() => { root.unmount(); resolve(); }, 0));
     if (mountId !== latestMountId) return;
     if (options?.api && runtime.billmeApi === options.api) {
       delete runtime.billmeApi;

@@ -1,6 +1,7 @@
 import { expect, test } from '@playwright/test';
 import {
   appUrl,
+  invokeDesktopIpc,
   createDesktopSettings,
   launchDesktopApp,
   seedDesktopData,
@@ -73,4 +74,33 @@ test('reports a failed credential save and keeps it available for retry', async 
   await expect(page.getByText(/Zugangsdaten konnten nicht gespeichert werden/)).toBeVisible();
   await expect(page.getByText('Einstellungen gespeichert!')).toHaveCount(0);
   await expect(page.getByLabel('Passwort', { exact: true })).toHaveValue('synthetic-e2e-password');
+});
+
+test('overview offers a way to create a bank account when none exists', async () => {
+  const { page, baseUrl } = desktop;
+  await page.goto(appUrl(baseUrl, '/'));
+  for (const account of await invokeDesktopIpc(page, 'accounts:list')) {
+    await invokeDesktopIpc(page, 'accounts:delete', { id: account.id });
+  }
+  await page.reload();
+  await expect(page.getByText('Noch kein Konto angelegt')).toBeVisible();
+  await page.getByRole('button', { name: 'Bankkonto anlegen' }).click();
+  await expect(page).toHaveURL(/\/accounts/);
+});
+
+test('open onboarding leaves the overview tiles in an empty state and the title bar uncovered', async () => {
+  const { page, baseUrl } = desktop;
+  await setDesktopSettings(page, createDesktopSettings({ onboardingCompleted: false, company: { name: '' } }));
+  await page.goto(appUrl(baseUrl, '/'));
+  await page.reload();
+  await expect(page.getByRole('heading', { name: 'Billme einrichten' })).toBeVisible();
+  await expect(page.getByText('Wird geladen', { exact: true })).toHaveCount(0);
+  await expect(page.getByText('Nach der Einrichtung verfügbar')).toHaveCount(2);
+  const titlebarCovered = await page.evaluate(() => {
+    const bar = document.querySelector('.drag-region');
+    const r = bar.getBoundingClientRect();
+    const hit = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+    return !bar.contains(hit);
+  });
+  expect(titlebarCovered).toBe(false);
 });

@@ -513,6 +513,19 @@ test('multipart offer publish stores PDF and serves it via /d/:id/pdf and legacy
   assert.equal(legacyPdfRes.headers.get('x-frame-options'), 'SAMEORIGIN');
 });
 
+test('decision page has no inline handlers and serves its script from the same origin', async () => {
+  const app = setup({ publishApiKey: API_KEY, publicBaseUrl: 'https://offers.example.test', requirePublishApiKey: true });
+  const { documentUrl } = await publishOfferAndGetDocument(app);
+  const page = await app.request(`${documentUrl}?view=1`, { headers: { accept: 'text/html' } });
+  const html = await page.text();
+  assert.match(html, /<form[^>]*data-submit-once/);
+  assert.doesNotMatch(html, /\son(submit|click)=/i);
+  assert.match(html, /<script src="\/portal-form\.js"/);
+  const script = await app.request('/portal-form.js');
+  assert.equal(script.status, 200);
+  assert.match(script.headers.get('content-type') ?? '', /javascript/);
+});
+
 test('first offer decision wins (second decision attempt does not overwrite)', async () => {
   const app = setup({
     publishApiKey: API_KEY,

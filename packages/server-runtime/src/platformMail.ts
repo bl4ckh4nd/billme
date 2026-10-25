@@ -13,13 +13,14 @@ export interface PlatformMail {
   readonly idempotencyKey: string;
 }
 
-export type PlatformMailer = (mail: PlatformMail) => Promise<{ sent: boolean; error?: string }>;
+/** `configured: false` when no mail can go out at all; a mailer without the flag counts as configured. */
+export type PlatformMailer = ((mail: PlatformMail) => Promise<{ sent: boolean; error?: string }>) & { readonly configured?: boolean };
 
 export const createPlatformMailer = (env: NodeJS.ProcessEnv = process.env): PlatformMailer => {
   const apiKey = env.USESEND_API_KEY?.trim();
   const from = env.BILLME_MAIL_FROM?.trim();
   const baseUrl = (env.USESEND_BASE_URL?.trim() || 'https://usesend.mnemonicc.com').replace(/\/+$/, '');
-  return async (mail) => {
+  return Object.assign(async (mail: PlatformMail) => {
     if (!apiKey || !from) return { sent: false, error: 'Platform mail is not configured' };
     try {
       const response = await fetch(`${baseUrl}/api/v1/emails`, {
@@ -33,7 +34,7 @@ export const createPlatformMailer = (env: NodeJS.ProcessEnv = process.env): Plat
     } catch (error) {
       return { sent: false, error: error instanceof Error ? error.message : String(error) };
     }
-  };
+  }, { configured: Boolean(apiKey && from) });
 };
 
 const escapeHtml = (value: string): string =>

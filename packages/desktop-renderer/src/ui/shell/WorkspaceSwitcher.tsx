@@ -1,7 +1,7 @@
 import React from 'react';
 import { ChevronsUpDown, Plus } from 'lucide-react';
 import { Button, Input, Menu, Modal, cn } from '@billme/ui';
-import type { RendererProduct, RendererWorkspaces } from '../../runtime-api';
+import { READ_ONLY_HINT, canMutate, type RendererProduct, type RendererWorkspaces } from '../../runtime-api';
 
 const PRODUCT_NAME: Record<RendererProduct, string> = { lite: 'Billme Lite', pro: 'Billme Pro' };
 
@@ -56,6 +56,7 @@ export const WorkspaceSwitcher: React.FC<{
           </button>
         )}
       />
+      {canMutate() ? null : <p className="px-1 text-micro text-muted">{READ_ONLY_HINT}</p>}
       {error ? <p role="alert" className="text-micro text-error-text">{error}</p> : null}
       <CreateWorkspaceDialog open={creating} onClose={() => setCreating(false)} workspaces={workspaces} product={product} />
     </>

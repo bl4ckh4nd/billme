@@ -158,6 +158,8 @@ export const productAppsSchema = z.object({ lite: z.string().optional(), pro: z.
 export const workspaceListSchema = z.array(workspaceSummarySchema);
 export const sessionTenantSchema = z.object({ tenantId: z.string(), user: authUserSchema }).passthrough();
 export const okResultSchema = z.object({ ok: z.literal(true) });
+/** `mailConfigured` describes the server, never the address, so known and unknown addresses get the same answer. */
+export const passwordResetRequestResultSchema = z.object({ ok: z.literal(true), mailConfigured: z.boolean().optional() });
 
 export const deviceLoginStartRequestSchema = z.object({
   product: serverProductSchema,

@@ -84,6 +84,18 @@ const PORTAL_SHELL_MAX_WIDTH_PX = 980;
 
 const PORTAL_CSP_BASE =
   "default-src 'self'; style-src 'unsafe-inline'; img-src 'self' data:; base-uri 'none'; frame-ancestors 'none'";
+/** Served as a file because the CSP forbids inline handlers: disables decision buttons after the first submit. */
+const PORTAL_FORM_SCRIPT = `document.addEventListener('submit', (event) => {
+  const form = event.target;
+  if (!(form instanceof HTMLFormElement) || !form.hasAttribute('data-submit-once')) return;
+  setTimeout(() => {
+    for (const control of form.querySelectorAll('button')) {
+      control.disabled = true;
+      control.textContent = 'Wird gesendet …';
+    }
+  }, 0);
+});
+`;
 const PORTAL_CSP_WITH_FORM =
   "default-src 'self'; style-src 'unsafe-inline'; img-src 'self' data:; frame-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'";
 
@@ -105,6 +117,7 @@ const renderPortalPage = (options: {
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta http-equiv="Content-Security-Policy" content="${options.contentSecurityPolicy}" />
     <title>${escapeHtml(options.title)}</title>
+    ${options.contentSecurityPolicy === PORTAL_CSP_WITH_FORM ? '<script src="/portal-form.js" defer></script>' : ''}
     <style>
       :root { color-scheme: light; }
       *, *::before, *::after { box-sizing: border-box; }
@@ -563,6 +576,15 @@ export const createApp = (deps: { store: OfferStore; pdf: PdfStore; config: Port
   };
 
   app.get('/health', (c) => c.json({ ok: true, ts: nowIso() }));
+  // Lets the publisher's connection test check its key without publishing anything.
+  app.get('/publish/check', (c) => {
+    const auth = checkPublishAuth(deps.config, c);
+    if (!auth.ok) {
+      c.header('WWW-Authenticate', 'ApiKey realm="publish"');
+      return c.json({ error: auth.error ?? 'unauthorized' }, auth.status ?? 401);
+    }
+    return c.json({ ok: true });
+  });
 
   app.get('/', (c) => {
     applySensitiveResponseHeaders(c);
@@ -929,6 +951,12 @@ ${nextLink}`,
     );
   });
 
+  app.get('/portal-form.js', (c) => {
+    c.header('content-type', 'text/javascript; charset=utf-8');
+    c.header('cache-control', 'public, max-age=3600');
+    return c.body(PORTAL_FORM_SCRIPT);
+  });
+
   app.get('/d/:documentId', async (c) => {
     applySensitiveResponseHeaders(c);
     const accept = c.req.header('accept') ?? '';
@@ -1000,7 +1028,7 @@ ${nextLink}`,
   <div style="margin-top:.25rem; color:${PORTAL_TOKENS.muted}; font-size:.875rem;">Bestätigt von ${escapeHtml(rec.decision.acceptedName)} am ${escapeHtml(formatDateTimeDe(rec.decision.decidedAt))}</div>
 </div>`
           : offerCanBeDecided
-            ? `<form method="post" action="/d/${encodeURIComponent(rec.documentId)}/decision" style="margin-top:1rem; padding:1rem; border:1px solid ${PORTAL_TOKENS.border}; border-radius:${PORTAL_TOKENS.radiusMd};" onsubmit="for (const control of this.querySelectorAll('button')) { control.disabled = true; if (control.dataset.label) continue; control.dataset.label = control.textContent || ''; control.textContent = 'Wird gesendet …'; } return true;">
+            ? `<form method="post" action="/d/${encodeURIComponent(rec.documentId)}/decision" style="margin-top:1rem; padding:1rem; border:1px solid ${PORTAL_TOKENS.border}; border-radius:${PORTAL_TOKENS.radiusMd};" data-submit-once>
   <div style="display:flex; gap:.75rem; flex-wrap:wrap;">
     <div style="flex:1; min-width:11rem;">
       <label for="acceptedName" style="${PORTAL_LABEL_STYLE}">Name (Pflicht)</label>
@@ -1225,7 +1253,7 @@ ${pdfSection}`,
     const actionForm =
       expired || decision
         ? ''
-        : `<form method="post" action="/offers/${encodeURIComponent(token)}/decision" style="margin-top:1rem; padding:1rem; border:1px solid ${PORTAL_TOKENS.border}; border-radius:${PORTAL_TOKENS.radiusMd};" onsubmit="for (const control of this.querySelectorAll('button')) { control.disabled = true; if (control.dataset.label) continue; control.dataset.label = control.textContent || ''; control.textContent = 'Wird gesendet …'; } return true;">
+        : `<form method="post" action="/offers/${encodeURIComponent(token)}/decision" style="margin-top:1rem; padding:1rem; border:1px solid ${PORTAL_TOKENS.border}; border-radius:${PORTAL_TOKENS.radiusMd};" data-submit-once>
   <div style="display:flex; gap:.75rem; flex-wrap:wrap;">
     <div style="flex:1; min-width:13rem;">
       <label for="offerAcceptedName" style="${PORTAL_LABEL_STYLE}">Name (Pflicht)</label>

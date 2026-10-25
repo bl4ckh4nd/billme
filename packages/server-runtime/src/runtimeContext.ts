@@ -159,7 +159,10 @@ export const authorizeEmbeddedRequest = (
  * product-scope checks. Keeping this separate makes non-HTTP adapters (such
  * as oRPC and the worker) use the exact same role matrix and feedback.
  */
-export const requireMutationCapability = (session: AuthSession, message = 'Mutation requires owner, admin, or accountant role'): AuthSession => {
+/** Shown as it is in the browser and the CLI, so it is German and says what the role may do. */
+const ROLE_REFUSAL_MESSAGE = 'Dafür fehlt dir die Berechtigung: Mit Lesezugriff kannst du alles ansehen, aber nichts ändern. Änderungen machen Inhaber, Admins oder die Buchhaltung des Workspace.';
+
+export const requireMutationCapability = (session: AuthSession, message = ROLE_REFUSAL_MESSAGE): AuthSession => {
   const allowed: ServerRole[] = ['owner', 'admin', 'accountant'];
   if (!allowed.includes(session.role)) {
     throw new AuthorizationError('role_forbidden', message, 403);
@@ -206,16 +209,13 @@ export const requireSession = async (
 export const requireMutationSession = async (
   app: FastifyInstance,
   authHeader: string | undefined,
-): Promise<AuthSession> => requireMutationCapability(
-  await requireSession(app, 'pro', authHeader),
-  'Accounting mutation requires owner, admin, or accountant role',
-);
+): Promise<AuthSession> => requireMutationCapability(await requireSession(app, 'pro', authHeader));
 
 export const requireMutationSessionFor = async (
   app: FastifyInstance,
   product: Product,
   authHeader: string | undefined,
-  message = 'Mutation requires owner, admin, or accountant role',
+  message = ROLE_REFUSAL_MESSAGE,
 ): Promise<AuthSession> => {
   try {
     return requireMutationCapability(await requireSession(app, product, authHeader), message);

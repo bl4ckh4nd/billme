@@ -169,6 +169,19 @@ export const portalClient = {
     );
   },
 
+  /** Whether the portal would take a publish with this key; 'unknown' for portals without the check route. */
+  checkPublishAccess: async (baseUrl: string, apiKey?: string | null): Promise<'ok' | 'rejected' | 'not_configured' | 'unknown'> => {
+    const res = await fetch(`${normalizeBaseUrl(baseUrl)}/publish/check`, {
+      method: 'GET',
+      headers: apiKey ? { 'x-api-key': apiKey } : {},
+      signal: AbortSignal.timeout(10_000),
+    }).catch((error: unknown) => { throw createPortalError(error); });
+    if (res.ok) return 'ok';
+    if (res.status === 401) return 'rejected';
+    if (res.status === 503) return 'not_configured';
+    return 'unknown';
+  },
+
   publishOffer: async (params: {
     baseUrl: string;
     apiKey?: string | null;

@@ -46,7 +46,7 @@ const toApiError = (error: unknown): never => {
 };
 
 const productMutationSession = async (app: FastifyInstance, product: 'lite' | 'pro', authHeader: string | undefined) => {
-  return requireMutationSessionFor(app, product, authHeader, 'Tax filing mutation requires owner, admin, or accountant role');
+  return requireMutationSessionFor(app, product, authHeader);
 };
 
 const databaseFor = (app: FastifyInstance): ServerDatabase => requireDatabase(app);

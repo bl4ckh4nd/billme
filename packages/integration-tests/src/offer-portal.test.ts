@@ -13,7 +13,7 @@ import { documentIdFromUrl, newToken, startPortal, type PortalHandle } from './o
  *
  * How this can fail (each one has a test below):
  * - publish auth: a missing, wrong or near-miss API key accepted on any of the
- *   four publish routes, strict mode without a configured key serving anyway,
+ *   four publish routes or the key check, strict mode without a configured key serving anyway,
  *   a rejected publish still storing something
  * - publish payloads: unknown content types, short or missing tokens, JSON and
  *   multipart disagreeing, default expiry (30 days offers, 365 invoices) wrong
@@ -21,6 +21,7 @@ import { documentIdFromUrl, newToken, startPortal, type PortalHandle } from './o
  *   ids), a guessed or truncated token resolving, short tokens crashing a route
  * - snapshots: stored snapshot differs from the published one, customer HTML
  *   not escaping snapshot text, missing no-store / frame / CSP headers
+ * - decision form: an inline handler the page's own CSP blocks, or the external form script missing
  * - decisions: a second decision overwriting the first, an expired offer still
  *   decidable, invoices decidable, foreign Origin / Host / missing CSRF accepted,
  *   fields not normalised, a re-publish wiping a recorded decision
@@ -164,6 +165,16 @@ const portalContract = (mode: 'sqlite' | 'memory') => describe(`${mode} store`, 
       assert.equal(asBearer.status, 401, 'the key is only accepted in x-api-key');
     });
 
+    test('the key check answers like a publish would, and only with the exact key', async () => {
+      for (const wrong of [undefined, 'wrong-key', portal.apiKey!.toUpperCase(), `${portal.apiKey}x`]) {
+        const response = await portal.request('GET', '/publish/check', wrong === undefined ? {} : { headers: { 'x-api-key': wrong } });
+        assert.equal(response.status, 401, `key "${wrong}"`);
+        assert.equal(response.headers['www-authenticate'], 'ApiKey realm="publish"');
+      }
+      const ok = await portal.request('GET', '/publish/check', { headers: { 'x-api-key': portal.apiKey! } });
+      assert.deepEqual([ok.status, ok.json], [200, { ok: true }]);
+    });
+
     test('a refused publish stores nothing, the right key does', async () => {
       const token = newToken('gate');
       const refused = await portal.request('POST', '/offers', { json: { token, snapshot: offerSnapshot() }, headers: { 'x-api-key': 'nope' } });
@@ -234,6 +245,17 @@ const portalContract = (mode: 'sqlite' | 'memory') => describe(`${mode} store`, 
       assert.equal(page.headers['referrer-policy'], 'same-origin');
       assert.match(page.text, /frame-ancestors 'none'/);
       assert.match(page.text, /default-src 'self'/);
+    });
+
+    test('the decision form works under its own CSP: no inline handler, the form script is served from the portal', async () => {
+      const page = await portal.request('GET', `/d/${await documentOf(await publishOffer(offerSnapshot()))}`, { headers: { accept: 'text/html' } });
+      assert.equal(page.status, 200);
+      assert.ok(!/\son(submit|click)=/i.test(page.text), 'default-src self blocks inline handlers');
+      assert.ok(page.text.includes('<script src="/portal-form.js" defer></script>'));
+      const script = await portal.request('GET', '/portal-form.js');
+      assert.equal(script.status, 200);
+      assert.match(String(script.headers['content-type']), /text\/javascript/);
+      assert.match(script.text, /data-submit-once/);
     });
 
     test('the document JSON mirrors the offer and hides nothing the customer needs', async () => {
@@ -851,6 +873,8 @@ describe('offer portal', () => {
         assert.equal(response.status, 503, path);
         assert.deepEqual(response.json, { error: 'publish_api_key_required' }, path);
       }
+      const check = await portal.request('GET', '/publish/check', { headers: { 'x-api-key': 'anything' } });
+      assert.deepEqual([check.status, check.json], [503, { error: 'publish_api_key_required' }], 'the key check reports the misconfiguration too');
       const setup = await portal.request('GET', '/admin/setup');
       assert.match(setup.text, /Fehlkonfiguration/);
     });

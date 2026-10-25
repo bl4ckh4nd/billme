@@ -5,6 +5,23 @@ type AnyInvoke = (key: never, args: never) => Promise<unknown>;
 const parseResult = <K extends IpcRouteKey>(key: K, value: unknown): IpcResult<K> =>
   ipcRoutes[key].result.parse(value) as IpcResult<K>;
 
+/** Object URLs of files this page downloaded, by file name, so "Öffnen" can show one again. */
+const downloadedFiles = new Map<string, string>();
+
+/** Saves a file through the browser and keeps it openable under its name (`shell:openPath`). */
+export const downloadInBrowser = (blob: Blob, fileName: string): void => {
+  const url = URL.createObjectURL(blob);
+  const previous = downloadedFiles.get(fileName);
+  if (previous) URL.revokeObjectURL(previous);
+  downloadedFiles.set(fileName, url);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = fileName;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+};
+
 /**
  * Browser answers for the Electron-only routes (window, shell, dialog, secrets,
  * updater). The HTTP adapters hand only those native routes to their fallback.
@@ -20,11 +37,17 @@ export const createBrowserNativeFallback = <TInvoke extends AnyInvoke>(
     switch (key) {
       case 'window:minimize':
       case 'window:setTheme':
-      case 'shell:openPath':
       case 'shell:openExportsDir':
       case 'updater:downloadUpdate':
       case 'updater:quitAndInstall':
         return parseResult(key, { ok: true as const });
+      case 'shell:openPath': {
+        const { path } = ipcRoutes[key].args.parse(rawArgs) as IpcArgs<'shell:openPath'>;
+        const url = downloadedFiles.get(path);
+        // Without a user gesture (after a slow render) the browser may block the tab; callers then offer a button.
+        if (url && !window.open(url, '_blank')) throw new Error('Der Browser hat das Öffnen blockiert.');
+        return parseResult(key, { ok: true as const });
+      }
       case 'window:toggleMaximize':
         if (document.fullscreenElement) {
           await document.exitFullscreen().catch(() => undefined);

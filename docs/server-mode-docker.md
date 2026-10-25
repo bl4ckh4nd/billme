@@ -66,7 +66,18 @@ login screen ("Neuen Workspace anlegen", Lite or Pro); a signed-in person adds
 more from the workspace switcher in the sidebar and switches between them. Owners
 and admins invite people under Einstellungen → Team with a role; the link is
 mailed through useSend (`USESEND_API_KEY`, `BILLME_MAIL_FROM`) and shown for
-copying when mail is not configured. "Passwort vergessen?" mails a one-hour link.
+copying when mail is not configured. "Passwort vergessen?" mails a one-hour link;
+without useSend the form says that no mail can arrive. Someone who already has
+an account (e.g. for Lite) opens the other product's setup screen with the same
+email and their existing password plus the setup code, and the new workspace is
+added to that account.
+
+Workspace mail (offers, invoices, dunning) uses the provider, host, user and
+sender each workspace picks under Einstellungen → E-Mail; the secret comes from
+the server (`SMTP_PASSWORD` for `SMTP_HOST`, or `RESEND_API_KEY`). Publishing to
+the customer portal works from the web apps as on the desktop; the server sends
+`BILLME_PORTAL_PUBLISH_API_KEY` and "Verbindung testen" checks that the portal
+accepts it.
 The worker serves every active workspace. The server-wide `SMTP_PASSWORD` only
 goes to `SMTP_HOST`, the portal key only to `BILLME_PUBLIC_PORTAL_URL`.
 

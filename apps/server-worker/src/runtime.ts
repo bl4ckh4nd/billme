@@ -549,12 +549,12 @@ export class ServerWorkerRuntime {
     };
 
     if (settings.email.provider === 'none') {
-      throw new Error('Email provider not configured');
+      throw new Error('Kein E-Mail-Anbieter eingerichtet. Wähle SMTP oder Resend unter Einstellungen → E-Mail.');
     }
 
     if (settings.email.provider === 'smtp') {
       if (!this.env.smtpPassword) {
-        throw new Error('SMTP password not configured');
+        throw new Error('SMTP-Passwort fehlt. Der Betreiber hinterlegt den Wert am Server (SMTP_PASSWORD).');
       }
       assertPinnedEndpoint({ configured: settings.email.smtpHost, pinned: this.env.smtpHost, pinnedEnvName: 'SMTP_HOST', label: 'SMTP-Server' });
 
@@ -574,7 +574,7 @@ export class ServerWorkerRuntime {
     }
 
     if (!this.env.resendApiKey) {
-      throw new Error('Resend API key not configured');
+      throw new Error('Resend-API-Key fehlt. Der Betreiber hinterlegt den Wert am Server (RESEND_API_KEY).');
     }
 
     return {

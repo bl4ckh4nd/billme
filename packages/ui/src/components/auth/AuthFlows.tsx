@@ -110,13 +110,15 @@ export const InviteForm: React.FC<{
 
 export const ResetRequestForm: React.FC<{
   initialEmail?: string;
-  onRequest: (email: string) => Promise<void>;
+  /** Resolves `mailConfigured: false` when the server cannot send mail at all. */
+  onRequest: (email: string) => Promise<void | { mailConfigured?: boolean }>;
   onBack: () => void;
   describeError: (error: unknown) => string;
 }> = ({ initialEmail = '', onRequest, onBack, describeError }) => {
   const [email, setEmail] = React.useState(initialEmail);
   const [emailError, setEmailError] = React.useState<string>();
   const [sent, setSent] = React.useState(false);
+  const [noMail, setNoMail] = React.useState(false);
   const { error, busy, run } = useSubmit(describeError);
   return (
     <form
@@ -127,7 +129,7 @@ export const ResetRequestForm: React.FC<{
         const next = !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim()) ? 'Bitte gib deine E-Mail-Adresse ein.' : undefined;
         setEmailError(next);
         if (next) return;
-        void run(async () => { await onRequest(email.trim()); setSent(true); });
+        void run(async () => { const result = await onRequest(email.trim()); setNoMail(result?.mailConfigured === false); setSent(true); });
       }}
     >
       <div className="grid gap-1.5">
@@ -136,7 +138,11 @@ export const ResetRequestForm: React.FC<{
       </div>
       <FormAlert message={error} />
       {sent ? (
-        <FormNotice>Wenn es zu {email.trim()} ein Konto gibt, ist der Link unterwegs. Schau auch im Spam-Ordner nach.</FormNotice>
+        noMail ? (
+          <FormNotice>Auf diesem Server ist kein Mailversand eingerichtet, deshalb kommt keine Mail an. Wende dich an die Person, die Billme bei euch betreibt: Sie richtet den Mailversand ein (USESEND_API_KEY und BILLME_MAIL_FROM am Server).</FormNotice>
+        ) : (
+          <FormNotice>Wenn es zu {email.trim()} ein Konto gibt, ist der Link unterwegs. Schau auch im Spam-Ordner nach.</FormNotice>
+        )
       ) : (
         <>
           <Input label="E-Mail-Adresse" fullWidth type="email" autoComplete="email" inputMode="email" placeholder="name@firma.de"

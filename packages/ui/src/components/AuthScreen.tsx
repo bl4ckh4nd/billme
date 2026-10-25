@@ -43,7 +43,7 @@ export interface AuthScreenProps {
   /** Why a link is dead (mode `invalid-link`). */
   invalidLinkMessage?: string;
   onAcceptInvitation?: (input: { password: string; fullName?: string }) => Promise<void>;
-  onRequestReset?: (email: string) => Promise<void>;
+  onRequestReset?: (email: string) => Promise<void | { mailConfigured?: boolean }>;
   onConfirmReset?: (password: string) => Promise<void>;
   onModeChange?: (mode: AuthScreenMode) => void;
   initialCredentials?: Partial<AuthScreenCredentials>;
@@ -98,7 +98,7 @@ export const describeAuthError = (error: unknown): string => {
     return 'Billme ist bereits eingerichtet. Lade die Seite neu und melde dich mit deinem Konto an.';
   }
   if (/already exists/i.test(message)) {
-    return 'Für diese E-Mail-Adresse gibt es schon ein Konto. Melde dich an und lege den Workspace über den Workspace-Wechsler an.';
+    return 'Für diese E-Mail-Adresse gibt es schon ein Konto, das Passwort passt aber nicht dazu. Gib das Passwort dieses Kontos ein, dann wird der Workspace deinem Konto hinzugefügt.';
   }
   if (error instanceof TypeError || /failed to fetch|networkerror|load failed/i.test(message)) {
     return 'Der Server antwortet nicht. Prüfe deine Internetverbindung und versuche es erneut.';
@@ -410,7 +410,9 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
                   </div>
                 ) : isSignup ? (
                   <p className="text-sm text-muted">Schon ein Konto? <LinkButton onClick={backToLogin}>Anmelden</LinkButton></p>
-                ) : null}
+                ) : (
+                  <p className="text-sm text-muted">Du hast schon ein Billme-Konto, etwa für {BRAND[product === 'pro' ? 'lite' : 'pro'].name}? Gib dieselbe E-Mail-Adresse und dein bisheriges Passwort ein, dann wird dieser Workspace deinem Konto hinzugefügt.</p>
+                )}
               </form>
             )}
           </div>

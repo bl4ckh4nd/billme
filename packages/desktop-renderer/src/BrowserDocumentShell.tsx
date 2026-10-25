@@ -249,7 +249,7 @@ export function BrowserDocumentShell({ product, defaultApiUrl, sessionStorageKey
       setLink(null);
       await enter(result);
     }}
-    onRequestReset={async (email) => { await workspaceClient.requestPasswordReset(product, email); }}
+    onRequestReset={(email) => workspaceClient.requestPasswordReset(product, email)}
     onConfirmReset={async (password) => {
       await workspaceClient.confirmPasswordReset(link!.token, password);
       clearLink();

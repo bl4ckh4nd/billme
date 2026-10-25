@@ -57,6 +57,7 @@ compose service requires that value and always enables publish-key enforcement.
 ## Key endpoints
 
 - `GET /health`
+- `GET /publish/check` (needs the publish key; `200` when a publish with this key would be accepted, `401` otherwise)
 - `GET /admin/setup`
 - `POST /offers`
 - `GET /offers/:token`
@@ -71,7 +72,13 @@ compose service requires that value and always enables publish-key enforcement.
 - `POST /customers/access-links/rotate`
 - `GET /customers/:token/documents`
 
-## Desktop integration
+## Desktop and web integration
 
-- Desktop publishes snapshots (and optional PDFs) through portal API endpoints.
-- Customer decisions are synced back and persisted locally in the desktop app.
+- Desktop and the web apps publish snapshots (and optional PDFs) through the Billme API
+  (`POST /api/v1/{lite|pro}/portal/publish-offer`); the API calls the portal with the publish key.
+  On the desktop the key comes from Einstellungen → Portal (system keychain), on a hosted server from
+  `PORTAL_API_KEY` (compose: `BILLME_PORTAL_PUBLISH_API_KEY`), and only goes to `BILLME_PUBLIC_PORTAL_URL`.
+- "Verbindung testen" (Einstellungen → Portal) checks reachability and the key (`/publish/check`), so it
+  fails when publishing would fail.
+- Customer decisions come back through "Portal-Status synchronisieren" on the offer, and on a hosted
+  server also through the worker's `offer-portal-sync` job (`WORKER_PORTAL_SYNC_INTERVAL_MS`).

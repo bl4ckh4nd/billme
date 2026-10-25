@@ -1,6 +1,6 @@
 import { createProHttpBillmeApi, type ProHttpBillmeApi } from '@billme/desktop-services/proHttpApi';
 import type { IpcInvoke } from '@billme/desktop-contracts-pro/api';
-import { createBrowserNativeFallback } from '@billme/desktop-renderer/browser-native-fallback';
+import { createBrowserNativeFallback, downloadInBrowser } from '@billme/desktop-renderer/browser-native-fallback';
 
 export type ProWebApiOptions = {
   baseUrl: string;
@@ -12,5 +12,6 @@ export const createProWebBillmeApi = ({ baseUrl, token, onRequestClose }: ProWeb
   createProHttpBillmeApi({
     baseUrl,
     getToken: () => token,
+    downloadBlob: downloadInBrowser,
     fallback: createBrowserNativeFallback<IpcInvoke>('Billme Pro', onRequestClose),
   });

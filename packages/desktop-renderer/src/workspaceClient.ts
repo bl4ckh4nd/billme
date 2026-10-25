@@ -1,6 +1,7 @@
 import {
   invitationPreviewSchema,
   okResultSchema,
+  passwordResetRequestResultSchema,
   productAppsSchema,
   sessionTenantSchema,
   workspaceListSchema,
@@ -51,7 +52,7 @@ export const createWorkspaceClient = (apiUrl: string) => {
     acceptInvitation: (token: string, input: { password: string; fullName?: string }) =>
       request('POST', `/api/v1/auth/invitations/${encodeURIComponent(token)}/accept`, workspaceSessionSchema, { body: input }),
     requestPasswordReset: (product: ServerProduct, email: string) =>
-      request('POST', `/api/v1/auth/password-reset?product=${product}`, okResultSchema, { body: { email } }),
+      request('POST', `/api/v1/auth/password-reset?product=${product}`, passwordResetRequestResultSchema, { body: { email } }),
     confirmPasswordReset: (token: string, password: string) =>
       request('POST', '/api/v1/auth/password-reset/confirm', okResultSchema, { body: { token, password } }),
   };

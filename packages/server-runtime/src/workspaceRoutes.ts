@@ -3,6 +3,7 @@ import { z } from 'zod';
 import {
   authUserSchema,
   createSingleTenantScope,
+  passwordResetRequestResultSchema,
   serverProductSchema,
   serverRoleSchema,
   teamInviteResultSchema,
@@ -197,7 +198,7 @@ export const registerWorkspaceRoutes = (app: FastifyInstance, options: Workspace
     url: '/api/v1/auth/password-reset',
     query: productQuerySchema,
     body: z.object({ email: z.string().email() }),
-    response: okSchema,
+    response: passwordResetRequestResultSchema,
     async handler({ request, query, body, reply }) {
       limitFor(request, 'password-reset');
       const reset = await access().requestPasswordReset(body.email);
@@ -215,7 +216,7 @@ export const registerWorkspaceRoutes = (app: FastifyInstance, options: Workspace
         if (!result.sent) app.log.warn({ error: result.error }, 'Password reset mail was not sent');
       }
       reply.code(202);
-      return { ok: true as const };
+      return { ok: true as const, mailConfigured: options.mailer.configured !== false };
     },
   });
 

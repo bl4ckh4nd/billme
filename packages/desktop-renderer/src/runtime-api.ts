@@ -39,6 +39,19 @@ const getExternalApi = (): RendererApi | undefined =>
 export const getRendererRuntime = (): RendererRuntime =>
   (globalThis as { billmeRuntime?: RendererRuntime }).billmeRuntime ?? {};
 
+/**
+ * Mirrors the server's mutation rule (owner, admin and accountant change data;
+ * sales and viewer only read). The desktop has no workspaces and always may.
+ */
+export const canMutate = (): boolean => {
+  const workspaces = getRendererRuntime().workspaces;
+  const role = workspaces?.list.find((workspace) => workspace.tenantId === workspaces.currentTenantId)?.role;
+  return !role || role === 'owner' || role === 'admin' || role === 'accountant';
+};
+
+/** Tooltip and hint for actions a read-only role cannot use. */
+export const READ_ONLY_HINT = 'Nur Lesezugriff: Du kannst ansehen, aber nichts ändern.';
+
 export const getRendererProduct = (): RendererProduct =>
   (globalThis as { billmeRuntime?: RendererRuntime }).billmeRuntime?.product ?? fallbackProduct;
 

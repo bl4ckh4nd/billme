@@ -845,6 +845,7 @@ export const createProWebClient = (config: ProWebClientConfig) => {
       fiscalYearStart: string;
       accountLength: number;
       encoding: 'cp1252' | 'utf8-bom';
+      kind?: 'journal' | 'opening_balances' | 'parties';
       reason?: string;
     }) {
       return requestBlobWithHeaders('/api/v1/pro/accounting/datev/export.csv', query).then(({ blob, headers }) => ({
@@ -853,6 +854,11 @@ export const createProWebClient = (config: ProWebClientConfig) => {
         contentSha256: headers.get('x-billme-datev-content-sha256') ?? undefined,
         recordCount: Number(headers.get('x-billme-datev-record-count') ?? 0),
       }));
+    },
+    exportProcedureDocumentation() {
+      // content-disposition is not an exposed CORS header, so the name is built here from the local day.
+      const day = new Date(Date.now() - new Date().getTimezoneOffset() * 60_000).toISOString().slice(0, 10);
+      return requestBlobWithHeaders('/api/v1/pro/tax/procedure-documentation').then(({ blob }) => ({ blob, fileName: `Verfahrensdokumentation_${day}.md` }));
     },
     listDatevExports(limit?: number) {
       return requestJson({ parser: parseArray(datevExportResultSchema) }, '/api/v1/pro/accounting/datev/exports').then((rows) => (limit ? rows.slice(0, limit) : rows).map((row) => (
@@ -1548,6 +1554,11 @@ export const createProHttpBillmeApi = ({ fallback, onInvoke, downloadBlob, ...cl
           const result = await client.disposeAsset(parsedArgs);
           return ipcRoutes[key].result.parse(result) as IpcResult<K>;
         }
+        case 'pro:exportProcedureDocumentation': {
+          const exported = await client.exportProcedureDocumentation();
+          (downloadBlob ?? downloadBlobInBrowser)(exported.blob, exported.fileName);
+          return { fileName: exported.fileName } as IpcResult<K>;
+        }
         case 'pro:exportDatevBuchungsstapel': {
           const parsedArgs = ipcRoutes[key].args.parse(args) as IpcArgs<'pro:exportDatevBuchungsstapel'>;
           if (!parsedArgs.from || !parsedArgs.to || parsedArgs.consultantNumber === undefined || parsedArgs.clientNumber === undefined || !parsedArgs.fiscalYearStart || parsedArgs.accountLength === undefined) {
@@ -1561,7 +1572,8 @@ export const createProHttpBillmeApi = ({ fallback, onInvoke, downloadBlob, ...cl
             fiscalYearStart: parsedArgs.fiscalYearStart,
             accountLength: parsedArgs.accountLength,
             encoding: parsedArgs.encoding ?? 'cp1252',
-            reason: 'DATEV-Buchungsstapel exportiert',
+            kind: parsedArgs.kind ?? 'journal',
+            reason: parsedArgs.kind === 'opening_balances' ? 'DATEV-Eröffnungsbilanzwerte exportiert' : parsedArgs.kind === 'parties' ? 'DATEV-Stammdaten Debitoren/Kreditoren exportiert' : 'DATEV-Buchungsstapel exportiert',
           });
           if (!exported.exportId) throw new Error('DATEV-Export ohne Serverbeleg-ID.');
           const history = await client.listDatevExports();
@@ -1569,7 +1581,7 @@ export const createProHttpBillmeApi = ({ fallback, onInvoke, downloadBlob, ...cl
           if (!receipt) throw new Error('DATEV-Export wurde nicht in der Serverhistorie gefunden.');
           const parsedReceipt = ipcRoutes[key].result.parse(receipt) as IpcResult<K>;
           await validateDatevExportReceipt(exported, parsedReceipt as DatevExportReceiptMetadata);
-          (downloadBlob ?? downloadBlobInBrowser)(exported.blob, `EXTF_Buchungsstapel_${parsedArgs.from}_${parsedArgs.to}.csv`);
+          (downloadBlob ?? downloadBlobInBrowser)(exported.blob, parsedArgs.kind === 'parties' ? `EXTF_Debitoren-Kreditoren_${parsedArgs.to}.csv` : `EXTF_${parsedArgs.kind === 'opening_balances' ? 'EB-Werte' : 'Buchungsstapel'}_${parsedArgs.from}_${parsedArgs.to}.csv`);
           return parsedReceipt;
         }
         case 'pro:listDatevExports': {

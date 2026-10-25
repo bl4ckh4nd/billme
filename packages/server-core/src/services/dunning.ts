@@ -6,7 +6,7 @@ import type {
   InvoiceDunningStatus,
 } from '../domain/dunning.js';
 import { isInvoiceOverdue, localIsoDate } from '../domain/dunning.js';
-import { dunningLevelFee } from '../domain/dunningDocument.js';
+import { buildDunningDocumentContext, dunningLevelFee } from '../domain/dunningDocument.js';
 import type { DunningDeliveryPort } from '../dunningDelivery.js';
 import type { Invoice, TenantScope } from '../domain/foundations.js';
 import { systemClock, type AuditActor, type AuditLogPort, type Clock, type DunningEmailPort, type DunningHistoryRepository, type DunningSecretPort, type DunningSettingsRepository, type InvoiceRepository } from '../ports/index.js';
@@ -270,7 +270,8 @@ export const processDunningRun = async <TSettings extends DunningSettings>(
       }
 
       if (dependencies.delivery) {
-        const feesBefore = (await dependencies.dunningHistoryRepo.listByInvoice(scope, invoice.id)).reduce((sum, entry) => sum + entry.feeApplied, 0);
+        const historyBefore = await dependencies.dunningHistoryRepo.listByInvoice(scope, invoice.id);
+        const feesBefore = historyBefore.reduce((sum, entry) => sum + entry.feeApplied, 0);
         const claimed = await dependencies.delivery.claim(scope, invoice.id, { ...applicableLevel, fee: dunningLevelFee(applicableLevel, invoice, feesBefore) });
         if (!claimed) continue;
         deliveryId = claimed.delivery.id;
@@ -285,8 +286,11 @@ export const processDunningRun = async <TSettings extends DunningSettings>(
           ...(attachment ? { attachments: [attachment] } : {}),
         });
         const emailLog = await dependencies.emailPort.log(scope, { documentType: 'invoice', documentId: invoice.id, documentNumber: claimed.invoice.number, recipientEmail: claimed.invoice.clientEmail, recipientName: claimed.invoice.client, subject, bodyText, provider: providerConfig.provider, status: emailResult.success ? 'sent' : 'failed', errorMessage: emailResult.error, sentAt: runStartedAt });
+        // The letter claims interest from the due date up to its own day, so only the increase over what earlier letters claimed is new.
+        const letterInterest = buildDunningDocumentContext({ invoice: claimed.invoice, level: applicableLevel.id, levels: settings.dunning.levels, history: historyBefore.filter((entry) => entry.dunningLevel !== applicableLevel.id), credited: credited(invoice.id), baseInterestRatePercent: settings.dunning.baseInterestRatePercent, today: runStartedDate }).interest ?? 0;
+        const interestApplied = Math.max(0, Math.round((letterInterest - historyBefore.reduce((sum, entry) => sum + (entry.interestApplied ?? 0), 0)) * 100) / 100);
         if (!emailResult.success) throw new Error(`Versandantwort unklar: ${emailResult.error ?? 'Keine Bestätigung'}. Bitte beim E-Mail-Anbieter abgleichen.`);
-        result.feesApplied += await dependencies.delivery.finish(scope, deliveryId, { invoiceId: invoice.id, invoiceNumber: claimed.invoice.number, dunningLevel: applicableLevel.id, daysOverdue, feeApplied: 0, emailSent: true, emailLogId: emailLog.id, processedAt: runStartedAt }, { actor, reason: `Mahnstufe ${applicableLevel.id} vom Anbieter angenommen` });
+        result.feesApplied += await dependencies.delivery.finish(scope, deliveryId, { invoiceId: invoice.id, invoiceNumber: claimed.invoice.number, dunningLevel: applicableLevel.id, daysOverdue, feeApplied: 0, ...(interestApplied > 0 ? { interestApplied } : {}), emailSent: true, emailLogId: emailLog.id, processedAt: runStartedAt }, { actor, reason: `Mahnstufe ${applicableLevel.id} vom Anbieter angenommen` });
         result.emailsSent += 1; result.processedInvoices += 1;
         continue;
       }

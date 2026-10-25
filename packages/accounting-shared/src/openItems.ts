@@ -4,7 +4,7 @@ export type OpenItemPartyType = 'debtor' | 'creditor';
 export type OpenItemStatus = 'open' | 'partially_paid' | 'paid' | 'overpaid' | 'unresolved';
 export type AccountingDocumentSource = 'outgoing_invoice' | 'incoming_invoice' | 'legacy_transaction' | 'correction';
 /** Open item sources: documents, `payment` for the surplus of a payment (the partner's credit), `dunning_fee` for a Mahngebühr. */
-export type OpenItemSource = AccountingDocumentSource | 'payment' | 'dunning_fee';
+export type OpenItemSource = AccountingDocumentSource | 'payment' | 'dunning_fee' | 'dunning_interest';
 
 /** Caller supplied audit context for a server-side accounting mutation. */
 export interface AccountingMutationContext {
@@ -43,6 +43,8 @@ export interface IncomingInvoiceLineEntity {
   grossAmount: number;
   accountNumber?: string;
   assetAccountNumber?: string;
+  /** false: the VAT is not deductible (§ 15 Abs. 1a UStG) and is booked with the expense. */
+  inputVatDeductible?: boolean;
 }
 
 export interface IncomingInvoiceTaxMeta {

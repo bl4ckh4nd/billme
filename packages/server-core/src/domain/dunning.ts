@@ -52,6 +52,8 @@ export const dunningHistoryEntrySchema = z.object({
   dunningLevel: z.number().int().nonnegative(),
   daysOverdue: z.number().int().nonnegative(),
   feeApplied: z.number(),
+  /** Verzugszinsen this letter added on top of those of earlier letters. */
+  interestApplied: z.number().nonnegative().optional(),
   emailSent: z.boolean(),
   emailLogId: entityIdSchema.optional(),
   processedAt: isoDateTimeSchema,

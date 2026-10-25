@@ -1770,11 +1770,23 @@ describe('pro accounting: setup and posting of issued invoices', () => {
       assert.deepEqual(entry.lines.slice(0, 2).map((line) => [line.netAmount, line.taxAmount]), [[70, 13.3], [30, 5.7]], 'the VAT return still sees 100 net and 19 input VAT');
     });
 
-    test('non-deductible input VAT can be marked on an incoming invoice', { todo: 'BUG: incoming invoices have no field for non-deductible input VAT (§15 Abs. 1a UStG, e.g. unangemessene Bewirtung, Geschenke über 50 €); the VAT is always booked as Vorsteuer' }, async () => {
+    test('non-deductible input VAT (§ 15 Abs. 1a UStG) books gross on the expense account, not as Vorsteuer', async () => {
       const id = `in-${randomUUID().slice(0, 6)}`;
       await h.raw('POST', '/accounting/incoming-invoices', incoming(id, { lines: [{ id: `l-${id}`, incomingInvoiceId: id, position: 0, description: 'Geschenk', quantity: 1, unitPrice: 100, netAmount: 100, taxRate: 19, taxAmount: 19, grossAmount: 119, accountNumber: '4930', inputVatDeductible: false }] }));
       assert.equal((await post(id)).status, 200);
-      assert.ok(!(await entryFor(h, `incoming-invoice:${id}`))!.lines.some((line) => line.accountNumber === '1576'), 'no Vorsteuer for a non-deductible line');
+      const entry = (await entryFor(h, `incoming-invoice:${id}`))!;
+      assert.ok(!entry.lines.some((line) => line.accountNumber === '1576'), 'no Vorsteuer for a non-deductible line');
+      assert.deepEqual(shape(entry), [['4930', 119, 0], ['1600', 0, 119]], 'the expense carries the VAT');
+      assert.equal(entry.lines[0]!.taxAmount ?? 0, 0, 'so the UStVA (Kz 66) does not count it');
+      assert.equal((await listed(id)).lines[0].inputVatDeductible, false, 'the flag is stored with the line');
+      // A mixed invoice: the deductible line keeps its Vorsteuer.
+      const mixed = `in-${randomUUID().slice(0, 6)}`;
+      await h.raw('POST', '/accounting/incoming-invoices', incoming(mixed, { netAmount: 200, taxAmount: 38, grossAmount: 238, lines: [
+        { id: `l1-${mixed}`, incomingInvoiceId: mixed, position: 0, description: 'Geschenk', quantity: 1, unitPrice: 100, netAmount: 100, taxRate: 19, taxAmount: 19, grossAmount: 119, accountNumber: '4930', inputVatDeductible: false },
+        { id: `l2-${mixed}`, incomingInvoiceId: mixed, position: 1, description: 'Papier', quantity: 1, unitPrice: 100, netAmount: 100, taxRate: 19, taxAmount: 19, grossAmount: 119, accountNumber: '4930' },
+      ] }));
+      assert.equal((await post(mixed)).status, 200);
+      assert.deepEqual(shape((await entryFor(h, `incoming-invoice:${mixed}`))!), [['4930', 119, 0], ['4930', 100, 0], ['1576', 19, 0], ['1600', 0, 238]]);
     });
 
     test('an incoming invoice needs its vendor, and amounts that do not add up cannot be posted', async () => {
@@ -1961,6 +1973,33 @@ describe('pro accounting: setup and posting of issued invoices', () => {
         assert.equal(reversed.status, 200, reversed.text);
         const mirror = (await journal(h)).find((entry) => entry.id === reversed.body.reversalEntryId)!;
         assert.deepEqual(sorted(mirror), [['1577', 0, 190], ['1600', 1000, 0], ['1787', 190, 0], ['4900', 0, 1000]]);
+      });
+      test('DATEV gets one net row per self-assessed purchase with BU 94/19/18 and the § 13b Sachverhalt L+L, not the tax pair', async () => {
+        // DATEV Kontenrahmen 2025, Fußnote 21: § 13b with Vorsteuerabzug is BU 94, the Tatbestand goes into Sachverhalt L+L
+        // (1 Leistung eines im Ausland ansässigen Unternehmers, 4 Bauleistung, 7 sonstige Leistung aus dem übrigen Gemeinschaftsgebiet).
+        // Innergemeinschaftlicher Erwerb is BU 19 (19 %) or 18 (7 %). DATEV computes Vorsteuer and Umsatzsteuer from the net amount.
+        const cases: Array<[string, number, Record<string, unknown> | undefined, string, string | undefined]> = [
+          ['DE_RC_13B_DOMESTIC', 19, { vendorCountryCode: 'DE', evidenceType: 'rechnung', evidenceReference: 'Bauleistung § 13b' }, '0094', '4'],
+          ['EU_B2B_SERVICE_RC', 19, undefined, '0094', '7'],
+          ['NON_EU_SERVICE_RC', 19, { vendorCountryCode: 'US', evidenceType: 'rechnung', evidenceReference: 'Cloud-Abo' }, '0094', '1'],
+          ['EU_IGE_GOODS_RC', 19, undefined, '0019', undefined],
+          ['EU_IGE_GOODS_RC', 7, undefined, '0018', undefined],
+        ];
+        const datevRowsOf = async (entry: JournalEntry) => (await get<Array<{ belegfeld1: string; konto: string; gegenkonto: string; umsatz: number; buSchluessel?: string; sachverhaltLl?: string }>>(h, `/accounting/datev/rows?from=${entry.postingDate}&to=${entry.postingDate}`))
+          .filter((row) => row.belegfeld1 === entry.reference).map((row) => [row.konto, row.gegenkonto, row.umsatz, row.buSchluessel, row.sachverhaltLl]);
+        for (const [taxCaseKey, rate, taxMeta, bu, sachverhalt] of cases) {
+          const id = `in-${randomUUID().slice(0, 6)}`;
+          await h.raw('POST', '/accounting/incoming-invoices', selfAssessed(id, taxCaseKey, rate, taxMeta ? { taxMeta } : {}));
+          const entry = await postedEntry(id);
+          assert.ok(entry.reference, 'the entry carries the invoice number as Belegfeld 1');
+          assert.deepEqual(await datevRowsOf(entry), [['4900', '1600', 1000, bu, sachverhalt]], `${taxCaseKey} ${rate} %`);
+        }
+        const id = `in-${randomUUID().slice(0, 6)}`;
+        await h.raw('POST', '/accounting/incoming-invoices', selfAssessed(id, 'EU_B2B_SERVICE_RC'));
+        await postedEntry(id);
+        const reversed = await h.raw('POST', '/accounting/documents/reverse', { reason: 'Falsch erfasst', documentType: 'incoming_invoice', documentId: id });
+        const mirror = (await journal(h)).find((entry) => entry.id === reversed.body.reversalEntryId)!;
+        assert.deepEqual(await datevRowsOf(mirror), [['1600', '4900', 1000, '0094', '7']], 'the reversal takes the § 13b row back the same way');
       });
     });
 

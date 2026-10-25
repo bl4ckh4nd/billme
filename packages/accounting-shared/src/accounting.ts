@@ -218,6 +218,7 @@ export interface DatevExportSourceSnapshot {
   accountLength?: number;
   encoding?: 'cp1252' | 'utf8-bom';
   chart?: LedgerChart;
+  kind?: 'journal' | 'opening_balances' | 'parties';
 }
 
 export interface DatevExportResult {

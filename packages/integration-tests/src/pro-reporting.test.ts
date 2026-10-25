@@ -160,9 +160,8 @@ describe('pro reporting', () => {
       for (const account of ['8400', '4930', '4900']) assert.ok(unmapped.includes(account), `${account} is reported as unmapped`);
       for (const account of ['1200', '1400', '1776', '1576', '1600']) assert.ok(!unmapped.includes(account), `${account} is excluded as a balance-sheet account`);
       const bwa = await get<any>(h, '/accounting/reports/bwa01?from=2026-01-01&to=2026-12-31');
-      assert.equal(bwa.mappingHealth.blocking, true);
-      assert.deepEqual(bwa.rows, [], 'a blocked report shows no numbers instead of guessed ones');
-      assert.deepEqual([bwa.totals.revenue, bwa.totals.expenses, bwa.totals.operatingResult], [0, 0, 0]);
+      assert.equal(bwa.mappingHealth.blocking, false, 'the BWA runs on the DATEV range defaults');
+      assert.ok(bwa.mappingHealth.warnings.some((warning: string) => /Standardzuordnung nach Kontenbereich \(SKR03\): .*4930.*8400/.test(warning)), JSON.stringify(bwa.mappingHealth.warnings));
       assert.deepEqual(await get(h, '/accounting/mappings?chart=SKR03'), [], 'reading a report stores nothing');
       assert.equal((await h.raw('GET', '/accounting/mappings/health?reportType=nonsense')).status, 400);
       assert.equal((await h.raw('GET', '/accounting/mappings/health?asOfDate=31.12.2026')).status, 400);
@@ -398,12 +397,13 @@ describe('pro reporting', () => {
       const bank = await addBankAccount(h, 'bank-unmapped');
       await importCsv(h, bank, [{ date: '2026-05-02', amount: -30, counterparty: 'Neues Konto', purpose: 'Versicherung' }]);
       const d = await getDraft(h, (await bankTx(h, 'Neues Konto')).id);
-      await approveDraft(h, d, [{ id: `${d.id}-1`, accountNumber: '4360', debitAmount: 30, creditAmount: 0 }, { id: `${d.id}-2`, accountNumber: '1200', debitAmount: 0, creditAmount: 30 }]);
+      // 4990 Kalkulatorischer Unternehmerlohn: no range default in any report family.
+      await approveDraft(h, d, [{ id: `${d.id}-1`, accountNumber: '4990', debitAmount: 30, creditAmount: 0 }, { id: `${d.id}-2`, accountNumber: '1200', debitAmount: 0, creditAmount: 30 }]);
       await postDraft(h, d.id, { postingDate: '2026-05-02' });
-      assert.deepEqual(await health(h, 'bwa01'), ['4360']);
+      assert.deepEqual(await health(h, 'bwa01'), ['4990']);
       const blocked = await get<any>(h, '/accounting/reports/bwa01?from=2026-01-01&to=2026-12-31');
       assert.equal(blocked.mappingHealth.blocking, true);
-      assert.deepEqual(blocked.mappingHealth.unmappedAccounts, ['4360']);
+      assert.deepEqual(blocked.mappingHealth.unmappedAccounts, ['4990']);
       assert.deepEqual(blocked.rows, []);
       const snapshots = async () => (await get<unknown[]>(h, '/accounting/reports/snapshots?reportType=bwa01')).length;
       const count = await snapshots();
@@ -412,11 +412,11 @@ describe('pro reporting', () => {
       assert.match(snapshotRefused.body.message, /REPORT_SNAPSHOT_BLOCKED_INCOMPLETE_MAPPING/);
       assert.equal(await snapshots(), count, 'no snapshot was created');
       assert.equal((await h.raw('POST', '/accounting/reports/snapshots', { reportType: 'susa', from: '2026-01-01', to: '2026-12-31', reason: 'SuSa ist nie blockiert' })).status, 200, 'the trial balance has no mapping');
-      assert.equal((await override(h, '4360', 'hgb-guv', 'other-operating-expense')).status, 200);
-      assert.equal((await override(h, '4360', 'bwa01', 'insurance')).status, 200);
-      assert.equal((await override(h, '4360', 'management-guv', 'fixed-costs')).status, 200);
+      assert.equal((await override(h, '4990', 'hgb-guv', 'other-operating-expense')).status, 200);
+      assert.equal((await override(h, '4990', 'bwa01', 'special-cost')).status, 200);
+      assert.equal((await override(h, '4990', 'management-guv', 'fixed-costs')).status, 200);
       assert.deepEqual(await health(h, 'bwa01'), []);
-      assert.equal(row(await get<any>(h, '/accounting/reports/bwa01?from=2026-01-01&to=2026-12-31'), 'insurance'), -30);
+      assert.equal(row(await get<any>(h, '/accounting/reports/bwa01?from=2026-01-01&to=2026-12-31'), 'special-cost'), -30);
     });
 
     test('a snapshot is frozen: later bookings do not change it, an identical report is recognised, a changed one is new', async () => {
@@ -466,7 +466,7 @@ describe('pro reporting', () => {
     });
     after(async () => { await e?.close(); });
 
-    test('GuV and Bilanz run on the DATEV range defaults without any mapping, flagged, and store nothing; the BWA still asks', async () => {
+    test('GuV, Bilanz and BWA run on the DATEV range defaults without any mapping, flagged, and store nothing', async () => {
       const guv = await get<any>(e, '/accounting/reports/hgb-guv?from=2026-01-01&to=2026-12-31');
       assert.equal(guv.mappingHealth.blocking, false, JSON.stringify(guv.mappingHealth));
       assert.equal(row(guv, 'revenue'), 200);
@@ -483,7 +483,12 @@ describe('pro reporting', () => {
 
       assert.deepEqual(await health(e, 'hgb-bilanz'), [], 'every booked account has a range default');
       assert.deepEqual(await health(e, 'hgb-guv'), []);
-      assert.deepEqual(await health(e, 'bwa01'), ['8400'], 'the BWA has no range default: the revenue account must be mapped, the balance accounts need not');
+      assert.deepEqual(await health(e, 'bwa01'), [], 'the BWA takes 8400 by its range too, the balance accounts need no mapping');
+      const bwa = await get<any>(e, '/accounting/reports/bwa01?from=2026-01-01&to=2026-12-31');
+      assert.equal(bwa.mappingHealth.blocking, false, JSON.stringify(bwa.mappingHealth));
+      assert.equal(row(bwa, 'revenue'), 200);
+      assert.ok(bwa.mappingHealth.warnings.some((warning: string) => /Standardzuordnung nach Kontenbereich \(SKR03\): .*8400/.test(warning)), JSON.stringify(bwa.mappingHealth.warnings));
+      assert.deepEqual(await get(e, '/accounting/mappings?chart=SKR03'), [], 'nothing stored');
     });
 
     test('a tenant mapping beats the range default', async () => {
@@ -558,6 +563,54 @@ describe('pro reporting', () => {
       assert.equal(health.unmappedAccountCount, mapping.unmapped.length, 'the health count comes from the report mappings, not the retired HGB table');
       for (const name of ['asset-depreciation-schedule.jsonl', 'asset-movements.jsonl', 'accounting-account-mappings.jsonl', 'tax-case-account-mappings.jsonl', 'report-account-mappings.jsonl', 'open-item-payments.jsonl', 'open-item-allocations.jsonl']) rows(name);
     });
+
+    test('the package also carries every table as CSV with a GDPdU index.xml (Beschreibungsstandard), so IDEA can read it', async () => {
+      const response = await h.raw('POST', '/tax/audit-export-package', { from: '2026-03-01', to: '2026-03-31' });
+      assert.equal(response.status, 200, response.text);
+      const files = new Map((response.body.files as Array<{ name: string; content: string }>).map((entry) => [entry.name, entry.content]));
+      const index = files.get('index.xml');
+      assert.ok(index, 'index.xml is in the package');
+      assert.match(index!, /<!DOCTYPE DataSet SYSTEM "gdpdu-01-09-2004.dtd">/);
+      assert.ok(files.get('gdpdu-01-09-2004.dtd')?.includes('<!ELEMENT VariableLength'), 'with the DTD it refers to');
+      const tables = [...index!.matchAll(/<Table>([\s\S]*?)<\/Table>/g)].map((match) => match[1]!);
+      assert.ok(tables.length >= 10, 'one table per dataset');
+      for (const table of tables) {
+        const url = /<URL>([^<]+)<\/URL>/.exec(table)![1]!;
+        const csv = files.get(url);
+        assert.ok(csv !== undefined, `${url} is in the package`);
+        const columns = [...table.matchAll(/<Variable(?:Column|PrimaryKey)>\s*<Name>([^<]+)<\/Name>/g)].map((match) => match[1]);
+        assert.deepEqual(csv!.split('\r\n')[0]!.split(';'), columns.map((name) => `"${name}"`), `${url}: the header row names the described columns`);
+        assert.match(table, /<Range>\s*<From>2<\/From>\s*<\/Range>/, `${url}: the data start after the header row`);
+      }
+      const lines = tables.find((table) => table.includes('<URL>journal-lines.csv</URL>'))!;
+      assert.match(lines, /<Name>debit_amount<\/Name>\s*<Numeric>\s*<Accuracy>2<\/Accuracy>\s*<\/Numeric>/, 'amounts are numbers with two decimals');
+      const entries = tables.find((table) => table.includes('<URL>journal-entries.csv</URL>'))!;
+      assert.match(entries, /<Name>posting_date<\/Name>\s*<Date>\s*<Format>YYYY-MM-DD<\/Format>\s*<\/Date>/, 'dates are dates');
+      const csv = files.get('journal-lines.csv')!.split('\r\n').filter(Boolean);
+      const header = csv[0]!.split(';');
+      const debit = header.indexOf('"debit_amount"');
+      assert.ok(csv.slice(1).some((row) => /^\d+,\d{2}$/.test(row.split(';')[debit]!)), 'with a decimal comma');
+      assert.equal(csv.length - 1, (files.get('journal-lines.jsonl') ?? '').split('\n').filter(Boolean).length, 'the CSV holds the same rows as the JSONL');
+    });
+
+    test('a draft Verfahrensdokumentation is generated from the settings and the books, with the parts only the business can write marked open', async () => {
+      const settings = await h.api.settings.get() as { company: { name: string }; numbers: { invoicePrefix: string } };
+      const response = await download(h, '/api/v1/pro/tax/procedure-documentation');
+      assert.equal(response.status, 200, response.bytes.toString());
+      assert.match(response.headers.get('content-type') ?? '', /text\/markdown/);
+      assert.match(response.headers.get('content-disposition') ?? '', /filename="Verfahrensdokumentation_\d{4}-\d{2}-\d{2}\.md"/);
+      const doc = response.bytes.toString('utf8');
+      assert.match(doc, /^# Verfahrensdokumentation \(Entwurf\)/);
+      for (const heading of ['## 1. Allgemeine Beschreibung', '## 2. Anwenderdokumentation', '## 3. Technische Systemdokumentation', '## 4. Betriebsdokumentation', '## 5. Vom Unternehmen zu ergänzen']) assert.ok(doc.includes(heading), heading);
+      assert.ok(doc.includes(settings.company.name), 'the company from the settings');
+      assert.ok(doc.includes('SKR03'), 'the Kontenrahmen in use');
+      assert.ok(doc.includes(`„${settings.numbers.invoicePrefix}“`), 'the invoice number range');
+      const chain = (await h.raw('POST', '/tax/audit-export-package', {})).body.files.find((file: { name: string }) => file.name === 'audit-chain-verification.json');
+      assert.ok(JSON.parse(chain.content).ok);
+      assert.match(doc, /Prüfkette: intakt \(\d+ Einträge\)/, 'the state of the audit chain on the day of the draft');
+      assert.match(doc, /Festgeschriebene Monate: (keine|\d{4}-\d{2})/);
+      assert.ok(!/undefined|null|NaN/.test(doc), 'no placeholders leak');
+    });
   });
 
   describe('DATEV export', () => {
@@ -591,7 +644,7 @@ describe('pro reporting', () => {
       const exportedTotal = rows.reduce((sum, fields) => sum + Math.round(Number(fields[0]!.replace(',', '.')) * 100), 0);
       assert.equal(exportedTotal, debitTotal, 'the exported amounts add up to the debits of March');
       assert.deepEqual((await get<unknown[]>(h, '/accounting/datev/rows?from=2026-03-01&to=2026-03-31')).length, rows.length, 'the preview rows and the file agree');
-      const invoiceRow = rows.find((fields) => fields[6] === '1400' && fields[7] === '8400')!;
+      const invoiceRow = rows.find((fields) => /^1\d{4}$/.test(fields[6]!) && fields[7] === '8400')!;
       assert.deepEqual([invoiceRow[0], invoiceRow[8]], ['238,00', ''], 'invoice A is one gross row on the Automatikkonto 8400, without BU key');
       assert.ok(!rows.some((fields) => fields[6] === '1776' || fields[7] === '1776'), 'and no separate VAT row');
       assert.match(invoiceRow[10]!, /^"RE-\d{4}-\d{3}"$/, 'Belegfeld 1 is the invoice number');
@@ -609,6 +662,40 @@ describe('pro reporting', () => {
 
       const receipt = (await receipts()).find((candidate) => candidate.id === exported.headers.get('x-billme-datev-export-id'))!;
       assert.deepEqual([receipt.recordCount, receipt.contentSha256, receipt.fromDate, receipt.toDate, receipt.encoding, receipt.headerVersion, receipt.formatVersion, receipt.chart], [rows.length, sha(exported.bytes), '2026-03-01', '2026-03-31', 'cp1252', 700, 13, 'SKR03']);
+    });
+
+    test('customers and vendors get their own Personenkonto in the stack (Debitor 1xxxx, Kreditor 7xxxx), stable across exports', async () => {
+      const rows = dataRows((await exportCsv()).bytes);
+      const invoiceRow = rows.find((fields) => fields[7] === '8400' && /^"RE-/.test(fields[10]!))!;
+      assert.match(invoiceRow[6]!, /^1\d{4}$/, 'the receivable is booked on the customer\'s Debitor, not on 1400');
+      const purchase = rows.find((fields) => fields[10] === '"ER-R1"')!;
+      assert.ok([purchase[6], purchase[7]].some((account) => /^7\d{4}$/.test(account!)), 'the payable is on the vendor\'s Kreditor, not on 1600');
+      assert.ok(!rows.some((fields) => /^"(RE|ER)-/.test(fields[10]!) && [fields[6], fields[7]].some((account) => account === '1400' || account === '1600')), 'no Sammelkonto left on an invoice, where the party is known');
+      assert.ok(rows.some((fields) => fields[10] === '"A-PRUEF"' && fields[7] === '1600'), 'an asset bought without a vendor stays on the Sammelkonto');
+      const again = dataRows((await exportCsv({ encoding: 'utf8-bom' })).bytes, 'utf8');
+      assert.equal(again.find((fields) => fields[10] === invoiceRow[10] && fields[7] === '8400')![6], invoiceRow[6], 'the same customer keeps the same Debitor');
+
+      // The tax adviser needs the names behind the numbers: a Stammdaten stack Debitoren/Kreditoren.
+      const parties = await exportCsv({ kind: 'parties' });
+      assert.equal(parties.status, 200, parties.bytes.toString());
+      const lines = text(parties.bytes).split('\r\n');
+      assert.deepEqual(lines[0]!.split(';').slice(0, 5), ['"EXTF"', '700', '16', '"Debitoren/Kreditoren"', '5']);
+      assert.equal(lines[0]!.split(';')[13], '4', 'Sachkontenlänge; the Personenkonten have one digit more');
+      assert.deepEqual(lines[1]!.split(';').slice(0, 2), ['Konto', 'Name (Adressatentyp Unternehmen)']);
+      const master = dataRows(parties.bytes);
+      assert.ok(master.every((fields) => fields.length === lines[1]!.split(';').length), 'every row has every column');
+      const vendor = master.find((fields) => fields[0] === purchase.slice(6, 8).find((account) => /^7\d{4}$/.test(account!)))!;
+      assert.ok(vendor.slice(1, 6).includes('"Report Lieferant"'), 'the Kreditor carries the vendor name');
+      assert.ok(master.some((fields) => fields[0] === invoiceRow[6]), 'the Debitor of the invoice is listed');
+      assert.equal(new Set(master.map((fields) => fields[0])).size, master.length, 'one row per Personenkonto');
+      assert.match(parties.headers.get('content-disposition') ?? '', /filename="EXTF_Debitoren-Kreditoren_/);
+      const fetchedAgain = await download(h, `/api/v1/pro/accounting/datev/exports/${parties.headers.get('x-billme-datev-export-id')}`);
+      assert.ok(fetchedAgain.bytes.equals(parties.bytes));
+      assert.match(fetchedAgain.headers.get('content-disposition') ?? '', /filename="EXTF_Debitoren-Kreditoren_/, 'fetched again from the history, it keeps its name');
+      const audit = await h.raw('POST', '/tax/audit-export-package', { from: '2026-03-01', to: '2026-03-31' });
+      assert.equal(audit.status, 200, audit.text);
+      const numbered = (audit.body.files as Array<{ name: string; content: string }>).find((file) => file.name === 'datev-party-accounts.jsonl')!.content.split('\n').map((line) => JSON.parse(line) as { party_type: string; party_id: string; ordinal: number });
+      assert.ok(numbered.some((row) => row.party_type === 'creditor' && row.party_id === 'v-reports' && String(7 * 10 ** 4 + row.ordinal) === vendor[0]), 'the Prüferpaket says which vendor stands behind the Kreditor');
     });
 
     test('an export can be fetched again byte for byte, even after the ledger changed, and the renderer client verifies the receipt', async () => {
@@ -675,7 +762,7 @@ describe('pro reporting', () => {
       const seven = await issue(h, { client: 'Sieben DATEV', date: '2026-05-10', dueDate: '2026-05-24', items: [{ kind: 'item', description: 'Buch', quantity: 1, price: 50, total: 50, taxRate: 7 }] });
       assert.ok(seven.id);
       const may = dataRows((await exportCsv({ from: '2026-05-01', to: '2026-05-31' })).bytes);
-      const revenueRow = may.find((fields) => fields[6] === '1400' && fields[7] === '8300')!;
+      const revenueRow = may.find((fields) => /^1\d{4}$/.test(fields[6]!) && fields[7] === '8300')!;
       assert.deepEqual([revenueRow[0], revenueRow[8]], ['53,50', ''], '8300 is the Automatikkonto for 7 %: gross, and a BU key there would be refused by DATEV');
     });
 
@@ -1356,6 +1443,21 @@ describe('pro reporting', () => {
       assert.deepEqual(await reports(), reportsBefore, 'closing and carrying forward change no report of either year');
       const datev = await get<Array<{ konto: string; gegenkonto: string }>>(h, '/accounting/datev/rows?from=2025-12-01&to=2026-01-31');
       assert.ok(!datev.some((pair) => ['0860', '9000'].includes(pair.konto) || ['0860', '9000'].includes(pair.gegenkonto)), 'closing entries are not part of the DATEV stack');
+      // The carry-forward goes to the tax adviser as its own stack (EB-Werte), each balance against 9000.
+      const eb = await download(h, '/api/v1/pro/accounting/datev/export.csv?kind=opening_balances&from=2026-01-01&to=2026-01-31&consultantNumber=1234567&clientNumber=12345&fiscalYearStart=2026-01-01&accountLength=4&encoding=cp1252');
+      assert.equal(eb.status, 200, eb.bytes.toString());
+      const [ebHeader, , ...ebRows] = eb.bytes.toString('latin1').split('\r\n').filter(Boolean).map((line) => line.split(';'));
+      assert.ok(ebHeader!.includes('"Eröffnungsbilanzwerte 2026"'), ebHeader!.join(';'));
+      assert.match(eb.headers.get('content-disposition') ?? '', /EB-Werte/);
+      assert.match((await download(h, `/api/v1/pro/accounting/datev/exports/${eb.headers.get('x-billme-datev-export-id')}`)).headers.get('content-disposition') ?? '', /EXTF_EB-Werte_2026-01-01_2026-01-31/, 'and keeps that name in the history');
+      const carriedLines = openingEntry.lines.filter((line) => line.accountNumber !== '9000');
+      assert.ok(carriedLines.length > 0);
+      assert.deepEqual(
+        ebRows.map((row) => [row[6], row[7], row[1], Number(row[0]!.replace(',', '.'))]).sort(),
+        carriedLines.map((line) => [line.accountNumber, '9000', line.debitAmount > 0 ? '"S"' : '"H"', money(Math.abs(line.debitAmount - line.creditAmount))]).sort(),
+      );
+      const running = await download(h, '/api/v1/pro/accounting/datev/export.csv?from=2026-01-01&to=2026-01-31&consultantNumber=1234567&clientNumber=12345&fiscalYearStart=2026-01-01&accountLength=4&encoding=cp1252');
+      assert.ok(!running.bytes.toString('latin1').split('\r\n').slice(2).some((line) => line.split(';')[7] === '9000'), 'the running stack still leaves it out');
       assert.ok((await periods(h, 2025)).every((month) => month.status === 'soft_locked'), 'the closed fiscal year is soft-locked');
       assert.equal(await statusOf(h, '2026-01'), 'open', 'the next year stays open');
       await assertLedgerConsistent(h);

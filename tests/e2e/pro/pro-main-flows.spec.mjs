@@ -8,7 +8,7 @@ import { appUrl, importPendingProTransaction, approveProDraft, getDesktopSetting
  * The main Pro flows through the visible UI, with the ledger as the witness (Playwright against the real Electron app):
  *  1. issue an invoice -> balanced entry (Forderung / Erlös / USt) -> Offene Posten -> bank line settles the item
  *  2. bank import -> rule suggestion accepted in the workbench -> posting in the journal
- *  3. BWA01 / Management-GuV / HGB-GuV show the year's postings once their accounts are mapped
+ *  3. BWA01 / HGB-GuV show the year's postings on the SKR range defaults, Management-GuV once its accounts are mapped
  *  4. DATEV Buchungsstapel export from the UI produces a file
  * Setup that is not the flow under test (seeding, rules, the rent posting) goes through the typed IPC bridge.
  */
@@ -315,21 +315,16 @@ const openReports = async (page) => {
 
 const metric = (page, label) => page.getByRole('main').locator('div.rounded-tile').filter({ has: page.getByText(label, { exact: true }) });
 
-test('BWA01 and HGB-GuV show the year from the postings once their accounts are mapped', async () => {
+test('BWA01 and HGB-GuV show the year from the postings on the SKR range defaults, without a manual mapping', async () => {
   const { page } = desktop;
   const { revenue, rent, result } = await prepareYear();
   const tabs = await openReports(page);
 
-  // Nothing is mapped yet: the BWA refuses to show numbers.
+  // Nothing is mapped yet: the BWA runs on the SKR03 range defaults and says so.
   await tabs.getByRole('button', { name: 'BWA01', exact: true }).click();
-  await expect(page.getByRole('alert').filter({ hasText: 'Auswertung blockiert: Konten-Mapping unvollständig' })).toBeVisible();
-  await page.screenshot({ path: shot('01-bwa-blocked'), fullPage: true });
-
-  // P&L accounts go to their BWA positions; the balance-sheet accounts fall to their SKR range default and need no mapping.
-  await mapAccount(page, '8400', 'bwa01', 'Umsatzerlöse');
-  await mapAccount(page, '8195', 'bwa01', 'Umsatzerlöse');
-  await mapAccount(page, '4210', 'bwa01', 'Raumkosten');
-  await tabs.getByRole('button', { name: 'BWA01', exact: true }).click();
+  await expect(page.getByRole('main').getByRole('status').filter({ hasText: /^Standardzuordnung nach Kontenbereich \(SKR03\): .*4210.*8400/ })).toBeVisible();
+  await expect(page.getByRole('alert').filter({ hasText: 'Auswertung blockiert' })).toHaveCount(0);
+  // 8400/8195 land on Umsatzerlöse and 4210 Miete on Raumkosten by their range.
   const bwa = page.getByRole('table', { name: 'BWA01' });
   await expect(bwa).toBeVisible();
   await expect(page.getByRole('alert').filter({ hasText: 'Auswertung blockiert' })).toHaveCount(0);
@@ -339,7 +334,7 @@ test('BWA01 and HGB-GuV show the year from the postings once their accounts are 
   await expect(bwa.getByRole('row', { name: /^Umsatzerlöse Konten: .*8400.* 5\.700,50 €/ })).toBeVisible();
   await expect(bwa.getByRole('row', { name: /^Raumkosten Konten: 4210 .*1\.190,00 €/ })).toBeVisible();
   expect([revenue, rent, result]).toEqual([5700.5, 1190, 4510.5]);
-  await page.screenshot({ path: shot('02-bwa-mapped'), fullPage: true });
+  await page.screenshot({ path: shot('02-bwa-defaults'), fullPage: true });
 
   // The position drilldown lists the postings behind it.
   await bwa.getByRole('button', { name: /^Umsatzerlöse/ }).click();
@@ -363,7 +358,7 @@ test('Management-GuV shows the year from the postings once its accounts are mapp
   await prepareYear();
   const tabs = await openReports(page);
 
-  // The balance-sheet accounts fall to their SKR range default (as for the BWA); the P&L accounts need a management position.
+  // The balance-sheet accounts fall to their SKR range default; the P&L accounts need a management position.
   await tabs.getByRole('button', { name: 'Management-GuV', exact: true }).click();
   await mapAccount(page, '8400', 'management-guv', 'Betriebliche Erlöse');
   await mapAccount(page, '8195', 'management-guv', 'Betriebliche Erlöse');
@@ -430,17 +425,31 @@ test('exports the DATEV Buchungsstapel from the UI and leaves the file', async (
   await expect.poll(() => fs.existsSync(target) && fs.statSync(target).size > 0).toBe(true);
   await page.screenshot({ path: shot('02-datev-exported'), fullPage: true });
 
-  // The file is a DATEV Buchungsstapel (EXTF header, CP1252) with the invoice as one gross booking 1190,00 on the
-  // Automatikkonto 8400 (no BU key, DATEV derives the 19 % VAT) and the invoice number as Belegfeld 1.
+  // The file is a DATEV Buchungsstapel (EXTF header, CP1252) with the invoice as one gross booking 1190,00 from the
+  // customer's Debitor on the Automatikkonto 8400 (no BU key, DATEV derives the 19 % VAT) and the invoice number as Belegfeld 1.
   const text = fs.readFileSync(target).toString('latin1');
   const [header, columns, ...rows] = text.split(/\r?\n/).filter(Boolean);
   expect(header).toMatch(/^"EXTF";700;21;"Buchungsstapel";/);
   expect(header).toContain(';1001;1;');
   expect(columns).toContain('Umsatz (ohne Soll/Haben-Kz)');
   expect(rows).toHaveLength(1);
-  expect(rows[0]).toMatch(/^1190,00;"S";"EUR";;;;1400;8400;;/);
+  expect(rows[0]).toMatch(/^1190,00;"S";"EUR";;;;1\d{4};8400;;/);
   expect(rows[0]).toContain(`"${invoice.number}"`);
+  const debitor = rows[0].split(';')[6];
 
-  // The export is listed as immutable history.
-  await expect(panel.getByLabel('Unveränderlicher DATEV-Exportverlauf').getByRole('listitem')).toHaveCount(1);
+  // The names behind the Personenkonten go to the tax adviser as their own Stammdaten stack.
+  const parties = test.info().outputPath('datev-debitoren-kreditoren.csv');
+  await app.evaluate(({ session }, file) => { session.defaultSession.once('will-download', (_event, item) => item.setSavePath(file)); }, parties);
+  await panel.getByLabel('Inhalt').selectOption({ label: 'Debitoren/Kreditoren (Stammdaten)' });
+  await panel.getByRole('button', { name: 'Stammdaten exportieren' }).click();
+  await expect(panel.getByRole('status').filter({ hasText: /\d+ Personenkont/ })).toBeVisible();
+  await expect.poll(() => fs.existsSync(parties) && fs.statSync(parties).size > 0).toBe(true);
+  const [partyHeader, partyColumns, ...partyRows] = fs.readFileSync(parties).toString('latin1').split(/\r?\n/).filter(Boolean);
+  expect(partyHeader).toMatch(/^"EXTF";700;16;"Debitoren\/Kreditoren";5;/);
+  expect(partyColumns).toMatch(/^Konto;Name \(Adressatentyp Unternehmen\);/);
+  expect(partyRows.some((row) => row.startsWith(`${debitor};`))).toBe(true);
+  await page.screenshot({ path: shot('03-datev-parties-exported'), fullPage: true });
+
+  // Both exports are listed as immutable history.
+  await expect(panel.getByLabel('Unveränderlicher DATEV-Exportverlauf').getByRole('listitem')).toHaveCount(2);
 });

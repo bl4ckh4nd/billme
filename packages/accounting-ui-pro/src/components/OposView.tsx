@@ -85,6 +85,8 @@ type IncomingInvoiceDraftLine = {
   taxRate: string;
   accountNumber: string;
   assetAccountNumber: string;
+  /** § 15 Abs. 1a UStG: the VAT is booked with the expense. */
+  vatNotDeductible?: boolean;
 };
 
 type CalculatedIncomingInvoiceLine = Omit<IncomingInvoiceDraftLine, 'quantity' | 'unitPrice' | 'taxRate'> & {
@@ -576,6 +578,7 @@ export default function OposView({ dataAdapter, role = 'admin', initialInvoiceId
           grossAmount: line.grossAmount,
           ...(line.accountNumber.trim() ? { accountNumber: line.accountNumber.trim() } : {}),
           ...(line.assetAccountNumber.trim() ? { assetAccountNumber: line.assetAccountNumber.trim() } : {}),
+          ...(line.vatNotDeductible ? { inputVatDeductible: false } : {}),
         })),
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString(),
@@ -1041,6 +1044,9 @@ export default function OposView({ dataAdapter, role = 'admin', initialInvoiceId
                             </div>
                             <div className="sm:col-span-3">
                               <Input label="Anlagekonto (optional)" aria-label="Anlagekonto" inputMode="numeric" fullWidth value={line.assetAccountNumber} onChange={(e) => updateInvoiceLine(line.id, 'assetAccountNumber', e.target.value)} placeholder="z. B. 0480" />
+                            </div>
+                            <div className="sm:col-span-6">
+                              <Checkbox label="Vorsteuer nicht abziehbar (z. B. Geschenk über 50 €)" checked={Boolean(line.vatNotDeductible)} onChange={(e) => setInvoiceLines((current) => current.map((candidate) => candidate.id === line.id ? { ...candidate, vatNotDeductible: e.target.checked } : candidate))} />
                             </div>
                           </div>
                           <p className="mt-2 text-right text-caption tabular-nums text-muted">Netto {euro(calculated?.netAmount ?? 0)} · Steuer {euro(calculated?.taxAmount ?? 0)} · Brutto {euro(calculated?.grossAmount ?? 0)}</p>

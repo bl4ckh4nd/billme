@@ -1,7 +1,7 @@
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { createHash } from 'node:crypto';
 import { createProAccountingAssetService, createProAccountingService } from '@billme/accounting-engine';
-import { buildDatevBuchungsstapelCsv } from '@billme/accounting-engine/datev-export';
+import { buildDatevBuchungsstapelCsv, buildDatevPartiesCsv } from '@billme/accounting-engine/datev-export';
 import type {
   AccountingMutationContext,
   ProDraftActionRequest,
@@ -22,7 +22,7 @@ import type {
   IncomingInvoiceEntity,
 } from '@billme/accounting-shared';
 import { CorrectionSettlementError, INCOMING_INVOICE_DOCUMENT_UPLOAD_BODY_LIMIT } from '@billme/accounting-shared';
-import { createPostgresProAccountingRepository, freezeServerEurSnapshot, getServerEurReport, getServerEurSnapshot, listServerEurAnnexFacts, listServerEurCashFacts, listServerEurCashItems, listServerEurSnapshots, saveServerEurAnnexFact, saveServerEurCashFact, saveServerEurClassificationFact } from '@billme/server-data';
+import { createPostgresProAccountingRepository, listDatevPartyRows, freezeServerEurSnapshot, getServerEurReport, getServerEurSnapshot, listServerEurAnnexFacts, listServerEurCashFacts, listServerEurCashItems, listServerEurSnapshots, saveServerEurAnnexFact, saveServerEurCashFact, saveServerEurClassificationFact } from '@billme/server-data';
 import {
   accountingAccountMappingSchema,
   accountingBackfillPreviewSchema,
@@ -199,6 +199,9 @@ export const datevExportQuerySchema = z.object({
   fiscalYearStart: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
   accountLength: z.coerce.number().int().min(4).max(8),
   encoding: z.enum(['cp1252', 'utf8-bom']).default('cp1252'),
+  // opening_balances: the carry-forward as its own stack (EB-Werte), e.g. for the first hand-over to the tax adviser.
+  // parties: the Stammdaten of the Personenkonten (Debitoren/Kreditoren) the journal stack books on.
+  kind: z.enum(['journal', 'opening_balances', 'parties']).default('journal'),
 });
 const datevExportQuery = datevExportQuerySchema;
 const asOfDate = z.object({ asOfDate: z.string().date().optional(), chart: z.enum(['SKR03', 'SKR04']).optional(), profile: z.string().trim().min(1).optional() });
@@ -1122,7 +1125,24 @@ export const registerProAccountingRoutes = (app: FastifyInstance, options: ProAc
       const session = await requireMutationSession(app, request.headers.authorization);
       const service = serviceFor(app);
       const policy = await service.getAccountingPolicy(session.scope);
-      const rows = await service.buildDatevRows(session.scope, { from: query.from, to: query.to });
+      if (query.kind === 'parties') {
+        const parties = await listDatevPartyRows(requireDatabase(app), session.scope, query.accountLength);
+        const content = buildDatevPartiesCsv(parties, { consultantNumber: query.consultantNumber, clientNumber: query.clientNumber, fiscalYearStart: query.fiscalYearStart, accountLength: query.accountLength, chart: policy.activeChart, encoding: query.encoding, createdAt: new Date() });
+        const contentSha256 = createHash('sha256').update(content).digest('hex');
+        const filePath = `datev-export/${contentSha256}`;
+        const receipt = (await service.listDatevExports(session.scope)).find((entry) => entry.filePath === filePath) ?? await service.insertDatevExport(session.scope, {
+          filePath, recordCount: parties.length, fromDate: query.from, toDate: query.to, content, mutation: mutationFor(session, 'DATEV-Stammdaten Debitoren/Kreditoren exportiert'), contentSha256, encoding: query.encoding, headerVersion: 700, formatVersion: 5, chart: policy.activeChart,
+          sourceSnapshot: { from: query.from, to: query.to, recordCount: parties.length, consultantNumber: query.consultantNumber, clientNumber: query.clientNumber, fiscalYearStart: query.fiscalYearStart, accountLength: query.accountLength, encoding: query.encoding, chart: policy.activeChart, kind: query.kind },
+        });
+        reply.header('x-billme-datev-export-id', receipt.id);
+        reply.header('x-billme-datev-content-sha256', contentSha256);
+        reply.header('x-billme-datev-record-count', String(parties.length));
+        reply.header('content-type', query.encoding === 'utf8-bom' ? 'text/csv; charset=utf-8' : 'text/csv; charset=windows-1252');
+        reply.header('content-disposition', `attachment; filename="EXTF_Debitoren-Kreditoren_${query.to}.csv"`);
+        return reply.send(Buffer.from(content));
+      }
+      const opening = query.kind === 'opening_balances';
+      const rows = await service.buildDatevRows(session.scope, { from: query.from, to: query.to, openingBalances: opening, ...(opening ? {} : { personAccountLength: query.accountLength }) });
       // Festschreibung only when every month of the stack is closed; a soft lock can still be overridden.
       const fromMonth = query.from.slice(0, 7); const toMonth = query.to.slice(0, 7);
       const years = [...new Set([Number(query.from.slice(0, 4)), Number(query.to.slice(0, 4))])];
@@ -1139,7 +1159,7 @@ export const registerProAccountingRoutes = (app: FastifyInstance, options: ProAc
         to: query.to,
         encoding: query.encoding,
         createdAt: new Date(),
-        stackName: `Buchungsstapel ${query.from.slice(0, 7)}`,
+        stackName: opening ? `Eröffnungsbilanzwerte ${query.from.slice(0, 4)}` : `Buchungsstapel ${query.from.slice(0, 7)}`,
       });
       const contentSha256 = createHash('sha256').update(content).digest('hex');
       const filePath = `datev-export/${contentSha256}`;
@@ -1166,13 +1186,14 @@ export const registerProAccountingRoutes = (app: FastifyInstance, options: ProAc
           accountLength: query.accountLength,
           encoding: query.encoding,
           chart: policy.activeChart,
+          kind: query.kind,
         },
       });
       reply.header('x-billme-datev-export-id', receipt.id);
       reply.header('x-billme-datev-content-sha256', contentSha256);
       reply.header('x-billme-datev-record-count', String(rows.length));
       reply.header('content-type', query.encoding === 'utf8-bom' ? 'text/csv; charset=utf-8' : 'text/csv; charset=windows-1252');
-      reply.header('content-disposition', `attachment; filename="EXTF_Buchungsstapel_${query.from}_${query.to}.csv"`);
+      reply.header('content-disposition', `attachment; filename="EXTF_${opening ? 'EB-Werte' : 'Buchungsstapel'}_${query.from}_${query.to}.csv"`);
       reply.send(Buffer.from(content));
     },
   });
@@ -1189,7 +1210,10 @@ export const registerProAccountingRoutes = (app: FastifyInstance, options: ProAc
       reply.header('x-billme-datev-record-count', String(exportSnapshot.recordCount));
       const encoding = exportSnapshot.encoding ?? 'cp1252';
       reply.header('content-type', encoding === 'utf8-bom' ? 'text/csv; charset=utf-8' : 'text/csv; charset=windows-1252');
-      reply.header('content-disposition', `attachment; filename="EXTF_Buchungsstapel_${exportSnapshot.fromDate ?? ''}_${exportSnapshot.toDate ?? ''}.csv"`);
+      // The stored file says what it is: category 16 is the Stammdaten stack, the stack name marks the EB-Werte.
+      const header = Buffer.from(exportSnapshot.content).toString('latin1').split('\r\n')[0]!.split(';');
+      const name = header[2] === '16' ? 'Debitoren-Kreditoren' : header[16]?.includes('Er\u00f6ffnungsbilanzwerte') || header[16]?.includes('ErÃ¶ffnungsbilanzwerte') ? 'EB-Werte' : 'Buchungsstapel';
+      reply.header('content-disposition', `attachment; filename="EXTF_${name}_${name === 'Debitoren-Kreditoren' ? exportSnapshot.toDate ?? '' : `${exportSnapshot.fromDate ?? ''}_${exportSnapshot.toDate ?? ''}`}.csv"`);
       reply.send(Buffer.from(exportSnapshot.content));
     },
   });

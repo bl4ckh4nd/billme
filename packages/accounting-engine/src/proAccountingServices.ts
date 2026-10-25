@@ -128,7 +128,7 @@ export interface ProAccountingService {
       lineCount: number;
     }>;
   }>;
-  buildDatevRows(scope: TenantScope, args?: ReportRangeOptions): Promise<DatevPostingRow[]>;
+  buildDatevRows(scope: TenantScope, args?: ReportRangeOptions & { openingBalances?: boolean; personAccountLength?: number }): Promise<DatevPostingRow[]>;
   getAccountingPolicy(scope: TenantScope): ReturnType<ProAccountingOposRepository['getAccountingPolicy']>;
   setAccountingPolicy(scope: TenantScope, input: { activeChart: 'SKR03' | 'SKR04'; vatMethod: 'soll' | 'ist'; mutation?: AccountingMutationContext }): ReturnType<ProAccountingOposRepository['setAccountingPolicy']>;
   listAccountingAccountMappings(scope: TenantScope, chart?: 'SKR03' | 'SKR04'): Promise<AccountingAccountMapping[]>;
@@ -187,7 +187,7 @@ export interface BoundProAccountingService {
       lineCount: number;
     }>;
   }>;
-  buildDatevRows(args?: ReportRangeOptions): Promise<DatevPostingRow[]>;
+  buildDatevRows(args?: ReportRangeOptions & { openingBalances?: boolean; personAccountLength?: number }): Promise<DatevPostingRow[]>;
   getAccountingPolicy(): ReturnType<ProAccountingOposRepository['getAccountingPolicy']>;
   setAccountingPolicy(input: { activeChart: 'SKR03' | 'SKR04'; vatMethod: 'soll' | 'ist'; mutation?: AccountingMutationContext }): ReturnType<ProAccountingOposRepository['setAccountingPolicy']>;
   listAccountingAccountMappings(chart?: 'SKR03' | 'SKR04'): Promise<AccountingAccountMapping[]>;

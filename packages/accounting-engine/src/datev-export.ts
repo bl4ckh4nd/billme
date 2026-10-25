@@ -228,3 +228,98 @@ export const buildDatevBuchungsstapelCsv = (
   if (options.encoding !== 'utf8-bom' && iconv.decode(encoded, 'win1252') !== plain) throw new Error('DATEV CP1252 kann Zeichen nicht verlustfrei darstellen.');
   return encoded;
 };
+
+// Personenkonten-Stammdaten (Debitoren/Kreditoren, category 16, format version 5). Column heading as written by
+// ameax/datev-extf (MIT); the official DATEV list (developer.datev.de, Formatbeschreibung) was not reachable to compare.
+export const DATEV_PARTY_COLUMNS = [
+  'Konto', 'Name (Adressatentyp Unternehmen)', 'Unternehmensgegenstand', 'Name (Adressatentyp natürl. Person)', 'Vorname (Adressatentyp natürl. Person)',
+  'Name (Adressatentyp keine Angabe)', 'Adressatentyp', 'Kurzbezeichnung', 'EU-Mitgliedstaat', 'EU-USt-IdNr.', 'Anrede',
+  'Titel/Akad.Grad', 'Adelstitel', 'Namensvorsatz', 'Adressart', 'Straße', 'Postfach', 'Postleitzahl', 'Ort', 'Land',
+  'Versandzusatz', 'Adresszusatz', 'Abweichende Anrede', 'Abw. Zustellbezeichnung 1', 'Abw. Zustellbezeichnung 2',
+  'Kennz. Korrespondenzadresse', 'Adresse Gültig von', 'Adresse Gültig bis', 'Telefon', 'Bemerkung (Telefon)', 'Telefon Geschäftsleitung',
+  'Bemerkung (Telefon GL)', 'E-Mail', 'Bemerkung (E-Mail)', 'Internet', 'Bemerkung (Internet)', 'Fax', 'Bemerkung (Fax)',
+  'Sonstige', 'Bemerkung (Sonstige)', 'Bankleitzahl 1', 'Bankbezeichnung 1', 'Bank-Kontonummer 1', 'Länderkennzeichen 1',
+  'IBAN-Nr. 1', 'Leerfeld', 'SWIFT-Code 1', 'Abw. Kontoinhaber 1', 'Kennz. Hauptbankverb. 1', 'Bankverbindung 1 Gültig von',
+  'Bankverbindung 1 Gültig bis', 'Bankleitzahl 2', 'Bankbezeichnung 2', 'Bank-Kontonummer 2', 'Länderkennzeichen 2',
+  'IBAN-Nr. 2', 'Leerfeld', 'SWIFT-Code 2', 'Abw. Kontoinhaber 2', 'Kennz. Hauptbankverb. 2', 'Bankverbindung 2 Gültig von',
+  'Bankverbindung 2 Gültig bis', 'Bankleitzahl 3', 'Bankbezeichnung 3', 'Bank-Kontonummer 3', 'Länderkennzeichen 3',
+  'IBAN-Nr. 3', 'Leerfeld', 'SWIFT-Code 3', 'Abw. Kontoinhaber 3', 'Kennz. Hauptbankverb. 3', 'Bankverbindung 3 Gültig von',
+  'Bankverbindung 3 Gültig bis', 'Bankleitzahl 4', 'Bankbezeichnung 4', 'Bank-Kontonummer 4', 'Länderkennzeichen 4',
+  'IBAN-Nr. 4', 'Leerfeld', 'SWIFT-Code 4', 'Abw. Kontoinhaber 4', 'Kennz. Hauptbankverb. 4', 'Bankverbindung 4 Gültig von',
+  'Bankverbindung 4 Gültig bis', 'Bankleitzahl 5', 'Bankbezeichnung 5', 'Bank-Kontonummer 5', 'Länderkennzeichen 5',
+  'IBAN-Nr. 5', 'Leerfeld', 'SWIFT-Code 5', 'Abw. Kontoinhaber 5', 'Kennz. Hauptbankverb. 5', 'Bankverbindung 5 Gültig von',
+  'Bankverbindung 5 Gültig bis', 'Leerfeld', 'Briefanrede', 'Grußformel', 'Kundennummer', 'Steuernummer', 'Sprache',
+  'Ansprechpartner', 'Vertreter', 'Sachbearbeiter', 'Diverse-Konto', 'Ausgabeziel', 'Währungssteuerung', 'Kreditlimit (Debitor)',
+  'Zahlungsbedingung', 'Fälligkeit in Tagen (Debitor)', 'Skonto in Prozent (Debitor)', 'Kreditoren-Ziel 1 (Tage)',
+  'Kreditoren-Skonto 1 (%)', 'Kreditoren-Ziel 2 (Tage)', 'Kreditoren-Skonto 2 (%)', 'Kreditoren-Ziel 3 Brutto (Tage)',
+  'Kreditoren-Ziel 4 (Tage)', 'Kreditoren-Skonto 4 (%)', 'Kreditoren-Ziel 5 (Tage)', 'Kreditoren-Skonto 5 (%)', 'Mahnung',
+  'Kontoauszug', 'Mahntext 1', 'Mahntext 2', 'Mahntext 3', 'Kontoauszugstext', 'Mahnlimit Betrag', 'Mahnlimit %', 'Zinsberechnung',
+  'Mahnzinssatz 1', 'Mahnzinssatz 2', 'Mahnzinssatz 3', 'Lastschrift', 'Leerfeld', 'Mandantenbank', 'Zahlungsträger',
+  'Indiv. Feld 1', 'Indiv. Feld 2', 'Indiv. Feld 3', 'Indiv. Feld 4', 'Indiv. Feld 5', 'Indiv. Feld 6', 'Indiv. Feld 7',
+  'Indiv. Feld 8', 'Indiv. Feld 9', 'Indiv. Feld 10', 'Indiv. Feld 11', 'Indiv. Feld 12', 'Indiv. Feld 13', 'Indiv. Feld 14',
+  'Indiv. Feld 15', 'Abweichende Anrede (Rechnungsadresse)', 'Adressart (Rechnungsadresse)', 'Straße (Rechnungsadresse)',
+  'Postfach (Rechnungsadresse)', 'Postleitzahl (Rechnungsadresse)', 'Ort (Rechnungsadresse)', 'Land (Rechnungsadresse)',
+  'Versandzusatz (Rechnungsadresse)', 'Adresszusatz (Rechnungsadresse)', 'Abw. Zustellbezeichnung 1 (Rechnungsadresse)',
+  'Abw. Zustellbezeichnung 2 (Rechnungsadresse)', 'Adresse Gültig von (Rechnungsadresse)', 'Adresse Gültig bis (Rechnungsadresse)',
+  'Bankleitzahl 6', 'Bankbezeichnung 6', 'Bank-Kontonummer 6', 'Länderkennzeichen 6', 'IBAN-Nr. 6', 'Leerfeld', 'SWIFT-Code 6',
+  'Abw. Kontoinhaber 6', 'Kennz. Hauptbankverb. 6', 'Bankverbindung 6 Gültig von', 'Bankverbindung 6 Gültig bis', 'Bankleitzahl 7',
+  'Bankbezeichnung 7', 'Bank-Kontonummer 7', 'Länderkennzeichen 7', 'IBAN-Nr. 7', 'Leerfeld', 'SWIFT-Code 7', 'Abw. Kontoinhaber 7',
+  'Kennz. Hauptbankverb. 7', 'Bankverbindung 7 Gültig von', 'Bankverbindung 7 Gültig bis', 'Bankleitzahl 8', 'Bankbezeichnung 8',
+  'Bank-Kontonummer 8', 'Länderkennzeichen 8', 'IBAN-Nr. 8', 'Leerfeld', 'SWIFT-Code 8', 'Abw. Kontoinhaber 8', 'Kennz. Hauptbankverb. 8',
+  'Bankverbindung 8 Gültig von', 'Bankverbindung 8 Gültig bis', 'Bankleitzahl 9', 'Bankbezeichnung 9', 'Bank-Kontonummer 9',
+  'Länderkennzeichen 9', 'IBAN-Nr. 9', 'Leerfeld', 'SWIFT-Code 9', 'Abw. Kontoinhaber 9', 'Kennz. Hauptbankverb. 9',
+  'Bankverbindung 9 Gültig von', 'Bankverbindung 9 Gültig bis', 'Bankleitzahl 10', 'Bankbezeichnung 10', 'Bank-Kontonummer 10',
+  'Länderkennzeichen 10', 'IBAN-Nr. 10', 'Leerfeld', 'SWIFT-Code 10', 'Abw. Kontoinhaber 10', 'Kennz. Hauptbankverb. 10',
+  'Bankverbindung 10 Gültig von', 'Bankverbindung 10 Gültig bis', 'Nummer Fremdsystem', 'Insolvent', 'SEPA-Mandatsreferenz 1',
+  'SEPA-Mandatsreferenz 2', 'SEPA-Mandatsreferenz 3', 'SEPA-Mandatsreferenz 4', 'SEPA-Mandatsreferenz 5', 'SEPA-Mandatsreferenz 6',
+  'SEPA-Mandatsreferenz 7', 'SEPA-Mandatsreferenz 8', 'SEPA-Mandatsreferenz 9', 'SEPA-Mandatsreferenz 10', 'Verknüpftes OPOS-Konto',
+  'Mahnsperre bis', 'Lastschriftsperre bis', 'Zahlungssperre bis', 'Gebührenberechnung', 'Mahngebühr 1', 'Mahngebühr 2',
+  'Mahngebühr 3', 'Pauschalenberechnung', 'Verzugspauschale 1', 'Verzugspauschale 2', 'Verzugspauschale 3', 'Alternativer Suchname',
+  'Status', 'Anschrift manuell geändert (Korrespondenzadresse)', 'Anschrift individuell (Korrespondenzadresse)', 'Anschrift manuell geändert (Rechnungsadresse)',
+  'Anschrift individuell (Rechnungsadresse)', 'Fristberechnung bei Debitor', 'Mahnfrist 1', 'Mahnfrist 2', 'Mahnfrist 3',
+  'Letzte Frist',
+] as const;
+
+export interface DatevPartyRow {
+  konto: string;
+  name: string;
+  /** DATEV Adressatentyp: 0 keine Angabe, 1 natürliche Person, 2 Unternehmen. */
+  addresseeType: 0 | 1 | 2;
+  vatId?: string;
+  street?: string;
+  postalCode?: string;
+  city?: string;
+  country?: string;
+  email?: string;
+}
+
+export const buildDatevPartiesCsv = (rows: DatevPartyRow[], options: Pick<DatevBuchungsstapelOptions, 'consultantNumber' | 'clientNumber' | 'fiscalYearStart' | 'accountLength' | 'chart' | 'encoding' | 'createdAt'>): Buffer => {
+  if (!Number.isInteger(options.accountLength) || options.accountLength < 4 || options.accountLength > 8) throw new Error('DATEV Sachkontenlänge muss 4 bis 8 sein.');
+  // Period, Buchungstyp, Festschreibung and WKZ belong to a Buchungsstapel; Stammdaten leave them empty.
+  const header = [
+    quote('EXTF'), DATEV_HEADER_VERSION, 16, quote('Debitoren/Kreditoren'), 5,
+    headerTimestamp(options.createdAt), '', quote('RE'), quote(''), quote(''),
+    String(options.consultantNumber), String(options.clientNumber), datevYmd(options.fiscalYearStart), options.accountLength,
+    '', '', quote(''), quote(''), '', '', '', quote(''), '', quote(''), '', '', quote(options.chart.slice(-2)), '', '', quote(''), quote(''),
+  ].join(';');
+  const text = (value: string | undefined, field: string, max: number) => value ? quote(validateText(value.slice(0, max), field, max)) : '';
+  const body = rows.map((row, idx) => {
+    if (!new RegExp(`^\\d{${options.accountLength + 1}}$`).test(row.konto)) throw new Error(`Zeile ${idx + 1}: Personenkonto passt nicht zur Sachkontenlänge.`);
+    const fields: string[] = Array.from({ length: DATEV_PARTY_COLUMNS.length }, () => '');
+    fields[0] = row.konto;
+    fields[row.addresseeType === 2 ? 1 : row.addresseeType === 1 ? 3 : 5] = text(row.name, 'Name', 50);
+    fields[6] = String(row.addresseeType);
+    const vatId = row.vatId?.replace(/\s+/g, '').toUpperCase();
+    if (vatId && /^[A-Z]{2}[A-Z0-9]{2,13}$/.test(vatId)) { fields[8] = quote(vatId.slice(0, 2)); fields[9] = quote(vatId.slice(2)); }
+    fields[15] = text(row.street, 'Straße', 36);
+    fields[17] = text(row.postalCode, 'Postleitzahl', 10);
+    fields[18] = text(row.city, 'Ort', 30);
+    fields[19] = row.country && /^[A-Z]{2}$/.test(row.country) ? quote(row.country) : '';
+    fields[32] = text(row.email, 'E-Mail', 60);
+    return fields.join(';');
+  });
+  const plain = `${header}\r\n${DATEV_PARTY_COLUMNS.join(';')}\r\n${body.join('\r\n')}${body.length ? '\r\n' : ''}`;
+  const encoded = options.encoding === 'utf8-bom' ? Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), Buffer.from(plain, 'utf8')]) : iconv.encode(plain, 'win1252');
+  if (options.encoding !== 'utf8-bom' && iconv.decode(encoded, 'win1252') !== plain) throw new Error('DATEV CP1252 kann Zeichen nicht verlustfrei darstellen.');
+  return encoded;
+};

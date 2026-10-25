@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { after, before, describe, test } from 'node:test';
-import { startLite, type LiteHarness } from './harness.js';
+import { reopenLiteWithStoredSettings, startLite, type LiteHarness } from './harness.js';
 import { getEurAnnexCatalog } from '@billme/desktop-services/eur/annexCatalog';
 import { draftInvoice, draftOffer } from './fixtures.js';
 import { bankAccount, configureLite, importBankRows, issueDated, line, pay } from './reports-fixtures.js';
@@ -718,7 +718,8 @@ describe('EÜR', () => {
 
     test('EÜR is only available for a sole proprietor with profit determination EÜR', async () => {
       const original = (await h.api.settings.get()) as any;
-      await h.api.settings.set({ settings: { ...original, businessReportingProfile: { jurisdiction: 'DE', legalForm: 'gmbh', profitDetermination: 'double_entry', hgbSizeClass: 'small', chart: 'SKR03', vatMethod: 'soll', fiscalYearStart: '01-01' } } } as never);
+      // Lite no longer accepts double entry, so this is a profile an older Lite left behind.
+      h = await reopenLiteWithStoredSettings(h, null, 'reports-eur', (s) => ({ ...s, businessReportingProfile: { jurisdiction: 'DE', legalForm: 'gmbh', profitDetermination: 'double_entry', hgbSizeClass: 'small', chart: 'SKR03', vatMethod: 'soll', fiscalYearStart: '01-01' } }));
       try {
         const blocked = await h.raw('GET', '/reports/eur?taxYear=2026');
         assert.equal(blocked.status, 409);
@@ -790,14 +791,33 @@ describe('EÜR', () => {
     assert.equal(rent.taxYear, 2026);
   });
 
-  test('the 10-day rule for a bank line: the December VAT prepayment paid on 8 January belongs to the year it is for', { todo: 'BUG: bank lines carry no "regelmäßig wiederkehrend" marker, so a classification for the previous year is refused (EUR_SOURCE_NOT_FOUND) and the payment counts in the year it flowed' }, async (t) => {
+  test('the 10-day rule for a bank line: the December VAT prepayment paid on 8 January belongs to the year it is for once the line is marked recurring', async (t) => {
     const own = await startLite(t, 'reports-ten-day-bank');
     await configureLite(own.api);
     await own.api.accounts.upsert({ account: bankAccount('bank-ten-day') } as never);
-    await importBankRows(own.api, 'bank-ten-day', [['2026-01-08', -1900, 'Finanzamt', 'USt-VA 12/2025']]);
-    const tx = (await own.api.transactions.list({} as never)).find((row) => row.counterparty === 'Finanzamt')!;
+    await importBankRows(own.api, 'bank-ten-day', [['2026-01-08', -1900, 'Finanzamt', 'USt-VA 12/2025'], ['2026-01-15', -800, 'Finanzamt', 'USt-VA 11/2025']]);
+    const rows = await own.api.transactions.list({} as never);
+    const tx = rows.find((row) => row.purpose === 'USt-VA 12/2025')!;
+    const outside = rows.find((row) => row.purpose === 'USt-VA 11/2025')!;
+    const listed = async (year: number) => own.api.eur.listItems({ taxYear: year } as never) as Promise<Array<{ sourceType: string; sourceId: string; purpose?: string; taxYear?: number }>>;
+    const line = YEAR_LINE(2026, '186');
+    assert.equal((await own.raw('PUT', '/reports/eur/classifications', { sourceType: 'transaction', sourceId: tx.id, taxYear: 2026, eurLineId: line, reason: 'erst falsch' })).status, 200);
+    assert.ok((await listed(2026)).some((item) => item.sourceId === tx.id), 'unmarked, the payment counts in the year it flowed');
+
+    const marked = await own.raw('POST', `/transactions/${tx.id}/recurring`, { recurring: true, reason: 'USt-Vorauszahlung Dezember' });
+    assert.equal(marked.status, 200, marked.text);
+    assert.equal((await own.api.transactions.list({} as never)).find((row) => row.id === tx.id)?.recurring, true);
+    assert.ok(!(await listed(2026)).some((item) => item.sourceId === tx.id), 'marked, it leaves 2026');
+    assert.equal(totalOf(await own.api.eur.getReport({ taxYear: 2026 }), '186', 2026) ?? 0, 0, 'and its old 2026 classification does not count there any more');
+    const moved = (await listed(2025)).find((item) => item.sourceId === tx.id)!;
+    assert.equal(moved.taxYear, 2025);
+    assert.match(String(moved.purpose), /10-Tage-Regel/);
     const classified = await own.raw('PUT', '/reports/eur/classifications', { sourceType: 'transaction', sourceId: tx.id, taxYear: 2025, eurLineId: YEAR_LINE(2025, '186'), reason: 'USt-Vorauszahlung Dezember' });
     assert.equal(classified.status, 200, classified.text);
+    assert.equal(totalOf(await own.api.eur.getReport({ taxYear: 2025 }), '186', 2025), 1900);
+
+    const refused = await own.raw('POST', `/transactions/${outside.id}/recurring`, { recurring: true, reason: 'außerhalb' });
+    assert.equal(refused.status, 409, 'a payment outside 22.12.–10.01. cannot be moved');
     assert.equal(totalOf(await own.api.eur.getReport({ taxYear: 2025 }), '186', 2025), 1900);
   });
 

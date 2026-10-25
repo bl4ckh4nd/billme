@@ -2,7 +2,7 @@ import { listReportMappingPositions } from './reportMappingCatalog';
 
 /**
  * Default report positions by account range of the DATEV Kontenrahmen (SKR03 / SKR04, edition 2025),
- * so GuV (§ 275 HGB, Gesamtkostenverfahren) and Bilanz (§ 266 HGB) run without mapping every account by
+ * so GuV (§ 275 HGB, Gesamtkostenverfahren), Bilanz (§ 266 HGB) and BWA 01 run without mapping every account by
  * hand. A tenant mapping (report_account_mappings) always wins; defaults are resolved at report time and
  * never stored. Ranges without a clear § 266/§ 275 position (ausstehende Einlagen, kalkulatorische Kosten,
  * Ergebnisverwendung, statistische Konten, SKR03 Klassen 5/6) stay unmapped and keep blocking.
@@ -93,6 +93,49 @@ const SKR03_GUV: readonly Range[] = [
   [8990, 8999, 'capitalized-work'],
 ];
 
+/**
+ * BWA 01 lines by the account groups of the Kontenrahmen (Raumkosten 4200–4299, Kfz 4500–4599, …). Kfz-Steuer and
+ * the other Betriebssteuern go to „Betriebliche Steuern“, Gewerbe- and Körperschaftsteuer to „Steuern“ after the
+ * result; Anlagenverkäufe, Kursdifferenzen and Abschreibungen auf Finanzanlagen are neutral. Bestandsveränderungen,
+ * aktivierte Eigenleistungen and kalkulatorische Kosten have no BWA 01 line here and keep blocking.
+ */
+const SKR03_BWA: readonly Range[] = [
+  [2000, 2099, 'other-neutral-expense'],
+  [2100, 2149, 'interest-expense'],
+  [2150, 2199, 'other-neutral-expense'],
+  [2200, 2299, 'income-tax'],
+  [2300, 2399, 'other-neutral-expense'],
+  [2400, 2499, 'other-operating-expense'],
+  [2500, 2649, 'other-neutral-income'],
+  [2650, 2699, 'interest-income'],
+  [2700, 2799, 'other-neutral-income'],
+  [3000, 3969, 'material-expense'],
+  [4000, 4099, 'material-expense'],
+  [4100, 4199, 'personnel-expense'],
+  [4200, 4299, 'space-expense'],
+  [4300, 4319, 'other-operating-expense'],
+  [4320, 4329, 'income-tax'],
+  [4330, 4359, 'operating-tax'],
+  [4360, 4399, 'insurance'],
+  [4500, 4509, 'vehicle-expense'],
+  [4510, 4519, 'operating-tax'],
+  [4520, 4599, 'vehicle-expense'],
+  [4600, 4699, 'advertising-travel'],
+  [4700, 4799, 'cost-of-goods-out'],
+  [4800, 4809, 'maintenance'],
+  [4810, 4819, 'other-operating-expense'],
+  [4820, 4869, 'depreciation'],
+  [4870, 4879, 'other-neutral-expense'],
+  [4880, 4889, 'depreciation'],
+  [4890, 4989, 'other-operating-expense'],
+  [8000, 8599, 'revenue'],
+  [8600, 8649, 'special-operating-income'],
+  [8650, 8699, 'interest-income'],
+  [8700, 8799, 'revenue'],
+  [8800, 8899, 'other-neutral-income'],
+  [8900, 8959, 'revenue'],
+];
+
 const SKR04_BILANZ: readonly Range[] = [
   [100, 199, 'assets.non-current.intangible'],
   [200, 399, 'assets.non-current.tangible.land'],
@@ -155,19 +198,50 @@ const SKR04_GUV: readonly Range[] = [
   [7650, 7699, 'other-tax'],
 ];
 
+const SKR04_BWA: readonly Range[] = [
+  [4000, 4499, 'revenue'],
+  [4500, 4599, 'special-operating-income'],
+  [4600, 4799, 'revenue'],
+  [4830, 4999, 'other-neutral-income'],
+  [5000, 5999, 'material-expense'],
+  [6000, 6199, 'personnel-expense'],
+  [6200, 6279, 'depreciation'],
+  [6280, 6299, 'other-operating-expense'],
+  [6300, 6309, 'other-operating-expense'],
+  [6310, 6389, 'space-expense'],
+  [6390, 6399, 'other-operating-expense'],
+  [6400, 6449, 'insurance'],
+  [6450, 6499, 'maintenance'],
+  [6500, 6599, 'vehicle-expense'],
+  [6600, 6699, 'advertising-travel'],
+  [6700, 6799, 'cost-of-goods-out'],
+  [6800, 6879, 'other-operating-expense'],
+  [6880, 6899, 'other-neutral-expense'],
+  [6900, 6959, 'other-operating-expense'],
+  [6960, 6969, 'other-neutral-expense'],
+  [7000, 7099, 'other-neutral-income'],
+  [7100, 7199, 'interest-income'],
+  [7200, 7299, 'other-neutral-expense'],
+  [7300, 7399, 'interest-expense'],
+  [7600, 7649, 'income-tax'],
+  [7650, 7699, 'operating-tax'],
+];
+
 const RANGES = {
-  SKR03: { 'hgb-bilanz': SKR03_BILANZ, 'hgb-guv': SKR03_GUV },
-  SKR04: { 'hgb-bilanz': SKR04_BILANZ, 'hgb-guv': SKR04_GUV },
+  SKR03: { 'hgb-bilanz': SKR03_BILANZ, 'hgb-guv': SKR03_GUV, bwa01: SKR03_BWA },
+  SKR04: { 'hgb-bilanz': SKR04_BILANZ, 'hgb-guv': SKR04_GUV, bwa01: SKR04_BWA },
 } as const;
 
-export type DefaultReportStatement = 'hgb-guv' | 'hgb-bilanz';
+export type DefaultReportStatement = 'hgb-guv' | 'hgb-bilanz' | 'bwa01';
+/** The profit-and-loss layout whose defaults apply besides the balance sheet. */
+export type DefaultResultStatement = 'hgb-guv' | 'bwa01';
 export interface DefaultReportPosition { statement: DefaultReportStatement; position: string; side?: 'asset' | 'liability' }
 
-/** The § 266 / § 275 position an account falls into by its number, or undefined when its range has none. */
-export const defaultReportPosition = (chart: 'SKR03' | 'SKR04', accountNumber: string): DefaultReportPosition | undefined => {
+/** The § 266 position, else the position of `result` (§ 275 or BWA 01), an account falls into by its number; undefined when its range has none. */
+export const defaultReportPosition = (chart: 'SKR03' | 'SKR04', accountNumber: string, result: DefaultResultStatement = 'hgb-guv'): DefaultReportPosition | undefined => {
   if (!/^\d{4}$/.test(accountNumber)) return undefined;
   const number = Number(accountNumber);
-  for (const statement of ['hgb-bilanz', 'hgb-guv'] as const) {
+  for (const statement of ['hgb-bilanz', result] as const) {
     const hit = RANGES[chart][statement].find(([from, to]) => number >= from && number <= to);
     if (hit) return { statement, position: hit[2], ...(statement === 'hgb-bilanz' ? { side: hit[2].startsWith('assets.') ? 'asset' as const : 'liability' as const } : {}) };
   }
@@ -184,6 +258,7 @@ export const defaultReportMappings = (
   size: 'micro' | 'small',
   asOfDate: string,
   mapped: (accountNumber: string, statement: DefaultReportStatement) => boolean,
+  result: DefaultResultStatement = 'hgb-guv',
 ): Array<{ accountNumber: string; statement: DefaultReportStatement; position: string; label: string; side?: 'asset' | 'liability' }> => {
   const catalogs = new Map<DefaultReportStatement, Map<string, string>>();
   const catalog = (statement: DefaultReportStatement) => {
@@ -192,7 +267,7 @@ export const defaultReportMappings = (
   };
   const out: ReturnType<typeof defaultReportMappings> = [];
   for (const accountNumber of new Set(accounts)) {
-    const found = defaultReportPosition(chart, accountNumber);
+    const found = defaultReportPosition(chart, accountNumber, result);
     if (!found || mapped(accountNumber, found.statement)) continue;
     const keys = catalog(found.statement);
     let position = found.position;

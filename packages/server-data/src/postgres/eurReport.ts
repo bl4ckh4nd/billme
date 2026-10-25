@@ -159,6 +159,11 @@ const tenDayYear = (paid: string, economic: string | undefined, due: string | un
   return near(paid) && near(due) ? economicYear : undefined;
 };
 const yearOf = (date: string) => Number(date.slice(0, 4));
+/** A bank line the user marked regelmäßig wiederkehrend: paid 22.12.–31.12. it is for the next year, 01.01.–10.01. for the previous one. */
+export const tenDayRecurringYear = (paid: string): number | undefined => {
+  const day = paid.slice(5, 10);
+  return day >= '12-22' ? yearOf(paid) + 1 : day <= '01-10' ? yearOf(paid) - 1 : undefined;
+};
 const TEN_DAY_NOTE = ' (10-Tage-Regel, § 11 EStG)';
 
 const listCashSources = async (db: PostgresQueryable, scope: TenantScope, from: string, to: string, product: EurProduct = 'pro'): Promise<CashSource[]> => {
@@ -202,7 +207,7 @@ const listCashSources = async (db: PostgresQueryable, scope: TenantScope, from: 
     const transactions = await q<Record<string, unknown>>(db, `
       SELECT * FROM transactions WHERE tenant_id=$1 AND status='booked'
         AND (deleted_at IS NULL OR deleted_at='') AND date >= $2 AND date <= $3
-      ORDER BY date,id`, [t, from, to]);
+      ORDER BY date,id`, [t, `${taxYear - 1}-12-22`, `${taxYear + 1}-01-10`]);
     const allTransactionIds = new Set((await q<{ id: string }>(db, `SELECT id FROM transactions WHERE tenant_id=$1`, [t])).map((row) => row.id));
     const manual = await q<Record<string, unknown>>(db, `SELECT m.*,b.date AS bank_date,b.account_id,b.type AS bank_type,r.receipt_json FROM lite_cash_entries m LEFT JOIN transactions b ON b.tenant_id=m.tenant_id AND b.id=m.matched_transaction_id LEFT JOIN lite_receipts r ON r.tenant_id=m.tenant_id AND r.id=m.receipt_id WHERE m.tenant_id=$1 AND m.deleted_at IS NULL`, [t]);
     const representedManual = new Set(manual.map((row) => row.matched_transaction_id).filter(Boolean));
@@ -231,6 +236,8 @@ const listCashSources = async (db: PostgresQueryable, scope: TenantScope, from: 
       const applied = allocation.reduce((sum, payment) => sum + payment.amount, 0);
       const residual = round(Number(bank.amount) - applied);
       if (residual === 0) continue;
+      const year = (bank.recurring === true ? tenDayRecurringYear(String(bank.date)) : undefined) ?? yearOf(String(bank.date));
+      if (year !== taxYear) continue;
       result.push({
         sourceType: 'transaction',
         sourceId: String(bank.id),
@@ -240,7 +247,7 @@ const listCashSources = async (db: PostgresQueryable, scope: TenantScope, from: 
         accountId: bank.account_id ? String(bank.account_id) : undefined,
         linkedViaInvoice: false,
         counterparty: String(bank.counterparty ?? ''),
-        purpose: String(bank.purpose ?? ''),
+        purpose: `${String(bank.purpose ?? '')}${year !== yearOf(String(bank.date)) ? TEN_DAY_NOTE : ''}`,
         classificationSourceIds: aliases,
         warning: bank.linked_invoice_id && allocation.length !== 1 ? `CASH_ALLOCATION_REVIEW_REQUIRED:${bank.id}` : undefined,
       });

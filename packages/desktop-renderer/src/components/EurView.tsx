@@ -290,6 +290,17 @@ export const EurView: React.FC = () => {
     }) => ipc.eur.upsertClassification(payload),
   });
 
+  // § 11 EStG: a bank line paid 22.12.–10.01. that the user marks regelmäßig wiederkehrend counts in the neighbouring year.
+  const recurringTargetYear = (date: string) => date.slice(5, 10) >= '12-22' ? Number(date.slice(0, 4)) + 1 : date.slice(5, 10) <= '01-10' ? Number(date.slice(0, 4)) - 1 : undefined;
+  const setRecurring = useMutation({
+    mutationFn: (payload: { transactionId: string; recurring: boolean }) => ipc.transactions.setRecurring(payload),
+    onSuccess: async (_result, payload) => {
+      await queryClient.invalidateQueries({ queryKey: ['eur'] });
+      showNotification(payload.recurring ? 'Als regelmäßig wiederkehrend markiert; die Zahlung zählt jetzt im Nachbarjahr.' : 'Markierung entfernt; die Zahlung zählt wieder im Jahr des Geldflusses.');
+    },
+    onError: (error) => showNotification(error instanceof Error ? error.message : String(error), 'error'),
+  });
+
   const invalidateEur = async () => {
     await Promise.all([
       queryClient.invalidateQueries({ queryKey: ['eur', 'items', taxYear] }),
@@ -894,6 +905,10 @@ export const EurView: React.FC = () => {
                         ))}
                       </Select>
                       {!isProProduct && <Checkbox className="mt-2" label="Weitere Kategorien anzeigen" checked={showAllCategories} onChange={(e) => setShowAllCategories(e.target.checked)} />}
+                      {!isProProduct && activeItem.sourceType === 'transaction' && recurringTargetYear(activeItem.date) !== undefined && (() => {
+                        const marked = activeItem.taxYear !== undefined && activeItem.taxYear !== Number(activeItem.date.slice(0, 4));
+                        return <Checkbox className="mt-2" label={`Regelmäßig wiederkehrend und um den Jahreswechsel fällig: zählt in ${recurringTargetYear(activeItem.date)} (10-Tage-Regel, § 11 EStG)`} checked={marked} disabled={setRecurring.isPending} onChange={(e) => setRecurring.mutate({ transactionId: activeItem.sourceId, recurring: e.target.checked })} />;
+                      })()}
                       {splitAllowed && <Checkbox className="mt-2" label="Bewirtung aufteilen: 70 % abziehbar, 30 % nicht abziehbar (Vorsteuer bleibt voll abziehbar)" checked={hospitalitySplit} onChange={(e) => setHospitalitySplit(e.target.checked)} />}
                     </div>
                     <Input

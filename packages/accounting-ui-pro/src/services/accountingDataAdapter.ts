@@ -135,10 +135,13 @@ export interface ProAccountingDataAdapter {
     fiscalYearStart: string;
     accountLength: number;
     encoding: 'cp1252' | 'utf8-bom';
+    kind?: 'journal' | 'opening_balances' | 'parties';
   }) => Promise<DatevExportResult>;
   listDatevExports?: (limit?: number) => Promise<DatevExportResult[]>;
   /** Prüferpaket (GoBD Z3): journal, Kontenplan, master data, receipts, OPOS, assets and mappings of the range. */
   exportAuditPackage?: (args: { from: string; to: string; includeDocuments: boolean }) => Promise<{ bundleDir: string; fileCount: number }>;
+  /** Draft Verfahrensdokumentation (GoBD Rz. 151 ff.) as Markdown, filled from settings and books. */
+  exportProcedureDocumentation?: () => Promise<{ fileName: string }>;
   getDatevExportContent?: (exportId: string) => Promise<Blob>;
   listOpenItems?: () => Promise<OpenItemEntity[]>;
   listBankTransactions?: () => Promise<OposBankTransaction[]>;

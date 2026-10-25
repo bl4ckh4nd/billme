@@ -7,6 +7,7 @@ import './route-log.js';
 import { ISSUER } from './fixtures.js';
 import { createLiteHttpBillmeApi } from '@billme/desktop-services/liteHttpApi';
 import { createProHttpBillmeApi } from '@billme/desktop-services/proHttpApi';
+import { PgliteServerDatabase } from '@billme/server-data';
 import { createLocalBackend } from '../../../apps/desktop/electron/localBackend.js';
 import { PRODUCT_PROFILE as LITE_PROFILE } from '../../../apps/desktop/productProfile.js';
 import { createProLocalBackend } from '../../../apps/pro-desktop/electron/proLocalBackend.js';
@@ -107,6 +108,23 @@ export const startPro = async (t: TestContext | null, suite: string, existingDat
 };
 
 export type LiteHarness = Awaited<ReturnType<typeof startLite>>;
+
+/**
+ * Rewrites the stored Lite settings below the API, the way an older app version
+ * left them, and reopens the backend on the same data dir. For states the
+ * settings route no longer accepts (a Lite profile on double entry).
+ */
+export const reopenLiteWithStoredSettings = async (h: LiteHarness, t: TestContext | null, suite: string, edit: (settings: any) => unknown): Promise<LiteHarness> => {
+  await h.close({ keepData: true });
+  const database = await PgliteServerDatabase.open(join(h.userDataPath, LITE_PROFILE.dataDirName));
+  try {
+    const stored = (await database.query<{ settings_json: string }>('SELECT settings_json FROM server_settings WHERE tenant_id=$1', [LITE_PROFILE.localTenantId])).rows[0]!;
+    await database.query('UPDATE server_settings SET settings_json=$2 WHERE tenant_id=$1', [LITE_PROFILE.localTenantId, JSON.stringify(edit(JSON.parse(stored.settings_json)))]);
+  } finally {
+    await database.close();
+  }
+  return startLite(t, suite, h.userDataPath);
+};
 
 /** Pro extends the Lite contract, so the billing suites run once per product (`<suite>-on-pro` transcripts for Pro). */
 export const PRODUCTS = ['lite', 'pro'] as const;

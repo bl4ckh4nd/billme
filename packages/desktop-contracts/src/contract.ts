@@ -153,6 +153,7 @@ const transactionSchema = z.object({
   status: z.enum(['pending', 'booked']),
   dedupHash: z.string().optional(),
   importBatchId: z.string().optional(),
+  recurring: z.boolean().optional(),
 });
 
 const invoiceMatchSuggestionSchema = z.object({
@@ -184,6 +185,11 @@ const linkTransactionResultSchema = z.object({
 
 const unlinkTransactionSchema = z.object({
   transactionId: z.string().min(1),
+});
+
+const setTransactionRecurringSchema = z.object({
+  transactionId: z.string().min(1),
+  recurring: z.boolean(),
 });
 
 const listTransactionsFiltersSchema = z.object({
@@ -937,6 +943,11 @@ export const ipcRoutes = {
   'transactions:unlink': {
     channel: 'transactions:unlink',
     args: unlinkTransactionSchema,
+    result: z.object({ success: z.boolean() }),
+  },
+  'transactions:setRecurring': {
+    channel: 'transactions:setRecurring',
+    args: setTransactionRecurringSchema,
     result: z.object({ success: z.boolean() }),
   },
 

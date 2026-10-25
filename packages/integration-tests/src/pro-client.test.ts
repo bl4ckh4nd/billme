@@ -217,6 +217,8 @@ describe('pro renderer client against the embedded backend', () => {
     const receipt = await api().pro.exportDatevBuchungsstapel({ from: '2026-03-01', to: '2026-03-31', consultantNumber: '1234567', clientNumber: '12345', fiscalYearStart: '2026-01-01', accountLength: 4 });
     assert.ok(receipt.recordCount > 0);
     assert.ok((await api().pro.listDatevExports({ limit: 10 })).some((entry) => entry.id === receipt.id));
+    const opening = await api().pro.exportDatevBuchungsstapel({ from: '2026-03-01', to: '2026-03-31', consultantNumber: '1234567', clientNumber: '12345', fiscalYearStart: '2026-01-01', accountLength: 4, kind: 'opening_balances' });
+    assert.deepEqual([opening.recordCount, opening.id === receipt.id], [0, false], 'the EB stack is its own export: March carries no balances forward');
     await assert.rejects(api().pro.exportDatevBuchungsstapel({ from: '2026-03-01', to: '2026-04-30', consultantNumber: '1234567', clientNumber: '12345', fiscalYearStart: '2026-01-01', accountLength: 4 }), /Periode/, 'the server message reaches the caller');
     await assert.rejects(api().pro.exportDatevBuchungsstapel({ from: '2026-03-01', to: '2026-03-31' } as never), /Beraternummer/, 'an incomplete export is refused before the request');
 

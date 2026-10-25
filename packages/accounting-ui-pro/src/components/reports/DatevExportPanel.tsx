@@ -6,6 +6,7 @@ import { permissionContextForRole } from '../../domain/permissions';
 import type { UserRole } from '../../types';
 
 type DatevEncoding = 'cp1252' | 'utf8-bom';
+type DatevKind = 'journal' | 'opening_balances' | 'parties';
 
 interface DatevExportValues {
   from: string;
@@ -15,6 +16,7 @@ interface DatevExportValues {
   fiscalYearStart: string;
   accountLength: string;
   encoding: DatevEncoding;
+  kind: DatevKind;
 }
 
 interface DatevExportPanelProps {
@@ -40,6 +42,7 @@ function defaultValues(): DatevExportValues {
     fiscalYearStart: `${year}-01-01`,
     accountLength: '4',
     encoding: 'cp1252',
+    kind: 'journal',
   };
 }
 
@@ -120,6 +123,20 @@ export default function DatevExportPanel({ dataAdapter, chartFramework = 'SKR03'
 
   const validationError = useMemo(() => validate(values), [values]);
   const canExportAudit = permissionContextForRole(role).canMutate && Boolean(dataAdapter?.exportAuditPackage);
+  const exportProcedure = async () => {
+    if (!dataAdapter?.exportProcedureDocumentation) return;
+    setAuditBusy(true);
+    setAuditNotice(null);
+    try {
+      const result = await dataAdapter.exportProcedureDocumentation();
+      setAuditNotice({ text: `Entwurf gespeichert: ${result.fileName}. Abschnitt 5 ergänzt das Unternehmen selbst.`, error: false });
+    } catch (procedureError) {
+      setAuditNotice({ text: procedureError instanceof Error ? procedureError.message : 'Verfahrensdokumentation konnte nicht erstellt werden.', error: true });
+    } finally {
+      setAuditBusy(false);
+    }
+  };
+
   const exportAudit = async () => {
     if (!dataAdapter?.exportAuditPackage) return;
     setAuditBusy(true);
@@ -164,6 +181,7 @@ export default function DatevExportPanel({ dataAdapter, chartFramework = 'SKR03'
         fiscalYearStart: values.fiscalYearStart,
         accountLength: Number(values.accountLength),
         encoding: values.encoding,
+        kind: values.kind,
       });
       setSuccess(result);
       await loadHistory();
@@ -191,6 +209,11 @@ export default function DatevExportPanel({ dataAdapter, chartFramework = 'SKR03'
 
       <form className="space-y-3 p-3.5" onSubmit={handleSubmit} noValidate>
         <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+          <Select label="Inhalt" value={values.kind} onChange={(event) => update('kind', event.target.value as DatevKind)} fullWidth>
+            <option value="journal">Buchungen</option>
+            <option value="opening_balances">Saldovorträge (EB-Werte)</option>
+            <option value="parties">Debitoren/Kreditoren (Stammdaten)</option>
+          </Select>
           <Input label="Von" type="date" value={values.from} onChange={(event) => update('from', event.target.value)} required fullWidth />
           <Input label="Bis" type="date" value={values.to} onChange={(event) => update('to', event.target.value)} required fullWidth />
           <Input label="Wirtschaftsjahresbeginn" type="date" value={values.fiscalYearStart} onChange={(event) => update('fiscalYearStart', event.target.value)} required fullWidth />
@@ -207,20 +230,25 @@ export default function DatevExportPanel({ dataAdapter, chartFramework = 'SKR03'
         {error ? <div className="rounded-control border border-error-border bg-error-bg px-3 py-2.5 text-control text-error-text" role="alert" aria-live="assertive">{error}</div> : null}
         {success ? (
           <div className="rounded-control border border-success-border bg-success-bg px-3 py-2.5 text-control text-success-text" role="status" aria-live="polite">
-            DATEV-Datei heruntergeladen · Serverbeleg <span className="break-all font-mono text-caption">{success.id}</span> · {success.recordCount} {success.recordCount === 1 ? 'Buchung' : 'Buchungen'}.
+            DATEV-Datei heruntergeladen · Serverbeleg <span className="break-all font-mono text-caption">{success.id}</span> · {success.recordCount} {values.kind === 'parties' ? (success.recordCount === 1 ? 'Personenkonto' : 'Personenkonten') : success.recordCount === 1 ? 'Buchung' : 'Buchungen'}.
             {success.sha256 ? <span className="mt-1 block break-all font-mono text-caption">SHA-256: {success.sha256}</span> : null}
           </div>
         ) : null}
         <div className="flex flex-wrap items-center justify-between gap-3">
           {!canExport ? <p className="text-caption text-muted">Der Browserzugriff kann keine Datei schreiben oder exportieren.</p> : <span />}
           <div className="flex flex-wrap gap-2">
+            {canExportAudit && dataAdapter?.exportProcedureDocumentation ? (
+              <Button type="button" variant="ghost" disabled={auditBusy} aria-busy={auditBusy} onClick={() => void exportProcedure()}>
+                Verfahrensdokumentation (Entwurf)
+              </Button>
+            ) : null}
             {canExportAudit ? (
               <Button type="button" variant="ghost" disabled={auditBusy || !values.from || !values.to} aria-busy={auditBusy} onClick={() => void exportAudit()}>
                 {auditBusy ? 'Prüferpaket wird erstellt…' : 'Prüferpaket (Z3) exportieren'}
               </Button>
             ) : null}
             <Button type="submit" variant="secondary" disabled={exporting || !canExport} aria-busy={exporting}>
-              {exporting ? 'Export läuft…' : 'Buchungsstapel exportieren'}
+              {exporting ? 'Export läuft…' : values.kind === 'opening_balances' ? 'EB-Werte exportieren' : values.kind === 'parties' ? 'Stammdaten exportieren' : 'Buchungsstapel exportieren'}
             </Button>
           </div>
         </div>

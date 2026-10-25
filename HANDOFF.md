@@ -2,10 +2,11 @@
 
 ## Stand 25.10.2026: alles zusammengeführt, Server-Mode-E2E grün
 
-- `refactor/slim-architecture` enthält die Fix-Runde, `feature/booking-followups` und `feature/umbuchungen-regel-engine` (Merges `6a3eb0f`, `75c7e75`). Nicht gepusht, `main` unberührt.
+- `refactor/slim-architecture` enthält die Fix-Runde, `feature/booking-followups` und `feature/umbuchungen-regel-engine` (Merges `6a3eb0f`, `75c7e75`). Gepusht nach `private` (billme-private).
+- Öffentliches `origin/main` (PRs #34–#38) ist per `9f8d150` in den Branch gemergt; das öffentliche Repo bleibt unberührt. Von `main` übernommen: CI-Trigger für `publish-ghcr.yml`, `docker-compose.server-mode.ghcr.yml`, `EUR_PROFILE_REQUIRED` bei fehlenden Server-Einstellungen. Alles andere (Pro-Web-Renderer, API-Proxy, Browser-Shell, `desktop-data`-Mapping, Unit-Tests) war hier schon anders gelöst und behält den Branch-Stand.
 - Prüfstand: Integration 1442/1442, Desktop-E2E Lite+Pro 164/164, Server-Mode-E2E `pnpm test:e2e:server:full` 23/23 (Podman, Postgres, alle Migrationen bis 0067).
 - Server-Mode-Szenarien waren veraltet, nicht das Produkt: Ansprechpartner sind eine Liste (`lite/scenarios.mjs`), der Jahresabschluss sperrt das Jahr vorläufig und die Festschreibung gilt kumulativ (`pro/source-runs.mjs` öffnet die Monate über die API wieder, Soft-Lock-Fall auf 2026-11), UStVA-Zeilen tragen Kennzahlen, Leserechte-Meldung auf Deutsch, eine Ausgangszeile beim Debitor ist ohne `refund: false` eine Rückzahlung (`pro/nonhappy.mjs`).
-- Offen beim User: pushen und PR gegen `main`; wo die Images gebaut werden; Saldovorträge je Personenkonto; DATEV-Formate gegen echten Import prüfen; Verfahrensdokumentation gegenlesen.
+- Offen beim User: ob und wann der Stand ins öffentliche `main` geht; wo die Images gebaut werden; Saldovorträge je Personenkonto; DATEV-Formate gegen echten Import prüfen; Verfahrensdokumentation gegenlesen.
 
 ## Fix-Runde nach dem Nutzer-Durchgang 24.10.2026 (nicht committet)
 

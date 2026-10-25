@@ -308,6 +308,7 @@ export const dunningHistory = pgTable("dunning_history", {
   dunningLevel: integer("dunning_level"),
   daysOverdue: integer("days_overdue"),
   feeApplied: numeric("fee_applied"),
+  interestApplied: numeric("interest_applied"),
   emailSent: boolean("email_sent"),
   emailLogId: text("email_log_id"),
   processedAt: text("processed_at"),
@@ -523,6 +524,7 @@ export const incomingInvoiceLines = pgTable("incoming_invoice_lines", {
   id: text("id"), tenantId: text("tenant_id"), incomingInvoiceId: text("incoming_invoice_id"), position: integer("position"),
   description: text("description"), quantity: numeric("quantity"), unitPrice: numeric("unit_price"), netAmount: numeric("net_amount"),
   taxRate: numeric("tax_rate"), taxAmount: numeric("tax_amount"), grossAmount: numeric("gross_amount"), accountNumber: text("account_number"), assetAccountNumber: text("asset_account_number"),
+  inputVatDeductible: boolean("input_vat_deductible"),
 });
 
 export const incomingInvoiceDocuments = pgTable("incoming_invoice_documents", {
@@ -727,6 +729,10 @@ export const taxSubmissionJobs = pgTable("tax_submission_jobs", {
   updatedAt: text("updated_at"),
 });
 
+export const datevPartyAccounts = pgTable("datev_party_accounts", {
+  tenantId: text("tenant_id"), partyType: text("party_type"), partyId: text("party_id"), ordinal: integer("ordinal"), createdAt: text("created_at"),
+});
+
 export const datevExports = pgTable("datev_exports", {
   id: text("id"),
   tenantId: text("tenant_id"),
@@ -804,6 +810,7 @@ export const transactions = pgTable("transactions", {
   dedupHash: text("dedup_hash"),
   importBatchId: text("import_batch_id"),
   deletedAt: text("deleted_at"),
+  recurring: boolean("recurring"),
 });
 
 export const eurLines = pgTable("eur_lines", {

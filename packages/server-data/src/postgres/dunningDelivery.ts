@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { dunningDeliverySchema, isInvoiceOverdue, localIsoDate, type AccountingMutationContext, type DunningDeliveryPort, type TenantScope } from '@billme/server-core';
 import { createPostgresDunningHistoryRepository, createPostgresInvoiceRepository } from './billing.js';
 import { createPostgresAuditLogPort } from './audit.js';
-import { postDunningFeeInTransaction } from './proAccountingRepository.js';
+import { postDunningFeeInTransaction, postDunningInterestInTransaction } from './proAccountingRepository.js';
 import { runInTransaction, type PostgresQueryable, type PostgresTransactionClient } from './connection.js';
 
 const stamp = () => new Date().toISOString();
@@ -51,9 +51,11 @@ export const createPostgresDunningDelivery = (db: PostgresQueryable): DunningDel
     const after = await repository.patchDunning!(scope, before.id, { dunningLevel: Number(row.level), historyEntry: { date: history.processedAt.slice(0, 10), action: `Mahnstufe ${row.level} vom E-Mail-Anbieter angenommen` } });
     // A fee is owed only while the invoice is: one paid or cancelled before the mail was accepted carries none.
     const fee = ['paid', 'cancelled', 'draft'].includes(before.status) ? 0 : Math.round(Number(row.fee) * 100) / 100;
-    await createPostgresDunningHistoryRepository(client).record(scope, { ...history, invoiceId: before.id, invoiceNumber: before.number, dunningLevel: Number(row.level), emailSent: true, feeApplied: fee });
-    // Pro books the fee as the customer's receivable, in the same transaction as the history row.
+    const interest = ['paid', 'cancelled', 'draft'].includes(before.status) ? 0 : Math.round((history.interestApplied ?? 0) * 100) / 100;
+    await createPostgresDunningHistoryRepository(client).record(scope, { ...history, invoiceId: before.id, invoiceNumber: before.number, dunningLevel: Number(row.level), emailSent: true, feeApplied: fee, ...(interest > 0 ? { interestApplied: interest } : { interestApplied: undefined }) });
+    // Pro books fee and interest as the customer's receivable, in the same transaction as the history row.
     await postDunningFeeInTransaction(client, scope, { invoiceId: before.id, level: Number(row.level), fee, date: localIsoDate(new Date(history.processedAt)), mutation });
+    await postDunningInterestInTransaction(client, scope, { invoiceId: before.id, level: Number(row.level), interest, date: localIsoDate(new Date(history.processedAt)), mutation });
     await client.query("UPDATE dunning_deliveries SET state='sent',updated_at=$1,error=NULL WHERE id=$2", [stamp(), id]);
     await createPostgresAuditLogPort(client).append(scope, { occurredAt: stamp(), action: 'invoice.dunning_reminder_sent', reason: mutation.reason, actor: mutation.actor!, subject: { entityType: 'invoice', entityId: before.id, tenantId: scope.tenantId }, change: { before, after } });
     return fee;

@@ -332,6 +332,34 @@
       "breakpoints": false
     },
     {
+      "idx": 50,
+      "version": "7",
+      "when": 1790985600020,
+      "tag": "0050_server_data_incoming_line_input_vat",
+      "breakpoints": false
+    },
+    {
+      "idx": 51,
+      "version": "7",
+      "when": 1790985600021,
+      "tag": "0051_server_data_dunning_interest",
+      "breakpoints": false
+    },
+    {
+      "idx": 52,
+      "version": "7",
+      "when": 1790985600022,
+      "tag": "0052_server_data_transaction_recurring",
+      "breakpoints": false
+    },
+    {
+      "idx": 53,
+      "version": "7",
+      "when": 1790985600023,
+      "tag": "0053_server_data_datev_party_accounts",
+      "breakpoints": false
+    },
+    {
       "idx": 60,
       "version": "7",
       "when": 1790985600030,

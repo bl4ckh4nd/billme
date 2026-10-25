@@ -71,6 +71,7 @@ import {
   saveServerSettings,
   createPostgresProjectRepository,
   buildPostgresTaxAuditExportArtifact,
+  buildProcedureDocumentation,
   type ServerDatabase,
   type ServerDatabaseSession,
 } from '@billme/server-data';
@@ -980,6 +981,11 @@ const registerBillingRoutes = (app: FastifyInstance, product: 'lite' | 'pro', pr
         const after = appSettingsSchema.parse(body.settings);
         const masterdataError = settingsMasterdataError(after, before ?? undefined);
         if (masterdataError) throw new ApiError(400, masterdataError);
+        // Lite has no ledger. A profile an older Lite stored on double entry keeps saving (and may go back to EÜR).
+        if (product === 'lite' && after.businessReportingProfile?.profitDetermination === 'double_entry'
+          && before?.businessReportingProfile?.profitDetermination !== 'double_entry') {
+          throw new ApiError(409, 'billme Lite rechnet nur mit EÜR. Doppelte Buchführung gibt es in billme Pro.');
+        }
         // Soll/Ist changes take effect from a period start, never retroactively for filed months:
         // without an explicit start the change applies from the first day of the current month.
         // Choosing the method during onboarding is no switch: it applies to the whole history.
@@ -1277,6 +1283,19 @@ const registerTaxAuditExportRoute = (app: FastifyInstance) => {
         session.scope.tenantId,
         body,
       );
+    },
+  });
+
+  typedRoute(app, {
+    method: 'GET',
+    url: '/api/v1/pro/tax/procedure-documentation',
+    async handler({ request, reply }) {
+      const session = await requireAuditExportSession(app, 'pro', request.headers.authorization);
+      const today = localIsoDate(new Date());
+      const content = await buildProcedureDocumentation(requireDatabase(app), session.scope.tenantId, today);
+      reply.header('content-type', 'text/markdown; charset=utf-8');
+      reply.header('content-disposition', `attachment; filename="Verfahrensdokumentation_${today}.md"`);
+      return reply.send(content);
     },
   });
 };

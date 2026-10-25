@@ -258,6 +258,7 @@ export const transactionSchema = z.object({
   accountId: z.string().optional(),
   dedupHash: z.string().optional(),
   importBatchId: z.string().optional(),
+  recurring: z.boolean().optional(),
 });
 
 export const eurLineSchema = z.object({

@@ -655,6 +655,27 @@ export async function setProAccountingPeriodStatus(desktop, period, status = 'so
   return { period, status };
 }
 
+/**
+ * Rewrites the stored Lite settings the way an older Lite left them (the settings route no longer
+ * accepts every such state, e.g. double entry): stop the app, edit the row, start it again on the
+ * same data. `desktop` is updated in place.
+ */
+export async function setStoredLiteSettings(desktop, edit) {
+  const { userDataDir } = desktop;
+  await desktop.close({ keepData: true });
+  const { PGlite } = await import('@electric-sql/pglite');
+  const db = new PGlite(path.join(userDataDir, 'billme-pglite'));
+  try {
+    await db.waitReady;
+    const tenant = 'billme-local-tenant';
+    const { rows } = await db.query('SELECT settings_json FROM server_settings WHERE tenant_id=$1', [tenant]);
+    await db.query('UPDATE server_settings SET settings_json=$2 WHERE tenant_id=$1', [tenant, JSON.stringify(edit(JSON.parse(rows[0].settings_json)))]);
+  } finally {
+    await db.close();
+  }
+  Object.assign(desktop, await launchDesktopApp({ userDataDir }));
+}
+
 /** Returns the embedded Factur-X XML of a PDF, or null when there is none. */
 export async function readEmbeddedFacturX(bytes) {
   const { PDFArray, PDFDict, PDFDocument, PDFName, decodePDFRawStream } = await import('pdf-lib');

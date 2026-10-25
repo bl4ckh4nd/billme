@@ -1,5 +1,7 @@
 import crypto from 'node:crypto';
 import type { PostgresQueryable } from './connection.js';
+import type { ServerQueryField } from '../database.js';
+import { GDPDU_DTD, GDPDU_DTD_FILE } from './gdpduDtd.js';
 import { exportPostgresAuditCsv, verifyPostgresAuditChain } from './audit.js';
 
 export type TaxAuditExportPackageArgs = {
@@ -63,6 +65,8 @@ const datasets: Dataset[] = [
   { name: 'bank-transactions.jsonl', table: 'bank_transactions', dateColumn: 'date', orderBy: 'date ASC, id ASC' },
   { name: 'bank-transaction-documents.jsonl', table: 'bank_transaction_documents', dateVia: 'bank_transaction_id:bank_transactions:date', columns: 'id,tenant_id,bank_transaction_id,original_filename,mime_type,byte_length,sha256,created_at', orderBy: 'created_at ASC, id ASC' },
   { name: 'datev-exports.jsonl', table: 'datev_exports', dateColumn: 'created_at', orderBy: 'created_at ASC, id ASC' },
+  // Which customer or vendor stands behind a Personenkonto of the DATEV stacks.
+  { name: 'datev-party-accounts.jsonl', table: 'datev_party_accounts', orderBy: 'party_type ASC, ordinal ASC' },
   { name: 'booking-drafts.jsonl', table: 'booking_drafts', dateColumn: 'updated_at', orderBy: 'updated_at ASC, id ASC' },
   { name: 'draft-validation-issues.jsonl', table: 'draft_validation_issues', dateColumn: 'created_at', orderBy: 'created_at ASC, id ASC' },
 ];
@@ -78,7 +82,7 @@ const queryRows = async (
   dataset: Dataset,
   tenantId: string,
   args: TaxAuditExportPackageArgs,
-): Promise<unknown[]> => {
+): Promise<{ rows: unknown[]; fields?: readonly ServerQueryField[] }> => {
   const values: unknown[] = [tenantId];
   const predicates = ['tenant_id = $1'];
   if (args.from && dataset.dateColumn) {
@@ -100,8 +104,56 @@ const queryRows = async (
     `SELECT ${dataset.columns ?? '*'} FROM ${dataset.table} WHERE ${predicates.join(' AND ')} ORDER BY ${dataset.orderBy}`,
     values,
   );
-  return result.rows;
+  return { rows: result.rows, fields: result.fields };
 };
+
+// GDPdU (Beschreibungsstandard): every dataset again as CSV, described in index.xml, so audit software (IDEA) reads it.
+type GdpduColumn = { name: string; type: 'numeric' | 'integer' | 'date' | 'text'; accuracy?: number };
+const NUMERIC_TYPES = new Set([1700, 700, 701]);
+const INTEGER_TYPES = new Set([20, 21, 23]);
+const BYTEA = 17;
+const ISO_DAY = /^\d{4}-\d{2}-\d{2}$/;
+const gdpduColumns = (rows: Array<Record<string, unknown>>, fields: readonly ServerQueryField[] | undefined): GdpduColumn[] =>
+  (fields?.length ? fields : Object.keys(rows[0] ?? {}).map((name) => ({ name, dataTypeID: undefined }))).filter((field) => field.dataTypeID !== BYTEA).map((field) => {
+    const values = rows.map((row) => row[field.name]).filter((value) => value !== null && value !== undefined);
+    if (field.dataTypeID !== undefined && INTEGER_TYPES.has(field.dataTypeID)) return { name: field.name, type: 'integer' };
+    if (field.dataTypeID !== undefined && NUMERIC_TYPES.has(field.dataTypeID)) {
+      const decimals = Math.max(2, ...values.map((value) => String(value).split('.')[1]?.length ?? 0));
+      return { name: field.name, type: 'numeric', accuracy: decimals };
+    }
+    if (values.length && values.every((value) => typeof value === 'string' && ISO_DAY.test(value))) return { name: field.name, type: 'date' };
+    return { name: field.name, type: 'text' };
+  });
+const gdpduValue = (value: unknown, column: GdpduColumn): string => {
+  if (value === null || value === undefined) return '';
+  if (column.type === 'numeric') return Number(value).toFixed(column.accuracy).replace('.', ',');
+  if (column.type === 'integer' || column.type === 'date') return String(value);
+  const text = typeof value === 'object' ? JSON.stringify(value) : String(value);
+  // One record per line: line breaks inside a text become spaces (the JSONL keeps the original).
+  return `"${text.replace(/\r?\n|\r/g, ' ').replaceAll('"', '""')}"`;
+};
+const gdpduCsv = (rows: Array<Record<string, unknown>>, columns: GdpduColumn[]): string =>
+  [columns.map((column) => `"${column.name}"`).join(';'), ...rows.map((row) => columns.map((column) => gdpduValue(row[column.name], column)).join(';'))].map((line) => `${line}\r\n`).join('');
+const xml = (value: string) => value.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;');
+const gdpduTable = (url: string, name: string, columns: GdpduColumn[]): string => `    <Table>
+      <URL>${xml(url)}</URL>
+      <Name>${xml(name)}</Name>
+      <UTF8/>
+      <DecimalSymbol>,</DecimalSymbol>
+      <DigitGroupingSymbol>.</DigitGroupingSymbol>
+      <Range>
+        <From>2</From>
+      </Range>
+      <VariableLength>
+        <ColumnDelimiter>;</ColumnDelimiter>
+        <RecordDelimiter>&#13;&#10;</RecordDelimiter>
+        <TextEncapsulator>"</TextEncapsulator>
+${columns.map((column) => `        <VariableColumn>
+          <Name>${xml(column.name)}</Name>
+          ${column.type === 'numeric' ? `<Numeric>\n            <Accuracy>${column.accuracy}</Accuracy>\n          </Numeric>` : column.type === 'integer' ? '<Numeric/>' : column.type === 'date' ? '<Date>\n            <Format>YYYY-MM-DD</Format>\n          </Date>' : '<AlphaNumeric/>'}
+        </VariableColumn>`).join('\n')}
+      </VariableLength>
+    </Table>`;
 
 const jsonl = (rows: unknown[]): string => rows
   .map((row) => JSON.stringify(row, (_key, value: unknown) => typeof value === 'bigint' ? value.toString() : value))
@@ -130,23 +182,51 @@ export const buildPostgresTaxAuditExportArtifact = async (
   const auditCsv = await exportPostgresAuditCsv(target, tenantId);
   files.push(file('audit-log.csv', auditCsv, auditCsv.split('\n').length - 1));
 
+  const gdpdu: Array<{ url: string; name: string; rows: Array<Record<string, unknown>>; fields?: readonly ServerQueryField[] }> = [];
   const selectedDatasets = args.includeDocuments ? [...datasets, ...documentDatasets] : datasets;
   for (const dataset of selectedDatasets) {
-    const rows = await queryRows(target, dataset, tenantId, args);
+    const { rows, fields } = await queryRows(target, dataset, tenantId, args);
     files.push(file(dataset.name, jsonl(rows), rows.length));
+    gdpdu.push({ url: dataset.name.replace(/\.jsonl$/, '.csv'), name: dataset.table, rows: rows as Array<Record<string, unknown>>, fields });
   }
 
   // Kontenplan: the DATEV catalogue of the active chart plus the tenant's own and deactivated accounts.
   const chart = String((await target.query(`SELECT active_chart FROM accounting_policies WHERE tenant_id = $1`, [tenantId])).rows[0]?.active_chart ?? 'SKR03');
-  const accounts = (await target.query(
+  const accountsResult = (await target.query(
     `SELECT COALESCE(t.chart, g.chart) AS chart, COALESCE(t.account_number, g.account_number) AS account_number, COALESCE(t.name, g.name) AS name,
        COALESCE(t.active, TRUE) AS active, CASE WHEN g.account_number IS NULL THEN 'tenant' ELSE 'datev' END AS source
      FROM (SELECT * FROM ledger_accounts WHERE chart = $2) g
      FULL OUTER JOIN (SELECT * FROM tenant_ledger_accounts WHERE tenant_id = $1 AND chart = $2) t ON t.account_number = g.account_number
      ORDER BY 2`,
     [tenantId, chart],
-  )).rows;
+  ));
+  const accounts = accountsResult.rows;
   files.push(file('chart-of-accounts.jsonl', jsonl(accounts), accounts.length));
+  gdpdu.push({ url: 'chart-of-accounts.csv', name: 'chart_of_accounts', rows: accounts as Array<Record<string, unknown>>, fields: accountsResult.fields });
+  const tables: string[] = [];
+  for (const table of gdpdu) {
+    const columns = gdpduColumns(table.rows, table.fields);
+    files.push(file(table.url, gdpduCsv(table.rows, columns), table.rows.length));
+    tables.push(gdpduTable(table.url, table.name, columns));
+  }
+  const settingsJson = (await target.query(`SELECT settings_json FROM server_settings WHERE tenant_id = $1 LIMIT 1`, [tenantId])).rows[0]?.settings_json;
+  const company = (() => { try { return String(JSON.parse(String(settingsJson ?? 'null'))?.company?.name ?? ''); } catch { return ''; } })();
+  files.push(file('index.xml', `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE DataSet SYSTEM "${GDPDU_DTD_FILE}">
+<DataSet>
+  <Version>1.0</Version>
+  <DataSupplier>
+    <Name>${xml(company || 'billme Pro')}</Name>
+    <Location></Location>
+    <Comment>Datenträgerüberlassung (Z3) aus billme Pro, Zeitraum ${xml(args.from ?? 'Beginn')} bis ${xml(args.to ?? 'heute')}</Comment>
+  </DataSupplier>
+  <Media>
+    <Name>Prüferpaket</Name>
+${tables.join('\n')}
+  </Media>
+</DataSet>
+`));
+  files.push(file(GDPDU_DTD_FILE, GDPDU_DTD));
 
   // The receipts themselves (bytes as stored, hash checked against the archive) when documents are requested:
   // those of incoming invoices by invoice date, those attached to bank lines by the date of the bank line.

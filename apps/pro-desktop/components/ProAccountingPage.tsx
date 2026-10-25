@@ -126,6 +126,7 @@ type DatevExportArgs = {
   fiscalYearStart: string;
   accountLength: number;
   encoding: 'cp1252' | 'utf8-bom';
+  kind?: 'journal' | 'opening_balances' | 'parties';
 };
 
 const inferAccountType = (accountNumber: string): ProUiAccount['type'] => {
@@ -821,6 +822,9 @@ export const ProAccountingPage: React.FC<{ view?: unknown; onViewChange?: (view:
       },
       exportAuditPackage(args: { from: string; to: string; includeDocuments: boolean }) {
         return runMutation(() => ipc.tax.auditExportPackage(args));
+      },
+      exportProcedureDocumentation() {
+        return ipc.pro.exportProcedureDocumentation();
       },
       listOpenItems() {
         return ipc.pro.listOpenItems();

@@ -400,6 +400,7 @@ const proExportDatevBuchungsstapelArgsSchema = z.object({
   fiscalYearStart: z.string().optional(),
   accountLength: z.number().int().min(4).max(8).optional(),
   encoding: z.enum(['cp1252', 'utf8-bom']).optional(),
+  kind: z.enum(['journal', 'opening_balances', 'parties']).optional(),
   actorRole: proActorRoleSchema.optional(),
 });
 
@@ -647,6 +648,11 @@ export const ipcRoutes = {
       gainLoss: z.number(),
       journalEntryId: z.string(), // empty for the sale of a fully depreciated asset: the invoice books everything
     }),
+  },
+  'pro:exportProcedureDocumentation': {
+    channel: 'pro:exportProcedureDocumentation',
+    args: z.undefined(),
+    result: z.object({ fileName: z.string().min(1) }),
   },
   'pro:exportDatevBuchungsstapel': {
     channel: 'pro:exportDatevBuchungsstapel',

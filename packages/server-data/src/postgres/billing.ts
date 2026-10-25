@@ -233,6 +233,7 @@ type DunningHistoryRow = {
   dunning_level: number;
   days_overdue: number;
   fee_applied: string | number;
+  interest_applied: string | number | null;
   email_sent: boolean;
   email_log_id: string | null;
   processed_at: string;
@@ -451,6 +452,7 @@ const rowToDunningHistory = (row: DunningHistoryRow): DunningHistoryEntry =>
     dunningLevel: row.dunning_level,
     daysOverdue: row.days_overdue,
     feeApplied: toNumber(row.fee_applied),
+    ...(row.interest_applied == null ? {} : { interestApplied: toNumber(row.interest_applied) }),
     emailSent: row.email_sent,
     emailLogId: row.email_log_id ?? undefined,
     processedAt: row.processed_at,
@@ -493,6 +495,7 @@ const toDunningHistoryRow = (row: any): DunningHistoryRow => ({
   dunning_level: row.dunningLevel!,
   days_overdue: row.daysOverdue!,
   fee_applied: row.feeApplied!,
+  interest_applied: row.interestApplied ?? null,
   email_sent: row.emailSent!,
   email_log_id: row.emailLogId ?? null,
   processed_at: row.processedAt!,
@@ -1391,6 +1394,7 @@ export const createPostgresDunningHistoryRepository = (
       dunningLevel: entry.dunningLevel,
       daysOverdue: entry.daysOverdue,
       feeApplied: String(entry.feeApplied),
+      interestApplied: entry.interestApplied ? String(entry.interestApplied) : null,
       emailSent: entry.emailSent,
       emailLogId: entry.emailLogId ?? null,
       processedAt: entry.processedAt,

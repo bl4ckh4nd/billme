@@ -3782,6 +3782,8 @@ const invoke = async <K extends IpcRouteKey>(key: K, args: IpcArgs<K>): Promise<
       return { asset, residualBookValue: asset.residualValue, gainLoss: proceeds - asset.residualValue, journalEntryId: `mock-disposal:${assetId}` } as IpcResult<K>;
     }
 
+    case 'pro:exportProcedureDocumentation':
+      return { fileName: 'Verfahrensdokumentation.md' };
     case 'pro:exportDatevBuchungsstapel': {
       const createdAt = new Date().toISOString();
       const payload = {
@@ -4705,6 +4707,12 @@ const invoke = async <K extends IpcRouteKey>(key: K, args: IpcArgs<K>): Promise<
       return { success: true, invoice: structuredClone(invoice) } as IpcResult<K>;
     }
 
+    case 'transactions:setRecurring': {
+      const { transactionId, recurring } = args as IpcArgs<'transactions:setRecurring'>;
+      const tx = accounts.flatMap((account) => account.transactions).find((row) => row.id === transactionId);
+      if (tx) { if (recurring) (tx as { recurring?: boolean }).recurring = true; else delete (tx as { recurring?: boolean }).recurring; }
+      return { success: Boolean(tx) };
+    }
     case 'transactions:unlink': {
       const { transactionId } = args as IpcArgs<'transactions:unlink'>;
       let linkedInvoiceId: string | undefined;

@@ -783,11 +783,22 @@ for (const product of PRODUCTS) describe(`automation (${product})`, () => {
       }
     });
 
-    if (product === 'pro') test('Verzugszinsen claimed in a letter reach the journal', { todo: 'BUG: the interest is computed for the letter only (dunningDocument.lateInterest) and never stored in the dunning history, so nothing can be booked (Zinserträge SKR03 2650 / SKR04 7100)' }, async () => {
-      const invoice = await overdueInvoice(40, 'Zinsen Pro');
-      await withSettings(dunningSetup([Object.assign(level(1, 7, 0), { chargeInterest: true })]), async () => { await h.api.dunning.manualRun(); });
-      const journal = (await h.raw('GET', '/accounting/journal?limit=5000')).body as Array<{ reference?: string; lines: Array<{ accountNumber: string; creditAmount: number }> }>;
-      assert.ok(journal.some((entry) => entry.reference === invoice.number && entry.lines.some((line) => line.accountNumber === '2650' && line.creditAmount > 0)));
+    if (product === 'pro') test('Verzugszinsen claimed in a letter are the customer\'s receivable against Zinserträge, booked once, with their own open item', async () => {
+      // A business is in default from the day after the due date: 40 days at Basiszins 1,27 % + 9 points (§ 288 Abs. 2 BGB).
+      const invoice = await issueInvoice(h.api, { client: 'Zinsen Pro', clientEmail: 'zinsenpro@example.com', date: addDays(today(), -54), dueDate: addDays(today(), -40), taxMeta: { buyerType: 'business' } as never });
+      const levels = [Object.assign(level(1, 7, 0), { chargeInterest: true })];
+      await withSettings((settings) => ({ ...dunningSetup(levels)(settings), dunning: { levels, baseInterestRatePercent: 1.27 } }), async () => {
+        await h.api.dunning.manualRun();
+        await h.api.dunning.manualRun();
+      });
+      const expected = Math.round(invoice.amount * (1.27 + 9) / 100 * 40 / 365 * 100) / 100;
+      assert.ok(expected > 0);
+      const entries = ((await h.raw('GET', '/accounting/journal?limit=5000')).body as Array<{ sourceType: string; reference?: string; lines: Array<{ accountNumber: string; debitAmount: number; creditAmount: number; taxCaseKey?: string }> }>)
+        .filter((entry) => entry.sourceType === 'dunning_interest' && entry.reference === invoice.number);
+      assert.equal(entries.length, 1, 'booked once, a second run books nothing');
+      assert.deepEqual(entries[0]!.lines.map((line) => [line.accountNumber, line.debitAmount, line.creditAmount, line.taxCaseKey ?? null]), [['1400', expected, 0, null], ['2650', 0, expected, null]], 'Zinserträge, no VAT');
+      const items = (await h.raw('GET', '/accounting/open-items')).body as Array<{ sourceType: string; sourceId: string; residualAmount: number }>;
+      assert.equal(items.find((item) => item.sourceType === 'dunning_interest' && item.sourceId === `${invoice.id}:1`)?.residualAmount, expected);
     });
 
     test('the reminder demands the open balance: %A subtracts payments and issued credit notes, the invoice keeps its amount', async () => {

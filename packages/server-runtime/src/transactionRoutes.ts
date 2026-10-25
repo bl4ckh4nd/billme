@@ -15,6 +15,7 @@ import {
   listServerImportBatches,
   previewServerTransactionImport,
   rollbackServerImportBatch,
+  setServerTransactionRecurring,
   unlinkServerTransaction,
   periodClosedMessage,
 } from '@billme/server-data';
@@ -38,6 +39,7 @@ const transactionSchema = z.object({
   suggestionReason: z.string().optional(),
   suggestionLayer: z.enum(['rule', 'counterparty', 'bayes', 'keyword', 'fallback']).optional(),
   suggestionConfidence: z.number().optional(),
+  recurring: z.boolean().optional(),
 });
 
 const transactionIdParams = z.object({ transactionId: z.string().min(1) });
@@ -170,6 +172,7 @@ const mapMutationError = (error: unknown): never => {
   if (error.message === 'TRANSACTION_NOT_FOUND' || error.message === 'INVOICE_NOT_FOUND') {
     throw new ApiError(404, error.message);
   }
+  if (error.message === 'TRANSACTION_NOT_AT_YEAR_END') throw new ApiError(409, 'Nur eine Zahlung vom 22.12. bis 10.01. kann nach der 10-Tage-Regel (§ 11 EStG) in das Nachbarjahr fallen.');
   if (error.message === 'TRANSACTION_ALREADY_LINKED' || error.message === 'TRANSACTION_NOT_LINKED') {
     throw new ApiError(409, error.message);
   }
@@ -381,6 +384,23 @@ export const registerTransactionRoutes = (app: FastifyInstance, product: 'lite' 
       const session = await requireMutation(app, product, request.headers.authorization);
       try {
         return await unlinkServerTransaction(requireDatabase(app), session.scope, params.transactionId, body.reason, createMutationContext(session, body.reason).actor);
+      } catch (error) {
+        return mapMutationError(error);
+      }
+    },
+  });
+
+  // Pro's EÜR reads bank lines through OPOS payments, which do not know the marker yet.
+  if (product === 'lite') typedRoute(app, {
+    method: 'POST',
+    url: `${prefix}/transactions/:transactionId/recurring`,
+    params: transactionIdParams,
+    body: mutationBody.extend({ recurring: z.boolean() }),
+    response: z.object({ success: z.literal(true) }),
+    async handler({ request, params, body }) {
+      const session = await requireMutation(app, product, request.headers.authorization);
+      try {
+        return await setServerTransactionRecurring(requireDatabase(app), session.scope, params.transactionId, body.recurring, body.reason, createMutationContext(session, body.reason).actor);
       } catch (error) {
         return mapMutationError(error);
       }

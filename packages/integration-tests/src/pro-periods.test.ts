@@ -125,9 +125,9 @@ test('closed and soft-locked periods stop every posting path, and ledger, open i
     assert.match(jan.disposition ?? '', /EXTF_Buchungsstapel_2026-01-01_2026-01-31\.csv/);
     assert.equal((await stack('2026-02', '28')).header[20], '0', 'a soft lock is no Festschreibung');
     assert.equal((await stack('2026-03', '31')).header[20], '0');
-    const sale = jan.rows.filter((fields) => fields[6] === '1400');
-    assert.deepEqual(sale.map((fields) => [fields[0], fields[7], fields[8], fields[10]]), [['238,00', '8400', '', `"${january.number}"`]], 'one gross row on the Automatikkonto 8400, no BU, the invoice number');
-    const purchase = jan.rows.filter((fields) => fields[7] === '1600');
+    const sale = jan.rows.filter((fields) => /^1\d{4}$/.test(fields[6]!));
+    assert.deepEqual(sale.map((fields) => [fields[0], fields[7], fields[8], fields[10]]), [['238,00', '8400', '', `"${january.number}"`]], 'one gross row from the customer\'s Debitor on the Automatikkonto 8400, no BU, the invoice number');
+    const purchase = jan.rows.filter((fields) => /^7\d{4}$/.test(fields[7]!));
     assert.equal(purchase.length, 1, `one gross row for the purchase: ${JSON.stringify(purchase)}`);
     assert.deepEqual([purchase[0]![0], purchase[0]![8], purchase[0]![10]], ['119,00', '"0009"', '"ER-1"'], 'the expense with BU 9 (Vorsteuer 19 %) and the vendor invoice number');
     assert.ok(!jan.rows.some((fields) => ['1776', '1576'].includes(fields[6]!) || ['1776', '1576'].includes(fields[7]!)), 'no separate VAT row');
@@ -445,6 +445,9 @@ describe('SKR04 with Ist-VAT', () => {
     await h.raw('POST', '/accounting/incoming-invoices', { reason: 'Eingang', invoice: { id, vendorId, number: 'ER-04', invoiceDate: '2026-03-02', dueDate: '2026-03-30', netAmount: 100, taxAmount: 19, grossAmount: 119, status: 'open', taxRate: 19, lines: [{ id: `l-${id}`, incomingInvoiceId: id, position: 0, description: 'Leistung', quantity: 1, unitPrice: 100, netAmount: 100, taxRate: 19, taxAmount: 19, grossAmount: 119 }] } });
     assert.equal((await h.raw('POST', '/accounting/incoming-invoices/post', { invoiceId: id, reason: 'gebucht' })).body.status, 'ready');
     assert.deepEqual(shape((await entryFor(h, `incoming-invoice:${id}`))!), [['6300', 100, 0], ['1406', 19, 0], ['3300', 0, 119]]);
+    const bwa = await get<any>(h, '/accounting/reports/bwa01?from=2026-03-01&to=2026-03-31');
+    assert.equal(bwa.mappingHealth.blocking, false, `the BWA runs on the SKR04 range defaults: ${JSON.stringify(bwa.mappingHealth)}`);
+    assert.ok(bwa.mappingHealth.warnings.some((warning: string) => /Standardzuordnung nach Kontenbereich \(SKR04\): .*6300/.test(warning)), JSON.stringify(bwa.mappingHealth.warnings));
 
     const locked = await setPolicy({ activeChart: 'SKR03', vatMethod: 'ist' });
     assert.equal(locked.status, 409, locked.text);
@@ -525,7 +528,7 @@ describe('SKR03 with Ist-VAT: not-yet-due VAT per rate, Skonto, Forderungsausfal
     const exported = await download(h, `/api/v1/pro/accounting/datev/export.csv?from=${month}-01&to=${last}&consultantNumber=1234567&clientNumber=12345&fiscalYearStart=${month.slice(0, 4)}-01-01&accountLength=4&encoding=cp1252`);
     assert.equal(exported.status, 200, exported.bytes.toString());
     const rows = exported.bytes.toString('latin1').split('\r\n').slice(2).filter(Boolean).map((line) => line.split(';')).filter((fields) => fields[10] === `"${invoice.number}"`);
-    assert.deepEqual(rows.map((fields) => [fields[0], fields[6], fields[7], fields[8]]).sort(), [['100,00', '1400', '8400', '"0040"'], ['19,00', '1400', '1766', '']]);
+    assert.deepEqual(rows.map((fields) => [fields[0], fields[6]!.replace(/^1\d{4}$/, 'Debitor'), fields[7], fields[8]]).sort(), [['100,00', 'Debitor', '8400', '"0040"'], ['19,00', 'Debitor', '1766', '']]);
   });
 
   test('a Skonto after the payment books the not-yet-due VAT, nothing stays on 1766 and 1776 carries the VAT of the money received', async () => {

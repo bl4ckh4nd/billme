@@ -3,6 +3,7 @@ import { previewCsv, type CsvMapping, type CsvPreviewResult, commitCsv } from '@
 import { isReceivableDocumentKind, type Invoice, type TenantScope } from '@billme/server-core';
 import { createPostgresBillingDependencies, creditedAmount, isSkontoPayment, settledInvoiceStatus, withSkontoSettlement } from './billing.js';
 import { assertLitePeriodsOpen, periodClosedMessage } from './liteCash.js';
+import { tenDayRecurringYear } from './eurReport.js';
 import { appendWithClient } from './audit.js';
 import { bookBankLinkInTransaction, findActiveOpenItemPayment, reverseOpenItemPaymentInTransaction } from './proAccountingRepository.js';
 import { runInTransaction, type PostgresQueryable } from './connection.js';
@@ -26,6 +27,8 @@ export interface ServerTransactionRecord {
   status: 'pending' | 'booked';
   dedupHash?: string;
   importBatchId?: string;
+  /** Marked regelmäßig wiederkehrend: paid 22.12.–10.01., it counts in the neighbouring year (§ 11 EStG). */
+  recurring?: boolean;
 }
 
 export interface TransactionListFilters {
@@ -162,6 +165,7 @@ const toTransaction = (row: Record<string, unknown>): ServerTransactionRecord =>
   status: row.status === 'booked' ? 'booked' : 'pending',
   dedupHash: typeof row.dedup_hash === 'string' && row.dedup_hash ? row.dedup_hash : undefined,
   importBatchId: typeof row.import_batch_id === 'string' && row.import_batch_id ? row.import_batch_id : undefined,
+  ...(row.recurring === true ? { recurring: true } : {}),
 });
 
 const parseJson = (value: unknown): unknown => {
@@ -441,7 +445,7 @@ export const getServerImportBatchDetails = async (
   const transactions = await query<Record<string, unknown>>(
     database,
     `SELECT id, account_id, date, amount, type, counterparty, purpose,
-            linked_invoice_id, status, dedup_hash, import_batch_id
+            linked_invoice_id, status, dedup_hash, import_batch_id, recurring
      FROM transactions
      WHERE tenant_id = $1 AND import_batch_id = $2
        AND (deleted_at IS NULL OR deleted_at = '')
@@ -550,7 +554,7 @@ export const listServerTransactions = async (
 ): Promise<ServerTransactionRecord[]> => {
   const where = transactionWhere(scope, filters);
   const result = await query<Record<string, unknown>>(database,
-    `SELECT id, account_id, date, amount, type, counterparty, purpose, linked_invoice_id, status, dedup_hash, import_batch_id
+    `SELECT id, account_id, date, amount, type, counterparty, purpose, linked_invoice_id, status, dedup_hash, import_batch_id, recurring
      FROM transactions
      WHERE ${where.clauses.join(' AND ')}
      ORDER BY date DESC, amount DESC, id ASC`,
@@ -574,7 +578,7 @@ const getTransaction = async (
   lock = false,
 ): Promise<ServerTransactionRecord | null> => {
   const result = await query<Record<string, unknown>>(database,
-    `SELECT id, account_id, date, amount, type, counterparty, purpose, linked_invoice_id, status, dedup_hash, import_batch_id
+    `SELECT id, account_id, date, amount, type, counterparty, purpose, linked_invoice_id, status, dedup_hash, import_batch_id, recurring
      FROM transactions
      WHERE tenant_id = $1 AND id = $2 AND (deleted_at IS NULL OR deleted_at = '')${lock ? ' FOR UPDATE' : ''}`,
     [tenant(scope), id],
@@ -801,5 +805,28 @@ export const unlinkServerTransaction = async (
     [tenant(scope), transactionId],
   );
   await audit(session, scope, 'transaction', transactionId, 'unlink_invoice', reason, transaction, { ...transaction, linkedInvoiceId: undefined }, actor);
+  return { success: true };
+});
+
+/** Marks a booked bank line regelmäßig wiederkehrend (or clears it); it then counts in the year next to the turn of the year it flowed at. */
+export const setServerTransactionRecurring = async (
+  database: TransactionDatabase,
+  scope: TenantScope,
+  transactionId: string,
+  recurring: boolean,
+  reason: string,
+  actor: TransactionMutationActor,
+): Promise<{ success: true }> => inTransaction(database, async (session) => {
+  const transaction = await getTransaction(session, scope, transactionId, true);
+  if (!transaction) throw new Error('TRANSACTION_NOT_FOUND');
+  // A line paying an invoice follows the invoice (its service period decides).
+  if (transaction.linkedInvoiceId) throw new Error('TRANSACTION_ALREADY_LINKED');
+  const movedTo = tenDayRecurringYear(transaction.date);
+  if (movedTo === undefined) throw new Error('TRANSACTION_NOT_AT_YEAR_END');
+  // Both years' EÜR change, so neither may be closed.
+  await assertLitePeriodsOpen(session, scope, [transaction.date, movedTo > Number(transaction.date.slice(0, 4)) ? `${movedTo}-01-01` : `${movedTo}-12-31`]);
+  if (Boolean(transaction.recurring) === recurring) return { success: true };
+  await query(session, 'UPDATE transactions SET recurring = $3 WHERE tenant_id = $1 AND id = $2', [tenant(scope), transactionId, recurring ? true : null]);
+  await audit(session, scope, 'transaction', transactionId, recurring ? 'recurring_marked' : 'recurring_unmarked', reason, transaction, { ...transaction, recurring: recurring || undefined }, actor);
   return { success: true };
 });

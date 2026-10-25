@@ -288,6 +288,13 @@ export const createLiteHttpBillmeApi = ({
     if (isSharedHttpRoute(key)) return sharedInvoke(key, args) as Promise<IpcResult<K>>;
 
     switch (key) {
+      case 'transactions:setRecurring': {
+        const parsed = args as IpcArgs<'transactions:setRecurring'>;
+        return requestJson('POST', `${PRODUCT_PREFIX}/transactions/${encodeURIComponent(parsed.transactionId)}/recurring`, z.object({ success: z.literal(true) }), {
+          recurring: parsed.recurring,
+          reason: parsed.recurring ? 'Als regelmäßig wiederkehrend markiert (10-Tage-Regel, § 11 EStG)' : 'Markierung regelmäßig wiederkehrend entfernt',
+        }) as Promise<IpcResult<K>>;
+      }
       case 'eur:getReport': {
         const parsed = args as IpcArgs<'eur:getReport'>;
         const query = eurReportQuery(parsed);

@@ -1,6 +1,7 @@
 import { expect, test } from '@playwright/test';
-import { appUrl, getDesktopSettings, invokeDesktopIpc, launchDesktopApp, seedDesktopData, setDesktopSettings } from '../support.mjs';
-import { createShooter, seedBankTransactions } from './lite-support.mjs';
+import { appUrl, getDesktopSettings, invokeDesktopIpc, launchDesktopApp, seedDesktopData, setDesktopSettings, setStoredLiteSettings } from '../support.mjs';
+import fs from 'node:fs';
+import { createShooter, seedBankTransactions, writeBankCsv } from './lite-support.mjs';
 
 /**
  * Settings sections and the EÜR worklist of the Lite UI, verified through the backend.
@@ -13,7 +14,8 @@ import { createShooter, seedBankTransactions } from './lite-support.mjs';
  *   no ledger, so that would switch it to SKR accounts it cannot book)
  * - EÜR: search or direction filter showing other rows; "exclude as private" not
  *   persisted or not reachable through the "Ausgeschl." filter; undo leaving the
- *   classification behind
+ *   classification behind; a bank line marked regelmäßig wiederkehrend (10-Tage-Regel)
+ *   staying in the year it flowed, or the mark not reachable from the line
  */
 
 let desktop;
@@ -47,10 +49,11 @@ test('Lite stays on EÜR: no GmbH, no double-entry switch, no Kontenrahmen', asy
 });
 
 test('a Lite GmbH profile left on double-entry gets back to EÜR through the legal form', async () => {
+  const profile = { jurisdiction: 'DE', legalForm: 'gmbh', profitDetermination: 'double_entry', hgbSizeClass: 'micro', chart: 'SKR03', fiscalYearStart: '01-01', vatMethod: 'soll' };
+  const refused = await setDesktopSettings(desktop.page, { ...(await getDesktopSettings(desktop.page)), businessReportingProfile: profile }).then(() => null, (error) => String(error));
+  expect(refused, 'the Lite backend refuses double entry').toMatch(/nur mit EÜR/);
+  await setStoredLiteSettings(desktop, (settings) => ({ ...settings, businessReportingProfile: profile }));
   const { page, baseUrl } = desktop;
-  const settings = await getDesktopSettings(page);
-  await setDesktopSettings(page, { ...settings, businessReportingProfile: { jurisdiction: 'DE', legalForm: 'gmbh', profitDetermination: 'double_entry', hgbSizeClass: 'micro', chart: 'SKR03', fiscalYearStart: '01-01', vatMethod: 'soll' } });
-  await page.reload();
   await page.goto(appUrl(baseUrl, '/settings'));
   await section(page, 'Rechtliches').click();
   await expect(page.getByTestId('profit-determination-value')).toHaveText('Doppelte Buchführung');
@@ -164,4 +167,36 @@ test('the EÜR worklist searches and filters, an expense is booked as Privatentn
   await page.getByRole('button', { name: /^Offen/ }).click();
   await expect(page.getByRole('button', { name: /Adobe Systems/ }).first()).toBeVisible();
   await shot('undone');
+});
+
+test('a VAT prepayment paid on 8 January, marked regelmäßig wiederkehrend, moves to the year it is for', async () => {
+  const { page, baseUrl } = desktop;
+  const shot = createShooter(page);
+  const file = writeBankCsv([{ date: '2026-01-08', amount: -1900, counterparty: 'Finanzamt', purpose: 'USt-VA 12-2025' }]);
+  try {
+    expect((await invokeDesktopIpc(page, 'finance:importCommit', { path: file, accountId: 'acc1', profile: 'generic', mapping: { dateColumn: 'Datum', amountColumn: 'Betrag', counterpartyColumn: 'Gegenpartei', purposeColumn: 'Verwendungszweck' } })).imported).toBe(1);
+  } finally {
+    fs.rmSync(file, { force: true });
+  }
+  await page.reload();
+  const listed = async (taxYear) => (await invokeDesktopIpc(page, 'eur:listItems', { taxYear, sourceType: 'transaction', status: 'all' })).filter((item) => item.counterparty === 'Finanzamt');
+
+  await page.goto(appUrl(baseUrl, '/eur'));
+  await page.getByLabel('Steuerjahr').selectOption('2026');
+  await page.getByRole('button', { name: /Finanzamt/ }).first().click();
+  const panel = page.getByRole('region', { name: 'Klassifizierung' });
+  const mark = panel.getByRole('checkbox', { name: /Regelmäßig wiederkehrend.*zählt in 2025/ });
+  await expect(mark).not.toBeChecked();
+  await shot('unmarked-2026');
+  await mark.click();
+  await expect.poll(async () => (await listed(2025)).length).toBe(1);
+  expect(await listed(2026)).toHaveLength(0);
+  await expect(page.getByRole('button', { name: /Finanzamt/ })).toHaveCount(0);
+
+  await page.getByLabel('Steuerjahr').selectOption('2025');
+  await page.getByRole('button', { name: /Finanzamt/ }).first().click();
+  await expect(panel.getByText(/10-Tage-Regel, § 11 EStG\)/).first()).toBeVisible();
+  await expect(panel.getByRole('checkbox', { name: /Regelmäßig wiederkehrend/ })).toBeChecked();
+  expect((await listed(2025))[0].taxYear).toBe(2025);
+  await shot('marked-2025');
 });

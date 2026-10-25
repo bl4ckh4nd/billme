@@ -4,7 +4,7 @@ import { after, before, describe, test } from 'node:test';
 import type { BillmeApi } from '@billme/desktop-contracts/api';
 import { createDefaultTemplateBody, resolveInvoiceTaxMode, SHIPPED_TEMPLATE_ID } from '@billme/server-core';
 import { mapArticleCsv, mapClientCsv, parseGermanNumber, readMasterdataCsv } from '@billme/desktop-services/masterdataCsv';
-import { PRODUCTS, startProduct, type LiteHarness } from './harness.js';
+import { PRODUCTS, reopenLiteWithStoredSettings, startLite, startProduct, type LiteHarness } from './harness.js';
 import { addDays, datevEvidence, draftInvoice, draftOffer, ISSUER, issueInvoice, newClient, today } from './fixtures.js';
 
 /**
@@ -236,7 +236,30 @@ for (const product of PRODUCTS) describe(`masterdata (${product})`, () => {
       });
     });
 
-    test('a valid GmbH profile (double entry, SKR04, fiscal year from April) is accepted and decides the VAT method', async () => {
+    if (product === 'lite') test('Lite refuses a switch away from EÜR; a profile an older Lite left on double entry still saves', async (t) => {
+      const doubleEntry = { jurisdiction: 'DE', legalForm: 'gmbh', profitDetermination: 'double_entry', hgbSizeClass: 'small', fiscalYearStart: '01-01', chart: 'SKR03', vatMethod: 'soll' } as const;
+      const soleDoubleEntry = { ...doubleEntry, legalForm: 'sole_proprietor' } as const;
+      const before = await getSettings();
+      for (const profile of [doubleEntry, soleDoubleEntry]) {
+        const refused = await h.raw('PUT', '/settings', { settings: { ...before, businessReportingProfile: profile } });
+        assert.equal(refused.status, 409, `${profile.legalForm}: ${refused.text}`);
+        assert.match(refused.text, /EÜR/);
+      }
+      assert.deepEqual(await getSettings(), before, 'nothing stored');
+
+      const own = await startLite(t, 'masterdata-lite-legacy');
+      const legacy = await reopenLiteWithStoredSettings(own, t, 'masterdata-lite-legacy', (s) => ({ ...s, businessReportingProfile: doubleEntry }));
+      const stored = (await legacy.api.settings.get())!;
+      assert.deepEqual(stored.businessReportingProfile, doubleEntry);
+      const unchanged = await legacy.raw('PUT', '/settings', { settings: { ...stored, company: { ...stored.company, phone: '0331 999' } } });
+      assert.equal(unchanged.status, 200, `the old profile saves unchanged: ${unchanged.text}`);
+      const back = { jurisdiction: 'DE', legalForm: 'sole_proprietor', profitDetermination: 'eur', fiscalYearStart: '01-01', vatMethod: 'soll' } as const;
+      assert.equal((await legacy.raw('PUT', '/settings', { settings: { ...stored, businessReportingProfile: back } })).status, 200, 'the way back to EÜR is open');
+      assert.equal((await legacy.raw('PUT', '/settings', { settings: { ...stored, businessReportingProfile: doubleEntry } })).status, 409, 'once on EÜR, Lite stays there');
+      assert.deepEqual((await legacy.api.settings.get())!.businessReportingProfile, back);
+    });
+
+    if (product === 'pro') test('a valid GmbH profile (double entry, SKR04, fiscal year from April) is accepted and decides the VAT method', async () => {
       const gmbh = { jurisdiction: 'DE', legalForm: 'gmbh', profitDetermination: 'double_entry', hgbSizeClass: 'small', fiscalYearStart: '04-01', chart: 'SKR04', vatMethod: 'ist' } as const;
       await withSettings((s) => ({ ...s, businessReportingProfile: gmbh }), async () => {
         const stored = await getSettings();

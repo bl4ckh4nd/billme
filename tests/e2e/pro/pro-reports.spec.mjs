@@ -17,7 +17,7 @@ test.afterEach(async () => {
   }
 });
 
-test('shows the SuSa from the seeded postings, keeps BWA and Management-GuV closed until mapped and marks the HGB defaults', async () => {
+test('shows the SuSa from the seeded postings, keeps the Management-GuV closed until mapped and marks the BWA and HGB defaults', async () => {
   const { page, baseUrl } = desktop;
 
   await page.goto(appUrl(baseUrl, '/'));
@@ -41,8 +41,8 @@ test('shows the SuSa from the seeded postings, keeps BWA and Management-GuV clos
   await expect(main.getByText('Live-Daten')).toBeVisible();
   await page.screenshot({ path: test.info().outputPath('01-susa.png'), fullPage: true });
 
-  // BWA and Management-GuV have no account-range default: they refuse to show numbers and to export.
-  for (const [tab, label] of [['BWA01', 'BWA01'], ['Management-GuV', 'Management-GuV']]) {
+  // The Management-GuV has no account-range default: it refuses to show numbers and to export.
+  for (const [tab, label] of [['Management-GuV', 'Management-GuV']]) {
     await tabs.getByRole('button', { name: tab, exact: true }).click();
     await expect(tabs.getByRole('button', { name: tab, exact: true })).toHaveAttribute('aria-pressed', 'true');
     await expect(main.getByRole('alert').filter({ hasText: `Mapping unvollständig für ${label}` })).toBeVisible();
@@ -52,8 +52,8 @@ test('shows the SuSa from the seeded postings, keeps BWA and Management-GuV clos
     await page.screenshot({ path: test.info().outputPath(`02-${tab}-blocked.png`), fullPage: true });
   }
 
-  // HGB-GuV and Bilanz place the accounts by their SKR03 range (§ 275 / § 266 HGB) and say so on screen.
-  for (const tab of ['HGB-GuV', 'Bilanz']) {
+  // BWA01, HGB-GuV and Bilanz place the accounts by their SKR03 range (BWA 01, § 275 / § 266 HGB) and say so on screen.
+  for (const tab of ['BWA01', 'HGB-GuV', 'Bilanz']) {
     await tabs.getByRole('button', { name: tab, exact: true }).click();
     await expect(tabs.getByRole('button', { name: tab, exact: true })).toHaveAttribute('aria-pressed', 'true');
     await expect(main.getByRole('status').filter({ hasText: /^Standardzuordnung nach Kontenbereich \(SKR03\): .*8195/ })).toBeVisible();

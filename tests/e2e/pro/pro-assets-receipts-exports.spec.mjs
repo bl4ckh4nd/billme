@@ -21,7 +21,10 @@ import { appUrl, importPendingProTransaction, invokeDesktopIpc, launchDesktopApp
  * - Kontenplan: an own account not created or not listed, a deactivation that does
  *   not show, an account that cannot be reactivated
  * - Prüferpaket (Z3): the button writing nothing, a package without manifest,
- *   Kontenplan or journal, a manifest hash that does not match the written file
+ *   Kontenplan or journal, a manifest hash that does not match the written file, no
+ *   GDPdU index.xml or one that names CSV files the folder does not hold
+ * - Verfahrensdokumentation: the button saving nothing, a draft without the company
+ *   from the settings or without the part the business has to complete
  */
 
 let desktop;
@@ -232,6 +235,24 @@ test('the SuSa is exported as CSV with the rows the screen shows', async () => {
   fs.rmSync(target, { force: true });
 });
 
+test('the draft Verfahrensdokumentation is saved from the reports screen, filled from the settings', async () => {
+  const { page, baseUrl, app } = desktop;
+  const target = test.info().outputPath('verfahrensdokumentation.md');
+  await app.evaluate(({ session }, file) => {
+    session.defaultSession.once('will-download', (_event, item) => item.setSavePath(file));
+  }, target);
+  await page.goto(appUrl(baseUrl, '/accounting?view=reports'));
+  await page.getByRole('button', { name: 'Verfahrensdokumentation (Entwurf)' }).click();
+  await expect(page.getByText(/^Entwurf gespeichert: Verfahrensdokumentation_\d{4}-\d{2}-\d{2}\.md/)).toBeVisible();
+  await expect.poll(() => fs.existsSync(target) && fs.statSync(target).size > 0, { timeout: 15_000 }).toBe(true);
+  const doc = fs.readFileSync(target, 'utf8');
+  expect(doc).toMatch(/^# Verfahrensdokumentation \(Entwurf\)/);
+  const settings = await invokeDesktopIpc(page, 'settings:get');
+  expect(doc).toContain(settings.company.name);
+  expect(doc).toContain('## 5. Vom Unternehmen zu ergänzen');
+  await page.screenshot({ path: test.info().outputPath('verfahrensdokumentation.png'), fullPage: true });
+});
+
 test('an own account is created in the Kontenplan, deactivated and activated again', async () => {
   const { page, baseUrl } = desktop;
   const shot = shooter(page);
@@ -270,6 +291,14 @@ test('the Prüferpaket (Z3) is written from the reports screen with a manifest t
   for (const entry of manifest.files) {
     expect(createHash('sha256').update(fs.readFileSync(path.join(bundleDir, entry.name))).digest('hex'), entry.name).toBe(entry.sha256);
   }
+  // GDPdU: index.xml describes CSV files that are really in the folder, next to the DTD it names.
+  const index = fs.readFileSync(path.join(bundleDir, 'index.xml'), 'utf8');
+  expect(index).toContain('<!DOCTYPE DataSet SYSTEM "gdpdu-01-09-2004.dtd">');
+  expect(fs.existsSync(path.join(bundleDir, 'gdpdu-01-09-2004.dtd'))).toBe(true);
+  const urls = [...index.matchAll(/<URL>([^<]+)<\/URL>/g)].map((match) => match[1]);
+  expect(urls).toContain('journal-lines.csv');
+  for (const url of urls) expect(fs.existsSync(path.join(bundleDir, url)), url).toBe(true);
+  fs.copyFileSync(path.join(bundleDir, 'index.xml'), test.info().outputPath('prueferpaket-index.xml'));
   fs.copyFileSync(path.join(bundleDir, 'manifest.json'), test.info().outputPath('prueferpaket-manifest.json'));
   await page.screenshot({ path: test.info().outputPath('prueferpaket.png'), fullPage: true });
 });

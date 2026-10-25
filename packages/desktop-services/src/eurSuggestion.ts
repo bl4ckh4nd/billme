@@ -9,7 +9,7 @@ export interface EurSuggestion {
   lineId?: string;
   reason?: string;
   /** A neutral kind instead of a line (income tax paid from the business account is a Privatentnahme). */
-  kind?: 'private-withdrawal' | 'private-contribution';
+  kind?: 'private-withdrawal' | 'private-contribution' | 'transit';
 }
 
 export const suggestEurLine = (

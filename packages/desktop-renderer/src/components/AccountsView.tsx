@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState, type ComponentType, type ReactElement, type ReactNode } from 'react';
-import { AlertCircle, Download, History, MoreHorizontal, Plus, Trash2, Upload } from 'lucide-react';
+import { AlertCircle, Download, History, MoreHorizontal, Pencil, Plus, Trash2, Upload } from 'lucide-react';
 import { useQuery, useQueryClient, type UseMutationResult, type UseQueryResult } from '@tanstack/react-query';
 import {
   Badge, Button, Card, ConfirmDialog, EMPTY_VALUE, EmptyState, ErrorState, HatchedProgress, IconButton, Menu, PageHeader,
@@ -8,7 +8,10 @@ import {
 import { DEFAULT_EUR_TAX_YEAR, TransactionMatchingView } from './TransactionMatchingView';
 import { ImportHistoryModal } from './ImportHistoryModal';
 import { useDeferredDelete } from '../hooks/useDeferredDelete';
-import { ipc } from '../runtime-api';
+import { getRendererProduct, ipc } from '../runtime-api';
+import { useSettingsQuery } from '../hooks/useSettings';
+import { currentAccountBalances } from '../ui/shell/dashboardFlows';
+import { formatIban } from '@billme/desktop-utils/iban';
 
 export type AccountsViewAccount = { id: string; name: string; iban?: string; balance: number };
 
@@ -18,7 +21,9 @@ export interface AccountsViewProps<TAccount extends AccountsViewAccount> {
   /** The product's account hooks (`createAccountHooks`), typed to its own account model. */
   useAccountsQuery: () => UseQueryResult<TAccount[]>;
   useDeleteAccountMutation: () => UseMutationResult<unknown, Error, string>;
-  BankAccountModal: ComponentType<{ isOpen: boolean; onClose: () => void }>;
+  BankAccountModal: ComponentType<{ isOpen: boolean; onClose: () => void; account?: TAccount }>;
+  /** The modal also edits an existing account (Lite); "Bearbeiten" appears in the account menu. */
+  canEditAccounts?: boolean;
   /** Extra facts beside the import account's balance (Pro: the default SKR account). */
   renderImportAccountMeta?: (account: TAccount) => ReactNode;
   /** An extra column in the account list. */
@@ -30,6 +35,9 @@ export interface AccountsViewProps<TAccount extends AccountsViewAccount> {
   footer?: ReactNode;
 }
 
+type CsvPreview = Awaited<ReturnType<typeof ipc.finance.importPreview>>;
+type CsvOptions = { profile: CsvPreview['profile']; mapping: CsvPreview['suggestedMapping']; encoding: 'utf8' | 'win1252' };
+
 const euro = (value: number) => new Intl.NumberFormat('de-DE', { style: 'currency', currency: 'EUR' }).format(value);
 
 const banner = 'flex items-start gap-2.5 rounded-control border px-3 py-2.5 text-control';
@@ -40,6 +48,7 @@ export function AccountsView<TAccount extends AccountsViewAccount>({
   useAccountsQuery,
   useDeleteAccountMutation,
   BankAccountModal,
+  canEditAccounts = false,
   renderImportAccountMeta,
   extraColumn,
   footer,
@@ -47,9 +56,11 @@ export function AccountsView<TAccount extends AccountsViewAccount>({
   const queryClient = useQueryClient();
   const [showImportHistory, setShowImportHistory] = useState(false);
   const [isBankAccountModalOpen, setIsBankAccountModalOpen] = useState(false);
+  const [editingAccount, setEditingAccount] = useState<TAccount | undefined>();
   const [pageError, setPageError] = useState<string | null>(null);
   const [csvPreview, setCsvPreview] = useState<Awaited<ReturnType<typeof ipc.finance.importPreview>> | null>(null);
   const [csvCommitting, setCsvCommitting] = useState(false);
+  const [csvOptions, setCsvOptions] = useState<CsvOptions | null>(null);
   const [selectedImportAccountId, setSelectedImportAccountId] = useState<string>('');
   const {
     data: accounts = [],
@@ -80,10 +91,22 @@ export function AccountsView<TAccount extends AccountsViewAccount>({
     queryFn: () => ipc.transactions.list({ type: 'income', unlinkedOnly: false }),
   });
 
+  // Pro with doppelter Buchführung has no EÜR: no query, no EÜR line (pro-buchhaltung B4, server-web B17).
+  const { data: settings } = useSettingsQuery();
+  const eurAvailable = !(getRendererProduct() === 'pro' && settings?.businessReportingProfile?.profitDetermination === 'double_entry');
   const { data: unclassifiedEurTransactions = [], isError: unclassifiedEurError } = useQuery({
+    enabled: eurAvailable,
     queryKey: ['eur', 'accounts-unclassified-transactions', DEFAULT_EUR_TAX_YEAR],
     queryFn: () => ipc.eur.listItems({ taxYear: DEFAULT_EUR_TAX_YEAR, sourceType: 'transaction', status: 'unclassified' }),
   });
+
+  // The stored balance is the Anfangssaldo; the shown Saldo adds the booked bank lines.
+  const { data: allTransactions = [] } = useQuery({
+    queryKey: ['transactions', 'all-for-balance'],
+    queryFn: () => ipc.transactions.list({}),
+  });
+  const balances = useMemo(() => currentAccountBalances(accounts, allTransactions), [accounts, allTransactions]);
+  const balanceOf = (account: TAccount) => balances.get(account.id) ?? account.balance;
 
   const unmatchedCount = unmatchedTransactions.length;
   const unclassifiedEurCount = unclassifiedEurTransactions.length;
@@ -94,12 +117,16 @@ export function AccountsView<TAccount extends AccountsViewAccount>({
     ? 'Offene Transaktionen konnten nicht geladen werden'
     : unmatchedCount > 0
       ? `${unmatchedCount} offene Transaktion${unmatchedPluralSuffix} warten auf Zuordnung`
-      : 'Alle Transaktionen zugeordnet';
+      : allTransactions.length === 0
+        ? 'Noch keine Kontoumsätze: Kontoauszug als CSV importieren'
+        : 'Alle Transaktionen zugeordnet';
   const unclassifiedEurDescription = unclassifiedEurError
     ? 'EÜR-Klassifizierung konnte nicht geladen werden'
     : unclassifiedEurCount > 0
       ? `${unclassifiedEurCount} ${unclassifiedEurCount === 1 ? 'Transaktion' : 'Transaktionen'} für EÜR offen`
-      : 'Alle Transaktionen sind EÜR-klassifiziert';
+      : allTransactions.length === 0
+        ? 'Nach dem Import erscheinen die Umsätze hier und unter „Buchen“'
+        : 'Alle Transaktionen sind EÜR-klassifiziert';
   const selectedImportAccount = useMemo(
     () => visibleAccounts.find((account) => account.id === selectedImportAccountId),
     [visibleAccounts, selectedImportAccountId],
@@ -139,37 +166,65 @@ export function AccountsView<TAccount extends AccountsViewAccount>({
         return;
       }
       setCsvPreview(preview);
+      setCsvOptions({ profile: preview.profile, mapping: preview.suggestedMapping, encoding: 'utf8' });
     } catch (error) {
       console.error('CSV import failed:', error);
       setPageError(error instanceof Error ? error.message : 'CSV-Import fehlgeschlagen. Prüfe Datei und Spaltenzuordnung.');
     }
   };
 
+  /** Re-reads the uploaded file with another format, column or encoding; a new format starts from its suggested columns. */
+  const updateCsvOptions = async (next: CsvOptions, profileChanged = false) => {
+    if (!csvPreview) return;
+    setCsvOptions(next);
+    try {
+      const preview = await ipc.finance.importPreview({
+        path: csvPreview.path,
+        fileName: csvPreview.fileName,
+        profile: next.profile,
+        mapping: profileChanged ? undefined : next.mapping,
+        encoding: next.encoding,
+        accountIdForDedupHash: selectedImportAccountId,
+      });
+      setCsvPreview(preview);
+      if (profileChanged) setCsvOptions({ ...next, mapping: preview.suggestedMapping });
+    } catch (error) {
+      setPageError(error instanceof Error ? error.message : 'Die Datei ließ sich mit dieser Zuordnung nicht lesen.');
+    }
+  };
+
   const handleCsvCommit = async () => {
-    if (!csvPreview || !selectedImportAccountId || csvCommitting) return;
+    if (!csvPreview || !csvOptions || !selectedImportAccountId || csvCommitting) return;
     setCsvCommitting(true);
     try {
       const commit = await ipc.finance.importCommit({
         path: csvPreview.path,
         accountId: selectedImportAccountId,
-        profile: csvPreview.profile,
-        mapping: csvPreview.suggestedMapping,
+        profile: csvOptions.profile,
+        mapping: csvOptions.mapping,
+        encoding: csvOptions.encoding,
       });
       setCsvPreview(null);
-
-      if (commit.imported > 0 || commit.skipped > 0) {
-        notify('success', `Erfolgreich ${commit.imported} Transaktionen importiert${commit.skipped > 0 ? `, ${commit.skipped} übersprungen` : ''}`);
-        await Promise.all([
-          queryClient.invalidateQueries({ queryKey: ['transactions'] }),
-          queryClient.invalidateQueries({ queryKey: ['accounts'] }),
-          queryClient.invalidateQueries({ queryKey: ['pro-accounting', 'transactions'] }),
-          queryClient.invalidateQueries({ queryKey: ['pro-accounting', 'drafts'] }),
-        ]);
+      const updated = commit.updated ?? 0;
+      const failed = commit.errors.length > 0 ? ` ${commit.errors.length} ${commit.errors.length === 1 ? 'Zeile wurde' : 'Zeilen wurden'} nicht übernommen: ${commit.errors[0]!.message}` : '';
+      if (commit.imported === 0 && updated === 0) {
+        // A replay or a file of known lines only: say so instead of "imported".
+        if (commit.skipped > 0) notify('info', `Keine neuen Buchungen: alle ${commit.skipped} Zeilen sind bereits importiert.${failed}`);
+        else setPageError(`Nichts importiert.${failed || ' Prüfe Datei und Spaltenzuordnung.'}`);
+      } else {
+        notify(commit.errors.length > 0 ? 'info' : 'success', `Erfolgreich ${commit.imported} Transaktionen importiert${updated > 0 ? `, ${updated} vorgemerkte jetzt gebucht` : ''}${commit.skipped > 0 ? `, ${commit.skipped} bereits vorhanden` : ''}.${failed}`);
       }
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ['transactions'] }),
+        queryClient.invalidateQueries({ queryKey: ['accounts'] }),
+        queryClient.invalidateQueries({ queryKey: ['eur'] }),
+        queryClient.invalidateQueries({ queryKey: ['pro-accounting', 'transactions'] }),
+        queryClient.invalidateQueries({ queryKey: ['pro-accounting', 'drafts'] }),
+      ]);
     } catch (error) {
       console.error('CSV import failed:', error);
       setCsvPreview(null);
-      setPageError('CSV-Import fehlgeschlagen. Prüfe Datei und Spaltenzuordnung.');
+      setPageError(error instanceof Error && error.message ? error.message : 'CSV-Import fehlgeschlagen. Prüfe Datei und Spaltenzuordnung.');
     } finally {
       setCsvCommitting(false);
     }
@@ -215,7 +270,7 @@ export function AccountsView<TAccount extends AccountsViewAccount>({
                 {incomeCount > 0 ? `${matchedCount} von ${incomeCount} Transaktionen zugeordnet` : unmatchedDescription}
               </h2>
               <p className="text-caption text-muted">
-                {incomeCount > 0 ? `${unmatchedDescription} · ${unclassifiedEurDescription}` : unclassifiedEurDescription}
+                {!eurAvailable ? (incomeCount > 0 ? unmatchedDescription : null) : incomeCount > 0 ? `${unmatchedDescription} · ${unclassifiedEurDescription}` : unclassifiedEurDescription}
               </p>
             </div>
             <div className="flex flex-wrap items-center gap-2">
@@ -264,7 +319,7 @@ export function AccountsView<TAccount extends AccountsViewAccount>({
             {selectedImportAccount && (
               <div className="flex min-h-8.5 flex-wrap items-center gap-x-4 gap-y-1">
                 <span className="text-control text-muted">
-                  Saldo <span className="font-medium text-foreground tabular-nums">{euro(selectedImportAccount.balance)}</span>
+                  Saldo <span className="font-medium text-foreground tabular-nums">{euro(balanceOf(selectedImportAccount))}</span>
                 </span>
                 {renderImportAccountMeta?.(selectedImportAccount)}
               </div>
@@ -311,9 +366,9 @@ export function AccountsView<TAccount extends AccountsViewAccount>({
                           {isImportAccount ? <Badge tone="neutral">Import-Konto</Badge> : null}
                         </span>
                       </TableCell>
-                      <TableCell muted className="hidden font-mono text-caption md:table-cell">{account.iban || EMPTY_VALUE}</TableCell>
+                      <TableCell muted className="hidden font-mono text-caption md:table-cell">{account.iban ? formatIban(account.iban) : EMPTY_VALUE}</TableCell>
                       {extraColumn ? <TableCell>{extraColumn.render(account, setPageError)}</TableCell> : null}
-                      <TableCell numeric className="font-medium">{euro(account.balance)}</TableCell>
+                      <TableCell numeric className="font-medium">{euro(balanceOf(account))}</TableCell>
                       <TableCell className="py-0 text-right">
                         <Menu
                           aria-label={`Aktionen für ${account.name}`}
@@ -324,6 +379,12 @@ export function AccountsView<TAccount extends AccountsViewAccount>({
                             </IconButton>
                           )}
                           items={[
+                            ...(canEditAccounts ? [{
+                              id: 'edit',
+                              label: 'Bearbeiten',
+                              icon: <Pencil size={14} />,
+                              onSelect: () => { setEditingAccount(account); setIsBankAccountModalOpen(true); },
+                            }] : []),
                             {
                               id: 'import',
                               label: 'Als Import-Konto verwenden',
@@ -362,8 +423,37 @@ export function AccountsView<TAccount extends AccountsViewAccount>({
         confirmLabel={csvPreview ? `${csvPreview.stats.validRows} Buchungen importieren` : 'Importieren'}
         busy={csvCommitting}
         onConfirm={() => void handleCsvCommit()}
-        onCancel={() => setCsvPreview(null)}
+        onCancel={() => { setCsvPreview(null); setCsvOptions(null); }}
         details={csvPreview ? (
+          <div className="flex flex-col gap-3">
+          {csvOptions && (
+            <div className="grid grid-cols-2 gap-2.5">
+              <Select label="Format" value={csvOptions.profile} onChange={(e) => void updateCsvOptions({ ...csvOptions, profile: e.target.value as CsvOptions['profile'] }, true)} fullWidth>
+                {(['fints', 'paypal', 'stripe', 'generic'] as const).map((profile) => <option key={profile} value={profile}>{csvProfileLabel[profile]}</option>)}
+              </Select>
+              <Select label="Zeichensatz" value={csvOptions.encoding} onChange={(e) => void updateCsvOptions({ ...csvOptions, encoding: e.target.value as CsvOptions['encoding'] })} fullWidth>
+                <option value="utf8">UTF-8</option>
+                <option value="win1252">Windows (ANSI, Umlaute aus Excel)</option>
+              </Select>
+              {([
+                ['dateColumn', 'Spalte Datum', true],
+                ['amountColumn', 'Spalte Betrag', true],
+                ['counterpartyColumn', 'Spalte Gegenpartei', false],
+                ['purposeColumn', 'Spalte Verwendungszweck', false],
+              ] as const).map(([key, label, required]) => (
+                <Select
+                  key={key}
+                  label={label}
+                  value={csvOptions.mapping[key] ?? ''}
+                  onChange={(e) => void updateCsvOptions({ ...csvOptions, mapping: { ...csvOptions.mapping, [key]: e.target.value || undefined } })}
+                  fullWidth
+                >
+                  {!required && <option value="">Keine</option>}
+                  {csvPreview.headers.map((header) => <option key={header} value={header}>{header}</option>)}
+                </Select>
+              ))}
+            </div>
+          )}
           <Table aria-label="Vorschau der ersten Zeilen" density="compact" bare>
             <TableHeader>
               <TableRow><TableHead>Datum</TableHead><TableHead>Gegenpartei</TableHead><TableHead numeric>Betrag</TableHead></TableRow>
@@ -378,10 +468,11 @@ export function AccountsView<TAccount extends AccountsViewAccount>({
               ))}
             </TableBody>
           </Table>
+          </div>
         ) : undefined}
       />
       <ImportHistoryModal isOpen={showImportHistory} onClose={() => setShowImportHistory(false)} />
-      <BankAccountModal isOpen={isBankAccountModalOpen} onClose={() => setIsBankAccountModalOpen(false)} />
+      <BankAccountModal isOpen={isBankAccountModalOpen} account={editingAccount} onClose={() => { setIsBankAccountModalOpen(false); setEditingAccount(undefined); }} />
     </div>
   );
 }

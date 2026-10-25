@@ -65,9 +65,15 @@ export const liteDatevExportQuerySchema = z.object({ from: isoDate, to: isoDate 
 // CP1252 printable range; anything else in a free text becomes '?' so one emoji cannot fail the whole file.
 const CP1252_TEXT = /[^\x20-\x7e\xa0-\xff€‚ƒ„…†‡ˆ‰Š‹ŒŽ‘’“”•–—˜™š›œžŸ]/g;
 const datevText = (value: string, max: number): string => value.replace(/\s+/g, ' ').replace(CP1252_TEXT, '?').trim().slice(0, max);
+// A document number in a free text: letters, a separator and digits (RE-2026-204, B-4711, 0815-2026-17).
+const DOCUMENT_NUMBER = /\b(?:[A-Za-z]{1,6}[-/]?)?\d{2,}(?:[-/]\d+)+\b|\b[A-Za-z]{1,6}[-/]?\d{3,}\b/;
+/** Belegfeld 1: the invoice or receipt number, else a number in the purpose; empty rather than an internal id. */
 const datevReference = (item: ServerEurCashItem): string => {
   const invoiceNumber = item.sourceType === 'invoice' ? /^Rechnung (\S+)/.exec(item.purpose)?.[1] : undefined;
-  return (invoiceNumber ?? item.sourceId).replace(/[^A-Za-z0-9_$&%*+\-/]/g, '-').slice(0, 36);
+  const inPurpose = DOCUMENT_NUMBER.exec(item.purpose)?.[0];
+  // An IBAN in the purpose (DE02 1203 …) looks like a number but is an account, not a document.
+  const reference = invoiceNumber ?? item.documentNumber ?? (inPurpose && !/^[A-Z]{2}\d{2}[A-Z0-9]{10,}$/.test(inPurpose) ? inPurpose : '');
+  return reference.replace(/[^A-Za-z0-9_$&%*+\-/]/g, '-').slice(0, 36);
 };
 const round2 = (value: number): number => Math.round((value + Number.EPSILON) * 100) / 100;
 
@@ -131,11 +137,19 @@ const buildLiteDatevRows = (items: ServerEurCashItem[], args: { taxYear: number;
     if (!lineId) { fail('Noch keiner EÜR-Kategorie zugeordnet.'); continue; }
     const rate = itemVatRate(item);
     if (rate === null) { fail('Steuersatz nicht eindeutig (weder 0, 7 noch 19 %).'); continue; }
-    // ponytail: split items (cash facts with several lines) go to the main category with the full gross;
-    // replace with one row per split once Lite splits carry gross amounts.
-    const choice = datevAccountFor(kennziffer.get(lineId), rate, item.flowType, args.chart);
-    if ('error' in choice) { fail(choice.error); continue; }
-    rows.push({ ...base, gegenkonto: pad(choice.account), sollHabenKennzeichen: item.flowType === 'income' ? 'S' : 'H', buSchluessel: choice.buKey });
+    // A split (Bewirtung 70/30) is one row per part; the gross is shared in the ratio of the net parts, the last part takes the cents.
+    const parts = (item.splits?.length ?? 0) > 1 ? item.splits! : [{ amountNet: 1, lineId }];
+    const netTotal = parts.reduce((sum, part) => sum + Math.abs(part.amountNet), 0);
+    const choices = parts.map((part) => datevAccountFor(kennziffer.get(part.lineId ?? lineId), rate, item.flowType, args.chart));
+    const failed = choices.find((choice): choice is { error: string } => 'error' in choice);
+    if (failed || netTotal <= 0) { fail(failed?.error ?? 'Aufteilung ohne Betrag.'); continue; }
+    let rest = amount;
+    choices.forEach((choice, index) => {
+      if ('error' in choice) return;
+      const umsatz = index === choices.length - 1 ? round2(rest) : round2(amount * Math.abs(parts[index]!.amountNet) / netTotal);
+      rest -= umsatz;
+      if (umsatz > 0) rows.push({ ...base, umsatz, gegenkonto: pad(choice.account), sollHabenKennzeichen: item.flowType === 'income' ? 'S' : 'H', buSchluessel: choice.buKey });
+    });
   }
   return { rows, errors };
 };
@@ -230,6 +244,8 @@ export const registerLiteEurRoutes = (app: FastifyInstance): void => {
     body: liteEurClassificationBodySchema,
     async handler({ request, body }) {
       const session = await requireMutationSessionFor(app, 'lite', request.headers.authorization, 'EÜR-Klassifikation benötigt die Rolle owner, admin oder accountant.');
+      // Without the rate the report could only book the gross amount and no Vorsteuer.
+      if (body.vatMode === 'default' && body.vatRate === undefined && !body.excluded && !body.kind) throw new ApiError(400, 'Bitte den Umsatzsteuersatz angeben (z. B. 19 oder 7 %) oder „Ohne Umsatzsteuer“ wählen.');
       try {
         const input = {
           sourceType: body.sourceType,

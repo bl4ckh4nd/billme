@@ -92,7 +92,7 @@ test('a received UBL XRechnung is read, checked, taken over into a receipt and a
   await expect(dialog.getByLabel('Belegaussteller', { exact: true })).toHaveValue('Bürobedarf Schulz & Partner GmbH');
   await expect(dialog.getByLabel('Belegdatum', { exact: true })).toHaveValue('2026-03-10');
   await expect(dialog.getByLabel('Leistung abgeschlossen am', { exact: true })).toHaveValue('2026-03-05');
-  await expect(dialog.getByLabel('Gesamtbetrag des Belegs in EUR', { exact: true })).toHaveValue('140.4');
+  await expect(dialog.getByLabel('Gesamtbetrag des Belegs in EUR', { exact: true })).toHaveValue('140,40');
   await expect(dialog.getByText('Die Originaldatei xrechnung-ubl.xml wird beim Speichern an den Beleg angehängt.')).toBeVisible();
 
   await dialog.getByLabel('Zahlungsart', { exact: true }).selectOption('cash');

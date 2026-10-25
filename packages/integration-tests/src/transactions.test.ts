@@ -15,22 +15,25 @@ import { addBankAccount, approveDraft, bankTransactions, bankTx, getDraft, impor
  * the base64 upload flow of the browser shell has its own tests.
  *
  * How this can fail (each one has a test below):
- * - accounts: malformed accounts accepted, an update creating a second account,
+ * - accounts: malformed accounts accepted (also an IBAN with a wrong check digit,
+ *   or one stored with spaces), an update creating a second account,
  *   a delete silently erasing the bookings (and import history) of the account
  * - CSV parsing: German decimals/thousands/negatives, ISO/DE/US dates, `;` `,`
  *   tab delimiters, BOM, CRLF, quoted multi-line fields, blank lines, short and
- *   long rows, Windows-1252, foreign currency, status column, missing columns,
- *   empty files; an impossible calendar date silently moved to another day
+ *   long rows, Windows-1252, foreign currency, status column (also "vorgemerkt"),
+ *   missing columns, empty files; a German PayPal export (Brutto/Entgelt/
+ *   Transaktionscode) read as a generic file; an impossible calendar date silently moved to another day
  * - preview: writing anything, hashing rows across accounts, a bad row failing
  *   the whole file, the row cap
  * - upload: unsafe names, non-canonical base64, replay, handles of expired or
  *   committed imports, unbounded open handles
  * - commit: bad rows poisoning good rows, a half-written import after a database
  *   error, duplicates on re-import or overlapping files, identical bank lines of
- *   one file collapsed into one (two real payments lost), a failed first attempt
+ *   one file collapsed into one (two real payments lost), a replayed file
+ *   reporting its rows as imported again, a failed first attempt
  *   (wrong mapping) or a rolled-back batch blocking a corrected re-import, import
  *   into an unknown account; a pending line never becoming booked when the bank
- *   books it; PayPal/Stripe imported net, so the fee vanishes and the invoice
+ *   books it, or the import history counting that line as nothing; PayPal/Stripe imported net, so the fee vanishes and the invoice
  *   stays open by the fee; the original file thrown away (no proof of what was
  *   imported) or replaced later
  * - rollback: removing another batch's rows, removing rows that already pay an
@@ -55,8 +58,11 @@ import { addBankAccount, approveDraft, bankTransactions, bankTx, getDraft, impor
  *   deleted ids reused, double counting in the EÜR once matched to the bank;
  *   a Bareinzahlung/Barabhebung (opposite signs on cash and bank) that cannot be
  *   matched, or that is matched without saying it is a Geldtransit and then
- *   counts as income or expense;
- *   a festgeschriebener month still taking new, changed or deleted entries,
+ *   counts as income or expense; a bank line already given its category in
+ *   "Buchen" losing it when its receipt is entered and matched (the entry shows
+ *   up open again, the old decision stays behind on the hidden bank line);
+ *   a festgeschriebener month still taking new, changed or deleted entries
+ *   (an import into it answering "0 imported" and leaving an empty batch),
  *   payments or bank links, the running month closable, closing not audited;
  *   the month still changed through a bank import, an import rollback, an EÜR
  *   classification or cash fact, or a receipt paid in that month
@@ -69,6 +75,7 @@ import { addBankAccount, approveDraft, bankTransactions, bankTx, getDraft, impor
 const YEAR = new Date().getFullYear();
 const MAP = { dateColumn: 'Date', amountColumn: 'Amount', counterpartyColumn: 'Name', purposeColumn: 'Purpose' };
 const HEADER = 'Date,Amount,Name,Purpose';
+const money = (value: number) => Math.round((value + Number.EPSILON) * 100) / 100;
 const unique = (label: string) => `${label} ${randomUUID().slice(0, 8)}`;
 
 /** Bytes of a valid-looking PDF of exactly `size` bytes; `seed` makes the hash differ. */
@@ -166,6 +173,18 @@ for (const product of PRODUCTS) describe(`transactions, banking and cash (${prod
       assert.ok(!(await h.api.accounts.list()).some((entry) => entry.id === base.id));
     });
 
+    test('an IBAN with a wrong check digit or length is refused with a German message; a valid one is stored without spaces', async () => {
+      const base = { id: randomUUID(), name: 'IBAN-Test', balance: 0, transactions: [], type: 'bank', color: '#000000', defaultSkrAccountNumber: '1200' };
+      for (const iban of ['DE12 3456', 'DE89 3704 0044 0532 0130 01']) {
+        const response = await h.raw('POST', '/accounts', { account: { ...base, iban } });
+        assert.equal(response.status, 400, `${iban}: ${response.text}`);
+        assert.match(response.text, /IBAN/);
+      }
+      assert.ok(!(await h.api.accounts.list()).some((entry) => entry.id === base.id));
+      await h.api.accounts.upsert({ account: { ...base, iban: 'de89 3704 0044 0532 0130 00' } } as never);
+      assert.equal((await h.api.accounts.list()).find((entry) => entry.id === base.id)!.iban, 'DE89370400440532013000');
+    });
+
     test('an account without bookings can be deleted; deleting an unknown id is a harmless no-op', async () => {
       const account = await newAccount();
       assert.deepEqual(await h.api.accounts.delete({ id: account.id }), { ok: true });
@@ -254,7 +273,7 @@ for (const product of PRODUCTS) describe(`transactions, banking and cash (${prod
       assert.deepEqual(result.rows.slice(0, 4).map((row) => row.parsed.date), ['2026-08-01', '2026-08-02', '2026-08-03', '2026-08-04']);
       for (const row of result.rows.slice(4)) {
         assert.equal(row.parsed.date, undefined, `row ${row.rowIndex}`);
-        assert.match(row.errors.join(' '), /Invalid date/);
+        assert.match(row.errors.join(' '), /Ungültiges Datum/);
       }
       assert.deepEqual(result.stats, { totalRows: 8, previewRows: 8, validRows: 4, errorRows: 4 });
     });
@@ -277,7 +296,7 @@ for (const product of PRODUCTS) describe(`transactions, banking and cash (${prod
       const csv = 'Date,Amount,Currency,Name\n2026-08-01,10,USD,A\n2026-08-02,10,eur,A\n2026-08-03,10,,A\n2026-08-04,10,CHF,A\n';
       const result = await preview(csv, { mapping: { dateColumn: 'Date', amountColumn: 'Amount', currencyColumn: 'Currency', counterpartyColumn: 'Name', currencyExpected: 'EUR' } });
       assert.deepEqual(result.rows.map((row) => row.errors.length > 0), [true, false, false, true]);
-      assert.match(result.rows[0]!.errors[0]!, /Unsupported currency: "USD"/);
+      assert.match(result.rows[0]!.errors[0]!, /Währung "USD" wird nicht unterstützt/);
       const accountId = (await newAccount()).id;
       const committed = await commit(accountId, csv, { mapping: { dateColumn: 'Date', amountColumn: 'Amount', currencyColumn: 'Currency', counterpartyColumn: 'Name' } });
       assert.equal(committed.imported, 2, 'the EUR row and the row without a currency');
@@ -285,10 +304,19 @@ for (const product of PRODUCTS) describe(`transactions, banking and cash (${prod
       assert.deepEqual((await txsOf(accountId)).map((tx) => tx.date).sort(), ['2026-08-02', '2026-08-03']);
     });
 
-    test('a status column maps pending/offen to pending and everything else to booked', async () => {
-      const csv = 'Date,Amount,Status\n2026-08-01,10,Pending\n2026-08-02,10,Gebucht\n2026-08-03,10,offen\n2026-08-04,10,\n';
+    test('a status column maps pending/offen/vorgemerkt/ausstehend to pending and everything else to booked', async () => {
+      const csv = 'Date,Amount,Status\n2026-08-01,10,Pending\n2026-08-02,10,Gebucht\n2026-08-03,10,offen\n2026-08-04,10,\n2026-08-05,10,Vorgemerkt\n2026-08-06,10,Ausstehend\n';
       const result = await preview(csv, { mapping: { dateColumn: 'Date', amountColumn: 'Amount', statusColumn: 'Status' } });
-      assert.deepEqual(result.rows.map((row) => row.parsed.status), ['pending', 'booked', 'pending', 'booked']);
+      assert.deepEqual(result.rows.map((row) => row.parsed.status), ['pending', 'booked', 'pending', 'booked', 'pending', 'pending']);
+    });
+
+    test('a German PayPal export (Brutto, Entgelt, Transaktionscode) is detected as PayPal and read gross with the fee', async () => {
+      const csv = '"Datum","Uhrzeit","Zeitzone","Name","Typ","Status","Währung","Brutto","Entgelt","Netto","Absender E-Mail-Adresse","Transaktionscode","Betreff"\n"01.08.2026","10:00:00","CEST","Delta Webshop","Zahlung im Einzugsverfahren","Abgeschlossen","EUR","119,00","-4,05","114,95","shop@example.com","9XY12345AB678901C","Bestellung 17"\n';
+      const result = await preview(csv);
+      assert.equal(result.profile, 'paypal');
+      assert.deepEqual([result.suggestedMapping.amountColumn, result.suggestedMapping.feeColumn, result.suggestedMapping.counterpartyColumn, result.suggestedMapping.externalIdColumn], ['Brutto', 'Entgelt', 'Name', 'Transaktionscode']);
+      assert.deepEqual(result.rows[0]!.errors, []);
+      assert.deepEqual([result.rows[0]!.parsed.amount, result.rows[0]!.parsed.fee, result.rows[0]!.parsed.counterparty, result.rows[0]!.parsed.status], [119, -4.05, 'Delta Webshop', 'booked']);
     });
 
     test('PayPal and Stripe exports are detected; the gross amount is the payment, the fee its own line; created date used, other currencies flagged', async () => {
@@ -313,7 +341,7 @@ for (const product of PRODUCTS) describe(`transactions, banking and cash (${prod
     test('mapping a column that is not in the file yields row errors, not a crash', async () => {
       const result = await preview('Date,Amount\n2026-08-01,10\n', { mapping: { dateColumn: 'Nope', amountColumn: 'Amount' } });
       assert.deepEqual(result.stats, { totalRows: 1, previewRows: 1, validRows: 0, errorRows: 1 });
-      assert.match(result.rows[0]!.errors.join(), /Invalid date/);
+      assert.match(result.rows[0]!.errors.join(), /Ungültiges Datum/);
       const unmapped = await h.raw('POST', '/finance/import/preview', { path: await writeCsv(`${HEADER}\n2026-08-01,1,A,B\n`), mapping: { dateColumn: '', amountColumn: 'Amount' } });
       assert.equal(unmapped.status, 400, 'an empty column name is refused at the boundary');
     });
@@ -450,8 +478,8 @@ for (const product of PRODUCTS) describe(`transactions, banking and cash (${prod
       assert.equal(result.imported, 2);
       assert.equal(result.skipped, 0);
       assert.deepEqual(result.errors.map((error) => error.rowIndex), [4, 5]);
-      assert.match(result.errors[0]!.message, /Invalid amount: "nope"/);
-      assert.match(result.errors[1]!.message, /Invalid date/);
+      assert.match(result.errors[0]!.message, /Ungültiger Betrag: "nope"/);
+      assert.match(result.errors[1]!.message, /Ungültiges Datum/);
       const stored = await txsOf(accountId);
       assert.deepEqual(stored.map((tx) => [tx.date, tx.amount, tx.type, tx.status, tx.accountId, tx.importBatchId]), [
         ['2026-08-02', -20, 'expense', 'booked', accountId, result.batchId],
@@ -493,6 +521,7 @@ for (const product of PRODUCTS) describe(`transactions, banking and cash (${prod
       const again = await h.api.finance.importCommit({ path, accountId, mapping: MAP, profile: 'generic' });
       const copy = await h.api.finance.importCommit({ path: await writeCsv(`${HEADER}\n2026-08-01,10,A,B\n2026-08-02,20,A,B\n`), accountId, mapping: MAP, profile: 'generic' });
       assert.equal(again.batchId, first.batchId);
+      assert.deepEqual([again.imported, again.skipped], [0, 2], 'the replay imports nothing and says so');
       assert.equal(copy.batchId, first.batchId, 'a byte-identical copy under another file name is the same file');
       assert.equal((await txsOf(accountId)).length, 2);
       assert.equal((await h.api.finance.listImportBatches({ accountId })).length, 1);
@@ -545,6 +574,8 @@ for (const product of PRODUCTS) describe(`transactions, banking and cash (${prod
       if (liteEur) assert.ok(!(await euerItems()).some((item) => item.counterparty === name), 'a pending line is no money yet');
       const second = await commit(accountId, `${HEADER},Status\n${today()},77,${name},RE-77,gebucht\n${today()},1,${unique('Neu')},x,gebucht\n`, { mapping });
       assert.deepEqual([second.imported, second.updated, second.skipped], [1, 1, 0]);
+      const history = (await h.api.finance.listImportBatches({ accountId })).find((entry) => entry.id === second.batchId)!;
+      assert.deepEqual([history.importedCount, history.updatedCount], [1, 1], 'the import history names the taken-over line, it does not report "0 importiert"');
       const rows = await txsOf(accountId);
       assert.equal(rows.length, 2, 'no second line for the same payment');
       const upgraded = rows.find((tx) => tx.amount === 77)!;
@@ -1012,6 +1043,24 @@ for (const product of PRODUCTS) describe(`transactions, banking and cash (${prod
       assert.ok((await euerItems()).some((item) => item.sourceId === refund.id), 'unlinked: the bank line is back');
     });
 
+    if (product === 'lite') test('a refund line already classified as an expense stops counting as one the moment it is tied to the invoice', async () => {
+      const invoice = await newInvoice();
+      const paidBy = await bankLine(invoice.amount);
+      await h.api.transactions.link({ transactionId: paidBy.id, invoiceId: invoice.id });
+      const refund = await bankLine(-50, { purpose: `Erstattung ${invoice.number}` });
+      const eurLineId = (await h.api.eur.getReport({ taxYear: YEAR })).rows.find((row) => row.kind === 'expense')!.lineId;
+      const expenseOf = async () => (await h.api.eur.getReport({ taxYear: YEAR })).summary.expenseTotal;
+      const open = await expenseOf();
+      await h.api.eur.upsertClassification({ sourceType: 'transaction', sourceId: refund.id, taxYear: YEAR, eurLineId, vatMode: 'none', reason: 'zuerst als Ausgabe erfasst' });
+      assert.equal(await expenseOf(), open + 50, 'as an expense the line counts');
+      await h.api.transactions.link({ transactionId: refund.id, invoiceId: invoice.id });
+      assert.equal(await expenseOf(), open, 'tied to the invoice it is a negative payment, no expense any more');
+      assert.equal((await euerItems()).filter((item) => item.sourceId === refund.id).length, 0);
+      await h.api.transactions.unlink({ transactionId: refund.id });
+      assert.equal((await euerItems()).find((item) => item.sourceId === refund.id)!.classification?.eurLineId, eurLineId, 'unlinked: the earlier decision is still there');
+      assert.equal(await expenseOf(), open + 50);
+    });
+
     if (product === 'lite') test('a Rücklastschrift reopens the whole invoice; more than was paid cannot go back', async () => {
       const invoice = await newInvoice();
       const paidBy = await bankLine(invoice.amount);
@@ -1467,6 +1516,18 @@ for (const product of PRODUCTS) describe(`transactions, banking and cash (${prod
       const classified = await own.raw('PUT', '/reports/eur/classifications', { sourceType: 'transaction', sourceId: april.id, taxYear: 2025, eurLineId: 'E2025_KZ150', reason: 'Miete' });
       assert.equal(classified.status, 200, `an open month is still classified: ${classified.text}`);
     });
+
+    test('a file whose every line falls into a closed month is refused with 409 and leaves no empty import batch', async (t) => {
+      const own = await startProduct('lite', t, 'transactions-closed-only');
+      const account = 'bank-closed-only';
+      await own.api.accounts.upsert({ account: { id: account, name: 'Giro', iban: 'DE02120300000000202051', balance: 0, transactions: [], type: 'bank', color: '#112233' } } as never);
+      await own.api.cash.closePeriod({ period: '2025-01', reason: 'Monat abgeschlossen' });
+      const refused = await own.raw('POST', '/finance/import/commit', { path: await writeCsv(`${HEADER}\n2025-01-10,-39.95,Telekom,Januar\n2025-01-12,-12.90,Hoster,Januar\n`), accountId: account, mapping: MAP, profile: 'generic' });
+      assert.equal(refused.status, 409, refused.text);
+      assert.match(refused.text, /Monat 2025-01 ist festgeschrieben/);
+      assert.deepEqual(await own.api.finance.listImportBatches({ accountId: account }), [], 'no empty batch in the import history');
+      assert.deepEqual(await own.api.transactions.list({ accountId: account }), []);
+    });
   });
 
   if (product === 'lite') describe('matching cash entries to bank lines', () => {
@@ -1505,6 +1566,31 @@ for (const product of PRODUCTS) describe(`transactions, banking and cash (${prod
       assert.equal(await classified(), eurLineId, 'classification kept after the match');
       await h.api.cash.unmatchEntry({ id: entry.id, reason: 'gelöst' });
       assert.equal(await classified(), eurLineId, 'classification kept after the unmatch');
+    });
+
+    test('a bank line classified in Buchen keeps its category, VAT and split when its receipt is matched to it; nothing stays behind', async () => {
+      const smallBusiness = ((await h.api.settings.get()) as any).legal?.smallBusinessRule === true;
+      const { tx, entry } = await matchedPair(-119);
+      const net = smallBusiness ? 119 : 100;
+      const splits = [
+        { amountNet: money(net * 0.7), deductibility: 'deductible', lineId: `E${YEAR}_KZ175`, reason: '70 % abziehbar' },
+        { amountNet: money(net * 0.3), deductibility: 'non-deductible', lineId: `E${YEAR}_KZ165`, reason: '30 % nicht abziehbar' },
+      ];
+      const classified = await h.raw('PUT', '/reports/eur/classifications', { sourceType: 'transaction', sourceId: tx.id, taxYear: YEAR, eurLineId: `E${YEAR}_KZ175`, vatMode: 'default', vatRate: 19, splits, reason: 'Bewirtung geprüft' });
+      assert.equal(classified.status, 200, classified.text);
+      const before = await h.api.eur.getReport({ taxYear: YEAR });
+      await h.api.cash.matchEntry({ id: entry.id, transactionId: tx.id, expectedCashDate: entry.originalCashDate, reason: 'Bewirtungsbeleg zum Umsatz' });
+      const items = await euerItems();
+      const moved = items.find((item) => item.sourceId === entry.id)!;
+      assert.deepEqual([moved.classification?.eurLineId, moved.classification?.vatMode, moved.classification?.vatRate], [`E${YEAR}_KZ175`, 'default', 19], 'the entry carries the decision');
+      assert.deepEqual(moved.splits?.map((split) => split.amountNet), splits.map((split) => split.amountNet));
+      assert.equal(items.filter((item) => item.sourceId === tx.id).length, 0);
+      const after = await h.api.eur.getReport({ taxYear: YEAR });
+      assert.deepEqual(after.summary, before.summary, 'the EÜR is the same');
+      assert.equal(after.unclassifiedCount, before.unclassifiedCount - 1, 'the entry, open until now, is decided with the bank line\'s category');
+      await h.api.cash.unmatchEntry({ id: entry.id, reason: 'gelöst' });
+      const back = (await euerItems()).find((item) => item.sourceId === tx.id)!;
+      assert.equal(back.classification, undefined, 'the old decision did not stay behind on the bank line');
     });
 
     test('matching the same pair twice is idempotent', async () => {

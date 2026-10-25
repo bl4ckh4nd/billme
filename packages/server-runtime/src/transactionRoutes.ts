@@ -131,6 +131,7 @@ const importBatchSchema = z.object({
   mappingJson: z.unknown(),
   importedCount: z.number().int(),
   skippedCount: z.number().int(),
+  updatedCount: z.number().int().optional(),
   errorCount: z.number().int(),
   createdAt: z.string(),
   rolledBackAt: z.string().optional(),
@@ -162,7 +163,7 @@ const requireMutation = (
   app: FastifyInstance,
   product: 'lite' | 'pro',
   authorization: string | undefined,
-) => requireMutationSessionFor(app, product, authorization, 'Transaction mutation requires owner, admin, or accountant role');
+) => requireMutationSessionFor(app, product, authorization);
 
 const mapMutationError = (error: unknown): never => {
   if (!(error instanceof Error)) throw error;

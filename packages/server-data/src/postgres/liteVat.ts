@@ -182,8 +182,24 @@ export const getServerLiteVatReport = (database: PostgresQueryable, scope: Tenan
     } else emitInput(date, 0, 1);
     if (cash.some((entry) => entry.flowType !== 'expense')) issue('RECEIPT_DIRECTION_REVIEW', 'Ein Beleg ist Einnahmen und Ausgaben zugeordnet. Bitte die Zuordnung prüfen.', receipt.id);
   }
-  const unmatched = await db.query<{ id: string }>(`SELECT t.id FROM transactions t WHERE t.tenant_id=$1 AND t.status='booked' AND t.deleted_at IS NULL AND t.date BETWEEN $2 AND $3 AND (t.linked_invoice_id IS NULL OR t.linked_invoice_id='') AND NOT EXISTS (SELECT 1 FROM lite_cash_entries m WHERE m.tenant_id=t.tenant_id AND m.matched_transaction_id=t.id AND m.deleted_at IS NULL) AND NOT EXISTS (SELECT 1 FROM eur_classifications c WHERE c.tenant_id=t.tenant_id AND c.source_type='transaction' AND c.source_id=t.id AND c.excluded=TRUE) AND NOT EXISTS (SELECT 1 FROM eur_cash_facts f WHERE f.tenant_id=t.tenant_id AND f.source_type='transaction' AND f.source_id=t.id AND f.kind IN ('private-withdrawal','private-contribution','pass-through','transit'))`, [scope.tenantId, from, to]);
-  for (const row of unmatched.rows) issue('BANK_TAX_EVIDENCE_REQUIRED', 'Bankzahlung benötigt einen Rechnungs-/Belegbezug oder eine geprüfte private/neutrale Zuordnung.', row.id);
+  // Bank lines without an invoice, cash entry or neutral decision. A line classified in "Buchen" counts with the rate
+  // chosen there, as in the EÜR (Kz 185/140); one without a decision stays open and is named so the user finds it.
+  const unmatched = await db.query<{ id: string; date: string; amount: string | number; type: string; counterparty: string | null; eur_line_id: string | null; vat_mode: string | null; vat_rate: string | number | null }>(`SELECT DISTINCT ON (t.id) t.id,t.date,t.amount,t.type,t.counterparty,c.eur_line_id,c.vat_mode,c.vat_rate FROM transactions t LEFT JOIN eur_classifications c ON c.tenant_id=t.tenant_id AND c.source_type='transaction' AND c.source_id=t.id AND c.excluded=FALSE AND c.eur_line_id IS NOT NULL WHERE t.tenant_id=$1 AND t.status='booked' AND t.deleted_at IS NULL AND t.date BETWEEN $2 AND $3 AND (t.linked_invoice_id IS NULL OR t.linked_invoice_id='') AND NOT EXISTS (SELECT 1 FROM lite_cash_entries m WHERE m.tenant_id=t.tenant_id AND m.matched_transaction_id=t.id AND m.deleted_at IS NULL) AND NOT EXISTS (SELECT 1 FROM eur_classifications c WHERE c.tenant_id=t.tenant_id AND c.source_type='transaction' AND c.source_id=t.id AND c.excluded=TRUE) AND NOT EXISTS (SELECT 1 FROM eur_cash_facts f WHERE f.tenant_id=t.tenant_id AND f.source_type='transaction' AND f.source_id=t.id AND f.kind IN ('private-withdrawal','private-contribution','pass-through','transit')) ORDER BY t.id, c.tax_year DESC NULLS LAST`, [scope.tenantId, from, to]);
+  for (const row of unmatched.rows) {
+    const date = String(row.date).slice(0, 10);
+    const gross = Math.abs(cents(Number(row.amount)));
+    const label = `${row.counterparty || 'Bankumsatz'} (Bank ${date.split('-').reverse().join('.')})`;
+    if (!row.eur_line_id) {
+      issue('BANK_TAX_EVIDENCE_REQUIRED', `${label}, ${(gross / 100).toLocaleString('de-DE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} €: noch nicht in „Buchen“ zugeordnet (Kategorie mit Umsatzsteuersatz, Privat oder Geldtransit) und ohne Rechnung oder Beleg.`, row.id);
+      continue;
+    }
+    const rate = row.vat_mode === 'default' && row.vat_rate != null ? Number(row.vat_rate) : 0;
+    if (smallBusiness || !rate || !gross) continue;
+    if (rate !== 7 && rate !== 19) { issue('BANK_VAT_RATE_REVIEW', `${label}: Steuersatz ${rate} % passt zu keiner Kennziffer der Voranmeldung. Bitte in „Buchen“ prüfen.`, row.id); continue; }
+    const vat = Math.round(gross * rate / (100 + rate));
+    const income = row.type === 'income';
+    report.sources.push({ sourceType: 'transaction', sourceId: row.id, label, date, code: income ? outputRateKz(rate) : inputTaxKz('domestic'), taxCode: taxCodes[income ? outputRateKz(rate) : inputTaxKz('domestic')], direction: income ? 'output' : 'input', rate, basisCents: gross - vat, taxCents: vat });
+  }
   // A Barabhebung/Bareinzahlung (cash entry matched to a bank line of the other direction) is Geldtransit and needs no receipt.
   const transit = new Set((await db.query<{ id: string }>(`SELECT m.id FROM lite_cash_entries m JOIN transactions t ON t.tenant_id=m.tenant_id AND t.id=m.matched_transaction_id WHERE m.tenant_id=$1 AND m.deleted_at IS NULL AND t.type <> m.flow_type`, [scope.tenantId])).rows.map((row) => row.id));
   // A booking without money (Pauschale, AfA, Privatanteil) carries no Vorsteuer and no payment receipt.
@@ -225,10 +241,19 @@ export const getServerLiteVatReport = (database: PostgresQueryable, scope: Tenan
     }, 0);
     report.smallBusinessLimits = { previousYear: year - 1, previousYearCents: turnover(year - 1), previousLimitCents: 2_500_000, currentYear: year, currentYearCents: turnover(year), currentLimitCents: 10_000_000 };
     if (report.smallBusinessLimits.previousYearCents > 2_500_000) issue('KU_LIMIT_EXCEEDED', `Umsatz ${year - 1} über 25.000 €: Die Kleinunternehmerregelung gilt ${year} nicht mehr (§ 19 Abs. 1 UStG). Bitte mit der Steuerberatung prüfen.`);
+    // VAT shown on an invoice is owed even under § 19 (§ 14c UStG), e.g. after switching to § 19 mid-year.
+    if (report.sources.some((source) => source.sourceType === 'invoice' && source.direction === 'output' && source.taxCents !== 0)) issue('KU_INVOICE_VAT_SHOWN', 'Kleinunternehmer, aber Rechnungen in diesem Zeitraum weisen Umsatzsteuer aus: Diese Steuer schuldest du trotzdem (§ 14c UStG) und meldest sie in der Voranmeldung. Wurde die Kleinunternehmerregelung erst später gewählt, bitte mit der Steuerberatung klären, ab wann sie gilt.');
     if (report.smallBusinessLimits.currentYearCents > 10_000_000) issue('KU_LIMIT_EXCEEDED', `Umsatz ${year} über 100.000 €: Ab dem Umsatz, mit dem die Grenze überschritten wird, gilt die Kleinunternehmerregelung nicht mehr (§ 19 Abs. 1 UStG). Bitte sofort mit der Steuerberatung prüfen.`);
   }
+  // The hint list names the document instead of its id.
+  const names = new Map<string, string>([
+    ...invoices.map((invoice) => [invoice.id, `Rechnung ${invoice.number}`] as [string, string]),
+    ...receipts.map((receipt) => [receipt.id, `Beleg ${receipt.number}`] as [string, string]),
+    ...entries.map((entry) => [entry.id, `Zahlung ${entry.counterparty} vom ${entry.cashDate.split('-').reverse().join('.')}`] as [string, string]),
+  ]);
+  for (const item of report.issues) if (item.sourceId && names.has(item.sourceId)) item.label = names.get(item.sourceId);
   report.reconciliation.paymentResidualCents = report.reconciliation.paymentCashCents - report.reconciliation.paymentRecognizedCents;
   report.preparationComplete = report.issues.length === 0;
-  report.sourceHash = createHash('sha256').update(JSON.stringify({ invoices, entries, receipts, from, to, method, smallBusiness })).digest('hex');
+  report.sourceHash = createHash('sha256').update(JSON.stringify({ invoices, entries, receipts, bankLines: unmatched.rows, from, to, method, smallBusiness })).digest('hex');
   return liteVatReportSchema.parse(report);
 }, { serializable: true });

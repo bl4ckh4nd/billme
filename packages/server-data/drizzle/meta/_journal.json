@@ -330,6 +330,34 @@
       "when": 1790985600015,
       "tag": "0048_server_data_datev_ledger_catalog",
       "breakpoints": false
+    },
+    {
+      "idx": 60,
+      "version": "7",
+      "when": 1790985600030,
+      "tag": "0060_server_data_import_updated_count",
+      "breakpoints": false
+    },
+    {
+      "idx": 65,
+      "version": "7",
+      "when": 1790985600031,
+      "tag": "0065_server_data_bank_transaction_documents",
+      "breakpoints": false
+    },
+    {
+      "idx": 66,
+      "version": "7",
+      "when": 1790985600032,
+      "tag": "0066_server_data_rebook_after_storno",
+      "breakpoints": false
+    },
+    {
+      "idx": 67,
+      "version": "7",
+      "when": 1790985600033,
+      "tag": "0067_server_data_asset_sale_reversal",
+      "breakpoints": false
     }
   ]
 }

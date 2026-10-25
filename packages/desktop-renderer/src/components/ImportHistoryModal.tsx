@@ -138,6 +138,9 @@ export const ImportHistoryModal = ({ isOpen, onClose, accountId }: ImportHistory
                   <CheckCircle2 size={12} className="mr-1" aria-hidden="true" />
                   {batch.importedCount} importiert
                 </span>
+                {(batch.updatedCount ?? 0) > 0 && (
+                  <span className="flex items-center tabular-nums text-muted">{batch.updatedCount} aktualisiert</span>
+                )}
                 {batch.skippedCount > 0 && (
                   <span className="flex items-center tabular-nums text-muted">
                     <XCircle size={12} className="mr-1" aria-hidden="true" />
@@ -225,6 +228,9 @@ export const ImportHistoryModal = ({ isOpen, onClose, accountId }: ImportHistory
                     <CheckCircle2 size={14} className="mr-1" aria-hidden="true" />
                     {details.batch.importedCount} importiert
                   </span>
+                  {(details.batch.updatedCount ?? 0) > 0 && (
+                    <span className="flex items-center tabular-nums text-muted">{details.batch.updatedCount} aktualisiert</span>
+                  )}
                   {details.batch.skippedCount > 0 && (
                     <span className="flex items-center tabular-nums text-muted">
                       <XCircle size={14} className="mr-1" aria-hidden="true" />
@@ -270,11 +276,11 @@ export const ImportHistoryModal = ({ isOpen, onClose, accountId }: ImportHistory
                           <TableCell muted className="tabular-nums">
                             {new Date(tx.date).toLocaleDateString('de-DE')}
                           </TableCell>
-                          <TableCell className="font-medium">{tx.counterparty}</TableCell>
-                          <TableCell muted className="max-w-xs truncate">{tx.purpose}</TableCell>
+                          <TableCell className="font-medium">{tx.counterparty}{tx.status === 'pending' ? <Badge tone="warning" className="ml-2">Vorgemerkt</Badge> : null}</TableCell>
+                          <TableCell muted className="w-full max-w-0 truncate" title={tx.purpose}>{tx.purpose}</TableCell>
                           <TableCell
                             numeric
-                            className={`font-medium ${tx.type === 'income' ? 'text-success-text' : 'text-error-text'}`}
+                            className={`whitespace-nowrap font-medium ${tx.type === 'income' ? 'text-success-text' : 'text-error-text'}`}
                           >
                             {tx.type === 'income' ? '+' : '-'}
                             {formatCurrency(Math.abs(tx.amount))}
@@ -308,7 +314,7 @@ export const ImportHistoryModal = ({ isOpen, onClose, accountId }: ImportHistory
                   )}
 
                   {details.canRollback && !showRollbackConfirm && (
-                    <Button variant="danger" onClick={() => setShowRollbackConfirm(true)}>
+                    <Button variant="danger" onClick={() => { rollbackMutation.reset(); setShowRollbackConfirm(true); }}>
                       <Undo2 size={16} aria-hidden="true" />
                       Import rückgängig machen
                     </Button>
@@ -321,7 +327,7 @@ export const ImportHistoryModal = ({ isOpen, onClose, accountId }: ImportHistory
                       description={(
                         <>
                           <p>Dies ist eine unwiderrufliche Aktion. Bitte prüfe die Auswirkungen.</p>
-                          {rollbackMutation.error ? <p className="mt-2 text-error-text">Fehler: {String(rollbackMutation.error)}</p> : null}
+                          {rollbackMutation.error ? <p className="mt-2 text-error-text">{rollbackMutation.error instanceof Error ? rollbackMutation.error.message : String(rollbackMutation.error)}</p> : null}
                         </>
                       )}
                       confirmLabel="Jetzt rückgängig machen"

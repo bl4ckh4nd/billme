@@ -1,15 +1,23 @@
 import React from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Badge, Button, Card, Checkbox, Input, Modal, Select } from '@billme/ui';
+import { useNavigate, useRouterState } from '@tanstack/react-router';
+import { Badge, Button, Card, Checkbox, ConfirmDialog, Input, Modal, Select } from '@billme/ui';
 import type { IncomingEinvoice, LiteCashEntry, LiteReceipt } from '@billme/server-core';
 import type { IpcArgs } from '@billme/desktop-contracts/contract';
 import { localIsoDate } from '@billme/desktop-utils';
 import { ipc } from '../../runtime-api';
 import { EinvoiceReview, receiptFromEinvoice } from './EinvoiceReview';
-import { nonCashPresets } from './categories';
+import { isDecidedEurItem, nonCashPresets } from './categories';
 
 const money = (value: number) => (value / 100).toLocaleString('de-DE', { style: 'currency', currency: 'EUR' });
-const parseCents = (value: string) => Math.round(Number(value.trim().replace(',', '.')) * 100);
+/** "1.234,56", "140,4" and "41.93" all read as euros; dots are thousands only next to a decimal comma. */
+const parseCents = (value: string) => { const text = value.trim().replace(/\s/g, ''); return Math.round(Number(text.includes(',') ? text.replace(/\./g, '').replace(',', '.') : text) * 100); };
+/** A euro amount typed the German way, shown as "140,40" once the field is left. */
+const EuroInput: React.FC<{ label: string; cents: number; onCents: (cents: number) => void }> = ({ label, cents, onCents }) => {
+  const shown = (cents / 100).toFixed(2).replace('.', ',');
+  const [draft, setDraft] = React.useState<string>();
+  return <Input label={label} inputMode="decimal" className="text-right tabular-nums" value={draft ?? shown} onFocus={() => setDraft(shown)} onBlur={() => setDraft(undefined)} onChange={(e) => { setDraft(e.target.value); const next = parseCents(e.target.value); if (Number.isSafeInteger(next)) onCents(next); }} />;
+};
 const fileToBase64 = (file: File) => new Promise<string>((resolve, reject) => { const reader = new FileReader(); reader.onload = () => resolve(String(reader.result).split(',')[1] ?? ''); reader.onerror = reject; reader.readAsDataURL(file); });
 const failureText = (failure: unknown) => (failure instanceof Error ? failure.message : String(failure));
 type PaymentMethod = NonNullable<LiteCashEntry['paymentMethod']>;
@@ -48,10 +56,44 @@ export const LiteCashPanel: React.FC = () => {
   const files = useQuery({ queryKey: ['cash', 'files', manageReceiptId], queryFn: () => ipc.cash.listFiles({ receiptId: manageReceiptId }), enabled: !!manageReceiptId });
   const refresh = async () => { await Promise.all(['cash', 'eur', 'transactions', 'lite-vat', 'dashboard-flows'].map((key) => queryClient.invalidateQueries({ queryKey: [key] }))); };
   const start = (entry?: LiteCashEntry) => {
+    setMatchOnSave(undefined);
     setEditing(entry); setReceipt(undefined); setReceiptOnly(false); setError(''); setReason('');
     setEinvoice(undefined); setEinvoiceProblems([]); setPendingOriginal(undefined);
     setForm({ id: entry?.id ?? crypto.randomUUID(), cashDate: entry?.originalCashDate ?? localIsoDate(), amount: entry ? String(Math.abs(entry.amountCents) / 100) : '', flowType: entry?.flowType ?? 'expense', refund: entry ? (entry.flowType === 'expense' ? entry.amountCents > 0 : entry.amountCents < 0) : false, counterparty: entry?.counterparty ?? '', purpose: entry?.purpose ?? '', receiptId: entry?.receiptId ?? '', paymentMethod: entry?.paymentMethod ?? '', preset: '' }); setOpen(true);
   };
+  // Ctrl/⌘K "Manuelle Buchung erfassen" lands here with ?create=cash: open the form once and drop the flag.
+  // With &tx=<bank line> ("Beleg erfassen" in Buchen) the form starts from that bank line and is matched to it on save.
+  const navigate = useNavigate();
+  const createRequest = useRouterState({ select: (state) => {
+    const search = state.location.search as Record<string, unknown>;
+    return search.create === 'cash' ? (typeof search.tx === 'string' ? search.tx : '') : undefined;
+  } });
+  const [matchOnSave, setMatchOnSave] = React.useState<{ transactionId: string; cashDate: string }>();
+  React.useEffect(() => {
+    if (createRequest === undefined) return;
+    const bank = createRequest ? transactions.data?.find((transaction) => transaction.id === createRequest) : undefined;
+    if (createRequest && !bank && !transactions.isSuccess) return; // wait for the bank lines; an unknown id opens an empty form
+    start();
+    if (bank) {
+      setForm((current) => ({ ...current, cashDate: bank.date, amount: Math.abs(bank.amount).toFixed(2).replace('.', ','), flowType: bank.type === 'income' ? 'income' : 'expense', counterparty: bank.counterparty, purpose: bank.purpose, paymentMethod: 'bank' }));
+      setReceipt({ ...blankReceipt(), counterparty: bank.counterparty, documentDate: bank.date, receivedDate: bank.date, serviceDate: bank.date, grossAmountCents: Math.round(Math.abs(bank.amount) * 100) });
+      setMatchOnSave({ transactionId: bank.id, cashDate: bank.date });
+    }
+    void navigate({ to: '.', search: {}, replace: true });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [createRequest, transactions.data]);
+  // Ctrl/⌘K "Beleg" without a booking lands here with ?receipt=<id>: show its originals.
+  const receiptRequest = useRouterState({ select: (state) => {
+    const search = state.location.search as Record<string, unknown>;
+    return typeof search.receipt === 'string' ? search.receipt : undefined;
+  } });
+  React.useEffect(() => {
+    if (!receiptRequest) return;
+    setOpen(false); setReceipt(undefined); setReason(''); setViewing(undefined); setError('');
+    setManageReceiptId(receiptRequest);
+    void navigate({ to: '.', search: {}, replace: true });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [receiptRequest]);
   const persistReceipt = async () => {
     if (!receipt) return form.receiptId || undefined;
     const saved = await ipc.cash.saveReceipt({ receipt, expectedUpdatedAt: receipt.updatedAt || undefined, reason: reason.trim() });
@@ -73,7 +115,14 @@ export const LiteCashPanel: React.FC = () => {
     if (!einvoice) return;
     const { receipt: next, problems } = receiptFromEinvoice(einvoice.parsed, receipt ?? blankReceipt());
     setReceipt(next); setEinvoiceProblems(problems); setPendingOriginal(einvoice.original); setEinvoice(undefined);
-    if (!receiptOnly) setForm((current) => ({ ...current, counterparty: current.counterparty || next.counterparty, purpose: current.purpose || `Rechnung ${next.number}`.trim() }));
+    // The payment is the invoice total; an IBAN on the invoice means a transfer, so the Zahlungsart is Bank.
+    if (!receiptOnly) setForm((current) => ({
+      ...current,
+      counterparty: current.counterparty || next.counterparty,
+      purpose: current.purpose || `Rechnung ${next.number}`.trim(),
+      amount: current.amount || (next.grossAmountCents > 0 ? (next.grossAmountCents / 100).toFixed(2).replace('.', ',') : ''),
+      paymentMethod: current.paymentMethod || (einvoice.parsed.iban ? 'bank' : ''),
+    }));
   };
   const showArchived = async (id: string) => {
     setError('');
@@ -100,8 +149,9 @@ export const LiteCashPanel: React.FC = () => {
       if (!eurLineId) throw new Error(`Die Buchung ist gespeichert, aber die EÜR-Zeile ${preset.code} fehlt für ${taxYear}. Bitte unter Buchen zuordnen.`);
       await ipc.eur.upsertClassification({ sourceType: 'manual', sourceId: saved.id, taxYear, eurLineId, vatMode: 'none', reason: reason.trim() });
     }
+    if (matchOnSave) await ipc.cash.matchEntry({ id: saved.id, transactionId: matchOnSave.transactionId, expectedCashDate: form.cashDate, reason: `Beleg zum Bankumsatz vom ${matchOnSave.cashDate.split('-').reverse().join('.')}: ${reason.trim()}` });
     return saved;
-  }, onSuccess: async () => { setOpen(false); setEditing(undefined); setManageReceiptId(''); await refresh(); }, onError: (failure: Error) => setError(failure.message) });
+  }, onSuccess: async () => { setMatchOnSave(undefined); setOpen(false); setEditing(undefined); setManageReceiptId(''); await refresh(); }, onError: (failure: Error) => setError(failure.message) });
   const action = useMutation({ mutationFn: async (work: () => Promise<unknown>) => work(), onSuccess: refresh, onError: (failure: Error) => setError(failure.message) });
   const upload = async (file: File) => {
     if (uploading || save.isPending) return;
@@ -125,6 +175,15 @@ export const LiteCashPanel: React.FC = () => {
     const url = URL.createObjectURL(new Blob([bytes], { type: 'application/octet-stream' }));
     const link = document.createElement('a'); link.href = url; link.download = file.fileName; link.click(); setTimeout(() => URL.revokeObjectURL(url), 1000);
   };
+  /** Festschreiben is irreversible: ask first and name what is still open in the month. */
+  const [confirmClose, setConfirmClose] = React.useState<{ period: string; open: number }>();
+  const askClose = async () => {
+    setError('');
+    try {
+      const items = await ipc.eur.listItems({ taxYear: Number(closingPeriod.slice(0, 4)) });
+      setConfirmClose({ period: closingPeriod, open: items.filter((item) => item.date.startsWith(closingPeriod) && !isDecidedEurItem(item)).length });
+    } catch (failure) { setError(failureText(failure)); }
+  };
   const candidates = matching ? (transactions.data ?? []).filter((bank) => !bank.linkedInvoiceId && bank.status === 'booked' && Math.round(bank.amount * 100) === (transitMatch ? -1 : 1) * matching.amountCents && !(entries.data ?? []).some((entry) => entry.matchedTransactionId === bank.id)) : [];
   return <Card className="mb-4">
     <div className="flex flex-wrap items-center justify-between gap-3"><p className="text-control text-muted">Barzahlungen, Zahlungen außerhalb des Bankimports und Buchungen ohne Geldfluss (Pauschalen, Abschreibung, Privatanteile) erfassen.</p><Button onClick={() => start()}>Manuelle Buchung</Button></div>
@@ -132,10 +191,23 @@ export const LiteCashPanel: React.FC = () => {
       <p className="mt-2 text-caption text-muted">Ein festgeschriebener Monat nimmt keine manuellen Buchungen, Zahlungen, Bankumsätze, Bankzuordnungen, Importrücknahmen, EÜR-Zuordnungen und Belegänderungen mehr an. Rechnungen und Einstellungen sperrt die Festschreibung nicht. Das lässt sich nicht rückgängig machen; Korrekturen gehören in einen offenen Monat.</p>
       <div className="mt-2 flex flex-wrap items-end gap-2">
         <Input type="month" label="Monat" value={closingPeriod} max={localIsoDate().slice(0, 7)} onChange={(e) => setClosingPeriod(e.target.value)} />
-        <Button variant="secondary" disabled={!closingPeriod || action.isPending} onClick={() => { setError(''); void action.mutateAsync(() => ipc.cash.closePeriod({ period: closingPeriod, reason: `Monat ${closingPeriod} festgeschrieben` })); }}>Festschreiben</Button>
+        <Button variant="secondary" disabled={!closingPeriod || action.isPending} onClick={() => void askClose()}>Festschreiben</Button>
       </div>
       {closedPeriods.data?.length ? <p className="mt-2 text-control">Festgeschrieben: {closedPeriods.data.map((entry) => entry.period).join(', ')}</p> : null}
     </details>
+    <ConfirmDialog
+      open={!!confirmClose}
+      destructive
+      title={`Monat ${confirmClose?.period.split('-').reverse().join('/') ?? ''} festschreiben?`}
+      description={<>
+        {confirmClose && confirmClose.open > 0 && <span className="mb-2 block font-semibold text-warning-text">{confirmClose.open} {confirmClose.open === 1 ? 'Zahlung ist' : 'Zahlungen sind'} in diesem Monat in „Buchen“ noch offen. Nach dem Festschreiben lassen sie sich nicht mehr zuordnen.</span>}
+        Danach nimmt der Monat keine Buchungen, Zahlungen, Bankumsätze, Zuordnungen und Belegänderungen mehr an. Das lässt sich nicht rückgängig machen; Korrekturen gehören in einen offenen Monat.
+      </>}
+      confirmLabel="Endgültig festschreiben"
+      busy={action.isPending}
+      onCancel={() => setConfirmClose(undefined)}
+      onConfirm={() => { const period = confirmClose!.period; setConfirmClose(undefined); void action.mutateAsync(() => ipc.cash.closePeriod({ period, reason: `Monat ${period} festgeschrieben` })).catch(() => undefined); }}
+    />
     {(entries.isError || receipts.isError) && <p role="alert" className="mt-3 text-control text-error-text">Manuelle Buchungen oder Belege konnten nicht geladen werden.</p>}
     {error && !open && <p role="alert" className="mt-3 text-control text-error-text">{error}</p>}
     <details className="mt-3"><summary className="cursor-pointer text-control">Manuelle Zahlungen und Belege ({entries.data?.length ?? 0})</summary>
@@ -146,13 +218,13 @@ export const LiteCashPanel: React.FC = () => {
         {entry.receiptId && <Button variant="secondary" size="sm" onClick={() => { setManageReceiptId(entry.receiptId!); setReceipt(undefined); setReason(''); setViewing(undefined); }}>Beleg</Button>}
       </div>)}</div>
     </details>
-    <Modal open={open} onClose={() => { if (!save.isPending && !uploading) { setOpen(false); setEditing(undefined); setManageReceiptId(''); } }} titleId="manual-cash-title" className="max-w-3xl">
+    <Modal open={open} onClose={() => { if (!save.isPending && !uploading) { setOpen(false); setEditing(undefined); setManageReceiptId(''); setError(''); } }} titleId="manual-cash-title" className="max-w-3xl">
       <div className="p-5"><h2 id="manual-cash-title" className="text-section">{receiptOnly ? 'Beleg bearbeiten' : editing ? 'Manuelle Buchung bearbeiten' : 'Manuelle Buchung'}</h2>
         {!receiptOnly && <div className="mt-4 grid gap-3 sm:grid-cols-2">
-          <Select label="Zahlungsart" value={form.paymentMethod} onChange={(e) => setForm({ ...form, paymentMethod: e.target.value as PaymentMethod | '', receiptId: e.target.value === 'non_cash' ? '' : form.receiptId })}><option value="">Bitte wählen</option><option value="bank">Bank (später mit dem Bankumsatz abgleichen)</option><option value="cash">Bar (Kasse)</option><option value="non_cash">Ohne Geldfluss (Pauschale, Abschreibung, Privatanteil)</option></Select>
+          <Select label="Zahlungsart" fullWidth value={form.paymentMethod} onChange={(e) => setForm({ ...form, paymentMethod: e.target.value as PaymentMethod | '', receiptId: e.target.value === 'non_cash' ? '' : form.receiptId })}><option value="">Bitte wählen</option><option value="bank">Bank (später mit dem Bankumsatz abgleichen)</option><option value="cash">Bar (Kasse)</option><option value="non_cash">Ohne Geldfluss (Pauschale, Abschreibung, Privatanteil)</option></Select>
           {form.paymentMethod === 'non_cash' && !editing
-            ? <Select label="Was wird gebucht?" value={form.preset} onChange={(e) => setForm({ ...form, preset: e.target.value })}><option value="">Bitte wählen</option>{nonCashPresets.map((item) => <option key={item.code} value={item.code}>{item.purpose}</option>)}</Select>
-            : <Select label="Art" value={form.flowType} onChange={(e) => setForm({ ...form, flowType: e.target.value as 'income' | 'expense' })}><option value="expense">Ausgabe</option><option value="income">Einnahme</option></Select>}
+            ? <Select label="Was wird gebucht?" fullWidth value={form.preset} onChange={(e) => setForm({ ...form, preset: e.target.value })}><option value="">Bitte wählen</option>{nonCashPresets.map((item) => <option key={item.code} value={item.code}>{item.purpose}</option>)}</Select>
+            : <Select label="Art" fullWidth value={form.flowType} onChange={(e) => setForm({ ...form, flowType: e.target.value as 'income' | 'expense' })}><option value="expense">Ausgabe</option><option value="income">Einnahme</option></Select>}
           {form.paymentMethod === 'non_cash' && <p className="text-caption text-muted sm:col-span-2">Zählt in der EÜR, aber nicht als Kasse oder Bank. {nonCashPresets.find((item) => item.code === form.preset)?.hint ?? ''} Umsatzsteuer auf Privatanteile rechnet die App nicht; bitte mit der Steuerberatung klären.</p>}
           <Input label="Zahlungsdatum" type="date" value={form.cashDate} onChange={(e) => setForm({ ...form, cashDate: e.target.value })} />
           <Input label="Betrag in EUR" inputMode="decimal" value={form.amount} onChange={(e) => setForm({ ...form, amount: e.target.value })} />
@@ -176,25 +248,25 @@ export const LiteCashPanel: React.FC = () => {
           <Input label="Belegdatum" type="date" value={receipt.documentDate} onChange={(e) => setReceipt({ ...receipt, documentDate: e.target.value })} />
           <Input label="Beleg erhalten am" type="date" value={receipt.receivedDate ?? ''} onChange={(e) => setReceipt({ ...receipt, receivedDate: e.target.value || undefined })} />
           <Input label="Leistung abgeschlossen am" type="date" value={receipt.serviceDate ?? ''} onChange={(e) => setReceipt({ ...receipt, serviceDate: e.target.value || undefined })} />
-          <Input label="Gesamtbetrag des Belegs in EUR" type="number" step="0.01" value={receipt.grossAmountCents / 100} onChange={(e) => setReceipt({ ...receipt, grossAmountCents: parseCents(e.target.value) })} />
+          <EuroInput label="Gesamtbetrag des Belegs in EUR" cents={receipt.grossAmountCents} onCents={(grossAmountCents) => setReceipt({ ...receipt, grossAmountCents })} />
           <Select label="Steuerart des Belegs" value={receipt.taxMode} onChange={(e) => setReceipt({ ...receipt, taxMode: e.target.value as LiteReceipt['taxMode'] })}><option value="domestic">Inländische Umsatzsteuer</option><option value="exempt">Ohne Umsatzsteuer</option><option value="small_business">Kleinunternehmer-Umsatz (§ 19)</option><option value="reverse_charge">Andere Leistung (§ 13b Abs. 2, ohne Grundstückskauf)</option><option value="eu_service">Dienstleistung aus der EU (§ 13b)</option><option value="intra_eu_acquisition">Innergemeinschaftlicher Erwerb</option><option value="import">Einfuhrumsatzsteuer</option></Select>
           {receipt.taxMode === 'import' && <Input label="Einfuhrumsatzsteuer entstanden am (Zollbeleg)" type="date" value={receipt.importTaxDate ?? ''} onChange={(e) => setReceipt({ ...receipt, importTaxDate: e.target.value || undefined })} />}
           {receipt.grossAmountCents < 0 && <><Select label="Originalbeleg der Korrektur" value={receipt.correctionOfReceiptId ?? ''} onChange={(e) => setReceipt({ ...receipt, correctionOfReceiptId: e.target.value || undefined })}><option value="">Original auswählen</option>{(receipts.data ?? []).filter((item) => item.id !== receipt.id && item.grossAmountCents > 0).map((item) => <option key={item.id} value={item.id}>{item.number} · {item.counterparty}</option>)}</Select><Input label="Entgelt geändert am" type="date" value={receipt.adjustmentDate ?? ''} onChange={(e) => setReceipt({ ...receipt, adjustmentDate: e.target.value || undefined })} /><Input label="Korrekturgrund" value={receipt.correctionReason ?? ''} onChange={(e) => setReceipt({ ...receipt, correctionReason: e.target.value || undefined })} /></>}
           <Input label="Vorsteuerberechtigter Anteil in Prozent" type="number" min="0" max="100" value={receipt.deductiblePercent} onChange={(e) => setReceipt({ ...receipt, deductiblePercent: Number(e.target.value) })} />
         </div>{receipt.taxBreakdown.map((line, index) => <div key={index} className="mt-3 grid gap-3 sm:grid-cols-3">
           <Select label={`Steuersatz ${index + 1}`} value={line.rate} onChange={(e) => { const rate = Number(e.target.value) as 0 | 7 | 19; setReceipt({ ...receipt, taxBreakdown: receipt.taxBreakdown.map((item, i) => i === index ? { ...item, rate, vatAmountCents: Math.round(item.netAmountCents * rate / 100) } : item) }); }}><option value="19">19 %</option><option value="7">7 %</option><option value="0">0 %</option></Select>
-          <Input label={`Netto ${index + 1} in EUR`} type="number" step="0.01" value={line.netAmountCents / 100} onChange={(e) => { const netAmountCents = parseCents(e.target.value); setReceipt({ ...receipt, taxBreakdown: receipt.taxBreakdown.map((item, i) => i === index ? { ...item, netAmountCents, vatAmountCents: Math.round(netAmountCents * item.rate / 100) } : item) }); }} />
-          <Input label={`Steuer ${index + 1} in EUR`} type="number" step="0.01" value={line.vatAmountCents / 100} onChange={(e) => setReceipt({ ...receipt, taxBreakdown: receipt.taxBreakdown.map((item, i) => i === index ? { ...item, vatAmountCents: parseCents(e.target.value) } : item) })} />
+          <EuroInput label={`Netto ${index + 1} in EUR`} cents={line.netAmountCents} onCents={(netAmountCents) => { setReceipt({ ...receipt, taxBreakdown: receipt.taxBreakdown.map((item, i) => i === index ? { ...item, netAmountCents, vatAmountCents: Math.round(netAmountCents * item.rate / 100) } : item) }); }} />
+          <EuroInput label={`Steuer ${index + 1} in EUR`} cents={line.vatAmountCents} onCents={(vatAmountCents) => setReceipt({ ...receipt, taxBreakdown: receipt.taxBreakdown.map((item, i) => i === index ? { ...item, vatAmountCents } : item) })} />
         </div>)}<div className="mt-3 flex flex-wrap gap-3"><Button variant="secondary" onClick={() => setReceipt({ ...receipt, taxBreakdown: [...receipt.taxBreakdown, { rate: 7, netAmountCents: 0, vatAmountCents: 0 }] })}>Weiterer Steuersatz</Button><Checkbox label="Anzahlung vor Leistung" checked={receipt.advancePayment ?? false} onChange={(e) => setReceipt({ ...receipt, advancePayment: e.target.checked })} /><Checkbox label="Regelmäßig wiederkehrend (z. B. Miete; 10-Tage-Regel)" checked={receipt.recurring ?? false} onChange={(e) => setReceipt({ ...receipt, recurring: e.target.checked || undefined })} /><Checkbox label="Steuerdaten geprüft" checked={receipt.reviewed} onChange={(e) => setReceipt({ ...receipt, reviewed: e.target.checked })} /></div>
         <p className="mt-3 text-caption text-muted">Der Gesamtbetrag gehört zum Beleg. Mehrere Teilzahlungen dürfen denselben Beleg verwenden.</p></div>}
-        <Input className="mt-4" label="Begründung" value={reason} onChange={(e) => setReason(e.target.value)} />
+        <div className="mt-4"><Input label="Begründung" fullWidth value={reason} onChange={(e) => setReason(e.target.value)} /></div>
         {(receipt || form.receiptId) && <Input className="mt-3" label="Originalbeleg hinzufügen (PDF, Bild oder XML)" type="file" accept=".pdf,.jpg,.jpeg,.png,.webp,.xml" onChange={(e) => { const file = e.target.files?.[0]; if (file) void upload(file); e.target.value = ''; }} />}
         {error && <p role="alert" className="mt-3 text-control text-error-text">{error}</p>}
-        <div className="mt-4 flex justify-end gap-2"><Button variant="secondary" disabled={save.isPending || uploading} onClick={() => { setOpen(false); setEditing(undefined); setManageReceiptId(''); }}>Abbrechen</Button><Button loading={save.isPending} disabled={uploading} onClick={() => save.mutate()}>{receiptOnly ? 'Beleg speichern' : 'Buchung speichern'}</Button></div>
+        <div className="mt-4 flex justify-end gap-2"><Button variant="secondary" disabled={save.isPending || uploading} onClick={() => { setOpen(false); setEditing(undefined); setManageReceiptId(''); setError(''); }}>Abbrechen</Button><Button loading={save.isPending} disabled={uploading} onClick={() => save.mutate()}>{receiptOnly ? 'Beleg speichern' : 'Buchung speichern'}</Button></div>
       </div>
     </Modal>
-    <Modal open={!!matching} onClose={() => setMatching(undefined)} titleId="cash-match-title"><div className="p-5"><h2 id="cash-match-title" className="text-section">Mit Bank abgleichen</h2><p className="my-3 text-control">Es werden nur freie Bankzahlungen mit exakt demselben Betrag und derselben Richtung angeboten. Das Bankdatum ersetzt das Zahlungsdatum {matching?.cashDate} in der EÜR.</p><Checkbox label="Bareinzahlung oder Barabhebung (Geldtransit): Bankzahlung in Gegenrichtung" checked={transitMatch} onChange={(e) => { setTransitMatch(e.target.checked); setBankId(''); }} />{transitMatch && <p className="mt-2 text-caption text-muted">Kasse und Bank gleichen sich aus; der Vorgang zählt nicht in der EÜR und nicht in der Umsatzsteuer.</p>}<Select label="Bankzahlung" value={bankId} onChange={(e) => setBankId(e.target.value)}><option value="">Bitte auswählen</option>{candidates.map((bank) => <option key={bank.id} value={bank.id}>{bank.date} · {bank.counterparty} · {money(Math.round(bank.amount * 100))}</option>)}</Select><p className="mt-3 text-control">Neues Zahlungsdatum: {candidates.find((bank) => bank.id === bankId)?.date ?? '–'}</p>{!candidates.length && <p className="mt-3 text-control">Keine passende freie Bankzahlung vorhanden.</p>}<Button className="mt-4" disabled={!bankId || action.isPending} onClick={() => { if (matching) void action.mutateAsync(() => ipc.cash.matchEntry({ id: matching.id, transactionId: bankId, expectedCashDate: matching.originalCashDate, transit: transitMatch || undefined, reason: `${transitMatch ? 'Geldtransit Kasse/Bank' : 'Exakter Bankabgleich'} bestätigt: ${matching.cashDate} → ${candidates.find((bank) => bank.id === bankId)?.date}` })).then(() => setMatching(undefined)).catch(() => undefined); }}>Datum und Abgleich bestätigen</Button>{error && <p role="alert" className="mt-3 text-error-text">{error}</p>}</div></Modal>
-    <Modal open={!!editing && !open} onClose={() => setEditing(undefined)} titleId="cash-reverse-title"><div className="p-5"><h2 id="cash-reverse-title" className="text-section">Manuelle Buchung löschen</h2><p className="my-3 text-control">Die Buchung wird gelöscht und zählt nicht mehr in EÜR und Umsatzsteuer. Es entsteht keine Gegenbuchung; der Audit-Eintrag mit Ihrer Begründung bleibt erhalten.</p><Input label="Begründung" value={reason} onChange={(e) => setReason(e.target.value)} /><Button variant="danger" className="mt-4" disabled={!reason.trim() || action.isPending} onClick={() => { if (editing) void action.mutateAsync(() => ipc.cash.deleteEntry({ id: editing.id, expectedUpdatedAt: editing.updatedAt, reason })).then(() => setEditing(undefined)).catch(() => undefined); }}>Löschen</Button>{error && <p role="alert" className="mt-3 text-error-text">{error}</p>}</div></Modal>
-    <Modal open={!!manageReceiptId && !open} onClose={() => { setManageReceiptId(''); setViewing(undefined); }} titleId="cash-files-title" className="max-w-3xl"><div className="p-5"><h2 id="cash-files-title" className="text-section">Originalbelege</h2>{(files.data ?? []).map((file) => <div key={file.id} className="mt-3 flex flex-wrap gap-2"><Button variant="secondary" onClick={() => void download(file.id).catch((failure: Error) => setError(failure.message))}>{file.fileName} herunterladen</Button>{/xml$/i.test(file.mimeType) && <Button variant="secondary" aria-label={`${file.fileName} anzeigen`} onClick={() => void showArchived(file.id).catch((failure: unknown) => { setViewing(undefined); setError(failureText(failure)); })}>Anzeigen</Button>}</div>)}{viewing && <div className="mt-4 border-t border-border pt-4"><EinvoiceReview invoice={viewing} /></div>}<Input className="mt-4" label="Begründung" value={reason} onChange={(e) => setReason(e.target.value)} /><Input className="mt-3" label="Originalbeleg hinzufügen" type="file" accept=".pdf,.jpg,.jpeg,.png,.webp,.xml" onChange={(e) => { const file = e.target.files?.[0]; if (file) void upload(file); e.target.value = ''; }} /><Button variant="secondary" className="mt-3" onClick={() => { const item = receipts.data?.find((row) => row.id === manageReceiptId); if (item) { start(); setReceiptOnly(true); setReceipt(item); } }}>Steuerdaten bearbeiten</Button>{error && <p role="alert" className="mt-3 text-error-text">{error}</p>}</div></Modal>
+    <Modal open={!!matching} onClose={() => { setMatching(undefined); setError(''); }} titleId="cash-match-title"><div className="p-5"><h2 id="cash-match-title" className="text-section">Mit Bank abgleichen</h2><p className="my-3 text-control">Es werden nur freie Bankzahlungen mit exakt demselben Betrag und derselben Richtung angeboten. Das Bankdatum ersetzt das Zahlungsdatum {matching?.cashDate} in der EÜR.</p><Checkbox label="Bareinzahlung oder Barabhebung (Geldtransit): Bankzahlung in Gegenrichtung" checked={transitMatch} onChange={(e) => { setTransitMatch(e.target.checked); setBankId(''); }} />{transitMatch && <p className="mt-2 text-caption text-muted">Kasse und Bank gleichen sich aus; der Vorgang zählt nicht in der EÜR und nicht in der Umsatzsteuer.</p>}<Select label="Bankzahlung" value={bankId} onChange={(e) => setBankId(e.target.value)}><option value="">Bitte auswählen</option>{candidates.map((bank) => <option key={bank.id} value={bank.id}>{bank.date} · {bank.counterparty} · {money(Math.round(bank.amount * 100))}</option>)}</Select><p className="mt-3 text-control">Neues Zahlungsdatum: {candidates.find((bank) => bank.id === bankId)?.date ?? '–'}</p>{!candidates.length && <p className="mt-3 text-control">Keine passende freie Bankzahlung vorhanden.</p>}<Button className="mt-4" disabled={!bankId || action.isPending} onClick={() => { if (matching) void action.mutateAsync(() => ipc.cash.matchEntry({ id: matching.id, transactionId: bankId, expectedCashDate: matching.originalCashDate, transit: transitMatch || undefined, reason: `${transitMatch ? 'Geldtransit Kasse/Bank' : 'Exakter Bankabgleich'} bestätigt: ${matching.cashDate} → ${candidates.find((bank) => bank.id === bankId)?.date}` })).then(() => setMatching(undefined)).catch(() => undefined); }}>Datum und Abgleich bestätigen</Button>{error && <p role="alert" className="mt-3 text-error-text">{error}</p>}</div></Modal>
+    <Modal open={!!editing && !open} onClose={() => { setEditing(undefined); setError(''); }} titleId="cash-reverse-title"><div className="p-5"><h2 id="cash-reverse-title" className="text-section">Manuelle Buchung löschen</h2><p className="my-3 text-control">Die Buchung wird gelöscht und zählt nicht mehr in EÜR und Umsatzsteuer. Es entsteht keine Gegenbuchung; der Audit-Eintrag mit Ihrer Begründung bleibt erhalten.</p><Input label="Begründung" value={reason} onChange={(e) => setReason(e.target.value)} /><Button variant="danger" className="mt-4" disabled={!reason.trim() || action.isPending} onClick={() => { if (editing) void action.mutateAsync(() => ipc.cash.deleteEntry({ id: editing.id, expectedUpdatedAt: editing.updatedAt, reason })).then(() => setEditing(undefined)).catch(() => undefined); }}>Löschen</Button>{error && <p role="alert" className="mt-3 text-error-text">{error}</p>}</div></Modal>
+    <Modal open={!!manageReceiptId && !open} onClose={() => { setManageReceiptId(''); setViewing(undefined); setError(''); }} titleId="cash-files-title" className="max-w-3xl"><div className="p-5"><div className="flex items-start justify-between gap-3"><h2 id="cash-files-title" className="text-section">Originalbelege</h2><Button variant="ghost" size="sm" onClick={() => { setManageReceiptId(''); setViewing(undefined); }}>Schließen</Button></div>{(files.data ?? []).map((file) => <div key={file.id} className="mt-3 flex flex-wrap gap-2"><Button variant="secondary" onClick={() => void download(file.id).catch((failure: Error) => setError(failure.message))}>{file.fileName} herunterladen</Button>{/xml$/i.test(file.mimeType) && <Button variant="secondary" aria-label={`${file.fileName} anzeigen`} onClick={() => void showArchived(file.id).catch((failure: unknown) => { setViewing(undefined); setError(failureText(failure)); })}>Anzeigen</Button>}</div>)}{viewing && <div className="mt-4 border-t border-border pt-4"><EinvoiceReview invoice={viewing} /></div>}<Input className="mt-4" label="Begründung" value={reason} onChange={(e) => setReason(e.target.value)} /><Input className="mt-3" label="Originalbeleg hinzufügen" type="file" accept=".pdf,.jpg,.jpeg,.png,.webp,.xml" onChange={(e) => { const file = e.target.files?.[0]; if (file) void upload(file); e.target.value = ''; }} /><Button variant="secondary" className="mt-3" onClick={() => { const item = receipts.data?.find((row) => row.id === manageReceiptId); if (item) { start(); setReceiptOnly(true); setReceipt(item); } }}>Steuerdaten bearbeiten</Button>{error && <p role="alert" className="mt-3 text-error-text">{error}</p>}</div></Modal>
   </Card>;
 };

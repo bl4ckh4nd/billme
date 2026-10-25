@@ -36,6 +36,10 @@
     "./calculations.test": {
       "types": "./src/calculations.test.ts",
       "default": "./src/calculations.test.ts"
+    },
+    "./iban": {
+      "types": "./src/iban.ts",
+      "default": "./src/iban.ts"
     }
   }
 }

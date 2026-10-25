@@ -4,7 +4,7 @@ export interface KeywordSuggestion {
   code?: string;
   reason?: string;
   /** Not an EÜR line at all: income tax, Soli and church tax paid from the business account are private. */
-  kind?: 'private-withdrawal' | 'private-contribution';
+  kind?: 'private-withdrawal' | 'private-contribution' | 'transit';
 }
 
 export interface KeywordSuggestionInput {
@@ -23,11 +23,17 @@ export const suggestEurCodeByKeywords = (input: KeywordSuggestionInput): Keyword
   const privateTax = includesAny(text, ['einkommensteuer', 'einkommenssteuer', 'solidaritaetszuschlag', 'kirchensteuer']) || words.has('est') || words.has('soli');
   const taxOffice = text.includes('finanzamt');
 
+  // Cash moved between the bank and the till is a Geldtransit, never income or expense.
+  if (includesAny(text, ['bareinzahlung', 'barauszahlung', 'barabhebung', 'geldautomat', 'bargeldauszahlung'])) {
+    return { kind: 'transit', reason: 'Bargeld zwischen Bank und Kasse: Geldtransit' };
+  }
+
   if (input.flowType === 'income') {
     // Money back from the Finanzamt for VAT is Kz 141; collected VAT on sales (Kz 140) is split off the sale itself.
     if (vat && (taxOffice || text.includes('erstattung'))) return hit('141', 'Umsatzsteuer-Erstattung vom Finanzamt erkannt');
     if (privateTax) return { kind: 'private-contribution', reason: 'Erstattung privater Steuern (Einkommensteuer, Soli, Kirchensteuer): keine Betriebseinnahme, Privateinlage' };
     if (taxOffice) return { reason: 'Zahlung vom Finanzamt: Steuerart bitte prüfen' };
+    if (text.includes('privateinlage') || words.has('einlage')) return { kind: 'private-contribution', reason: 'Privateinlage erkannt' };
     return hit('112', 'Standard Betriebseinnahme');
   }
 
@@ -35,6 +41,12 @@ export const suggestEurCodeByKeywords = (input: KeywordSuggestionInput): Keyword
   if (vat && !includesAny(text, ['vorsteuer'])) return hit('186', 'Umsatzsteuer-Zahlung an das Finanzamt erkannt');
   if (taxOffice) return { reason: 'Zahlung an das Finanzamt: Steuerart bitte prüfen' };
 
+  // A returned direct debit takes back a customer payment: linked to the invoice it is a negative payment, no expense.
+  if (includesAny(text, ['ruecklastschrift', 'rueckbuchung lastschrift'])) {
+    return { reason: 'Rücklastschrift: mit „Zahlung zurücknehmen“ der Rechnung zuordnen; das nimmt die Zahlung zurück und öffnet die Rechnung wieder. Keine Ausgabe buchen.' };
+  }
+  if (text.includes('privatentnahme') || words.has('privat')) return { kind: 'private-withdrawal', reason: 'Privatentnahme erkannt' };
+  if (includesAny(text, ['bewirtung', 'geschaeftsessen', 'restaurant'])) return hit('175', 'Bewirtung erkannt (70 % abziehbar, 30 % nicht abziehbar)');
   if (includesAny(text, ['miete', 'pacht', 'cowork'])) return hit('150', 'Miete/Pacht erkannt');
   if (includesAny(text, ['telefon', 'internet', 'hosting', 'domain'])) return hit('280', 'Telekommunikation erkannt');
   if (includesAny(text, ['software', 'saas', 'lizenz', 'cloud'])) return hit('228', 'EDV-Kosten erkannt');

@@ -4,14 +4,14 @@ import type { IncomingEinvoice, LiteReceipt } from '@billme/server-core';
 
 const euro = (value: number | undefined, currency = 'EUR') =>
   value === undefined ? '–' : value.toLocaleString('de-DE', { style: 'currency', currency: /^[A-Z]{3}$/.test(currency) ? currency : 'EUR' });
-const day = (iso: string | undefined) => (iso ? new Date(`${iso}T00:00:00`).toLocaleDateString('de-DE') : '–');
+const day = (iso: string | undefined) => (iso ? new Date(`${iso}T00:00:00`).toLocaleDateString('de-DE', { day: '2-digit', month: '2-digit', year: 'numeric' }) : '–');
 const syntaxLabel = (invoice: IncomingEinvoice) => {
   const profile = invoice.profile ?? '';
   const name = /xrechnung/i.test(profile) ? 'XRechnung' : /factur-x|zugferd/i.test(profile) ? 'ZUGFeRD/Factur-X' : 'EN 16931';
   return `${name} (${invoice.syntax}${invoice.source.kind === 'pdf' ? `, aus PDF-Anhang ${invoice.source.attachmentName ?? ''}` : ''})`;
 };
 const CATEGORY_LABELS: Record<string, string> = {
-  S: 'Normalsatz', AE: 'Steuerschuldnerschaft des Leistungsempfängers', K: 'Innergemeinschaftliche Lieferung',
+  S: 'Steuerpflichtig', AE: 'Steuerschuldnerschaft des Leistungsempfängers', K: 'Innergemeinschaftliche Lieferung',
   G: 'Ausfuhr', E: 'Steuerbefreit', Z: 'Nullsatz', O: 'Nicht steuerbar',
 };
 

@@ -5,7 +5,7 @@ import { Bell, CheckCheck, Plus, X, type LucideIcon } from 'lucide-react';
 import { BillmeLogo, Button, IconButton, Kbd, KontorIcon, Portal, SegmentedControl, cn, popoverExitClass, useAnchoredPosition, useExitTransition, useThemePreference, type ThemePreference } from '@billme/ui';
 import { useSettingsQuery } from '../../hooks/useSettings';
 import { useNotificationsStore, type AppNotification } from '@billme/desktop-core/state/notificationsStore';
-import { getRendererProduct, getRendererRuntime } from '../../runtime-api';
+import { canMutate, getRendererProduct, getRendererRuntime } from '../../runtime-api';
 import { WorkspaceSwitcher } from './WorkspaceSwitcher';
 import { CommandPalette, isMacPlatform, type ShellCommand } from './CommandPalette';
 
@@ -53,6 +53,16 @@ export interface ShellNavItem {
   action?: string;
 }
 
+/** Open work shown at the top of the bell panel (overdue invoices, unbooked payments, a due Voranmeldung). */
+export interface ShellAttentionItem {
+  key: string;
+  title: string;
+  message: string;
+  tone: 'error' | 'warning' | 'info';
+  to: string;
+  search?: Record<string, string>;
+}
+
 export interface DashboardLayoutProps {
   children: React.ReactNode;
   isEditorActive: boolean;
@@ -63,6 +73,10 @@ export interface DashboardLayoutProps {
   navItems: readonly ShellNavItem[];
   /** Product titlebar, rendered above the shell. */
   titlebar: React.ReactNode;
+  /** Open work for the bell; the product derives it from its own data. */
+  attention?: readonly ShellAttentionItem[];
+  /** Product actions for the Ctrl/⌘K palette (e.g. Lite booking actions), each a route with search. */
+  actions?: ReadonlyArray<{ key: string; title: string; to: string; search?: Record<string, string>; keywords: string[] }>;
 }
 
 const GROUPS: ShellNavGroup[] = ['Arbeit', 'Verkauf', 'Abschluss'];
@@ -102,13 +116,13 @@ const CREATE_ACTIONS: Array<{ key: string; title: string; to: string; search: Re
 
 const SETTINGS_SUBTITLE = 'Firma, Buchführung und Nummernkreise';
 
-export const DashboardLayout: React.FC<DashboardLayoutProps> = ({ children, isEditorActive, navItems, titlebar }) => {
+export const DashboardLayout: React.FC<DashboardLayoutProps> = ({ children, isEditorActive, navItems, titlebar, attention = [], actions }) => {
   const navigate = useNavigate();
   const location = useRouterState({ select: (s) => s.location });
   const activeId = findActive(navItems, location.pathname, (location.search ?? {}) as Record<string, unknown>);
   const settingsActive = pathMatches(location.pathname, '/settings');
   const activeItem = navItems.find((item) => item.id === activeId);
-  const canCreateInvoice = navItems.some((item) => item.to === '/documents');
+  const canCreateInvoice = navItems.some((item) => item.to === '/documents') && canMutate();
   const subtitle = activeItem ? activeItem.subtitle : settingsActive ? SETTINGS_SUBTITLE : undefined;
   const { data: settings } = useSettingsQuery();
   const profile = settings?.businessReportingProfile;
@@ -139,6 +153,7 @@ export const DashboardLayout: React.FC<DashboardLayoutProps> = ({ children, isEd
 
   const { notifications, addNotification, markAllRead, clearAll } = useNotificationsStore();
   const unreadCount = notifications.filter((n) => !n.read).length;
+  const bellCount = unreadCount + attention.length;
   const [notifPanelOpen, setNotifPanelOpen] = React.useState(false);
   const notifPanelRef = React.useRef<HTMLDivElement | null>(null);
   const notifDropdownRef = React.useRef<HTMLDivElement | null>(null);
@@ -217,6 +232,11 @@ export const DashboardLayout: React.FC<DashboardLayoutProps> = ({ children, isEd
     for (const item of navItems) {
       if (item.action) list.push({ key: `action:${item.id}`, title: item.action, icon: item.icon, keywords: [item.label.toLowerCase()], run: () => go(item) });
     }
+    for (const action of actions ?? []) {
+      if (!has(action.to)) continue;
+      const icon = navItems.find((item) => item.to === action.to)?.icon ?? Plus;
+      list.push({ key: `product:${action.key}`, title: action.title, icon, keywords: action.keywords, run: () => go({ to: action.to, search: action.search }) });
+    }
     for (const item of navItems) {
       list.push({ key: `go:${item.id}`, title: `Gehe zu ${item.label}`, icon: item.icon, keywords: ['öffnen', 'seite', item.label.toLowerCase(), `${item.label.toLowerCase()} öffnen`, item.group.toLowerCase()], run: () => go(item) });
     }
@@ -225,7 +245,7 @@ export const DashboardLayout: React.FC<DashboardLayoutProps> = ({ children, isEd
       list.push({ key: `theme:${option.value}`, title: `Darstellung: ${option.label}`, icon: option.icon, keywords: ['theme', 'dunkel', 'hell', 'modus', 'farbschema'], run: () => setTheme(option.value) });
     }
     return list;
-  }, [go, navItems, navigate, setTheme]);
+  }, [actions, go, navItems, navigate, setTheme]);
 
   // A page's PageHeader renders into these slots; the nav label, the nav
   // subtitle and "Neue Rechnung" only fill what the page leaves empty.
@@ -303,7 +323,9 @@ export const DashboardLayout: React.FC<DashboardLayoutProps> = ({ children, isEd
           <BillmeLogo className="h-6 w-auto text-foreground" {...(compact ? { viewBox: '300 505 265 375' } : {})} />
         </div>
         {!compact && settings && (() => {
-          const companyName = settings.company.name || 'Unternehmen';
+          const workspaces = getRendererRuntime().workspaces;
+          // A new workspace has no company data yet; its own name says more than a placeholder.
+          const companyName = settings.company.name || workspaces?.list.find((workspace) => workspace.tenantId === workspaces.currentTenantId)?.name || 'Unternehmen';
           const detail = [
                 profile && LEGAL_FORM[profile.legalForm],
                 profile && (profile.profitDetermination === 'eur' ? 'EÜR' : 'Doppelte Buchführung'),
@@ -311,7 +333,6 @@ export const DashboardLayout: React.FC<DashboardLayoutProps> = ({ children, isEd
               ]
                 .filter(Boolean)
                 .join(' · ') || 'Buchführung noch nicht eingerichtet';
-          const workspaces = getRendererRuntime().workspaces;
           return workspaces ? (
             <WorkspaceSwitcher workspaces={workspaces} product={getRendererProduct()} companyName={companyName} detail={detail} />
           ) : (
@@ -450,9 +471,9 @@ export const DashboardLayout: React.FC<DashboardLayoutProps> = ({ children, isEd
                   aria-label="Benachrichtigungen"
                 >
                   <Bell size={16} aria-hidden="true" />
-                  {unreadCount > 0 && (
+                  {bellCount > 0 && (
                     <span className="absolute right-0.5 top-0.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-error-text px-1 text-caption font-semibold leading-none text-background ring-2 ring-surface tabular-nums">
-                      {unreadCount > 9 ? '9+' : unreadCount}
+                      {bellCount > 9 ? '9+' : bellCount}
                     </span>
                   )}
                 </IconButton>
@@ -493,8 +514,27 @@ export const DashboardLayout: React.FC<DashboardLayoutProps> = ({ children, isEd
                           )}
                         </div>
                       </div>
+                      {attention.length > 0 && (
+                        <ul aria-label="Offene Aufgaben" className="divide-y divide-border-subtle border-b border-border">
+                          {attention.map((item) => (
+                            <li key={item.key}>
+                              <button
+                                type="button"
+                                onClick={() => { setNotifPanelOpen(false); go({ to: item.to, search: item.search }); }}
+                                className="flex w-full items-start gap-2 px-4 py-3 text-left hover:bg-surface-muted focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-focus-ring"
+                              >
+                                <span aria-hidden="true" className={cn('mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full', item.tone === 'error' ? 'bg-error-text' : item.tone === 'warning' ? 'bg-warning-text' : 'bg-info-text')} />
+                                <span className="min-w-0 flex-1">
+                                  <span className="block text-xs font-semibold text-foreground">{item.title}</span>
+                                  <span className="mt-0.5 block text-xs text-muted">{item.message}</span>
+                                </span>
+                              </button>
+                            </li>
+                          ))}
+                        </ul>
+                      )}
                       {notifications.length === 0 ? (
-                        <div className="px-4 py-8 text-center text-sm text-muted">Keine Benachrichtigungen</div>
+                        attention.length === 0 ? <div className="px-4 py-8 text-center text-sm text-muted">Keine Benachrichtigungen</div> : null
                       ) : (
                         <div className="divide-y divide-border-subtle">
                           {notifications.map((n) => (
@@ -524,7 +564,7 @@ export const DashboardLayout: React.FC<DashboardLayoutProps> = ({ children, isEd
               </div>
 
               {/* The primary action sits last: the page's own, else the invoice. */}
-              <div ref={actionsSlotRef} data-shell-actions className="flex shrink-0 items-center gap-2 empty:hidden" />
+              <div ref={actionsSlotRef} data-shell-actions className="flex max-w-full shrink-0 flex-wrap items-center gap-2 empty:hidden" />
               {canCreateInvoice && !pageOwns.actions && !pathMatches(location.pathname, '/documents') && (
                 <Button onClick={() => go({ to: '/documents', search: { create: 'invoice' } })} className="max-sm:hidden">
                   <Plus size={16} aria-hidden="true" />

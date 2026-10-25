@@ -1,4 +1,4 @@
-import React, { useId, useRef } from 'react';
+import React, { useEffect, useId, useRef, useState } from 'react';
 import { Button } from './Button';
 import { Input } from './Input';
 import { Modal } from './Modal';
@@ -42,12 +42,16 @@ export const ConfirmDialog: React.FC<ConfirmDialogProps> = ({
   const titleId = useId();
   const descriptionId = useId();
   const reasonMissing = reason?.required === true && reason.value.trim().length === 0;
-  const reasonError = reasonMissing ? 'Bitte gib eine Begründung ein, bevor du bestätigst.' : undefined;
+  const [reasonTouched, setReasonTouched] = useState(false);
+  // A dialog that stays mounted starts every opening without the "missing reason" error.
+  useEffect(() => { if (!open) setReasonTouched(false); }, [open]);
+  const reasonError = reasonMissing && reasonTouched ? 'Bitte gib eine Begründung ein, bevor du bestätigst.' : undefined;
   const dismissOnBackdrop = !(reason?.required === true && reason.value.length > 0);
 
   const handleConfirm = () => {
     if (busy) return;
     if (reasonMissing) {
+      setReasonTouched(true);
       reasonInputRef.current?.focus();
       return;
     }
@@ -95,6 +99,7 @@ export const ConfirmDialog: React.FC<ConfirmDialogProps> = ({
                 placeholder={reason.placeholder}
                   value={reason.value}
                   onChange={(event) => reason.onChange(event.target.value)}
+                  onBlur={() => setReasonTouched(true)}
                   onKeyDown={(event) => {
                     if (event.key !== 'Enter' || event.nativeEvent.isComposing) return;
                     event.preventDefault();

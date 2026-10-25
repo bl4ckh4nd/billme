@@ -237,8 +237,9 @@ const DashboardHomeContent: React.FC<ViewProps & { settings: AppSettings }> = ({
 
     const currentYear = now.getFullYear();
     const currentMonth = now.getMonth();
+    // Only billing documents and their corrections; an order confirmation or delivery note is no revenue.
     const monthIssued = invoices
-      .filter((inv) => inv.status !== 'draft')
+      .filter((inv) => inv.status !== 'draft' && (isReceivableDocumentKind(inv.documentKind) || isCorrectionDocumentKind(inv.documentKind)))
       .filter((inv) => {
         const d = new Date(inv.date);
         return d.getFullYear() === currentYear && d.getMonth() === currentMonth;
@@ -424,9 +425,12 @@ const DashboardHomeContent: React.FC<ViewProps & { settings: AppSettings }> = ({
 
   const tasks = [
     { key: 'overdue', count: kpis.overdueCount, title: 'Überfällige Rechnungen mahnen', subtitle: `${formatCurrency(kpis.overdueTotal)} seit Fälligkeit offen`, tone: 'error' as const, icon: <AlertTriangle size={16} />, go: () => onNavigate('documents', { kind: 'invoice', status: 'overdue' }) },
-    { key: 'unclassified', count: flows?.unclassifiedCount ?? 0, title: 'Kontoumsätze der EÜR zuordnen', subtitle: 'Abgerufen, aber noch keiner EÜR-Zeile zugeordnet', tone: 'info' as const, icon: <ReceiptText size={16} />, go: () => onNavigate('eur') },
-    { key: 'open', count: flows?.openTransactionCount ?? 0, title: 'Zahlungseingänge abgleichen', subtitle: 'Eingänge auf dem Konto ohne zugeordnete Rechnung', tone: 'info' as const, icon: <Landmark size={16} />, go: () => onNavigate('accounts') },
-    { key: 'due', count: kpis.dueSoonCount, title: `Fällig in ${dash.dueSoonDays} Tagen`, subtitle: `${formatCurrency(kpis.dueSoonTotal)} erwartete Eingänge`, tone: 'warning' as const, icon: <Clock size={16} />, go: () => onNavigate('documents', { kind: 'invoice', status: 'open' }) },
+    // One backlog counter: for EÜR businesses the "Offen" queue of "Buchen" (same number as the nav badge), which
+    // also holds the unmatched incoming payments; double-entry businesses only match incoming payments.
+    profitDetermination === 'eur'
+      ? { key: 'unclassified', count: flows?.unclassifiedCount ?? 0, title: 'Zahlungen in „Buchen“ zuordnen', subtitle: 'Offen in „Buchen“: Rechnung zuordnen, Kategorie, Privat oder Geldtransit wählen', tone: 'info' as const, icon: <ReceiptText size={16} />, go: () => onNavigate('eur') }
+      : { key: 'open', count: flows?.openTransactionCount ?? 0, title: 'Zahlungseingänge abgleichen', subtitle: 'Eingänge auf dem Konto ohne zugeordnete Rechnung', tone: 'info' as const, icon: <Landmark size={16} />, go: () => onNavigate('accounts') },
+    { key: 'due', count: kpis.dueSoonCount, title: `Fällig in ${dash.dueSoonDays} Tagen`, subtitle: `${formatCurrency(kpis.dueSoonTotal)} erwartete Eingänge`, tone: 'warning' as const, icon: <Clock size={16} />, go: () => onNavigate('documents', { kind: 'invoice', due: String(dash.dueSoonDays) }) },
   ].filter((task) => task.count > 0);
 
   if (invoicesQuery.isError) {
@@ -457,7 +461,12 @@ const DashboardHomeContent: React.FC<ViewProps & { settings: AppSettings }> = ({
             marker="tick"
             label="Liquidität"
             value={flows?.liquidity == null ? '–' : formatCurrency(flows.liquidity)}
-            hint={flowsQuery.isError ? 'Konten nicht erreichbar' : !flows ? 'Wird geladen' : flows.liquidity == null ? 'Noch kein Konto angelegt' : flows.accountCount === 1 ? 'Bestand des Kontos' : `Bestand aller ${flows.accountCount} Konten`}
+            hint={flowsQuery.isError ? 'Konten nicht erreichbar' : !profitDetermination ? 'Nach der Einrichtung verfügbar' : !flows ? 'Wird geladen' : flows.liquidity == null ? (
+              <span>
+                Noch kein Konto angelegt.{' '}
+                <button type="button" className="font-medium text-foreground underline underline-offset-2" onClick={() => onNavigate('accounts')}>Bankkonto anlegen</button>
+              </span>
+            ) : `Anfangssaldo plus Kontoumsätze${flows.accountCount === 1 ? '' : `, ${flows.accountCount} Konten`}`}
             tone={flows?.liquidity != null && flows.liquidity < 0 ? 'error' : 'neutral'}
           />
         </div>
@@ -475,7 +484,7 @@ const DashboardHomeContent: React.FC<ViewProps & { settings: AppSettings }> = ({
             marker="tick"
             label={`Ergebnis ${nowMonthLabel}`}
             value={monthResult == null ? '–' : formatCurrency(monthResult)}
-            hint={monthResultQuery.isError ? (/REPORT_CHART_MISMATCH/.test(String(monthResultQuery.error)) ? 'Kontenrahmen in Profil und Buchhaltung weichen ab' : /REPORT_MAPPING_BLOCKED/.test(String(monthResultQuery.error)) ? 'Berichtskontenzuordnung unvollständig' : 'Auswertung nicht erreichbar') : monthResult == null ? 'Wird geladen' : 'Umsatz minus Aufwand'}
+            hint={monthResultQuery.isError ? (/REPORT_CHART_MISMATCH/.test(String(monthResultQuery.error)) ? 'Kontenrahmen in Profil und Buchhaltung weichen ab' : /REPORT_MAPPING_BLOCKED/.test(String(monthResultQuery.error)) ? 'Berichtskontenzuordnung unvollständig' : 'Auswertung nicht erreichbar') : !profitDetermination ? 'Nach der Einrichtung verfügbar' : monthResult == null ? 'Wird geladen' : 'Umsatz minus Aufwand'}
             tone={monthResult == null ? 'neutral' : monthResult >= 0 ? 'success' : 'error'}
           />
         </div>
@@ -531,7 +540,7 @@ const DashboardHomeContent: React.FC<ViewProps & { settings: AppSettings }> = ({
                 description="Konten und Kontoumsätze sind gerade nicht erreichbar. Die übrigen Karten rechnen aus den Rechnungen."
                 onRetry={() => void flowsQuery.refetch()}
               />
-            ) : flowsQuery.isPending ? (
+            ) : flowsQuery.isLoading ? (
               <SkeletonLoader variant="card" count={1} />
             ) : shownMonths.every((month) => month.income === 0 && month.expense === 0) ? (
               <EmptyState title="Noch keine Zahlungen" description="Sobald Kontoumsätze importiert oder Zahlungen erfasst sind, erscheinen sie hier nach Monat." />
@@ -667,7 +676,7 @@ const DashboardHomeContent: React.FC<ViewProps & { settings: AppSettings }> = ({
           />
           <div className="mt-1">
             {tasks.length === 0 ? (
-              <EmptyState title="Keine offenen Vorgänge" description="Nichts ist überfällig und jeder Kontoumsatz ist zugeordnet." />
+              <EmptyState title="Keine offenen Vorgänge" description="Nichts ist überfällig und kein Kontoumsatz wartet auf eine Zuordnung." />
             ) : (
               tasks.map((task) => (
                 <ListRow key={task.key} icon={task.icon} tone={task.tone} title={task.title} subtitle={task.subtitle} value={task.count} onClick={task.go} />
@@ -808,7 +817,7 @@ const DashboardHomeContent: React.FC<ViewProps & { settings: AppSettings }> = ({
              title={<span id="dashboard-receivables">Offene Forderungen</span>}
              subtitle={kpis.overdueCount > 0 ? <>davon <span className="tabular-nums">{formatCurrency(kpis.overdueTotal)}</span> überfällig ({kpis.overdueCount})</> : 'Nichts überfällig'}
              actions={
-               <Button variant="ghost" size="sm" onClick={() => onNavigate('documents')}>
+               <Button variant="ghost" size="sm" onClick={() => onNavigate('documents', { kind: 'invoice', unpaid: '1' })}>
                  Alle ansehen <ArrowUpRight size={14} aria-hidden="true" />
                </Button>
              }

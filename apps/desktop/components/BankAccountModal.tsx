@@ -1,6 +1,8 @@
-import { useId, useRef, useState } from 'react';
+import { useEffect, useId, useRef, useState } from 'react';
 import { X } from 'lucide-react';
 import { Button, IconButton, Input, Modal } from '@billme/ui';
+import type { Account } from '@billme/desktop-core/types';
+import { formatIban, ibanError, normalizeIban } from '@billme/desktop-utils/iban';
 import { ipc } from '../ipc/client';
 import { useQueryClient } from '@tanstack/react-query';
 import { v4 as uuidv4 } from 'uuid';
@@ -8,17 +10,21 @@ import { v4 as uuidv4 } from 'uuid';
 interface BankAccountModalProps {
   isOpen: boolean;
   onClose: () => void;
+  /** Edit this account instead of creating a new one. */
+  account?: Account;
 }
 
-export const BankAccountModal = ({ isOpen, onClose }: BankAccountModalProps) => {
+const formOf = (account?: Account) => ({ name: account?.name ?? '', iban: account?.iban ? formatIban(account.iban) : '', balance: String(account?.balance ?? 0) });
+
+export const BankAccountModal = ({ isOpen, onClose, account }: BankAccountModalProps) => {
   const queryClient = useQueryClient();
   const titleId = useId();
   const descriptionId = useId();
-  const [formData, setFormData] = useState({
-    name: '',
-    iban: '',
-    balance: '0',
-  });
+  const [formData, setFormData] = useState(() => formOf(account));
+  const [ibanMessage, setIbanMessage] = useState<string | undefined>();
+  useEffect(() => {
+    if (isOpen) { setFormData(formOf(account)); setIbanMessage(undefined); }
+  }, [isOpen, account]);
   const [isSaving, setIsSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [showNameError, setShowNameError] = useState(false);
@@ -35,26 +41,32 @@ export const BankAccountModal = ({ isOpen, onClose }: BankAccountModalProps) => 
       return;
     }
 
+    const invalidIban = ibanError(formData.iban);
+    if (invalidIban) {
+      setIbanMessage(invalidIban);
+      return;
+    }
+
     setError(null);
     setIsSaving(true);
     try {
       await ipc.accounts.upsert({
         account: {
-          id: uuidv4(),
-          name: formData.name,
-          iban: formData.iban || '',
-          balance: parseFloat(formData.balance) || 0,
-          type: 'bank',
-          color: '#4B5563',
+          id: account?.id ?? uuidv4(),
+          name: formData.name.trim(),
+          iban: normalizeIban(formData.iban),
+          balance: parseFloat(formData.balance.replace(',', '.')) || 0,
+          type: account?.type ?? 'bank',
+          color: account?.color ?? '#4B5563',
           transactions: [],
         }
       });
       await queryClient.invalidateQueries({ queryKey: ['accounts'] });
       onClose();
-      setFormData({ name: '', iban: '', balance: '0' });
+      setFormData(formOf());
     } catch (error) {
-      console.error('Failed to create account:', error);
-      setError('Konto konnte nicht erstellt werden. Prüfe die Eingaben und versuche es erneut.');
+      console.error('Failed to save account:', error);
+      setError(error instanceof Error && error.message ? error.message : 'Konto konnte nicht gespeichert werden. Prüfe die Eingaben und versuche es erneut.');
     } finally {
       setIsSaving(false);
     }
@@ -70,9 +82,9 @@ export const BankAccountModal = ({ isOpen, onClose }: BankAccountModalProps) => 
     >
       <div className="flex items-start gap-3 px-4.5 pt-4 pb-2.5">
         <div className="min-w-0 flex-1">
-          <h2 id={titleId} className="text-title text-foreground">Neues Bankkonto</h2>
+          <h2 id={titleId} className="text-title text-foreground">{account ? 'Bankkonto bearbeiten' : 'Neues Bankkonto'}</h2>
           <p id={descriptionId} className="text-caption text-muted">
-            Fügen Sie ein neues Konto hinzu
+            {account ? 'Name, IBAN und Anfangssaldo ändern' : 'Fügen Sie ein neues Konto hinzu'}
           </p>
         </div>
         <IconButton aria-label="Dialog schließen" tooltip={false} size="sm" onClick={onClose}>
@@ -109,7 +121,9 @@ export const BankAccountModal = ({ isOpen, onClose }: BankAccountModalProps) => 
           label="IBAN (optional)"
           type="text"
           value={formData.iban}
-          onChange={(e) => setFormData({ ...formData, iban: e.target.value })}
+          error={ibanMessage}
+          onChange={(e) => { setFormData({ ...formData, iban: e.target.value }); setIbanMessage(undefined); }}
+          onBlur={() => setIbanMessage(ibanError(formData.iban))}
           placeholder="DE89 3704 0044 0532 0130 00"
           className="font-mono"
           fullWidth

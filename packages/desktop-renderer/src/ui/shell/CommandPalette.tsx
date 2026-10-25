@@ -1,15 +1,15 @@
 import React from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useNavigate } from '@tanstack/react-router';
-import { Briefcase, FileText, Package, Search, Users, type LucideIcon } from 'lucide-react';
+import { Briefcase, FileText, Landmark, Package, Receipt, Search, Users, type LucideIcon } from 'lucide-react';
 import { Kbd, Portal } from '@billme/ui';
-import { ipc } from '../../runtime-api';
+import { getRendererProduct, ipc } from '../../runtime-api';
 
 type SearchResult = {
   key: string;
   title: string;
   subtitle: string;
-  badge: 'Rechnung' | 'Angebot' | 'Kunde' | 'Projekt' | 'Artikel';
+  badge: 'Rechnung' | 'Angebot' | 'Kunde' | 'Projekt' | 'Artikel' | 'Bankumsatz' | 'Beleg';
   to: string;
   search?: Record<string, string>;
   score: number;
@@ -51,7 +51,10 @@ const getScore = (query: string, fields: Array<string | undefined>): number | nu
 };
 
 const resultIcon = (badge: SearchResult['badge']): LucideIcon =>
-  badge === 'Kunde' ? Users : badge === 'Projekt' ? Briefcase : badge === 'Artikel' ? Package : FileText;
+  badge === 'Kunde' ? Users : badge === 'Projekt' ? Briefcase : badge === 'Artikel' ? Package : badge === 'Bankumsatz' ? Landmark : badge === 'Beleg' ? Receipt : FileText;
+
+const isoToDe = (date: string): string => date.slice(0, 10).split('-').reverse().join('.');
+const euro = (value: number): string => value.toLocaleString('de-DE', { style: 'currency', currency: 'EUR' });
 
 export interface CommandPaletteProps {
   open: boolean;
@@ -73,6 +76,9 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({ open, onClose, c
   const inputRef = React.useRef<HTMLInputElement | null>(null);
   const listRef = React.useRef<HTMLDivElement | null>(null);
   const query = normalize(term);
+  // Lite books bank lines and receipts in "Buchen"; Pro keeps them in its accounting area.
+  const searchBooking = getRendererProduct() !== 'pro';
+  const searchedIn = searchBooking ? 'Rechnungen, Kunden, Artikeln, Bankumsätzen und Belegen' : 'Rechnungen, Kunden und Artikeln';
 
   React.useEffect(() => {
     if (!open) return;
@@ -97,14 +103,34 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({ open, onClose, c
     enabled: open && query.length >= 2,
     staleTime: 15_000,
     queryFn: async () => {
-      const [invoices, offers, clients, projects, articles] = await Promise.all([
+      const [invoices, offers, clients, projects, articles, transactions, receipts, entries] = await Promise.all([
         ipc.invoices.list(),
         ipc.offers.list(),
         ipc.clients.list(),
         includeProjects ? ipc.projects.list({ includeArchived: true }) : Promise.resolve([]),
         includeArticles ? ipc.articles.list() : Promise.resolve([]),
+        searchBooking ? ipc.transactions.list({}) : Promise.resolve([]),
+        searchBooking ? ipc.cash.listReceipts() : Promise.resolve([]),
+        searchBooking ? ipc.cash.listEntries() : Promise.resolve([]),
       ]);
       const out: SearchResult[] = [];
+      // A bank line opens where it is booked: its invoice, its matched cash entry, or itself in "Buchen".
+      for (const tx of transactions) {
+        const score = getScore(query, [tx.counterparty, tx.purpose]);
+        if (score === null) continue;
+        const target: Pick<SearchResult, 'to' | 'search'> = tx.linkedInvoiceId
+          ? { to: '/documents', search: { kind: 'invoice', id: tx.linkedInvoiceId } }
+          : tx.status !== 'booked'
+            ? { to: '/accounts' }
+            : { to: '/eur', search: { item: tx.matchedManualEntryId ? `manual:${tx.matchedManualEntryId}` : `transaction:${tx.id}`, year: tx.date.slice(0, 4) } };
+        out.push({ key: `transaction:${tx.id}`, title: tx.counterparty || 'Ohne Gegenpartei', subtitle: `${isoToDe(tx.date)} · ${euro(tx.type === 'expense' ? -Math.abs(tx.amount) : Math.abs(tx.amount))} · ${tx.purpose}`, badge: 'Bankumsatz', ...target, score });
+      }
+      for (const receipt of receipts) {
+        const score = getScore(query, [receipt.number, receipt.counterparty]);
+        if (score === null) continue;
+        const entry = entries.find((candidate) => candidate.receiptId === receipt.id);
+        out.push({ key: `receipt:${receipt.id}`, title: receipt.counterparty || 'Beleg', subtitle: `Beleg ${receipt.number || 'ohne Nummer'} · ${isoToDe(receipt.documentDate)} · ${euro(receipt.grossAmountCents / 100)}`, badge: 'Beleg', to: '/eur', search: entry ? { item: `manual:${entry.id}`, year: entry.cashDate.slice(0, 4) } : { receipt: receipt.id }, score });
+      }
       for (const inv of invoices) {
         const score = getScore(query, [inv.number, inv.client, inv.clientEmail, inv.clientNumber]);
         if (score !== null) out.push({ key: `invoice:${inv.id}`, title: inv.number, subtitle: inv.client || 'Ohne Kunde', badge: 'Rechnung', to: '/documents', search: { kind: 'invoice', id: inv.id }, score });
@@ -227,14 +253,14 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({ open, onClose, c
                 {matchingCommands.map((command, idx) => row({ kind: 'command', key: command.key, command }, idx))}
               </div>
             )}
-            {query.length === 1 && <p className="px-2.25 py-3 text-caption text-muted">Ab 2 Zeichen wird auch in Rechnungen, Kunden und Artikeln gesucht.</p>}
+            {query.length === 1 && <p className="px-2.25 py-3 text-caption text-muted">Ab 2 Zeichen wird auch in {searchedIn} gesucht.</p>}
             {query.length >= 2 && (
               <div role="group" aria-label="Treffer" className={matchingCommands.length > 0 ? 'mt-1 border-t border-border-subtle pt-1' : undefined}>
                 <p className="px-2.25 pb-1 pt-2 text-caption font-medium text-muted">Treffer</p>
                 {loading ? (
                   <p className="px-2.25 py-3 text-caption text-muted">Suche läuft …</p>
                 ) : dataResults.length === 0 ? (
-                  <p className="px-2.25 py-3 text-caption text-muted">Keine Treffer in Rechnungen, Kunden und Artikeln.</p>
+                  <p className="px-2.25 py-3 text-caption text-muted">Keine Treffer in {searchedIn}.</p>
                 ) : (
                   dataResults.map((result, i) => row({ kind: 'result', key: result.key, result }, matchingCommands.length + i))
                 )}

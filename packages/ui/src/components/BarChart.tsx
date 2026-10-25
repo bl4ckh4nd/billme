@@ -82,12 +82,20 @@ export const BarChart: React.FC<BarChartProps> = ({
 
   const paired = data.some((datum) => datum.compare !== undefined);
   const patternId = React.useId().replace(/:/g, '');
-  const max = niceMax(Math.max(0, reference?.value ?? 0, ...data.map((datum) => Math.max(datum.value, datum.compare ?? 0))));
+  const top = Math.max(0, reference?.value ?? 0, ...data.map((datum) => Math.max(datum.value, datum.compare ?? 0)));
+  // Negative values (a month with refunds) draw below a zero line; without any the scale starts at 0 as before.
+  const negative = Math.max(0, ...data.map((datum) => -datum.value));
+  // With negatives the ticks are whole multiples of one round step (0, ±500, ±1.000), never a split of an odd range.
+  const step = negative > 0 ? niceMax((top + negative) / TICKS) : 0;
+  const max = negative > 0 ? Math.max(step, Math.ceil(top / step) * step) : niceMax(top);
+  const min = negative > 0 ? -Math.ceil(negative / step) * step : 0;
+  const tickCount = negative > 0 ? Math.round((max - min) / step) : TICKS;
   const plotWidth = Math.max(0, width - AXIS_WIDTH);
   const plotHeight = height - X_LABEL_HEIGHT - TOP_PAD;
   const band = data.length > 0 ? plotWidth / data.length : 0;
   const barWidth = paired ? Math.max(2, Math.min(18, band * 0.32)) : Math.max(2, Math.min(32, band - 2, band * 0.62));
-  const y = (value: number) => TOP_PAD + plotHeight - (Math.max(0, value) / max) * plotHeight;
+  const y = (value: number) => TOP_PAD + plotHeight - ((Math.max(min, value) - min) / (max - min)) * plotHeight;
+  const zeroY = y(0);
   const hoveredDatum = hovered === null ? null : data[hovered];
 
   return (
@@ -103,8 +111,8 @@ export const BarChart: React.FC<BarChartProps> = ({
                 </pattern>
               </defs>
             )}
-            {Array.from({ length: TICKS + 1 }, (_, index) => {
-              const value = (max / TICKS) * index;
+            {Array.from({ length: tickCount + 1 }, (_, index) => {
+              const value = min + ((max - min) / tickCount) * index;
               const tickY = y(value);
               return (
                 <g key={index}>
@@ -115,14 +123,15 @@ export const BarChart: React.FC<BarChartProps> = ({
                 </g>
               );
             })}
+            {min < 0 && <line x1={AXIS_WIDTH} x2={width} y1={zeroY} y2={zeroY} className="stroke-foreground" strokeWidth={1} shapeRendering="crispEdges" />}
             {data.map((datum, index) => {
               const center = AXIS_WIDTH + band * index + band / 2;
               const top = y(datum.value);
-              const barHeight = TOP_PAD + plotHeight - top;
+              const barHeight = zeroY - top;
               const active = hovered === index;
               const primaryX = paired ? center - barWidth - 1 : center - barWidth / 2;
               const compareTop = y(datum.compare ?? 0);
-              const compareHeight = TOP_PAD + plotHeight - compareTop;
+              const compareHeight = zeroY - compareTop;
               return (
                 <g key={datum.key}>
                   {paired && compareHeight > 0 && (
@@ -130,6 +139,9 @@ export const BarChart: React.FC<BarChartProps> = ({
                       d={barPath(center + 1, compareTop, barWidth, compareHeight)}
                       fill={`url(#${patternId})`}
                     />
+                  )}
+                  {datum.value < 0 && (
+                    <path d={`M${primaryX},${zeroY}H${primaryX + barWidth}V${top}H${primaryX}Z`} className="fill-foreground" />
                   )}
                   {barHeight > 0 && (
                     <path

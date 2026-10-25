@@ -112,8 +112,8 @@ export const detectProfile = (headers: string[]): CsvProfile => {
     return 'stripe';
   }
 
-  // PayPal exports typically include "Transaction ID" + "Type" + "Net"
-  if (has('Transaction ID') || (has('Net') && has('Type') && (has('Date') || has('Datum')))) {
+  // PayPal exports typically include "Transaction ID" + "Type" + "Net"; the German export says Transaktionscode, Typ, Brutto, Netto.
+  if (has('Transaction ID') || has('Transaktionscode') || (has('Net') && has('Type') && (has('Date') || has('Datum'))) || (has('Netto') && has('Brutto') && has('Typ'))) {
     return 'paypal';
   }
 
@@ -144,10 +144,11 @@ export const suggestedMappingFor = (profile: CsvProfile, headers: string[]): Csv
       dateColumn: pickHeader(headers, ['Date', 'Datum']) ?? headers[0]!,
       // The gross amount is what the customer paid (it settles the invoice); the fee is its own expense.
       amountColumn: pickHeader(headers, ['Gross', 'Brutto', 'Amount', 'Net', 'Net Amount']) ?? headers[0]!,
-      feeColumn: pickHeader(headers, ['Fee', 'Gebühr']),
-      counterpartyColumn: pickHeader(headers, ['Name', 'From Email Address', 'To Email Address', 'Payee Name']),
-      purposeColumn: pickHeader(headers, ['Type', 'Item Title', 'Subject', 'Note', 'Description']),
-      externalIdColumn: pickHeader(headers, ['Transaction ID', 'Transaction ID/Order ID']),
+      feeColumn: pickHeader(headers, ['Fee', 'Gebühr', 'Entgelt']),
+      counterpartyColumn: pickHeader(headers, ['Name', 'From Email Address', 'To Email Address', 'Payee Name', 'Absender E-Mail-Adresse', 'Empfänger E-Mail-Adresse']),
+      purposeColumn: pickHeader(headers, ['Type', 'Item Title', 'Subject', 'Note', 'Description', 'Betreff', 'Artikelbezeichnung', 'Hinweis', 'Typ']),
+      externalIdColumn: pickHeader(headers, ['Transaction ID', 'Transaction ID/Order ID', 'Transaktionscode']),
+      statusColumn: pickHeader(headers, ['Status']),
       currencyColumn: pickHeader(headers, ['Currency', 'Währung']),
       currencyExpected: 'EUR',
     };
@@ -164,6 +165,7 @@ export const suggestedMappingFor = (profile: CsvProfile, headers: string[]): Csv
         'Name',
       ]),
       purposeColumn: pickHeader(headers, ['Verwendungszweck', 'Buchungstext', 'Text', 'Beschreibung']),
+      statusColumn: pickHeader(headers, ['Status', 'Buchungsstatus']),
       currencyColumn: pickHeader(headers, ['Währung', 'Currency']),
       currencyExpected: 'EUR',
     };
@@ -319,19 +321,19 @@ const buildRows = (params: {
     const currencyRaw = params.mapping.currencyColumn ? String(raw[params.mapping.currencyColumn] ?? '').trim() : '';
 
     const dateIso = parseDateToIso(dateRaw);
-    if (!dateIso) rowErrors.push(`Invalid date: "${dateRaw}"`);
+    if (!dateIso) rowErrors.push(`Ungültiges Datum: "${dateRaw}"`);
 
     const amount = parseGermanNumber(amountRaw);
-    if (amount === null) rowErrors.push(`Invalid amount: "${amountRaw}"`);
+    if (amount === null) rowErrors.push(`Ungültiger Betrag: "${amountRaw}"`);
     const feeRaw = params.mapping.feeColumn ? String(raw[params.mapping.feeColumn] ?? '').trim() : '';
     const feeValue = feeRaw ? parseGermanNumber(feeRaw) : 0;
-    if (feeValue === null) rowErrors.push(`Invalid fee: "${feeRaw}"`);
+    if (feeValue === null) rowErrors.push(`Ungültige Gebühr: "${feeRaw}"`);
     // PayPal lists the fee negative, Stripe positive; either way it runs against the payment.
     const fee = amount && feeValue ? Math.round(-Math.sign(amount) * Math.abs(feeValue) * 100) / 100 : undefined;
 
     if (params.mapping.currencyExpected && currencyRaw) {
       if (currencyRaw.toUpperCase() !== params.mapping.currencyExpected.toUpperCase()) {
-        rowErrors.push(`Unsupported currency: "${currencyRaw}" (expected ${params.mapping.currencyExpected})`);
+        rowErrors.push(`Währung "${currencyRaw}" wird nicht unterstützt (erwartet ${params.mapping.currencyExpected})`);
       }
     }
 
@@ -340,8 +342,8 @@ const buildRows = (params: {
     const statusRaw = params.mapping.statusColumn ? String(raw[params.mapping.statusColumn] ?? '').trim() : '';
     const externalId = params.mapping.externalIdColumn ? String(raw[params.mapping.externalIdColumn] ?? '').trim() : '';
 
-    const status: 'pending' | 'booked' =
-      statusRaw.toLowerCase().includes('pending') || statusRaw.toLowerCase().includes('offen') ? 'pending' : 'booked';
+    // "Vorgemerkt" (banks) and "Ausstehend" (PayPal) are not yet booked; a later import of the booked line takes it over.
+    const status: 'pending' | 'booked' = /pending|offen|vorgemerkt|ausstehend/i.test(statusRaw) ? 'pending' : 'booked';
 
     let type: 'income' | 'expense' | undefined;
     if (amount !== null) {

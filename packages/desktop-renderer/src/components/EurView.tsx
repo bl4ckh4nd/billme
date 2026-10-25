@@ -4,6 +4,7 @@ import {
   Button,
   Card,
   Checkbox,
+  ConfirmDialog,
   EmptyState,
   ErrorState,
   Input,
@@ -22,13 +23,14 @@ import {
 } from '@billme/ui';
 import { defaultEurTaxYear, eurTaxYearOptions, eurBookingPreview, type LedgerChart } from '@billme/accounting-shared';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useNavigate, useRouterState } from '@tanstack/react-router';
 import { AlertCircle, Search, Check, Info, RotateCcw, Save, Ban, Settings2 } from 'lucide-react';
 import { getRendererProduct, getRendererRuntime, ipc } from '../runtime-api';
 import { Spinner } from '../ui/components/Spinner';
 import { EurRulesModal } from './EurRulesModal';
 import { useSettingsQuery } from '../hooks/useSettings';
 import { LiteCashPanel } from './eur/LiteCashPanel';
-import { isNeutralEurKind, isSimpleEurCategory, neutralEurKindLabels, neutralEurKindNotes, simpleEurCategoryLabel, type NeutralEurKind } from './eur/categories';
+import { isDecidedEurItem, isNeutralEurKind, isSimpleEurCategory, neutralEurKindLabels, neutralEurKindNotes, simpleEurCategoryLabel, type NeutralEurKind } from './eur/categories';
 
 const DEFAULT_YEAR = defaultEurTaxYear();
 
@@ -59,6 +61,9 @@ type EurItem = {
   suggestionReason?: string;
   suggestionLayer?: SuggestionLayer;
   suggestedKind?: NeutralEurKind;
+  /** Lite: the VAT that goes with the suggestion, only when it is known. */
+  suggestedVatMode?: VatMode;
+  suggestedVatRate?: number;
   kind?: string;
   transitHint?: string;
   classification?: {
@@ -116,8 +121,7 @@ const itemKey = (item: { sourceType: SourceType; sourceId: string }): string =>
   `${item.sourceType}:${item.sourceId}`;
 
 const neutralKindOf = (item: EurItem): NeutralEurKind | undefined => (isNeutralEurKind(item.kind) ? item.kind : undefined);
-/** Decided: a line, an exclusion, or any typed kind (cash fact), like the server's list filter. */
-const isDecided = (item: EurItem): boolean => Boolean(item.classification?.eurLineId || item.classification?.excluded || item.kind);
+const isDecided = (item: EurItem): boolean => isDecidedEurItem(item);
 const decisionOf = (item: EurItem): Decision => neutralKindOf(item) ?? (item.classification?.excluded ? 'excluded' : 'flow');
 
 const queryErrorDetail = (error: unknown): string =>
@@ -230,6 +234,7 @@ export const EurView: React.FC = () => {
   const queryClient = useQueryClient();
   const { data: settings } = useSettingsQuery();
   const [taxYear, setTaxYear] = React.useState<number>(DEFAULT_YEAR);
+  const navigate = useNavigate();
   const [activeSource, setActiveSource] = React.useState<{ sourceType: SourceType; sourceId: string } | null>(null);
   const [selectedLineId, setSelectedLineId] = React.useState<string>('');
   const [vatMode, setVatMode] = React.useState<VatMode>('none');
@@ -252,6 +257,8 @@ export const EurView: React.FC = () => {
   const [showRulesModal, setShowRulesModal] = React.useState(false);
   const [showAllCategories, setShowAllCategories] = React.useState(false);
   const { notify } = useActionFeedback('eur');
+  const configuredVatRate = settings?.legal?.defaultVatRate ?? 0;
+  const standardVatRate = configuredVatRate > 0 ? configuredVatRate : 19;
 
   const showNotification = (message: string, type: 'success' | 'error' | 'warning' | 'info' = 'success') => {
     notify(type === 'warning' ? 'info' : type, message);
@@ -311,6 +318,46 @@ export const EurView: React.FC = () => {
     if (!activeItem) return lineOptions;
     return lineOptions.filter((line) => line.kind === activeItem.flowType);
   }, [activeItem, lineOptions]);
+
+  // Ctrl/⌘K finds a bank line or receipt and lands here with ?item=<sourceType>:<id>&year=<tax year>.
+  const itemRequest = useRouterState({ select: (state) => {
+    const search = state.location.search as Record<string, unknown>;
+    return typeof search.item === 'string' ? `${search.item}|${String(search.year ?? '')}` : undefined;
+  } });
+  React.useEffect(() => {
+    if (!itemRequest) return;
+    const [item = '', year = ''] = itemRequest.split('|');
+    const [sourceType = '', ...id] = item.split(':');
+    if (eurTaxYearOptions().includes(Number(year))) setTaxYear(Number(year));
+    // "Alle", so a classified line is listed too.
+    setQueueStatus('all'); setQuery(''); setFlowFilter('all');
+    setActiveSource({ sourceType: sourceType as SourceType, sourceId: id.join(':') });
+    void navigate({ to: '.', search: {}, replace: true });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [itemRequest]);
+
+  // Lite: an outgoing bank line can be a Rücklastschrift or refund of a paid invoice. Tied to the invoice it
+  // takes the payment back and reopens the invoice instead of counting as an expense.
+  const refundMatches = useQuery({
+    queryKey: ['transaction-matches', 'refund', activeItem?.sourceId],
+    queryFn: () => ipc.transactions.findMatches({ transactionId: activeItem!.sourceId }),
+    enabled: !isProProduct && activeItem?.sourceType === 'transaction' && activeItem.flowType === 'expense',
+  });
+  const refundSuggestions = !isProProduct && activeItem?.sourceType === 'transaction' && activeItem.flowType === 'expense' ? refundMatches.data?.suggestions ?? [] : [];
+  const [refundTarget, setRefundTarget] = React.useState<{ transactionId: string; invoiceId: string; number: string; client: string; amount: number } | null>(null);
+  const takeBackPayment = useMutation({
+    mutationFn: (target: NonNullable<typeof refundTarget>) => ipc.transactions.link({ transactionId: target.transactionId, invoiceId: target.invoiceId }),
+    onSuccess: async (_result, target) => {
+      setRefundTarget(null);
+      setActiveSource(null);
+      await Promise.all(['eur', 'invoices', 'transactions', 'transaction-matches', 'lite-vat', 'dashboard-flows'].map((key) => queryClient.invalidateQueries({ queryKey: [key] })));
+      showNotification(`Zahlung zurückgenommen: ${target.number} ist wieder offen.`, 'success');
+    },
+    onError: (error) => {
+      setRefundTarget(null);
+      showNotification(error instanceof Error ? error.message : String(error), 'error');
+    },
+  });
 
   const queueItems = React.useMemo(() => {
     const base = (items as EurItem[]).filter((item) => {
@@ -376,17 +423,24 @@ export const EurView: React.FC = () => {
   React.useEffect(() => {
     if (!activeItem) return;
     setSelectedLineId(activeItem.classification?.eurLineId ?? activeItem.suggestedLineId ?? '');
-    setVatMode(activeItem.classification?.vatMode ?? 'none');
-    setVatRate(activeItem.classification?.vatRate);
+    setVatMode(activeItem.classification?.vatMode ?? activeItem.suggestedVatMode ?? 'none');
+    setVatRate(activeItem.classification?.vatRate ?? activeItem.suggestedVatRate);
     // Pro keeps its own fact workflow (Auswertungen); here it only knows a line or the exclusion.
     setDecision(isProProduct ? (activeItem.classification?.excluded ? 'excluded' : 'flow') : decisionOf(activeItem));
     setTaxNote(activeItem.classification?.note ?? '');
     setHospitalitySplit(Boolean(activeItem.splits?.length));
   }, [activeItem]);
 
+  // A reason belongs to one decision: a new entry starts with an empty audit reason.
+  React.useEffect(() => {
+    setAuditReason('');
+  }, [activeSource?.sourceType, activeSource?.sourceId]);
+
+  /** A resolver returns null for an entry it cannot decide; that entry is left out and stays selected. */
   const applyBulk = async (
     label: string,
-    resolver: (item: EurItem) => { eurLineId?: string; excluded?: boolean; kind?: NeutralEurKind; vatMode?: VatMode; vatRate?: number },
+    resolver: (item: EurItem) => { eurLineId?: string; excluded?: boolean; kind?: NeutralEurKind; vatMode?: VatMode; vatRate?: number } | null,
+    skippedHint = '',
   ) => {
     if (selectedItems.length === 0) return;
     const reason = auditReason.trim();
@@ -394,8 +448,16 @@ export const EurView: React.FC = () => {
       showNotification('Bitte eine Begründung für den Audit-Eintrag eingeben.', 'warning');
       return;
     }
+    const planned = selectedItems.map((item) => ({ item, resolved: resolver(item) }));
+    const applied = planned.filter((entry) => entry.resolved !== null);
+    const skipped = planned.filter((entry) => entry.resolved === null).map((entry) => entry.item);
+    const skippedText = skipped.length ? `${skipped.length} ${skipped.length === 1 ? 'Eintrag' : 'Einträge'} ausgelassen: ${skippedHint}` : '';
+    if (applied.length === 0) {
+      showNotification(skippedText, 'warning');
+      return;
+    }
 
-    const changes: UndoChange[] = selectedItems.map((item) => ({
+    const changes: UndoChange[] = applied.map(({ item }) => ({
       sourceType: item.sourceType,
       sourceId: item.sourceId,
       taxYear,
@@ -409,22 +471,21 @@ export const EurView: React.FC = () => {
     setIsApplying(true);
     try {
       await Promise.all(
-        selectedItems.map((item) => {
-          const resolved = resolver(item);
-          return upsertClassification.mutateAsync({
-            sourceType: item.sourceType,
-            sourceId: item.sourceId,
-            taxYear,
-            ...resolved,
-            vatRate: isProProduct ? resolved.vatRate : undefined,
-            reason,
-          });
-        }),
+        applied.map(({ item, resolved }) => upsertClassification.mutateAsync({
+          sourceType: item.sourceType,
+          sourceId: item.sourceId,
+          taxYear,
+          ...resolved,
+          vatRate: resolved!.vatRate,
+          reason,
+        })),
       );
       setLastUndo({ label, reason, changes });
-      setSelectedKeys(new Set());
+      setSelectedKeys(new Set(skipped.map((item) => itemKey(item))));
       await invalidateEur();
-      showNotification(`${selectedItems.length} Einträge klassifiziert`, 'success');
+      showNotification(`${applied.length} ${applied.length === 1 ? 'Eintrag' : 'Einträge'} klassifiziert${skippedText ? `. ${skippedText}` : ''}`, skippedText ? 'warning' : 'success');
+    } catch (error) {
+      showNotification(error instanceof Error ? error.message : String(error), 'error');
     } finally {
       setIsApplying(false);
     }
@@ -451,17 +512,7 @@ export const EurView: React.FC = () => {
       },
     ];
 
-    const split = splitAllowed && hospitalitySplit && hospitalityDeductible && hospitalityNonDeductible ? (() => {
-      const net = Math.abs(activeItem.amountNet);
-      const deductible = Math.round(net * 70) / 100;
-      return {
-        lineId: hospitalityDeductible.lineId,
-        splits: [
-          { amountNet: deductible, deductibility: 'deductible' as const, lineId: hospitalityDeductible.lineId, reason: '70 % abziehbar (§ 4 Abs. 5 Nr. 2 EStG)' },
-          { amountNet: Math.round((net - deductible) * 100) / 100, deductibility: 'non-deductible' as const, lineId: hospitalityNonDeductible.lineId, reason: '30 % nicht abziehbar' },
-        ],
-      };
-    })() : undefined;
+    const split = hospitalityParts ? { lineId: hospitalityDeductible!.lineId, splits: hospitalityParts } : undefined;
 
     setIsApplying(true);
     try {
@@ -474,13 +525,16 @@ export const EurView: React.FC = () => {
         excluded: decision === 'excluded',
         kind: isNeutralEurKind(decision) ? decision : undefined,
         vatMode,
-        vatRate: isProProduct ? vatRate : undefined,
+        vatRate,
         note: taxNote.trim() || undefined,
         reason,
       });
       setLastUndo({ label: 'Einzelklassifizierung', reason, changes });
+      setAuditReason('');
       await invalidateEur();
       showNotification('Klassifizierung gespeichert', 'success');
+    } catch (error) {
+      showNotification(error instanceof Error ? error.message : String(error), 'error');
     } finally {
       setIsApplying(false);
     }
@@ -500,7 +554,7 @@ export const EurView: React.FC = () => {
             excluded: change.prevExcluded,
             kind: change.prevKind,
             vatMode: change.prevVatMode,
-            vatRate: isProProduct ? change.prevVatRate : undefined,
+            vatRate: change.prevVatRate,
             reason: `Undo: ${lastUndo.label}; ursprüngliche Begründung: ${lastUndo.reason}`,
           }),
         ),
@@ -508,6 +562,8 @@ export const EurView: React.FC = () => {
       await invalidateEur();
       setLastUndo(null);
       showNotification('Letzte Aktion rückgängig gemacht', 'info');
+    } catch (error) {
+      showNotification(error instanceof Error ? error.message : String(error), 'error');
     } finally {
       setIsApplying(false);
     }
@@ -517,6 +573,20 @@ export const EurView: React.FC = () => {
   const hospitalityDeductible = lineOptions.find((line) => line.kennziffer === '175');
   const hospitalityNonDeductible = lineOptions.find((line) => line.kennziffer === '165');
   const splitAllowed = !isProProduct && !excluded && activeItem?.flowType === 'expense' && (activeLine?.kennziffer === '175' || activeLine?.kennziffer === '165');
+  // The 70 %-Bewirtung line is only ever booked split; 165 alone stays a plain non-deductible expense.
+  const splitForced = splitAllowed && activeLine?.kennziffer === '175';
+  // The parts split the net as the server computes it from the chosen rate (the item's net is still the old one).
+  const hospitalityParts = activeItem && splitAllowed && (hospitalitySplit || splitForced) && hospitalityDeductible && hospitalityNonDeductible ? (() => {
+    const gross = Math.abs(activeItem.amountGross);
+    const net = activeItem.sourceType !== 'transaction'
+      ? Math.abs(activeItem.amountNet)
+      : Math.round((settings?.legal?.smallBusinessRule || vatMode !== 'default' ? gross : gross / (1 + (vatRate ?? 0) / 100)) * 100) / 100;
+    const deductible = Math.round(net * 70) / 100;
+    return [
+      { amountNet: deductible, deductibility: 'deductible' as const, lineId: hospitalityDeductible.lineId, reason: '70 % abziehbar (§ 4 Abs. 5 Nr. 2 EStG)' },
+      { amountNet: Math.round((net - deductible) * 100) / 100, deductibility: 'non-deductible' as const, lineId: hospitalityNonDeductible.lineId, reason: '30 % nicht abziehbar' },
+    ];
+  })() : undefined;
   const bulkDisabled = selectedItems.length === 0 || isApplying || auditReason.trim().length === 0;
   const checks = activeItem
     ? [
@@ -524,7 +594,7 @@ export const EurView: React.FC = () => {
         auditReason.trim().length === 0 ? 'Bitte eine Begründung für den Audit-Eintrag eingeben.' : undefined,
         isProProduct && vatMode === 'default' ? activeItem.vatWarning : undefined,
         activeItem.transitHint,
-        !isProProduct && activeLine?.kennziffer === '164' && vatMode === 'default' ? 'Geschenke über 50 €: keine Vorsteuer (§ 15 Abs. 1a UStG). Bitte „Keine USt. Umrechnung“ wählen.' : undefined,
+        !isProProduct && activeLine?.kennziffer === '164' && vatMode === 'default' ? 'Geschenke über 50 €: keine Vorsteuer (§ 15 Abs. 1a UStG). Bitte „Ohne Umsatzsteuer“ wählen.' : undefined,
       ].filter((text): text is string => Boolean(text))
     : [];
 
@@ -664,13 +734,22 @@ export const EurView: React.FC = () => {
                 variant="secondary"
                 size="sm"
                 onClick={() =>
-                  void applyBulk('Bulk: Vorschlag anwenden', (item) => ({
-                    eurLineId: item.suggestedKind ? undefined : item.suggestedLineId,
-                    kind: item.suggestedKind,
-                    excluded: false,
-                    vatMode: item.classification?.vatMode ?? 'none',
-                    vatRate: item.classification?.vatRate,
-                  }))
+                  void applyBulk('Bulk: Vorschlag anwenden', isProProduct
+                    ? (item) => ({
+                      eurLineId: item.suggestedKind ? undefined : item.suggestedLineId,
+                      kind: item.suggestedKind,
+                      excluded: false,
+                      vatMode: item.classification?.vatMode ?? 'none',
+                      vatRate: item.classification?.vatRate,
+                    })
+                    // Lite: a line goes with its VAT or not at all; an unknown rate is never booked gross without Vorsteuer.
+                    // Bewirtung needs its 70/30 split and is booked one by one.
+                    : (item) => item.suggestedKind
+                      ? { kind: item.suggestedKind, excluded: false, vatMode: 'none' }
+                      : item.suggestedLineId && item.suggestedVatMode && lineOptions.find((line) => line.lineId === item.suggestedLineId)?.kennziffer !== '175'
+                        ? { eurLineId: item.suggestedLineId, excluded: false, vatMode: item.suggestedVatMode, vatRate: item.suggestedVatRate }
+                        : null,
+                  'ohne Vorschlag, ohne bekannten USt.-Satz oder Bewirtung. Sie bleiben ausgewählt; bitte einzeln buchen.')
                 }
                 disabled={bulkDisabled}
               >
@@ -776,7 +855,7 @@ export const EurView: React.FC = () => {
                         </span>
                       </span>
                       <span className="mt-0.75 flex flex-wrap items-center gap-1.5">
-                        <span className="text-caption tabular-nums text-muted">{item.date}</span>
+                        <span className="text-caption tabular-nums text-muted">{formatDate(item.date)}</span>
                         {item.classification?.excluded ? (
                           <Badge tone="error">Ausgeschlossen</Badge>
                         ) : neutralKindOf(item) ? (
@@ -828,9 +907,9 @@ export const EurView: React.FC = () => {
                   <div className="flex flex-wrap items-start gap-2.5 rounded-control border border-info-border bg-info-bg px-3 py-2.5 text-control text-info-text">
                     <Info size={16} className="mt-px shrink-0" aria-hidden="true" />
                     <div className="min-w-0 flex-1">
-                      <strong className="font-semibold">Einnahmen-Überschuss-Rechnung.</strong> Erfasst wird die Zahlung, nicht die Rechnung.
+                      {!(activeItem.suggestedLineId || activeItem.suggestedKind || activeItem.suggestionReason) && 'Noch kein Vorschlag: bitte Art und Kategorie wählen.'}
                       {(activeItem.suggestedLineId || activeItem.suggestedKind || activeItem.suggestionReason) && (
-                        <div className="mt-1 flex flex-wrap items-center gap-1.5 text-caption">
+                        <div className="flex flex-wrap items-center gap-1.5 text-caption">
                           {activeItem.suggestionLayer && (
                             <Badge tone={LAYER_TONES[activeItem.suggestionLayer]}>{LAYER_LABELS[activeItem.suggestionLayer]}</Badge>
                           )}
@@ -846,13 +925,47 @@ export const EurView: React.FC = () => {
                           if (activeItem.suggestedKind) { setDecision(activeItem.suggestedKind); return; }
                           setSelectedLineId(activeItem.suggestedLineId!);
                           setDecision('flow');
+                          if (activeItem.suggestedVatMode) { setVatMode(activeItem.suggestedVatMode); setVatRate(activeItem.suggestedVatRate); }
                         }}
                       >
                         <Check size={14} aria-hidden="true" />
                         Vorschlag übernehmen
                       </Button>
                     )}
+                    {!isProProduct && activeItem.sourceType === 'transaction' && !neutralKindOf(activeItem) && (
+                      // GoBD: a bank line gets its receipt through a manual entry matched to it (the form opens below);
+                      // a category already chosen moves to that entry.
+                      <Button variant="secondary" size="sm" onClick={() => void navigate({ to: '.', search: { create: 'cash', tx: activeItem.sourceId } })}>
+                        Beleg erfassen
+                      </Button>
+                    )}
                   </div>
+
+                  {refundSuggestions.length > 0 && (
+                    <div role="group" aria-label="Rücklastschrift oder Erstattung" className="rounded-control border border-border px-3 py-2.5">
+                      <div className="text-control font-semibold text-foreground">Rücklastschrift oder Erstattung einer Rechnung?</div>
+                      <p className="mt-0.5 text-caption text-muted">Dann ist das keine Ausgabe: Die Zahlung wird an der Rechnung zurückgenommen, die Rechnung ist danach wieder offen.</p>
+                      <ul className="mt-2 flex flex-col gap-1.5">
+                        {refundSuggestions.map((suggestion) => (
+                          <li key={suggestion.invoice.id} className="flex flex-wrap items-center justify-between gap-2">
+                            <span className="min-w-0 text-control text-foreground">
+                              <span className="font-medium tabular-nums">{suggestion.invoice.number}</span> · {suggestion.invoice.client}
+                              <span className="block text-caption text-muted">{suggestion.matchReasons.join(' · ')}</span>
+                            </span>
+                            <Button
+                              size="sm"
+                              variant="secondary"
+                              aria-label={`Zahlung an ${suggestion.invoice.number} zurücknehmen`}
+                              onClick={() => setRefundTarget({ transactionId: activeItem.sourceId, invoiceId: suggestion.invoice.id, number: suggestion.invoice.number, client: suggestion.invoice.client, amount: Math.abs(activeItem.amountGross) })}
+                            >
+                              <RotateCcw size={14} aria-hidden="true" />
+                              Zahlung zurücknehmen
+                            </Button>
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
 
                   <div>
                     <div className="mb-1.5 text-eyebrow uppercase text-muted">Art des Vorgangs</div>
@@ -894,7 +1007,12 @@ export const EurView: React.FC = () => {
                         ))}
                       </Select>
                       {!isProProduct && <Checkbox className="mt-2" label="Weitere Kategorien anzeigen" checked={showAllCategories} onChange={(e) => setShowAllCategories(e.target.checked)} />}
-                      {splitAllowed && <Checkbox className="mt-2" label="Bewirtung aufteilen: 70 % abziehbar, 30 % nicht abziehbar (Vorsteuer bleibt voll abziehbar)" checked={hospitalitySplit} onChange={(e) => setHospitalitySplit(e.target.checked)} />}
+                      {splitAllowed && <Checkbox className="mt-2" label="Bewirtung aufteilen: 70 % abziehbar, 30 % nicht abziehbar (Vorsteuer bleibt voll abziehbar)" checked={hospitalitySplit || splitForced} disabled={splitForced} onChange={(e) => setHospitalitySplit(e.target.checked)} />}
+                      {hospitalityParts && (
+                        <p className="mt-1 text-caption text-muted tabular-nums">
+                          Abziehbar {formatCurrency(hospitalityParts[0]!.amountNet)}, nicht abziehbar {formatCurrency(hospitalityParts[1]!.amountNet)} (netto)
+                        </p>
+                      )}
                     </div>
                     <Input
                       label="Betrag brutto"
@@ -907,11 +1025,15 @@ export const EurView: React.FC = () => {
                       id="eur-vat-mode"
                       label="USt. Modus"
                       value={vatMode}
-                      onChange={(e) => setVatMode(e.target.value as VatMode)}
+                      onChange={(e) => {
+                        const next = e.target.value as VatMode;
+                        setVatMode(next);
+                        if (next === 'default' && vatRate === undefined) setVatRate(standardVatRate);
+                      }}
                       fullWidth
                     >
-                      <option value="none">Keine USt. Umrechnung</option>
-                      <option value="default">Default USt. (Netto)</option>
+                      <option value="none">Ohne Umsatzsteuer</option>
+                      <option value="default">Mit Umsatzsteuer (netto rechnen)</option>
                     </Select>
                     {vatMode === 'default' && (
                       <Input
@@ -1042,6 +1164,16 @@ export const EurView: React.FC = () => {
           </Card>
         )}
       </div>
+
+      <ConfirmDialog
+        open={refundTarget !== null}
+        title="Zahlung zurücknehmen?"
+        description={refundTarget ? `${formatCurrency(refundTarget.amount)} gehen als Rücklastschrift oder Erstattung an ${refundTarget.number} (${refundTarget.client}). Die Zahlung wird an der Rechnung zurückgenommen, die Rechnung ist danach wieder offen. Der Bankumsatz zählt nicht als Ausgabe.` : undefined}
+        confirmLabel="Zahlung zurücknehmen"
+        busy={takeBackPayment.isPending}
+        onConfirm={() => { if (refundTarget) takeBackPayment.mutate(refundTarget); }}
+        onCancel={() => setRefundTarget(null)}
+      />
 
       {showRulesModal && (
         <EurRulesModal

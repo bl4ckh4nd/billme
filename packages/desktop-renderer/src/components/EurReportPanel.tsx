@@ -3,7 +3,7 @@ import {
   Button, Card, EMPTY_VALUE, EmptyState, ErrorState, Metric, Select,
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow, useActionFeedback,
 } from '@billme/ui';
-import { defaultEurTaxYear, eurTaxYearOptions } from '@billme/accounting-shared';
+import { defaultEurTaxYear, eurTaxYearOptions, LATEST_SUPPORTED_EUR_TAX_YEAR } from '@billme/accounting-shared';
 import { useQuery } from '@tanstack/react-query';
 import { Download } from 'lucide-react';
 import { ipc } from '../runtime-api';
@@ -44,10 +44,16 @@ export const EurReportPanel: React.FC = () => {
   const [isDatevExporting, setIsDatevExporting] = React.useState(false);
   const [datevResult, setDatevResult] = React.useState<DatevExportResult | null>(null);
   const { notify } = useActionFeedback('eur-report');
+  const [showEmptyRows, setShowEmptyRows] = React.useState(false);
+  // The coming year can be prepared early; it is computed with the newest published form.
+  const yearOptions = React.useMemo(() => [...new Set([defaultEurTaxYear() + 1, ...eurTaxYearOptions()])].sort((a, b) => b - a), []);
   const { data: report, isLoading, isError, error, refetch } = useQuery({
     queryKey: ['eur', 'report', taxYear],
     queryFn: () => ipc.eur.getReport({ taxYear }),
   });
+
+  // Master data (Kalenderjahr, Steuernummer, Art des Betriebs) is no amount; empty lines only on request.
+  const visibleRows = (report?.rows ?? []).filter((row) => row.providerPath !== 'general' && (showEmptyRows || row.total !== 0));
 
   const exportCsv = async () => {
     try {
@@ -116,7 +122,7 @@ export const EurReportPanel: React.FC = () => {
           <div className="flex flex-wrap items-center gap-2 border-b border-border px-3.5 py-3">
             <h2 id="eur-report-title" className="mr-auto text-section">Anlage EÜR {taxYear}</h2>
             <Select value={taxYear} aria-label="Steuerjahr" onChange={(e) => setTaxYear(Number(e.target.value))}>
-              {eurTaxYearOptions().map((year) => <option key={year} value={year}>{year}</option>)}
+              {yearOptions.map((year) => <option key={year} value={year}>{year > LATEST_SUPPORTED_EUR_TAX_YEAR ? `${year} (vorläufig)` : year}</option>)}
             </Select>
             <Button variant="secondary" onClick={() => void exportCsv()}>
               <Download size={16} aria-hidden="true" />
@@ -128,6 +134,7 @@ export const EurReportPanel: React.FC = () => {
                 PDF exportieren
               </Button>
             )}
+            <span className="ml-2 text-caption text-muted" aria-hidden="true">DATEV-Zeitraum</span>
             <Select value={datevPeriod} aria-label="DATEV-Zeitraum" onChange={(e) => setDatevPeriod(e.target.value)}>
               <option value="year">Jahr {taxYear}</option>
               <optgroup label="Quartal">
@@ -164,7 +171,7 @@ export const EurReportPanel: React.FC = () => {
               <ul className="mt-1.5 flex flex-col gap-1 text-caption text-foreground-secondary">
                 {datevResult.errors.map((rowError) => (
                   <li key={`${rowError.sourceType}:${rowError.sourceId}`}>
-                    <span className="tabular-nums">{new Date(`${rowError.date}T00:00:00`).toLocaleDateString('de-DE')}</span>
+                    <span className="tabular-nums">{new Date(`${rowError.date}T00:00:00`).toLocaleDateString('de-DE', { day: '2-digit', month: '2-digit', year: 'numeric' })}</span>
                     {' · '}{rowError.counterparty || EMPTY_VALUE}{' · '}
                     <span className="tabular-nums">{formatCurrency(rowError.amount)}</span>
                     {': '}{rowError.message}
@@ -190,6 +197,13 @@ export const EurReportPanel: React.FC = () => {
               description="Sobald Buchungen importiert oder Rechnungen gestellt sind, entsteht hier die Auswertung."
             />
           ) : (
+            <>
+            <div className="flex items-center justify-end border-b border-border px-3.5 py-2">
+              <label className="flex items-center gap-2 text-caption text-muted">
+                <input type="checkbox" checked={showEmptyRows} onChange={(event) => setShowEmptyRows(event.target.checked)} />
+                Auch Zeilen ohne Betrag zeigen
+              </label>
+            </div>
             <Table aria-label="EÜR-Report" bare>
               <TableHeader>
                 <TableRow>
@@ -199,12 +213,12 @@ export const EurReportPanel: React.FC = () => {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {report.rows.length === 0 ? (
+                {visibleRows.length === 0 ? (
                   <TableRow>
                     <TableCell colSpan={3} muted className="h-20 text-center">Noch keine Positionen in diesem Steuerjahr.</TableCell>
                   </TableRow>
                 ) : null}
-                {report.rows.map((row) => (
+                {visibleRows.map((row) => (
                   <TableRow key={row.lineId}>
                     <TableCell muted className="font-mono">{row.kennziffer ?? EMPTY_VALUE}</TableCell>
                     <TableCell>{row.label}</TableCell>
@@ -215,6 +229,7 @@ export const EurReportPanel: React.FC = () => {
                 ))}
               </TableBody>
             </Table>
+            </>
           )}
         </Card>
       </section>

@@ -532,6 +532,12 @@ export const incomingInvoiceDocuments = pgTable("incoming_invoice_documents", {
   createdAt: text("created_at"), updatedAt: text("updated_at"),
 });
 
+export const bankTransactionDocuments = pgTable("bank_transaction_documents", {
+  id: text("id"), tenantId: text("tenant_id"), bankTransactionId: text("bank_transaction_id"),
+  originalFilename: text("original_filename"), mimeType: text("mime_type"), byteLength: integer("byte_length"),
+  sha256: text("sha256"), contentBytes: bytea("content_bytes"), createdAt: text("created_at"),
+});
+
 export const openItems = pgTable("open_items", {
   id: text("id"), tenantId: text("tenant_id"), partyType: text("party_type"), partyId: text("party_id"), sourceType: text("source_type"), sourceId: text("source_id"), documentNumber: text("document_number"), documentDate: text("document_date"), dueDate: text("due_date"), originalAmount: numeric("original_amount"), allocatedAmount: numeric("allocated_amount"), residualAmount: numeric("residual_amount"), status: text("status"), journalEntryId: text("journal_entry_id"), createdAt: text("created_at"), updatedAt: text("updated_at"),
 });
@@ -934,6 +940,7 @@ export const importBatches = pgTable("import_batches", {
   mappingJson: text("mapping_json"),
   importedCount: integer("imported_count"),
   skippedCount: integer("skipped_count"),
+  updatedCount: integer("updated_count"),
   errorCount: integer("error_count"),
   createdAt: text("created_at"),
   rolledBackAt: text("rolled_back_at"),

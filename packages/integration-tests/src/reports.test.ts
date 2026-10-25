@@ -29,10 +29,13 @@ import { bankAccount, configureLite, importBankRows, issueDated, line, pay } fro
  *   that does not give the bank row back on unlink
  * - classification: an item moved to another line leaves the old total behind,
  *   an excluded item still counts, a computed/unknown/wrong-flow line or a
- *   made-up source is accepted, a change leaves no audit entry, the missing
- *   VAT rate goes unnoticed
+ *   made-up source is accepted, a change leaves no audit entry, VAT mode
+ *   "default" without a rate accepted (gross booked, no Vorsteuer)
  * - suggestions: rules applied out of priority order, inactive/other-year
- *   rules applied, a deleted rule still suggesting, counterparty memory wrong
+ *   rules applied, a deleted rule still suggesting, counterparty memory wrong;
+ *   (Lite) a suggestion without the VAT that goes with it, so "Vorschlag
+ *   anwenden" books a regular-VAT expense gross without Vorsteuer, or a rate
+ *   guessed where none is known (no partner history, a line that can carry VAT)
  * - facts: private withdrawals counted as expense, splits that do not add up,
  *   a replayed idempotency key creating a second fact
  * - Geldtransit / Privat (Lite): a transfer between own accounts counted as
@@ -41,11 +44,14 @@ import { bankAccount, configureLite, importBankRows, issueDated, line, pay } fro
  *   without its counterpart going unnoticed; Privatentnahme and Privateinlage
  *   lumped into one "excluded" bucket, given an EÜR line, or set on the wrong
  *   direction (an Entnahme coming in); a later line choice leaving the old
- *   neutral kind behind
+ *   neutral kind behind; a booked leg calling its still open counterpart
+ *   "missing"
  * - tax payments (Lite suggestions): a USt-Erstattung suggested as collected VAT
  *   (Kz 140 instead of 141), a USt-Vorauszahlung as other expense (183 instead
  *   of 186), Einkommensteuer/Soli/Kirchensteuer as a business expense instead of
- *   private, "ust" found inside unrelated words (August, Zustellung)
+ *   private, "ust" found inside unrelated words (August, Zustellung); a
+ *   Privatentnahme or Bewirtung falling back to "other expense", a
+ *   Rücklastschrift suggested as expense, a cash deposit suggested as income
  * - CSV export: wrong decimal format, non-exportable rows, totals that differ
  *   from the report
  * - boundaries: unsupported tax year, partial-year ranges, no EÜR profile,
@@ -55,7 +61,8 @@ import { bankAccount, configureLite, importBankRows, issueDated, line, pay } fro
  *   payments / refunds, cancellations and credit notes not
  *   netting out, drafts reported, reverse charge / Kleinunternehmer / export
  *   taxed, input VAT from unreviewed or file-less receipts, double input VAT
- *   for instalments, spreadsheet formula injection in the CSV, bad periods
+ *   for instalments, spreadsheet formula injection in the CSV, bad periods;
+ *   a Kleinunternehmer with VAT on earlier invoices told it is all tax-free
  * - tax filing: a filing that can leave `draft` without a report snapshot, a
  *   replayed idempotency key creating a second filing, a certificate stored
  *   without an encryption key
@@ -69,7 +76,8 @@ import { bankAccount, configureLite, importBankRows, issueDated, line, pay } fro
  *   silently booked as Kasse; the wrong account for
  *   the chart or the VAT rate, a BU key on an Automatikkonto (or none on a plain
  *   account), cash entries booked against the bank, amounts with a dot, a
- *   Belegdatum other than TTMM, UTF-8 instead of CP1252, settings.datev lost on save
+ *   a split Bewirtung exported whole on one account, Belegfeld 1 carrying an
+ *   internal id (or an IBAN from the purpose) instead of a readable number, Belegdatum other than TTMM, UTF-8 instead of CP1252, settings.datev lost on save
  * - Anlage EÜR form: the "abziehbar" and "nicht abziehbar" columns (174/164,
  *   175/165, 172/162, 177/168) swapped; a davon line (119 in 111, 153 in 151)
  *   added to the sums a second time; 142/139 added to 199 instead of subtracted;
@@ -423,15 +431,14 @@ describe('EÜR', () => {
       classifiedGross.income += 500;
     });
 
-    test('VAT mode "default" without a rate is flagged instead of silently booking 0 % VAT', async () => {
+    test('VAT mode "default" without a rate is refused with 400 instead of silently booking the gross amount', async () => {
       const tx = await txId('Kunde X');
-      try {
-        await classify(tx, incomeLine, { vatMode: 'default' }, 'transaction');
-        const report = await reportOf();
-        assert.ok(report.warnings.some((w) => w.startsWith('VAT_RATE_REQUIRED')), `warnings: ${report.warnings}`);
-      } finally {
-        await classify(tx, incomeLine, { vatMode: 'default', vatRate: 19 }, 'transaction');
-      }
+      const refused = await classify(tx, incomeLine, { vatMode: 'default' }, 'transaction');
+      assert.equal(refused.status, 400, refused.text);
+      assert.match(refused.text, /Umsatzsteuersatz angeben/);
+      const report = await reportOf();
+      assert.equal(report.summary.incomeTotal, 1130.5, 'the saved rate is untouched');
+      assert.ok(!report.warnings.some((w) => w.startsWith('VAT_RATE_REQUIRED')), `warnings: ${report.warnings}`);
     });
 
     test('a VAT rate outside 0..100 is refused', async () => {
@@ -908,6 +915,11 @@ describe('Geldtransit, Privat und Steuerzahlungen (Lite)', () => {
       ['2026-06-27', -900, 'Finanzamt Musterstadt', 'Einkommensteuer Vorauszahlung II/2026'],
       ['2026-06-28', -35, 'Finanzamt Musterstadt', 'Steuernummer 12/345/67890'],
       ['2026-08-01', -15, 'Kunst AG', 'Zustellung August'],
+      ['2026-07-01', -1500, 'Max Muster', 'Privatentnahme Oktober'],
+      ['2026-07-02', -86.4, 'Restaurant Adler', 'Bewirtung Kunde Alpha'],
+      ['2026-07-03', -595, 'Gamma Studio', 'Rücklastschrift RE-2026-204'],
+      ['2026-07-04', 300, 'Sparkasse', 'Bareinzahlung Geldautomat'],
+      ['2026-07-05', -200, 'Sparkasse', 'Barauszahlung Geldautomat'],
     ]);
     await importBankRows(h.api, tagesgeld, [['2026-06-02', 1000, 'Max Muster', 'Umbuchung vom Giro']]);
   });
@@ -926,7 +938,9 @@ describe('Geldtransit, Privat und Steuerzahlungen (Lite)', () => {
     const out = await itemOf('Umbuchung auf Tagesgeld');
     const into = await itemOf('Umbuchung vom Giro');
     const lone = await itemOf('Übertrag Sparkonto');
-    for (const item of [out, into, lone]) assert.equal((await classify(item.sourceId, { kind: 'transit' })).status, 200);
+    assert.equal((await classify(out.sourceId, { kind: 'transit' })).status, 200);
+    assert.match((await itemOf('Umbuchung auf Tagesgeld')).transitHint ?? '', /Gegenbuchung vom 02\.06\.2026 ist noch offen/, 'the booked leg names the open counterpart instead of "no counterpart"');
+    for (const item of [into, lone]) assert.equal((await classify(item.sourceId, { kind: 'transit' })).status, 200);
     const after = await h.api.eur.getReport({ taxYear: 2026 });
     assert.deepEqual(after.summary, before.summary, 'no income, no expense');
     assert.equal(after.unclassifiedCount, before.unclassifiedCount - 3);
@@ -968,6 +982,65 @@ describe('Geldtransit, Privat und Steuerzahlungen (Lite)', () => {
     assert.equal(unknown.suggestedLineId, undefined);
     assert.match(unknown.suggestionReason ?? '', /Finanzamt/);
     assert.notEqual((await itemOf('Zustellung August')).suggestedLineId, YEAR_LINE(2026, '186'), '"ust" inside a word is no tax payment');
+  });
+
+  test('keyword suggestions: Privatentnahme → private, Bewirtung → Kz 175, Rücklastschrift → no expense guess, cash in/out at the ATM → Geldtransit', async () => {
+    const withdrawal = await itemOf('Privatentnahme Oktober');
+    assert.deepEqual([withdrawal.suggestedLineId, withdrawal.suggestedKind], [undefined, 'private-withdrawal']);
+    assert.equal((await itemOf('Bewirtung Kunde Alpha')).suggestedLineId, YEAR_LINE(2026, '175'));
+    const returnDebit = await itemOf('Rücklastschrift RE-2026-204');
+    assert.deepEqual([returnDebit.suggestedLineId, returnDebit.suggestedKind], [undefined, undefined], 'a returned debit reverses an income, it is no expense');
+    assert.match(returnDebit.suggestionReason ?? '', /Rücklastschrift/);
+    assert.deepEqual([(await itemOf('Bareinzahlung Geldautomat')).suggestedKind, (await itemOf('Barauszahlung Geldautomat')).suggestedKind], ['transit', 'transit']);
+  });
+});
+
+describe('Suggested VAT for "Vorschlag anwenden" (Lite, Regelbesteuerung)', () => {
+  let h: LiteHarness;
+  const giro = 'bank-vat-suggest';
+  const itemOf = async (purpose: string) => {
+    const found = ((await h.api.eur.listItems({ taxYear: 2026 } as never)) as Array<Record<string, any>>).find((item) => item.purpose === purpose);
+    assert.ok(found, `item ${purpose} not found`);
+    return found;
+  };
+  const vatOf = async (purpose: string) => { const item = await itemOf(purpose); return [item.suggestedLineId, item.suggestedVatMode, item.suggestedVatRate]; };
+
+  before(async () => {
+    h = await startLite(null, 'reports-vat-suggest');
+    await configureLite(h.api, { smallBusiness: false });
+    await h.api.accounts.upsert({ account: bankAccount(giro) } as never);
+    await importBankRows(h.api, giro, [
+      ['2026-02-05', -119, 'Adobe Systems', 'Abo Februar'],
+      ['2026-03-05', -119, 'Adobe Systems', 'Abo März'],
+      ['2026-03-06', -107, 'Buchladen Wort', 'Fachbuch Steuerrecht'],
+      ['2026-04-06', -53.5, 'Buchladen Wort', 'Fachbuch Marketing'],
+      ['2026-03-07', -320, 'Allianz Versicherung', 'Betriebshaftpflicht 2026'],
+      ['2026-03-08', -59, 'Neuer Anbieter GmbH', 'Software Lizenz'],
+      ['2026-03-09', 840, 'Finanzamt Musterstadt', 'Erstattung Umsatzsteuer 02/2026'],
+    ]);
+    await h.api.eur.upsertRule({ taxYear: 2026, priority: 1, field: 'counterparty', operator: 'contains', value: 'allianz', targetEurLineId: YEAR_LINE(2026, '223') });
+    await h.api.eur.upsertRule({ taxYear: 2026, priority: 2, field: 'counterparty', operator: 'contains', value: 'neuer anbieter', targetEurLineId: YEAR_LINE(2026, '228') });
+    const classify = async (purpose: string, body: Record<string, unknown>) => {
+      const response = await h.raw('PUT', '/reports/eur/classifications', { sourceType: 'transaction', sourceId: (await itemOf(purpose)).sourceId, taxYear: 2026, reason: 'Beleg geprüft', ...body });
+      assert.equal(response.status, 200, response.text);
+    };
+    await classify('Abo Februar', { eurLineId: YEAR_LINE(2026, '228'), vatMode: 'default', vatRate: 19 });
+    await classify('Fachbuch Steuerrecht', { eurLineId: YEAR_LINE(2026, '281'), vatMode: 'default', vatRate: 7 });
+  });
+  after(async () => { await h.close(); });
+
+  test('the rate of an earlier booking of the same partner comes with the suggestion', async () => {
+    assert.deepEqual(await vatOf('Abo März'), [YEAR_LINE(2026, '228'), 'default', 19]);
+    assert.deepEqual(await vatOf('Fachbuch Marketing'), [YEAR_LINE(2026, '281'), 'default', 7]);
+  });
+
+  test('a line without VAT of its own (insurance, a tax refund) suggests "ohne Umsatzsteuer"', async () => {
+    assert.deepEqual(await vatOf('Betriebshaftpflicht 2026'), [YEAR_LINE(2026, '223'), 'none', undefined]);
+    assert.deepEqual(await vatOf('Erstattung Umsatzsteuer 02/2026'), [YEAR_LINE(2026, '141'), 'none', undefined]);
+  });
+
+  test('a partner without history on a line that can carry VAT gets no rate: it is asked for, never guessed', async () => {
+    assert.deepEqual(await vatOf('Software Lizenz'), [YEAR_LINE(2026, '228'), undefined, undefined]);
   });
 });
 
@@ -1157,6 +1230,12 @@ describe('USt-Voranmeldung: Dauerfristverlängerung, Kz 39/83, Kleinunternehmer 
     const over = await vat('2026-10-01', '2026-10-31');
     assert.ok(over.smallBusinessLimits.currentYearCents > 10_000_000);
     assert.ok(over.issues.some((issue: any) => issue.code === 'KU_LIMIT_EXCEEDED'), 'over 100.000 € this year');
+    // Switched to § 19 after invoices with VAT: that VAT is still owed (§ 14c UStG), and the report says so instead of "steuerfrei".
+    const november = await vat('2026-11-01', '2026-11-30');
+    assert.equal(november.filingRequired, true);
+    const shown = november.issues.find((issue: any) => issue.code === 'KU_INVOICE_VAT_SHOWN');
+    assert.match(shown?.message ?? '', /§ 14c/);
+    assert.equal(november.preparationComplete, false);
     await setLegal({}, false);
     assert.equal((await vat('2026-10-01', '2026-10-31')).smallBusinessLimits, undefined, 'only for a Kleinunternehmer');
     assert.equal((await vat('2026-10-01', '2026-10-31')).filingRequired, true);
@@ -1210,10 +1289,10 @@ describe('Zahlungsart manueller Buchungen und Buchungen ohne Geldfluss (Lite)', 
     assert.equal((await entry('m-legacy', '2026-07-03', -2000, { purpose: 'Altbuchung' })).status, 200);
     for (const id of ['m-cash', 'm-bank', 'm-legacy']) assert.equal((await classify(id, '183')).status, 200);
     const { rows, errors } = await datev();
-    const cash = rows.find((row) => row[10] === '"m-cash"');
+    const cash = rows.find((row) => row[13]?.includes('Bürobedarf bar'));
     assert.ok(cash, 'the cash entry is exported');
     assert.deepEqual([cash[6], cash[7], cash[1]], ['1000', '4900', '"H"'], 'Kasse 1000 against the expense account');
-    const flatRate = rows.find((row) => row[10] === '"np-verpflegung"');
+    const flatRate = rows.find((row) => row[13]?.includes('Verpflegungsmehraufwand Juni'));
     assert.ok(flatRate, 'the Verpflegungspauschale is exported');
     assert.deepEqual([flatRate[6], flatRate[7]], ['1890', '4674'], 'Privateinlage against Verpflegungsmehraufwand, never Kasse or Bank');
     assert.match(errors.find((error) => error.sourceId === 'm-bank')?.message ?? '', /Bankumsatz/);
@@ -1227,7 +1306,7 @@ describe('Zahlungsart manueller Buchungen und Buchungen ohne Geldfluss (Lite)', 
     assert.equal(match.status, 200, match.text);
     const kind = await h.raw('PUT', '/reports/eur/classifications', { sourceType: 'manual', sourceId: 'm-private', taxYear: 2026, kind: 'private-withdrawal', reason: 'Privat' });
     assert.equal(kind.status, 200, kind.text);
-    const row = (await datev()).rows.find((r) => r[10] === '"m-private"');
+    const row = (await datev()).rows.find((r) => r[13]?.includes('Privat bezahlt'));
     assert.ok(row, 'the Privatentnahme is exported');
     assert.deepEqual([row[0], row[1], row[6], row[7]], ['50,00', '"H"', '1200', '1800'], 'money left the bank: bank Haben, Privatentnahme Soll');
   });
@@ -1595,6 +1674,25 @@ describe('VAT preparation', () => {
       january = await month(1);
       assert.ok(!january.issues.some((i) => i.code === 'BANK_TAX_EVIDENCE_REQUIRED'), 'a reviewed private/neutral decision settles the evidence');
       assert.ok(january.issues.some((i) => i.code === 'CASH_RECEIPT_REQUIRED'));
+    });
+
+    test('a bank line classified with a VAT rate counts like the EÜR: expense as Vorsteuer (Kz 66), income as Kz 81; an open one is named by counterparty, date and amount', async () => {
+      await importBankRows(h.api, account, [['2025-03-10', -119, 'Adobe Systems', 'Abo März'], ['2025-03-12', 238, 'Webshop Kunde', 'Bestellung 17'], ['2025-03-14', -50, 'Offen GmbH', 'Ohne Zuordnung']]);
+      const rows = await h.api.transactions.list({} as never);
+      const id = (name: string) => rows.find((t) => t.counterparty === name)!.id;
+      for (const [name, code] of [['Adobe Systems', '228'], ['Webshop Kunde', '112']] as const) {
+        const saved = await h.raw('PUT', '/reports/eur/classifications', { sourceType: 'transaction', sourceId: id(name), taxYear: 2025, eurLineId: YEAR_LINE(2025, code), vatMode: 'default', vatRate: 19, reason: 'Kontoauszug geprüft' });
+        assert.equal(saved.status, 200, saved.text);
+      }
+      const march = await report('2025-03-01', '2025-03-31');
+      assert.deepEqual([position(march, '66', 'input')?.basisCents, position(march, '66', 'input')?.taxCents], [10000, 1900], 'Vorsteuer of the 119 € expense');
+      assert.deepEqual([position(march, '81', 'output')?.basisCents, position(march, '81', 'output')?.taxCents], [20000, 3800], 'USt of the 238 € income');
+      assert.equal(march.issues.some((i) => i.sourceId === id('Adobe Systems') || i.sourceId === id('Webshop Kunde')), false, 'a classified line needs no further evidence');
+      const open = march.issues.find((i) => i.sourceId === id('Offen GmbH'));
+      assert.ok(open, 'the unclassified line stays open');
+      assert.match(open.message, /Offen GmbH/);
+      assert.match(open.message, /14\.03\.2025/);
+      assert.match(open.message, /50,00/);
     });
   });
 
@@ -1965,5 +2063,39 @@ describe('DATEV export (EÜR → Buchungsstapel)', () => {
     assert.equal((await exportDatev('2024-01-01', '2024-12-31')).status, 400);
     const anonymous = await fetch(`${h.connection.baseUrl}/api/v1/lite/eur/datev.csv?from=2026-01-01&to=2026-12-31`);
     assert.equal(anonymous.status, 401);
+  });
+  test('a split Bewirtung is two rows (70 % on 4650, 30 % on 4654, both with Vorsteuer); Belegfeld 1 is a readable number, never the internal id', async () => {
+    await importBankRows(h.api, account, [
+      ['2026-08-04', -119, 'Restaurant Adler', 'Bewirtung Kunde Alpha'],
+      ['2026-08-05', -595, 'Gamma Studio', 'Rücklastschrift RE-2026-204'],
+      ['2026-08-06', -25, 'Agentur Iban', 'Honorar an DE02120300000000202051'],
+    ]);
+    const list = await h.api.transactions.list({} as never);
+    const meal = list.find((t) => t.counterparty === 'Restaurant Adler')!.id;
+    const returned = list.find((t) => t.counterparty === 'Gamma Studio')!.id;
+    // The split as the Buchen form sends it: net 100 → 70 abziehbar (Kz 175), 30 nicht abziehbar (Kz 165).
+    const saved = await h.raw('PUT', '/reports/eur/classifications', {
+      sourceType: 'transaction', sourceId: meal, taxYear: 2026, eurLineId: YEAR_LINE(2026, '175'), vatMode: 'default', vatRate: 19, reason: 'Bewirtungsbeleg',
+      splits: [
+        { amountNet: 70, deductibility: 'deductible', lineId: YEAR_LINE(2026, '175'), reason: '70 % abziehbar' },
+        { amountNet: 30, deductibility: 'non-deductible', lineId: YEAR_LINE(2026, '165'), reason: '30 % nicht abziehbar' },
+      ],
+    });
+    assert.equal(saved.status, 200, saved.text);
+    assert.equal((await h.raw('PUT', '/reports/eur/classifications', { sourceType: 'transaction', sourceId: returned, taxYear: 2026, eurLineId: YEAR_LINE(2026, '183'), vatMode: 'none', reason: 'Rücklastschrift' })).status, 200);
+    const result = await h.api.eur.exportDatev({ from: '2026-08-01', to: '2026-08-31' });
+    const rows = rowsOf(Buffer.from(result.contentBase64, 'base64'));
+    const [deductible] = byGegenkonto(rows, '4650');
+    const [nonDeductible] = byGegenkonto(rows, '4654');
+    assert.deepEqual([deductible?.[0], deductible?.[8], nonDeductible?.[0], nonDeductible?.[8]], ['83,30', '"0009"', '35,70', '"0009"'], 'gross 119 split 70/30, Vorsteuer on both parts');
+    const uuid = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/;
+    for (const row of rowsOf(Buffer.from((await h.api.eur.exportDatev({ from: '2026-01-01', to: '2026-12-31' })).contentBase64, 'base64'))) {
+      assert.doesNotMatch(row[10]!, uuid, `Belegfeld 1 of "${row[13]}" is an internal id`);
+    }
+    assert.equal(byGegenkonto(rows, '4900')[0]?.[10], '"RE-2026-204"', 'a document number in the purpose becomes Belegfeld 1');
+    const ibanLine = list.find((t) => t.counterparty === 'Agentur Iban')!.id;
+    assert.equal((await h.raw('PUT', '/reports/eur/classifications', { sourceType: 'transaction', sourceId: ibanLine, taxYear: 2026, eurLineId: YEAR_LINE(2026, '183'), vatMode: 'none', reason: 'Honorar' })).status, 200);
+    const withIban = rowsOf(Buffer.from((await h.api.eur.exportDatev({ from: '2026-08-06', to: '2026-08-06' })).contentBase64, 'base64')).find((row) => row[13]?.includes('Agentur Iban'));
+    assert.equal(withIban?.[10], '""', 'an IBAN in the purpose is no document number');
   });
 });

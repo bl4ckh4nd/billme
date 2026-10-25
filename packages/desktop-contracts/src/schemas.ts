@@ -32,6 +32,7 @@ export const invoiceItemSchema = z.object({
   category: z.string().optional(),
   unit: z.string().optional(),
   discountPercent: z.number().min(0).max(100).optional(),
+  discountAmount: z.number().min(0).optional(),
   taxRate: z.number().min(0).optional(),
   note: z.string().optional(),
   optionNote: z.string().optional(),
@@ -79,6 +80,8 @@ export const invoiceTaxMetaSchema = z.object({
   datevSachverhaltLl: z.string().regex(/^[1-9]\d{0,2}$/).optional(),
   datevEvidenceType: z.string().min(1).optional(),
   datevEvidenceReference: z.string().min(1).optional(),
+  /** Set on the outgoing invoice of a fixed-asset sale: its revenue goes to the asset-sale account. */
+  assetSaleAssetId: z.string().min(1).optional(),
 });
 
 export const invoiceTaxSnapshotSchema = z.object({
@@ -191,6 +194,8 @@ export const clientSchema = z.object({
     vatId: z.string().optional(),
     vatIdValidation: z.enum(['valid', 'invalid', 'unavailable', 'manual_override']).optional(),
     vatIdValidationAt: z.string().optional(),
+    /** BT-10 Käuferreferenz a public buyer requires (Leitweg-ID); new documents for the client take it over. */
+    buyerReference: z.string().trim().max(200).optional(),
   }).optional(),
   projects: z.array(projectSchema),
   activities: z.array(activitySchema),
@@ -275,6 +280,7 @@ export const eurClassificationSchema = z.object({
   eurLineId: z.string().optional(),
   excluded: z.boolean(),
   vatMode: z.enum(['none', 'default']),
+  vatRate: z.number().optional(),
   note: z.string().optional(),
   /** Lite: Privatentnahme, Privateinlage or Geldtransit instead of a line. */
   kind: z.enum(['private-withdrawal', 'private-contribution', 'transit']).optional(),
@@ -350,6 +356,9 @@ export const eurListItemSchema = z.object({
   suggestionLayer: z.enum(['rule', 'counterparty', 'bayes', 'keyword']).optional(),
   /** A neutral kind suggested instead of a line (the other leg of a Geldtransit, a private tax payment). */
   suggestedKind: z.enum(['transit', 'private-withdrawal', 'private-contribution']).optional(),
+  /** Lite: the VAT that goes with the suggested line, when it is known. */
+  suggestedVatMode: z.enum(['none', 'default']).optional(),
+  suggestedVatRate: z.number().min(0).max(100).optional(),
   /** What the payment is when it is neither income nor expense (a cash fact). */
   kind: z.enum(['income', 'expense', 'private-withdrawal', 'private-contribution', 'pass-through', 'transit']).optional(),
   /** A Geldtransit leg without its counterpart. */
@@ -461,6 +470,8 @@ export const recurringProfileSchema = z.object({
   endDate: z.string().optional(),
   amount: z.number(),
   items: z.array(invoiceItemSchema),
+  /** Stamped by the server from the settings when the profile is created. */
+  taxMode: invoiceTaxModeSchema.optional(),
 });
 
 export const dunningLevelSchema = z.object({

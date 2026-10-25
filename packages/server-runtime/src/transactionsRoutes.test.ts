@@ -176,8 +176,9 @@ test('embedded Lite finance import commit persists valid rows once and replays t
     const second = await app.inject({ method: 'POST', url: '/api/v1/lite/finance/import/commit', headers, payload });
     assert.equal(second.statusCode, 200, second.body);
     assert.equal(second.json().batchId, first.json().batchId);
-    assert.equal(second.json().imported, 2);
-    assert.equal(second.json().skipped, 0);
+    // The replay imports nothing; the known rows count as skipped.
+    assert.equal(second.json().imported, 0);
+    assert.equal(second.json().skipped, 2);
 
     const batches = await database.query<{ count: string }>('SELECT count(*)::text AS count FROM import_batches WHERE tenant_id = $1', [tenantId]);
     const transactions = await database.query<{ count: string }>('SELECT count(*)::text AS count FROM transactions WHERE tenant_id = $1 AND deleted_at IS NULL', [tenantId]);

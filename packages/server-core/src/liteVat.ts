@@ -13,8 +13,8 @@ export const liteVatReportSchema = z.object({
   preparationComplete: z.boolean(), submissionReady: z.literal(false), outputVatCents: cents, inputVatCents: cents, payableCents: cents,
   reconciliation: z.object({ paymentCashCents: cents, paymentRecognizedCents: cents, paymentResidualCents: cents }),
   positions: z.array(z.object({ code: z.string(), taxCode: z.string().optional(), label: z.string(), direction: z.enum(['output', 'input', 'information']), basisCents: cents, taxCents: cents, basisWholeEuros: z.number().int() })),
-  sources: z.array(z.object({ sourceType: z.enum(['invoice', 'receipt']), sourceId: z.string(), date, label: z.string(), code: z.string(), taxCode: z.string().optional(), rate: z.number(), basisCents: cents, taxCents: cents, direction: z.enum(['output', 'input', 'information']) })),
-  issues: z.array(z.object({ code: z.string(), sourceId: z.string().optional(), message: z.string() })),
+  sources: z.array(z.object({ sourceType: z.enum(['invoice', 'receipt', 'transaction']), sourceId: z.string(), date, label: z.string(), code: z.string(), taxCode: z.string().optional(), rate: z.number(), basisCents: cents, taxCents: cents, direction: z.enum(['output', 'input', 'information']) })),
+  issues: z.array(z.object({ code: z.string(), sourceId: z.string().optional(), label: z.string().optional(), message: z.string() })),
   /** Kz 39: the Sondervorauszahlung deducted in the last Voranmeldung of the year (Dauerfristverlängerung). */
   specialPrepaymentCents: cents.default(0),
   /** Kz 83: verbleibende Vorauszahlung (positive) or Überschuss (negative) after Kz 39. */

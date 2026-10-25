@@ -33,6 +33,10 @@ export const neutralEurKindLabels: Record<NeutralEurKind, string> = {
 export const neutralEurKindNotes: Record<NeutralEurKind, string> = {
   'private-withdrawal': 'Privatentnahme: Geld für private Zwecke, keine Betriebsausgabe. Zählt nicht in der EÜR und nicht in der Umsatzsteuer.',
   'private-contribution': 'Privateinlage: privates Geld für den Betrieb, keine Betriebseinnahme. Zählt nicht in der EÜR und nicht in der Umsatzsteuer.',
-  transit: 'Geldtransit: Geld zwischen eigenen Konten oder Bank und Kasse bewegt. Zählt nicht in der EÜR und nicht in der Umsatzsteuer; die Gegenseite auf dem anderen Konto wird genauso zugeordnet.',
+  transit: 'Geldtransit: Geld zwischen eigenen Konten oder Bank und Kasse bewegt. Zählt nicht in der EÜR und nicht in der Umsatzsteuer; ordne die Gegenbuchung auf dem anderen Konto ebenfalls als Geldtransit zu.',
 };
 export const isNeutralEurKind = (kind: string | undefined): kind is NeutralEurKind => kind === 'private-withdrawal' || kind === 'private-contribution' || kind === 'transit';
+
+/** Decided in "Buchen": a line, an exclusion, or a typed kind (cash fact), like the server's list filter. One definition for the queue, the nav badge and the overview. */
+export const isDecidedEurItem = (item: { classification?: { eurLineId?: string; excluded?: boolean }; kind?: string }): boolean =>
+  Boolean(item.classification?.eurLineId || item.classification?.excluded || item.kind);

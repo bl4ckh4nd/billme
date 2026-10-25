@@ -2,6 +2,8 @@ import { createHash, randomUUID } from 'node:crypto';
 import { liteCashEntryInputSchema, liteCashEntrySchema, liteReceiptInputSchema, liteReceiptSchema, liteReceiptUploadSchema, type AccountingMutationContext, type TenantScope } from '@billme/server-core';
 import { assertIncomingInvoiceDocumentContent } from '@billme/accounting-shared';
 import { appendWithClient } from './audit.js';
+import { carryLiteEurDecisionInTransaction } from './eurFacts.js';
+import { assertLitePeriodsOpen, periodClosedMessage } from './litePeriods.js';
 import { runInTransaction, type PostgresQueryable, type PostgresTransactionClient } from './connection.js';
 
 const rows = async <T = Record<string, unknown>>(db: PostgresQueryable, sql: string, values: unknown[] = []) => (await db.query(sql, values)).rows as T[];
@@ -19,14 +21,7 @@ export const listLiteClosedPeriods = async (db: PostgresQueryable, scope: Tenant
   (await rows<{ period: string; updated_at: string }>(db, "SELECT period, updated_at FROM accounting_periods WHERE tenant_id=$1 AND status='closed' ORDER BY period", [scope.tenantId]))
     .map((row) => ({ period: row.period, closedAt: row.updated_at }));
 
-export const assertLitePeriodsOpen = async (db: PostgresQueryable, scope: TenantScope, dates: Array<string | undefined | null>) => {
-  const periods = [...new Set(dates.filter((date): date is string => Boolean(date)).map((date) => date.slice(0, 7)))];
-  if (!periods.length) return;
-  const closed = await rows<{ period: string }>(db, "SELECT period FROM accounting_periods WHERE tenant_id=$1 AND status='closed' AND period = ANY($2::text[])", [scope.tenantId, periods]);
-  if (closed.length) throw Object.assign(new Error('LITE_PERIOD_CLOSED'), { period: closed[0]!.period });
-};
-
-export const periodClosedMessage = (period: string) => `Der Monat ${period} ist festgeschrieben; Korrekturen bitte in einem offenen Monat buchen.`;
+export { assertLitePeriodsOpen, periodClosedMessage };
 
 export const closeLitePeriod = (db: PostgresQueryable, scope: TenantScope, period: string, today: string, mutation: AccountingMutationContext) => runInTransaction(db, async (client) => {
   if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(period)) throw new Error('LITE_PERIOD_INVALID');
@@ -122,6 +117,8 @@ export const matchLiteCashEntry = (db: PostgresQueryable, scope: TenantScope, en
     if (before.matched_transaction_id || before.cash_date !== expectedCashDate || (await rows(client, 'SELECT id FROM lite_cash_entries WHERE tenant_id=$1 AND matched_transaction_id=$2', [scope.tenantId, transactionId])).length) throw new Error('LITE_CASH_MATCH_INVALID');
   } else if (before.matched_transaction_id !== (current.matched_transaction_id ?? null)) throw new Error('LITE_CASH_STALE');
   await client.query('UPDATE lite_cash_entries SET matched_transaction_id=$1,updated_at=$2 WHERE tenant_id=$3 AND id=$4', [transactionId ?? null, changedAt(before.updated_at as string), scope.tenantId, entryId]);
+  // The bank line is now shown as this entry: its category goes with it instead of being left behind.
+  if (transactionId && !transit) await carryLiteEurDecisionInTransaction(client, scope, transactionId, entryId, mutation);
   const after = (await listLiteCashEntries(client, scope)).find((row) => row.id === entryId)!;
   await audit(client, scope, mutation, 'lite_cash_entry', entryId, transactionId ? (transit ? 'lite.cash.match_transit' : 'lite.cash.match') : 'lite.cash.unmatch', before, after);
   return after;

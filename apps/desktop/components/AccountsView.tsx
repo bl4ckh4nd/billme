@@ -10,6 +10,7 @@ export function AccountsView(): ReactElement {
       useAccountsQuery={useAccountsQuery}
       useDeleteAccountMutation={useDeleteAccountMutation}
       BankAccountModal={BankAccountModal}
+      canEditAccounts
     />
   );
 }

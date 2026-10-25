@@ -6,7 +6,7 @@ import type { AccountingMutationContext, TenantScope } from '@billme/server-core
 import { appendWithClient, createPostgresAuditLogPort } from './audit.js';
 import { runInTransaction, type PostgresQueryable, type PostgresTransactionClient } from './connection.js';
 import { assertServerEurCashSource, assertServerEurProfile, type ServerEurReportResult } from './eurReport.js';
-import { assertLitePeriodsOpen } from './liteCash.js';
+import { assertLitePeriodsOpen } from './litePeriods.js';
 
 type EurCashFactKind = 'income' | 'expense' | 'private-withdrawal' | 'private-contribution' | 'pass-through' | 'transit';
 /** Kinds the Lite classification sets instead of an EÜR line; each lives as a cash fact of the payment. */
@@ -232,6 +232,53 @@ const saveClassificationInTransaction = async (db: PostgresTransactionClient, sc
     ...(kind ? { kind } : {}),
     updatedAt: String(saved.updated_at),
   };
+};
+
+/**
+ * Lite: a bank line that gets its receipt through a matched cash entry is shown as that entry from then on.
+ * Its EÜR decision (line, VAT, neutral kind, split) moves to the entry instead of staying behind on the
+ * hidden bank line, and the entry does not reappear as open. An entry with a decision of its own keeps it.
+ */
+export const carryLiteEurDecisionInTransaction = async (db: PostgresTransactionClient, scope: TenantScope, transactionId: string, entryId: string, mutation: AccountingMutationContext): Promise<void> => {
+  const { reason, actor } = assertMutation(mutation);
+  const own = (table: string, sourceType: string, sourceId: string) => q(db, `SELECT * FROM ${table} WHERE tenant_id=$1 AND source_type=$2 AND source_id=$3`, [scope.tenantId, sourceType, sourceId]);
+  const classifications = await own('eur_classifications', 'transaction', transactionId);
+  const facts = await own('eur_cash_facts', 'transaction', transactionId);
+  const entryYears = new Set([...await own('eur_classifications', 'manual', entryId), ...await own('eur_cash_facts', 'manual', entryId)].map((row) => Number(row.tax_year)));
+  for (const taxYear of new Set([...classifications, ...facts].map((row) => Number(row.tax_year)))) {
+    if (entryYears.has(taxYear)) continue;
+    const row = classifications.find((candidate) => Number(candidate.tax_year) === taxYear);
+    const fact = facts.find((candidate) => Number(candidate.tax_year) === taxYear);
+    const kind = fact && ['private-withdrawal', 'private-contribution', 'transit'].includes(String(fact.kind)) ? String(fact.kind) as EurNeutralKind : undefined;
+    const eurLineId = (row?.eur_line_id ?? fact?.eur_line_id ?? undefined) as string | undefined;
+    if (!kind && !eurLineId && row?.excluded !== true) continue;
+    let source: Awaited<ReturnType<typeof assertServerEurCashSource>>;
+    try { source = await assertServerEurCashSource(db, scope, 'manual', entryId, 'lite', taxYear); } catch { continue; }
+    const vatMode = row?.vat_mode === 'default' ? 'default' as const : 'none' as const;
+    const vatRate = row?.vat_rate == null ? undefined : Number(row.vat_rate);
+    // A split is kept in its proportions on the entry's net, which a reviewed receipt can set differently.
+    const oldSplits = (typeof fact?.splits_json === 'string' ? JSON.parse(fact.splits_json) : fact?.splits_json ?? undefined) as EurExpenseSplit[] | undefined;
+    let splits: EurExpenseSplit[] | undefined;
+    if (oldSplits?.length && eurLineId) {
+      const { smallBusiness } = await assertServerEurProfile(db, scope, { taxYear });
+      const gross = Math.abs(source.amountGross);
+      const net = cents(source.sourceNet !== undefined ? Math.abs(source.sourceNet) : smallBusiness || vatMode !== 'default' ? gross : gross / (1 + (vatRate ?? 0) / 100));
+      const total = oldSplits.reduce((sum, split) => sum + cents(split.amountNet), 0);
+      let left = net;
+      splits = oldSplits.map((split, index) => {
+        const part = index === oldSplits.length - 1 ? left : Math.round(net * cents(split.amountNet) / (total || 1));
+        left -= part;
+        return { ...split, amountNet: part / 100 };
+      });
+    }
+    await saveClassificationInTransaction(db, scope, { sourceType: 'manual', sourceId: entryId, taxYear, eurLineId, excluded: row?.excluded === true, vatMode, vatRate, note: row?.note ? String(row.note) : undefined, kind, splits, product: 'lite', mutation });
+    const now = new Date().toISOString();
+    for (const [table, entityType, old] of [['eur_classifications', 'eur_classification', row], ['eur_cash_facts', 'eur_cash_fact', fact]] as const) {
+      if (!old) continue;
+      await db.query(`DELETE FROM ${table} WHERE tenant_id=$1 AND id=$2`, [scope.tenantId, old.id]);
+      await appendWithClient(db, scope, { occurredAt: now, action: 'delete', reason: `${reason} (übernommen von der Buchung ${entryId})`, actor: { type: 'user', id: actor.id, displayName: actor.displayName }, subject: { entityType, entityId: `transaction:${transactionId}:${taxYear}`, tenantId: scope.tenantId }, change: { before: old, after: null } });
+    }
+  }
 };
 
 const saveServerEurCashFactInTransaction = async (db: PostgresTransactionClient, scope: TenantScope, input: SaveServerEurCashFactInput): Promise<ServerEurCashFact> => {

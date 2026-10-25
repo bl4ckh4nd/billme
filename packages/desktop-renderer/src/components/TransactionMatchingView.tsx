@@ -8,6 +8,7 @@ import { Link2, Unlink, CheckCircle2, Search, X, Layers, Check, Ban, TriangleAle
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { getRendererProduct, ipc } from '../runtime-api';
 import { Spinner } from '../ui/components/Spinner';
+import { useSettingsQuery } from '../hooks/useSettings';
 import { isNeutralEurKind, neutralEurKindLabels, type NeutralEurKind } from './eur/categories';
 import type { Transaction, Invoice as InvoiceType } from '@billme/desktop-core/types';
 
@@ -197,6 +198,9 @@ export const TransactionMatchingView: React.FC<{ initialTab?: MatchingTab }> = (
   const [eurLineId, setEurLineId] = useState('');
   const [eurVatMode, setEurVatMode] = useState<'none' | 'default'>('none');
   const [eurVatRate, setEurVatRate] = useState<number | undefined>(undefined);
+  const { data: settings } = useSettingsQuery();
+  const configuredVatRate = settings?.legal?.defaultVatRate ?? 0;
+  const standardVatRate = configuredVatRate > 0 ? configuredVatRate : 19;
   const [eurDecision, setEurDecision] = useState<EurDecision>('flow');
   const eurExcluded = eurDecision !== 'flow';
   const [eurReason, setEurReason] = useState('');
@@ -329,12 +333,14 @@ export const TransactionMatchingView: React.FC<{ initialTab?: MatchingTab }> = (
         excluded: eurDecision === 'excluded',
         kind: isNeutralEurKind(eurDecision) ? eurDecision : undefined,
         vatMode: eurVatMode,
-        vatRate: isProProduct ? eurVatRate : undefined,
+        vatRate: eurVatRate,
         reason,
       });
       setEurUndo({ label: 'Einzelklassifizierung', reason, changes: [change] });
       await invalidateEur();
       showNotification('EÜR-Klassifizierung gespeichert', 'success');
+    } catch (error) {
+      showNotification(error instanceof Error ? error.message : String(error), 'error');
     } finally {
       setEurPending(false);
     }
@@ -377,7 +383,7 @@ export const TransactionMatchingView: React.FC<{ initialTab?: MatchingTab }> = (
             sourceId: item.sourceId,
             taxYear,
             ...resolved,
-            vatRate: isProProduct ? resolved.vatRate : undefined,
+            vatRate: resolved.vatRate,
             reason,
           });
         }),
@@ -386,6 +392,8 @@ export const TransactionMatchingView: React.FC<{ initialTab?: MatchingTab }> = (
       setEurSelected(new Set());
       await invalidateEur();
       showNotification(`${selectedEurItems.length} Einträge klassifiziert`, 'success');
+    } catch (error) {
+      showNotification(error instanceof Error ? error.message : String(error), 'error');
     } finally {
       setEurPending(false);
     }
@@ -405,7 +413,7 @@ export const TransactionMatchingView: React.FC<{ initialTab?: MatchingTab }> = (
             excluded: item.prevExcluded,
             kind: item.prevKind,
             vatMode: item.prevVatMode,
-            vatRate: isProProduct ? item.prevVatRate : undefined,
+            vatRate: item.prevVatRate,
             reason: `Undo: ${eurUndo.label}; ursprüngliche Begründung: ${eurUndo.reason}`,
           }),
         ),
@@ -413,6 +421,8 @@ export const TransactionMatchingView: React.FC<{ initialTab?: MatchingTab }> = (
       setEurUndo(null);
       await invalidateEur();
       showNotification('Letzte Aktion rückgängig gemacht', 'info');
+    } catch (error) {
+      showNotification(error instanceof Error ? error.message : String(error), 'error');
     } finally {
       setEurPending(false);
     }
@@ -477,7 +487,8 @@ export const TransactionMatchingView: React.FC<{ initialTab?: MatchingTab }> = (
           onChange={setActiveTab}
           options={[
             { value: 'matching', label: 'Rechnungen zuordnen' },
-            { value: 'eur', label: 'EÜR klassifizieren' },
+            // Doppelte Buchführung (Pro) books bank lines in Buchen; there is no EÜR to classify.
+            ...(isProProduct && settings?.businessReportingProfile?.profitDetermination === 'double_entry' ? [] : [{ value: 'eur' as const, label: 'EÜR klassifizieren' }]),
           ]}
         />
         {activeTab === 'matching' ? (
@@ -550,6 +561,7 @@ export const TransactionMatchingView: React.FC<{ initialTab?: MatchingTab }> = (
             <Card padding="none" className="overflow-hidden">
               <CardHeader
                 title={listSummary}
+                subtitle={isProProduct ? 'Nur Zahlungseingänge. Ausgaben und Erstattungen stehen unter Offene Posten.' : 'Nur Zahlungseingänge. Rücklastschriften, Erstattungen und Zahlungen an Lieferanten ordnest du unter Buchen zu.'}
                 actions={
                   <Button variant="secondary" size="sm" onClick={() => setShowLinked(!showLinked)} aria-pressed={showLinked}>
                     {toggleVisibilityLabel}
@@ -594,6 +606,9 @@ export const TransactionMatchingView: React.FC<{ initialTab?: MatchingTab }> = (
                         </span>
                         <span className="mt-1 flex flex-wrap items-center gap-1.5">
                           <span className="text-caption tabular-nums text-muted">{formatDate(transaction.date)}</span>
+                          {transaction.status === 'pending' && (
+                            <span title="Von der Bank noch nicht gebucht; zählt erst nach dem nächsten Import als gebucht in EÜR und Umsatzsteuer."><Badge tone="warning">Vorgemerkt</Badge></span>
+                          )}
                           {transaction.linkedInvoiceId && (
                             <Badge tone="success"><Link2 size={12} aria-hidden="true" />Zugeordnet</Badge>
                           )}
@@ -864,7 +879,7 @@ export const TransactionMatchingView: React.FC<{ initialTab?: MatchingTab }> = (
                             </span>
                           </span>
                           <span className="mt-1 flex flex-wrap items-center gap-1.5">
-                            <span className="text-caption tabular-nums text-muted">{item.date}</span>
+                            <span className="text-caption tabular-nums text-muted">{formatDate(item.date)}</span>
                             <span className="text-caption text-muted">{item.flowType === 'income' ? 'Einnahme' : 'Ausgabe'}</span>
                             {item.classification?.excluded ? (
                               <Badge tone="error">Ausgeschlossen</Badge>
@@ -961,14 +976,18 @@ export const TransactionMatchingView: React.FC<{ initialTab?: MatchingTab }> = (
                       id="tm-eur-vat-mode"
                       label="USt. Modus"
                       value={eurVatMode}
-                      onChange={(e) => setEurVatMode(e.target.value as 'none' | 'default')}
+                      onChange={(e) => {
+                        const next = e.target.value as 'none' | 'default';
+                        setEurVatMode(next);
+                        if (next === 'default' && eurVatRate === undefined) setEurVatRate(standardVatRate);
+                      }}
                       fullWidth
                     >
-                      <option value="none">Keine USt. Umrechnung</option>
-                      <option value="default">Default USt. (Netto)</option>
+                      <option value="none">Ohne Umsatzsteuer</option>
+                      <option value="default">Mit Umsatzsteuer (netto rechnen)</option>
                     </Select>
 
-                    {isProProduct && eurVatMode === 'default' && (
+                    {eurVatMode === 'default' && (
                       <div>
                         <Input
                           id="tm-eur-vat-rate"

@@ -57,8 +57,9 @@ test('DATEV numbers are set in the settings, a classified bank expense is export
   await expect(page.getByText(/DATEV-Export: Beraternummer/)).toBeVisible();
   expect((await getDesktopSettings(page)).datev).toBeUndefined();
   await page.getByLabel('Beraternummer').fill('1234567');
-  await page.getByLabel('Kontenrahmen der Steuerberatung').selectOption('SKR03');
-  await expect(page.getByText(/billme Lite führt selbst keine Konten/)).toBeVisible();
+  // Lite keeps no ledger: no Kontenrahmen or Sachkontenlänge on screen; the export uses SKR03 with 4 digits.
+  await expect(page.getByLabel('Kontenrahmen')).toHaveCount(0);
+  await expect(page.getByLabel('Sachkontenlänge')).toHaveCount(0);
   await shot('datev-settings');
   await page.getByRole('button', { name: 'Einstellungen speichern' }).click();
   await expect.poll(async () => (await getDesktopSettings(page)).datev ?? null)

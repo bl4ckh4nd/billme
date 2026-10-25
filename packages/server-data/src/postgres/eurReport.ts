@@ -72,10 +72,15 @@ export interface ServerEurCashItem {
   suggestionLayer?: 'rule' | 'counterparty' | 'keyword';
   /** A neutral kind suggested instead of a line: the other leg of a transfer, or a private tax payment. */
   suggestedKind?: 'transit' | 'private-withdrawal' | 'private-contribution';
+  /** Lite: the VAT that goes with the suggested line when it is known (partner history, a tax-free line, the tax of the invoice or receipt). */
+  suggestedVatMode?: 'none' | 'default';
+  suggestedVatRate?: number;
   kind?: 'income' | 'expense' | 'private-withdrawal' | 'private-contribution' | 'pass-through' | 'transit';
   /** Lite: a Geldtransit leg whose counterpart (other own account, same amount, other direction) is not found. */
   transitHint?: string;
   splits?: EurExpenseSplit[];
+  /** Lite: the receipt number of a manual entry (DATEV Belegfeld 1). */
+  documentNumber?: string;
   classification?: {
     id: string;
     sourceType: 'transaction' | 'invoice' | 'manual';
@@ -120,6 +125,7 @@ type CashSource = {
   warning?: string;
   /** A cash entry matched to a bank line of the other direction: a Barabhebung or Bareinzahlung, one Geldtransit. */
   transit?: boolean;
+  documentNumber?: string;
 };
 
 type EurProduct = 'lite' | 'pro';
@@ -217,7 +223,7 @@ const listCashSources = async (db: PostgresQueryable, scope: TenantScope, from: 
       const rates = Array.isArray(receipt?.taxBreakdown) ? receipt.taxBreakdown as Array<{ netAmountCents: number; vatAmountCents: number }> : [];
       const receiptNet = rates.reduce((sum, rate) => sum + Number(rate.netAmountCents) + (row.flow_type === 'expense' ? Number(rate.vatAmountCents) * (1 - Number(receipt?.deductiblePercent ?? 0) / 100) : 0), 0);
       const receiptGross = Number(receipt?.grossAmountCents);
-      result.push({ sourceType: 'manual', sourceId: String(row.id), date, amountGross: gross, flowType: row.flow_type === 'expense' ? 'expense' : 'income', accountId: row.account_id ? String(row.account_id) : undefined, paymentMethod: row.payment_method ? String(row.payment_method) as CashPaymentMethod : undefined, counterparty: String(row.counterparty), purpose: `${String(row.purpose)}${yearOf(date) !== taxYear ? TEN_DAY_NOTE : ''}`, sourceNet: receipt?.reviewed && receiptGross !== 0 && Number.isFinite(receiptGross) ? round(gross * receiptNet / receiptGross) : undefined, transit: Boolean(row.bank_type) && row.bank_type !== row.flow_type });
+      result.push({ sourceType: 'manual', sourceId: String(row.id), date, amountGross: gross, flowType: row.flow_type === 'expense' ? 'expense' : 'income', accountId: row.account_id ? String(row.account_id) : undefined, paymentMethod: row.payment_method ? String(row.payment_method) as CashPaymentMethod : undefined, counterparty: String(row.counterparty), purpose: `${String(row.purpose)}${yearOf(date) !== taxYear ? TEN_DAY_NOTE : ''}`, sourceNet: receipt?.reviewed && receiptGross !== 0 && Number.isFinite(receiptGross) ? round(gross * receiptNet / receiptGross) : undefined, transit: Boolean(row.bank_type) && row.bank_type !== row.flow_type, documentNumber: typeof receipt?.number === 'string' && receipt.number.trim() ? receipt.number.trim() : undefined });
     }
     for (const bank of transactions) {
       if (representedManual.has(bank.id)) continue;
@@ -294,7 +300,8 @@ const listCashSources = async (db: PostgresQueryable, scope: TenantScope, from: 
       classificationSourceIds: [payment.bank_id, payment.source_transaction_id].filter((id): id is string => typeof id === 'string' && id.length > 0),
     });
   }
-  const banks = await q<Record<string, unknown>>(db, `SELECT id,account_id,date,amount,type,counterparty,purpose,linked_invoice_id FROM bank_transactions WHERE tenant_id=$1 AND status='booked' AND date >= $2 AND date <= $3 ORDER BY date,id`, [t, from, to]);
+  // The Pro EÜR profile has no booking-draft step: an imported (pending) bank line is money that flowed and is classified like a booked one.
+  const banks = await q<Record<string, unknown>>(db, `SELECT id,account_id,date,amount,type,counterparty,purpose,linked_invoice_id FROM bank_transactions WHERE tenant_id=$1 AND status IN ('booked','pending') AND date >= $2 AND date <= $3 ORDER BY date,id`, [t, from, to]);
   for (const bank of banks) {
     const id = String(bank.id);
     if (representedBanks.has(id)) continue;
@@ -330,10 +337,19 @@ const markTransitPairs = (items: ServerEurCashItem[]): void => {
       const other = counterpart(item, (candidate) => open(candidate) || candidate.kind === 'transit');
       if (other) { item.suggestedKind = 'transit'; item.suggestionReason = `Gegenbuchung vom ${other.date.split('-').reverse().join('.')} auf einem anderen eigenen Konto: Geldtransit?`; item.suggestionLayer = 'keyword'; }
     } else if (item.kind === 'transit' && !counterpart(item, (candidate) => candidate.kind === 'transit')) {
-      item.transitHint = 'Geldtransit ohne Gegenstück (gleicher Betrag, anderes eigenes Konto, höchstens fünf Tage Abstand); bitte prüfen.';
+      const waiting = counterpart(item, open);
+      item.transitHint = waiting
+        ? `Die Gegenbuchung vom ${waiting.date.split('-').reverse().join('.')} ist noch offen; bitte dort ebenfalls „Geldtransit“ wählen.`
+        : 'Geldtransit ohne Gegenstück (gleicher Betrag, anderes eigenes Konto, höchstens fünf Tage Abstand); bitte prüfen.';
     }
   }
 };
+
+/**
+ * Lines whose payments carry no VAT of their own: Kleinunternehmer and tax-free income, wages, insurance
+ * (§ 4 Nr. 10 UStG) and memberships, gifts over 50 € (§ 15 Abs. 1a UStG), and the tax payments themselves.
+ */
+const TAX_FREE_KENNZIFFERN = new Set(['111', '103', '120', '223', '164', '140', '141', '185', '186']);
 
 const toNet = (gross: number, classification: ClassificationRow | undefined, sourceNet: number | undefined, smallBusiness: boolean, sourceId: string): { amountNet: number; warning?: string } => {
   if (smallBusiness) return { amountNet: round(gross) };
@@ -371,6 +387,8 @@ export const listServerEurCashItems = async (db: PostgresQueryable, scope: Tenan
   const classifications = await loadClassifications(db, scope, taxYear);
   const facts = new Map((await q<Record<string, unknown>>(db, `SELECT id,source_type,source_id,kind,amount_net,eur_line_id,splits_json FROM eur_cash_facts WHERE tenant_id=$1 AND tax_year=$2`, [tenant(scope), taxYear])).map((fact) => [`${fact.source_type}:${fact.source_id}`, fact]));
   const items: ServerEurCashItem[] = [];
+  /** Items whose net comes from the invoice or a reviewed receipt, so no rate is needed. */
+  const taxFromSource = new Set<ServerEurCashItem>();
   for (const source of await listCashSources(db, scope, from, to, product)) {
     const basis = await invoiceBasis(db, scope, source, source.amountGross);
     const classification = classifications.get(`${source.sourceType}:${source.sourceId}`)
@@ -382,8 +400,9 @@ export const listServerEurCashItems = async (db: PostgresQueryable, scope: Tenan
       ?? (source.invoiceId ? facts.get(`invoice:${source.invoiceId}`) : undefined);
     const persistedClassification = classification ?? (fact ? { id: String(fact.id), source_type: source.sourceType, source_id: source.sourceId, eur_line_id: fact.eur_line_id ? String(fact.eur_line_id) : null, excluded: false, vat_mode: 'none', vat_rate: null, note: null, updated_at: '' } : undefined);
     const legacyInvoiceFact = product === 'lite' && fact && fact.source_type === 'invoice' && fact.source_id !== source.sourceId;
-    items.push({ sourceType: source.sourceType, sourceId: source.sourceId, date: source.date, taxYear, amountGross: source.amountGross, amountNet: source.transit ? Math.abs(source.amountGross) : fact && !legacyInvoiceFact ? Number(fact.amount_net) : net.amountNet, flowType: source.flowType, accountId: source.accountId, paymentMethod: source.paymentMethod, linkedViaInvoice: source.linkedViaInvoice, counterparty: basis.counterparty ?? source.counterparty, purpose: source.purpose?.endsWith(TEN_DAY_NOTE) && basis.purpose && !basis.purpose.endsWith(TEN_DAY_NOTE) ? `${basis.purpose}${TEN_DAY_NOTE}` : basis.purpose ?? source.purpose, vatWarning: source.warning ?? (legacyInvoiceFact ? `LEGACY_CASH_FACT_REVIEW_REQUIRED:${source.invoiceId}` : net.warning), kind: source.transit ? 'transit' : fact?.kind as ServerEurCashItem['kind'] | undefined, splits: fact?.splits_json && !legacyInvoiceFact ? parseJsonArray(fact.splits_json) as EurExpenseSplit[] : undefined, classification: persistedClassification ? { id: persistedClassification.id, sourceType: source.sourceType, sourceId: source.sourceId, taxYear, eurLineId: persistedClassification.eur_line_id ?? undefined, excluded: Boolean(persistedClassification.excluded), vatMode: persistedClassification.vat_mode === 'default' ? 'default' : 'none', vatRate: persistedClassification.vat_rate == null ? undefined : Number(persistedClassification.vat_rate), note: persistedClassification.note ?? undefined, updatedAt: persistedClassification.updated_at ?? '' } : undefined });
+    items.push({ sourceType: source.sourceType, sourceId: source.sourceId, date: source.date, taxYear, amountGross: source.amountGross, amountNet: source.transit ? Math.abs(source.amountGross) : fact && !legacyInvoiceFact ? Number(fact.amount_net) : net.amountNet, flowType: source.flowType, accountId: source.accountId, paymentMethod: source.paymentMethod, linkedViaInvoice: source.linkedViaInvoice, counterparty: basis.counterparty ?? source.counterparty, purpose: source.purpose?.endsWith(TEN_DAY_NOTE) && basis.purpose && !basis.purpose.endsWith(TEN_DAY_NOTE) ? `${basis.purpose}${TEN_DAY_NOTE}` : basis.purpose ?? source.purpose, vatWarning: source.warning ?? (legacyInvoiceFact ? `LEGACY_CASH_FACT_REVIEW_REQUIRED:${source.invoiceId}` : net.warning), kind: source.transit ? 'transit' : fact?.kind as ServerEurCashItem['kind'] | undefined, splits: fact?.splits_json && !legacyInvoiceFact ? parseJsonArray(fact.splits_json) as EurExpenseSplit[] : undefined, documentNumber: source.documentNumber, classification: persistedClassification ? { id: persistedClassification.id, sourceType: source.sourceType, sourceId: source.sourceId, taxYear, eurLineId: persistedClassification.eur_line_id ?? undefined, excluded: Boolean(persistedClassification.excluded), vatMode: persistedClassification.vat_mode === 'default' ? 'default' : 'none', vatRate: persistedClassification.vat_rate == null ? undefined : Number(persistedClassification.vat_rate), note: persistedClassification.note ?? undefined, updatedAt: persistedClassification.updated_at ?? '' } : undefined });
     items[items.length - 1].vatAmountCash = round(source.amountGross - net.amountNet);
+    if (basis.sourceNet !== undefined) taxFromSource.add(items[items.length - 1]);
   }
   if (product === 'lite') markTransitPairs(items);
   // Both products show the rules button and the suggestion in the EÜR view.
@@ -416,6 +435,26 @@ export const listServerEurCashItems = async (db: PostgresQueryable, scope: Tenan
         ? resolveEurCodeToLine(smallBusiness ? '111' : '112', 'Rechnungszahlung; bitte Kategorie prüfen', lines)
         : suggestEurLine(item, lines);
       item.suggestedLineId = suggestion.lineId; item.suggestedKind = suggestion.kind; item.suggestionReason = suggestion.reason; item.suggestionLayer = suggestion.lineId || suggestion.kind ? 'keyword' : undefined;
+    }
+    // Lite: the VAT that goes with a suggested line, only where it is known; an unknown rate stays unset
+    // so "Vorschlag anwenden" asks for it instead of booking the gross amount without Vorsteuer.
+    if (product === 'lite') {
+      const partnerVat = new Map<string, Set<string>>();
+      for (const other of items) {
+        const chosen = other.classification;
+        if (!chosen?.eurLineId || chosen.excluded || (chosen.vatMode === 'default' && chosen.vatRate === undefined)) continue;
+        const key = partnerKey(other);
+        partnerVat.set(key, (partnerVat.get(key) ?? new Set()).add(chosen.vatMode === 'default' ? String(chosen.vatRate) : 'none'));
+      }
+      const kennziffer = new Map(lines.map((line) => [line.id, line.kennziffer]));
+      for (const item of items) {
+        if (!item.suggestedLineId || item.classification?.eurLineId || item.classification?.excluded || item.kind) continue;
+        const known = partnerVat.get(partnerKey(item));
+        const remembered = item.counterparty.trim() && known?.size === 1 ? [...known][0]! : undefined;
+        if (smallBusiness || taxFromSource.has(item) || (!remembered && TAX_FREE_KENNZIFFERN.has(kennziffer.get(item.suggestedLineId) ?? ''))) item.suggestedVatMode = 'none';
+        else if (remembered === 'none') item.suggestedVatMode = 'none';
+        else if (remembered) { item.suggestedVatMode = 'default'; item.suggestedVatRate = Number(remembered); }
+      }
     }
   }
   return items.sort((left, right) => left.date === right.date ? left.sourceId.localeCompare(right.sourceId) : left.date.localeCompare(right.date));

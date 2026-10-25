@@ -18,6 +18,8 @@ import {
   resolveInvoiceTaxMode,
   resolveIssueTaxMode,
   prepareClientForUpsert,
+  clientMasterdataError,
+  settingsMasterdataError,
   createSingleTenantScope,
   createCancellationInvoiceAsync,
   createCreditNoteAsync,
@@ -40,6 +42,8 @@ import {
   serverProductSchema,
   supportedServerProducts,
   supportedServerRoles,
+  ibanError,
+  normalizeIban,
   type ServerRole,
   type TenantScope,
 } from '@billme/server-core';
@@ -59,6 +63,10 @@ import {
   readDatabaseUrl,
   assertDrizzleSchemaCurrent,
   saveServerArticle,
+  applyProSettingsToAccountingPolicy,
+  postDunningFeeInTransaction,
+  reverseAssetSaleInTransaction,
+  saveProServerBankAccount,
   saveServerBankAccount,
   saveServerSettings,
   createPostgresProjectRepository,
@@ -286,7 +294,7 @@ const mapArticleRecord = (record: Awaited<ReturnType<typeof listServerArticles>>
 // number. Pro clients still send one and validate it against the strict Pro
 // schema before the request, so the guarantee stays where it belongs.
 const serverAccountSchema = accountSchema.extend({
-  defaultSkrAccountNumber: z.string().min(1).optional(),
+  defaultSkrAccountNumber: z.string().optional(),
 });
 const serverUpsertAccountPayloadSchema = z.object({ account: serverAccountSchema });
 
@@ -374,6 +382,8 @@ const registerBillingRoutes = (app: FastifyInstance, product: 'lite' | 'pro', pr
         await transaction.query('SELECT id FROM clients WHERE tenant_id=$1 AND id=$2 FOR UPDATE', [session.scope.tenantId, body.client.id]);
         const repositories = createPostgresBillingDependencies(transaction);
         const before = await repositories.clientRepo.getById(session.scope, body.client.id);
+        const masterdataError = clientMasterdataError(body.client, before);
+        if (masterdataError) throw new ApiError(400, masterdataError);
         const reservation = !body.client.customerNumber?.trim() && !before?.customerNumber?.trim()
           ? await reserveDocumentNumber(numbering, 'customer') : null;
         const clients = await repositories.clientRepo.list(session.scope);
@@ -539,6 +549,21 @@ const registerBillingRoutes = (app: FastifyInstance, product: 'lite' | 'pro', pr
           await postOpenedBillingDocument(transaction, session.scope, after, issuanceReservationId, createMutationContext(session, body.reason));
         }
         if ((!before || before.status === 'draft') && after.status === 'open') await settleCorrectedSource(transaction, session, after, body.reason);
+        // "Mahnung erstellen" in the invoice view raises the level by saving the invoice: record each new level with its
+        // fee in the dunning history (once per level) and let Pro book the fee, like a reminder sent by the dunning run.
+        if (before && before.status !== 'draft' && (after.dunningLevel ?? 0) > (before.dunningLevel ?? 0)) {
+          const levels = parseStoredSettings(await getServerSettings(transaction, session.scope.tenantId))?.dunning.levels ?? [];
+          const historyRepo = repositories.dunningHistoryRepo;
+          const recorded = new Set((await historyRepo.listByInvoice(session.scope, after.id)).map((entry) => entry.dunningLevel));
+          const date = localIsoDate(new Date());
+          const daysOverdue = Math.max(0, Math.round((Date.parse(`${date}T12:00:00`) - Date.parse(`${after.dueDate.slice(0, 10)}T12:00:00`)) / 86_400_000));
+          for (let level = (before.dunningLevel ?? 0) + 1; level <= after.dunningLevel!; level += 1) {
+            if (recorded.has(level)) continue;
+            const fee = ['paid', 'cancelled'].includes(after.status) ? 0 : Math.round((levels.find((entry) => entry.id === level)?.fee ?? 0) * 100) / 100;
+            await historyRepo.record(session.scope, { invoiceId: after.id, invoiceNumber: after.number, dunningLevel: level, daysOverdue, feeApplied: fee, emailSent: false, processedAt: new Date().toISOString() });
+            await postDunningFeeInTransaction(transaction, session.scope, { invoiceId: after.id, level, fee, date, mutation: createMutationContext(session, body.reason) });
+          }
+        }
         return after;
       });
       return withInvoiceHistory(database, session.scope, saved);
@@ -702,6 +727,10 @@ const registerBillingRoutes = (app: FastifyInstance, product: 'lite' | 'pro', pr
           throw new ApiError(404, 'Invoice not found');
         }
         if (existing.status !== 'draft') throw new ApiError(409, 'Gestellte Rechnungen können nicht gelöscht werden. Bitte eine Gutschrift oder Stornorechnung erstellen.');
+        // A deleted sale draft of an asset takes the sale back (Pro): book value and AfA of the sale are reversed today.
+        if (product === 'pro' && existing.taxMeta?.assetSaleAssetId) {
+          await reverseAssetSaleInTransaction(transaction, session.scope, { invoiceId: existing.id, reason: body.reason, postingDate: localIsoDate(new Date()), mutation: createMutationContext(session, body.reason) });
+        }
         await repositories.invoiceRepo.remove(session.scope, params.id);
         // The draft's number goes back to the pool (older drafts carry a finalized reservation).
         await transaction.query(
@@ -949,6 +978,8 @@ const registerBillingRoutes = (app: FastifyInstance, product: 'lite' | 'pro', pr
         await transaction.query('SELECT tenant_id FROM server_settings WHERE tenant_id=$1 FOR UPDATE', [session.scope.tenantId]);
         const before = parseStoredSettings(await getServerSettings(transaction, session.scope.tenantId));
         const after = appSettingsSchema.parse(body.settings);
+        const masterdataError = settingsMasterdataError(after, before ?? undefined);
+        if (masterdataError) throw new ApiError(400, masterdataError);
         // Soll/Ist changes take effect from a period start, never retroactively for filed months:
         // without an explicit start the change applies from the first day of the current month.
         // Choosing the method during onboarding is no switch: it applies to the whole history.
@@ -956,6 +987,13 @@ const registerBillingRoutes = (app: FastifyInstance, product: 'lite' | 'pro', pr
           const explicit = after.legal.taxAccountingMethodSince && after.legal.taxAccountingMethodSince !== before.legal.taxAccountingMethodSince;
           after.legal.previousTaxAccountingMethod = before.legal.taxAccountingMethod;
           if (!explicit) after.legal.taxAccountingMethodSince = `${localIsoDate(new Date()).slice(0, 8)}01`;
+        }
+        // Pro: a changed chart or Soll/Ist becomes the posting policy (refused for a chart switch after the first posting).
+        if (product === 'pro') {
+          await applyProSettingsToAccountingPolicy(transaction, session.scope, {
+            activeChart: after.businessReportingProfile?.chart !== before?.businessReportingProfile?.chart ? after.businessReportingProfile?.chart : undefined,
+            vatMethod: after.legal.taxAccountingMethod !== before?.legal.taxAccountingMethod ? after.legal.taxAccountingMethod : undefined,
+          }, createMutationContext(session, body.reason));
         }
         await saveServerSettings(transaction, {
           tenantId: session.scope.tenantId,
@@ -1191,16 +1229,23 @@ const registerCatalogRoutes = (app: FastifyInstance, product: 'lite' | 'pro', pr
     response: serverAccountSchema,
     async handler({ request, body }) {
       const session = await requireMutationSessionFor(app, product, request.headers.authorization);
-      const saved = await saveServerBankAccount(requireDatabase(app), {
+      // One spelling for every IBAN, so own-account matching compares like with like.
+      const invalidIban = ibanError(body.account.iban);
+      if (invalidIban) throw new ApiError(400, invalidIban);
+      const record = {
         id: body.account.id,
         tenantId: session.scope.tenantId,
         name: body.account.name,
-        iban: body.account.iban,
+        iban: normalizeIban(body.account.iban),
         balance: body.account.balance,
-        defaultSkrAccountNumber: body.account.defaultSkrAccountNumber,
+        defaultSkrAccountNumber: body.account.defaultSkrAccountNumber?.trim() || undefined,
         type: body.account.type,
         color: body.account.color,
-      });
+      };
+      // Pro books the bank account on its ledger account: only a money account, a blank one takes the bank role.
+      const saved = product === 'pro'
+        ? await saveProServerBankAccount(requireDatabase(app), session.scope, record)
+        : await saveServerBankAccount(requireDatabase(app), record);
       return mapAccountRecord(saved);
     },
   });
@@ -1480,6 +1525,8 @@ export const buildServerApi = async (options: BuildServerApiOptions = {}): Promi
     methods: ['GET', 'HEAD', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
     allowedHeaders: ['authorization', 'content-type', 'x-billme-local-token'],
     exposedHeaders: [
+      // The browser shells name PDF downloads after the document from this header.
+      'content-disposition',
       'x-billme-datev-export-id',
       'x-billme-datev-content-sha256',
       'x-billme-datev-record-count',

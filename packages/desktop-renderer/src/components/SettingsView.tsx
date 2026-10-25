@@ -12,7 +12,8 @@ import {
 } from '@billme/ui';
 import { Spinner } from '../ui/components/Spinner';
 import type { AppSettings, BusinessReportingProfile, DunningLevel } from '@billme/desktop-core/types';
-import { getRendererProduct, getRendererRuntime, ipc } from '../runtime-api';
+import { READ_ONLY_HINT, canMutate, getRendererProduct, getRendererRuntime, ipc } from '../runtime-api';
+import { DEFAULT_DUNNING_LEVELS } from '@billme/desktop-services/mockData';
 import { datevSettingsSchema } from '@billme/desktop-contracts/schemas';
 import { useSetSettingsMutation, useSettingsQuery } from '../hooks/useSettings';
 import { useQueryClient } from '@tanstack/react-query';
@@ -20,6 +21,8 @@ import { v4 as uuidv4 } from 'uuid';
 import { DunningResultModal } from '../ui/components/DunningResultModal';
 import { DunningLevelPreviewModal } from '../ui/components/DunningLevelPreviewModal';
 import { CliAccessSection } from './CliAccessSection';
+import { bicError, ibanError, vatIdError, zipError } from '@billme/server-core';
+import { LEGAL_FORM_OPTIONS, isCapitalLegalForm, numberPrefixError } from '../ui/components/BusinessOnboarding';
 import { TeamSection } from './TeamSection';
 
 const canManageTeam = (): boolean => {
@@ -34,7 +37,7 @@ const normalizeCategoryName = (value: string): string => value.trim();
 const formatCount = (count: number, singular: string, plural: string): string => `${count} ${count === 1 ? singular : plural}`;
 
 const PROFIT_DETERMINATION_COPY: Record<BusinessReportingProfile['profitDetermination'], { label: string; hint: string }> = {
-  eur: { label: 'EÜR', hint: 'Für Einzelunternehmen, GbR und Freiberufler. Erfasst wird die Zahlung.' },
+  eur: { label: 'EÜR', hint: 'Für Einzelunternehmen, GbR und e.K., die nicht bilanzieren müssen. Erfasst wird die Zahlung.' },
   double_entry: { label: 'Doppelte Buchführung', hint: 'Für GmbH, UG und alle Buchführungspflichtigen. Soll an Haben, Bilanz und GuV.' },
 };
 
@@ -51,6 +54,34 @@ const inferBusinessReportingProfile = (settings: AppSettings): BusinessReporting
     vatMethod: settings.legal.taxAccountingMethod ?? 'soll',
   };
 };
+
+type FieldErrors = Partial<Record<'company.zip' | 'finance.iban' | 'finance.bic' | 'finance.vatId' | 'numbers.invoicePrefix' | 'numbers.offerPrefix', string>>;
+const FIELD_TAB: Record<keyof FieldErrors, SettingsTab> = {
+  'company.zip': 'company', 'finance.iban': 'finance', 'finance.bic': 'finance', 'finance.vatId': 'finance',
+  'numbers.invoicePrefix': 'numbers', 'numbers.offerPrefix': 'numbers',
+};
+
+/** The checks the server makes on save, at the field; an unchanged stored value passes like on the server. */
+const settingsFieldErrors = (settings: AppSettings, stored: AppSettings): FieldErrors => {
+  const errors: FieldErrors = {};
+  // `before` set: a value stored before the check existed passes until it is changed (the server does the same).
+  const check = (field: keyof FieldErrors, error: string | undefined, value?: string, before?: string) => {
+    if (error && (before === undefined || value !== before)) errors[field] = error;
+  };
+  check('company.zip', (settings.legal.countryCode ?? 'DE') === 'DE' ? zipError(settings.company.zip, 'DE') : undefined, settings.company.zip, stored.company.zip);
+  check('finance.iban', ibanError(settings.finance.iban));
+  check('finance.bic', bicError(settings.finance.bic), settings.finance.bic, stored.finance.bic);
+  check('finance.vatId', vatIdError(settings.finance.vatId), settings.finance.vatId, stored.finance.vatId);
+  const prefix = (field: 'invoicePrefix' | 'offerPrefix', label: string) => {
+    const value = settings.numbers[field];
+    check(`numbers.${field}`, !value.trim() ? `Bitte lege ein ${label}-Präfix fest.` : numberPrefixError(value));
+  };
+  prefix('invoicePrefix', 'Rechnungs');
+  prefix('offerPrefix', 'Angebots');
+  return errors;
+};
+
+const errorText = (error: unknown): string => (error instanceof Error ? error.message : String(error)).replace(/^(?:Error:\s*)+/, '');
 
 /** One settings group: a card on the ground with a lined head. `flush` leaves the body padding to the rows. */
 type DatevDraft = { consultantNumber: string; clientNumber: string; accountLength: number; chart: 'SKR03' | 'SKR04' };
@@ -165,6 +196,7 @@ const SettingsForm: React.FC<{ initialSettings: AppSettings }> = ({ initialSetti
   // Lite keeps no ledger: EÜR only, so neither GmbH nor double-entry can be chosen there.
   const isLite = getRendererProduct() !== 'pro';
   const { notify } = useActionFeedback('settings');
+  const [fieldErrors, setFieldErrors] = useState<FieldErrors>({});
 
   React.useEffect(() => {
     if (loadedSettings) {
@@ -196,6 +228,14 @@ const SettingsForm: React.FC<{ initialSettings: AppSettings }> = ({ initialSetti
     const datev = datevEmpty ? undefined : datevSettingsSchema.safeParse(datevDraft);
     if (datev && !datev.success) {
       notify('error', `DATEV-Export: ${datev.error.issues[0]?.message ?? 'Angaben unvollständig.'}`);
+      return;
+    }
+    const errors = settingsFieldErrors(settings, loadedSettings);
+    setFieldErrors(errors);
+    const firstError = Object.keys(errors)[0] as keyof FieldErrors | undefined;
+    if (firstError) {
+      setActiveTab(FIELD_TAB[firstError]);
+      notify('error', `Nicht gespeichert: ${errors[firstError]}`);
       return;
     }
     const normalizeCategoryList = (list: Array<{ id: string; name: string }>) => {
@@ -273,8 +313,13 @@ const SettingsForm: React.FC<{ initialSettings: AppSettings }> = ({ initialSetti
       },
     };
 
+    try {
+      await setSettingsMutation.mutateAsync(sanitizedSettings);
+    } catch (error) {
+      notify('error', `Einstellungen nicht gespeichert: ${errorText(error)}`);
+      return;
+    }
     setSettings(sanitizedSettings);
-    await setSettingsMutation.mutateAsync(sanitizedSettings);
 
     const nextKey = portalApiKey.trim();
     try {
@@ -336,13 +381,15 @@ const SettingsForm: React.FC<{ initialSettings: AppSettings }> = ({ initialSetti
 
   const updateReportingProfile = <K extends keyof BusinessReportingProfile>(field: K, value: BusinessReportingProfile[K]) => {
     setReportingProfile((current) => {
-      if (field === 'legalForm' && value === 'gmbh') {
-        return { ...current, legalForm: value, profitDetermination: 'double_entry', hgbSizeClass: current.hgbSizeClass ?? 'micro', chart: current.chart ?? 'SKR03' };
+      if (field === 'legalForm' && isCapitalLegalForm(value as BusinessReportingProfile['legalForm'])) {
+        return { ...current, legalForm: value as BusinessReportingProfile['legalForm'], profitDetermination: 'double_entry', hgbSizeClass: current.hgbSizeClass ?? 'micro', chart: current.chart ?? 'SKR03' };
       }
-      if (field === 'legalForm' && value === 'sole_proprietor') {
-        return { ...current, legalForm: value, profitDetermination: 'eur', hgbSizeClass: undefined };
+      if (field === 'legalForm') {
+        // Lite keeps an EÜR; in Pro a sole proprietor, GbR or e.K. keeps the chosen method.
+        return { ...current, legalForm: value as BusinessReportingProfile['legalForm'], profitDetermination: isLite ? 'eur' : current.profitDetermination, hgbSizeClass: undefined };
       }
-      if (field === 'profitDetermination' && value === 'eur' && current.legalForm === 'gmbh') return current;
+      if (field === 'profitDetermination' && value === 'eur' && isCapitalLegalForm(current.legalForm)) return current;
+      if (field === 'profitDetermination' && value === 'double_entry') return { ...current, profitDetermination: 'double_entry', chart: current.chart ?? 'SKR03' };
       return { ...current, [field]: value };
     });
   };
@@ -355,6 +402,26 @@ const SettingsForm: React.FC<{ initialSettings: AppSettings }> = ({ initialSetti
           dunning: { ...prev.dunning, levels: newLevels }
       }));
   };
+
+  // The level id is its ordinal: invoices store the reached level number, so ids stay 1..n.
+  const setDunningLevels = (levels: DunningLevel[]) => {
+    setSettings((prev) => ({ ...prev, dunning: { ...prev.dunning, levels: levels.map((level, index) => ({ ...level, id: index + 1 })) } }));
+  };
+  const addDunningLevel = () => {
+    const levels = settings.dunning.levels;
+    const last = levels[levels.length - 1];
+    const number = levels.length;
+    setDunningLevels([...levels, {
+      id: levels.length + 1,
+      name: number === 0 ? 'Zahlungserinnerung' : `${number}. Mahnung`,
+      enabled: true,
+      daysAfterDueDate: (last?.daysAfterDueDate ?? 0) + 14,
+      fee: last?.fee ?? 0,
+      subject: `${number === 0 ? 'Zahlungserinnerung' : `${number}. Mahnung`} zur Rechnung %N`,
+      text: 'Die Rechnung %N vom %D über %A ist weiterhin offen. Bitte überweisen Sie den Betrag umgehend.',
+    }]);
+  };
+  const removeDunningLevel = (index: number) => setDunningLevels(settings.dunning.levels.filter((_, position) => position !== index));
 
   const updateAutomation = (field: string, value: string | number | boolean) => {
     setSettings(prev => ({
@@ -425,7 +492,7 @@ const SettingsForm: React.FC<{ initialSettings: AppSettings }> = ({ initialSetti
     } catch (error) {
       setEmailTestStatus({
         success: false,
-        message: error instanceof Error ? error.message : String(error),
+        message: errorText(error),
       });
     } finally {
       setEmailTesting(false);
@@ -561,6 +628,7 @@ const SettingsForm: React.FC<{ initialSettings: AppSettings }> = ({ initialSetti
                 type="text"
                 fullWidth
                 value={settings.company.zip}
+                error={fieldErrors['company.zip']}
                 onChange={(e) => updateNested('company', 'zip', e.target.value)}
               />
             </div>
@@ -691,6 +759,7 @@ const SettingsForm: React.FC<{ initialSettings: AppSettings }> = ({ initialSetti
                 fullWidth
                 className="font-mono"
                 value={settings.finance.iban}
+                error={fieldErrors['finance.iban']}
                 onChange={(e) => updateNested('finance', 'iban', e.target.value)}
               />
               <Input
@@ -700,7 +769,8 @@ const SettingsForm: React.FC<{ initialSettings: AppSettings }> = ({ initialSetti
                 fullWidth
                 className="font-mono"
                 value={settings.finance.bic}
-                onChange={(e) => updateNested('finance', 'bic', e.target.value)}
+                error={fieldErrors['finance.bic']}
+                onChange={(e) => updateNested('finance', 'bic', e.target.value.toUpperCase())}
               />
             </div>
             <div className="grid grid-cols-2 gap-3 border-t border-border pt-3">
@@ -718,7 +788,9 @@ const SettingsForm: React.FC<{ initialSettings: AppSettings }> = ({ initialSetti
                 type="text"
                 fullWidth
                 value={settings.finance.vatId}
-                onChange={(e) => updateNested('finance', 'vatId', e.target.value)}
+                error={fieldErrors['finance.vatId']}
+                placeholder="DE123456789"
+                onChange={(e) => updateNested('finance', 'vatId', e.target.value.toUpperCase())}
               />
             </div>
             <Input
@@ -757,7 +829,8 @@ const SettingsForm: React.FC<{ initialSettings: AppSettings }> = ({ initialSetti
                 placeholder="1 bis 5 Ziffern"
               />
             </div>
-            <div className="grid grid-cols-2 gap-3">
+            {/* Lite keeps no ledger: chart and account length stay at the stored values (default SKR03, 4 digits). */}
+            {!isLite && <div className="grid grid-cols-2 gap-3">
               <Select
                 id="settings-datev-account-length"
                 label="Sachkontenlänge"
@@ -769,8 +842,7 @@ const SettingsForm: React.FC<{ initialSettings: AppSettings }> = ({ initialSetti
               </Select>
               <Select
                 id="settings-datev-chart"
-                label={isLite ? 'Kontenrahmen der Steuerberatung' : 'Kontenrahmen'}
-                hint={isLite ? 'billme Lite führt selbst keine Konten; der Export ordnet deine EÜR-Kategorien diesen Standardkonten zu.' : undefined}
+                label="Kontenrahmen"
                 fullWidth
                 value={datevDraft.chart}
                 onChange={(e) => setDatevDraft((draft) => ({ ...draft, chart: e.target.value as DatevDraft['chart'] }))}
@@ -778,7 +850,7 @@ const SettingsForm: React.FC<{ initialSettings: AppSettings }> = ({ initialSetti
                 <option value="SKR03">SKR03</option>
                 <option value="SKR04">SKR04</option>
               </Select>
-            </div>
+            </div>}
           </SettingsCard>
           </>
         );
@@ -786,7 +858,7 @@ const SettingsForm: React.FC<{ initialSettings: AppSettings }> = ({ initialSetti
         return (
           <SettingsCard
             title="Nummernkreise"
-            subtitle="Definieren Sie das Format für Ihre Rechnungs-, Angebots- und Kundennummern."
+            subtitle="Lege das Format deiner Rechnungs-, Angebots- und Kundennummern fest."
           >
             <section className="flex flex-col gap-3">
               <div className="flex flex-wrap items-baseline justify-between gap-2">
@@ -801,7 +873,8 @@ const SettingsForm: React.FC<{ initialSettings: AppSettings }> = ({ initialSetti
                   type="text"
                   fullWidth
                   className="font-mono"
-                  hint="%Y = Aktuelles Jahr (z.B. 2023)"
+                  hint="%Y = aktuelles Jahr (z. B. RE-%Y- ergibt RE-2026-)"
+                  error={fieldErrors['numbers.invoicePrefix']}
                   value={settings.numbers.invoicePrefix}
                   onChange={(e) => updateNested('numbers', 'invoicePrefix', e.target.value)}
                 />
@@ -855,6 +928,7 @@ const SettingsForm: React.FC<{ initialSettings: AppSettings }> = ({ initialSetti
                   fullWidth
                   className="font-mono"
                   value={settings.numbers.offerPrefix}
+                  error={fieldErrors['numbers.offerPrefix']}
                   onChange={(e) => updateNested('numbers', 'offerPrefix', e.target.value)}
                 />
                 <Input
@@ -990,16 +1064,13 @@ const SettingsForm: React.FC<{ initialSettings: AppSettings }> = ({ initialSetti
           </SettingsCard>
         );
       case 'email':
-        if (isWebShell) return <SettingsCard title="E-Mail im Serverbetrieb" subtitle="Versandanbieter und Zugangsdaten werden vom Betreiber am Server eingerichtet.">
-          <p className="text-control">Gespeicherter Anbieter: {settings.email.provider}. Der Verbindungstest verwendet die Serverkonfiguration.</p>
-          <Button className="mt-3" variant="secondary" loading={emailTesting} onClick={handleEmailTest}>Serververbindung prüfen</Button>
-          {emailTestStatus && <p role="status" className="mt-3 text-control">{emailTestStatus.message}</p>}
-        </SettingsCard>;
         return (
           <>
             <SettingsCard
               title="E-Mail Konfiguration"
-              subtitle="Konfigurieren Sie SMTP oder Resend für den E-Mail-Versand."
+              subtitle={isWebShell
+                ? 'Wähle den Anbieter und trage Server und Absender ein. Passwort bzw. API-Key richtet der Betreiber am Server ein.'
+                : 'Richte SMTP oder Resend für den E-Mail-Versand ein.'}
             >
               <h3 className="text-caption font-medium text-foreground-secondary">E-Mail-Anbieter</h3>
               <div className="grid gap-3 sm:grid-cols-3">
@@ -1049,12 +1120,17 @@ const SettingsForm: React.FC<{ initialSettings: AppSettings }> = ({ initialSetti
                     type="number"
                     fullWidth
                     value={settings.email.smtpPort}
-                    onChange={(e) => updateNested('email', 'smtpPort', Number(e.target.value))}
+                    onChange={(e) => {
+                      const port = Number(e.target.value);
+                      updateNested('email', 'smtpPort', port);
+                      // 465 speaks TLS from the start; 587/25/2525 upgrade with STARTTLS.
+                      if (port === 465 || port === 587 || port === 25 || port === 2525) updateNested('email', 'smtpSecure', port === 465);
+                    }}
                     placeholder="587"
                   />
                 </div>
                 <Checkbox
-                  label="SSL/TLS verwenden (empfohlen für Port 465)"
+                  label="SSL/TLS von Anfang an (Port 465; bei 587 aus lassen, dann gilt STARTTLS)"
                   checked={settings.email.smtpSecure}
                   onChange={(e) => updateNested('email', 'smtpSecure', e.target.checked)}
                 />
@@ -1067,6 +1143,11 @@ const SettingsForm: React.FC<{ initialSettings: AppSettings }> = ({ initialSetti
                   onChange={(e) => updateNested('email', 'smtpUser', e.target.value)}
                   placeholder="user@example.com"
                 />
+                {isWebShell ? (
+                  <p className="text-control text-muted">
+                    Das Passwort setzt der Betreiber am Server (SMTP_PASSWORD). Es geht nur an den dort freigegebenen Server (SMTP_HOST), trage deshalb genau diesen Host ein.
+                  </p>
+                ) : (
                 <Input
                   id="settingsview-passwort"
                   label="Passwort"
@@ -1080,6 +1161,7 @@ const SettingsForm: React.FC<{ initialSettings: AppSettings }> = ({ initialSetti
                   placeholder={smtpPasswordConfigured ? '•••••••• (gespeichert)' : '••••••••'}
                   hint="Wird sicher im Schlüsselbund des Systems gespeichert."
                 />
+                )}
                 <Button
                   variant="secondary"
                   className="self-start"
@@ -1088,7 +1170,7 @@ const SettingsForm: React.FC<{ initialSettings: AppSettings }> = ({ initialSetti
                   disabled={
                     !settings.email.smtpHost ||
                     !settings.email.smtpUser ||
-                    (!smtpPassword && !smtpPasswordConfigured)
+                    (!isWebShell && !smtpPassword && !smtpPasswordConfigured)
                   }
                 >
                   Verbindung testen
@@ -1099,6 +1181,9 @@ const SettingsForm: React.FC<{ initialSettings: AppSettings }> = ({ initialSetti
 
             {settings.email.provider === 'resend' && (
               <SettingsCard title="Resend API-Konfiguration">
+                {isWebShell ? (
+                  <p className="text-control text-muted">Den API-Key setzt der Betreiber am Server (RESEND_API_KEY).</p>
+                ) : (
                 <Input
                   id="settingsview-api-key"
                   label="API-Key"
@@ -1121,12 +1206,13 @@ const SettingsForm: React.FC<{ initialSettings: AppSettings }> = ({ initialSetti
                   placeholder={resendApiKeyConfigured ? 're_*** (gespeichert)' : 're_***'}
                   hint="Wird sicher im Schlüsselbund des Systems gespeichert."
                 />
+                )}
                 <Button
                   variant="secondary"
                   className="self-start"
                   onClick={handleEmailTest}
                   loading={emailTesting}
-                  disabled={!resendApiKey && !resendApiKeyConfigured}
+                  disabled={!isWebShell && !resendApiKey && !resendApiKeyConfigured}
                 >
                   API-Schlüssel testen
                 </Button>
@@ -1177,12 +1263,12 @@ const SettingsForm: React.FC<{ initialSettings: AppSettings }> = ({ initialSetti
                   <AlertTriangle size={16} className="mt-px shrink-0" aria-hidden="true" />
                   <div>
                     <p className="font-semibold">E-Mail-Provider erforderlich</p>
-                    <p>Konfigurieren Sie SMTP oder Resend im E-Mail-Tab, um Mahnungen versenden zu können.</p>
+                    <p>Richte im Bereich E-Mail SMTP oder Resend ein, um Mahnungen versenden zu können.</p>
                   </div>
                 </div>
               )}
               {!dunningEnabled && (
-                <p className="text-caption text-muted">Aktivieren Sie das Mahnwesen, um Mahnstufen zu konfigurieren</p>
+                <p className="text-caption text-muted">Ohne Automatik erstellst du Mahnungen von Hand in der Rechnung. Die Mahnstufen unten gelten auch dafür.</p>
               )}
             </SettingsCard>
 
@@ -1237,8 +1323,23 @@ const SettingsForm: React.FC<{ initialSettings: AppSettings }> = ({ initialSetti
                 />
               </SettingsCard>
             )}
-            {dunningEnabled && (
-              <SettingsCard title="Mahnstufen" count={<span className="tabular-nums">{activeLevelCount} von {totalLevels} aktiv</span>} flush>
+            <SettingsCard
+              title="Mahnstufen"
+              count={<span className="tabular-nums">{activeLevelCount} von {totalLevels} aktiv</span>}
+              actions={totalLevels > 0 ? (
+                <Button variant="secondary" size="sm" onClick={addDunningLevel}>
+                  <Plus size={14} aria-hidden="true" /> Stufe hinzufügen
+                </Button>
+              ) : undefined}
+              flush
+            >
+                {totalLevels === 0 && (
+                  <EmptyState
+                    title="Noch keine Mahnstufen"
+                    description="Ohne Mahnstufe gibt es keine Zahlungserinnerung und keine Mahngebühr. Übliche Stufen: Zahlungserinnerung ohne Gebühr, 1. und 2. Mahnung."
+                    action={<Button onClick={() => setDunningLevels(DEFAULT_DUNNING_LEVELS.map((level) => ({ ...level })))}>Standardstufen anlegen</Button>}
+                  />
+                )}
                 {settings.dunning.levels.map((level, index) => (
                   <div key={level.id} className="flex flex-col gap-3 border-b border-border p-3.5 last:border-b-0">
                     <div className="flex flex-wrap items-center justify-between gap-3">
@@ -1249,7 +1350,16 @@ const SettingsForm: React.FC<{ initialSettings: AppSettings }> = ({ initialSetti
                           onChange={(e) => updateDunningLevel(index, 'enabled', e.target.checked)}
                         />
                         <Badge tone={level.enabled ? 'inverse' : 'neutral'}>{level.id}</Badge>
-                        <h3 className="text-label text-foreground">{level.name}</h3>
+                        <Input
+                          type="text"
+                          className="w-44 font-semibold"
+                          aria-label={`Name der Mahnstufe ${level.id}`}
+                          value={level.name}
+                          onChange={(e) => updateDunningLevel(index, 'name', e.target.value)}
+                        />
+                        <IconButton size="sm" tooltip="Stufe entfernen" aria-label={`Mahnstufe ${level.id} entfernen`} onClick={() => removeDunningLevel(index)} className="hover:bg-error-bg hover:text-error-text">
+                          <Trash2 size={14} aria-hidden="true" />
+                        </IconButton>
                       </div>
 
                       <div className="flex items-center gap-3 text-caption text-muted">
@@ -1364,8 +1474,7 @@ const SettingsForm: React.FC<{ initialSettings: AppSettings }> = ({ initialSetti
                     )}
                   </div>
                 ))}
-              </SettingsCard>
-            )}
+            </SettingsCard>
 
             <SettingsCard title="Automatische Abo-Rechnungen" subtitle="Automatische Generierung wiederkehrender Rechnungen">
               <Switch
@@ -1413,9 +1522,13 @@ const SettingsForm: React.FC<{ initialSettings: AppSettings }> = ({ initialSetti
             <SettingsCard title="Rechtliches & Texte" subtitle="Steuerliche Einstellungen und Standardtexte.">
               <Switch
                 label="Kleinunternehmerregelung anwenden"
-                description="Keine Umsatzsteuerberechnung gem. § 19 UStG."
+                description="Keine Umsatzsteuer auf Rechnungen (§ 19 UStG). Gilt, wenn dein Umsatz im Vorjahr höchstens 25.000 € betrug und im laufenden Jahr 100.000 € nicht übersteigt."
                 checked={settings.legal.smallBusinessRule}
-                onCheckedChange={(checked) => updateNested('legal', 'smallBusinessRule', checked)}
+                onCheckedChange={(checked) => {
+                  updateNested('legal', 'smallBusinessRule', checked);
+                  // Leaving § 19 means charging VAT: a 0 % standard rate would keep invoices tax-free.
+                  if (!checked && !(settings.legal.defaultVatRate > 0)) updateNested('legal', 'defaultVatRate', 19);
+                }}
               />
               <Switch
                 label="ZUGFeRD Export für Rechnungen aktivieren"
@@ -1428,12 +1541,15 @@ const SettingsForm: React.FC<{ initialSettings: AppSettings }> = ({ initialSetti
                   id="settings-sitzland-des-verkaufers"
                   label="Sitzland des Verkäufers"
                   fullWidth
+                  hint="billme unterstützt derzeit Unternehmen mit Sitz in Deutschland."
+                  error={settings.legal.countryCode && settings.legal.countryCode !== 'DE' ? 'Steuer und Berichte rechnen nur nach deutschem Recht. Bitte Deutschland wählen.' : undefined}
                   value={settings.legal.countryCode ?? 'DE'}
                   onChange={(e) => updateNested('legal', 'countryCode', e.target.value)}
                 >
                   <option value="DE">Deutschland</option>
-                  <option value="AT">Österreich</option>
-                  <option value="CH">Schweiz</option>
+                  {/* Only Germany is supported; a seat stored earlier stays visible until it is changed. */}
+                  {settings.legal.countryCode === 'AT' && <option value="AT">Österreich (nicht unterstützt)</option>}
+                  {settings.legal.countryCode === 'CH' && <option value="CH">Schweiz (nicht unterstützt)</option>}
                 </Select>
                 <Input
                   id="settings-standard-umsatzsteuer"
@@ -1457,15 +1573,16 @@ const SettingsForm: React.FC<{ initialSettings: AppSettings }> = ({ initialSetti
 
             <SettingsCard
               title="Berichtsprofil"
-              subtitle="Der aktuelle Berichts- und Steuerumfang unterstützt Deutschland. AT/CH-Berichte sind noch nicht verfügbar."
+              subtitle="Berichte und Steuer rechnen nach deutschem Recht."
             >
               <div className="grid grid-cols-2 gap-3">
                 <Select label="Rechtsraum" aria-label="Rechtsraum" fullWidth value={reportingProfile.jurisdiction} onChange={(event) => updateReportingProfile('jurisdiction', event.target.value as 'DE')}>
                   <option value="DE">Deutschland</option>
                 </Select>
                 <Select label="Rechtsform" aria-label="Rechtsform" fullWidth value={reportingProfile.legalForm} onChange={(event) => updateReportingProfile('legalForm', event.target.value as BusinessReportingProfile['legalForm'])}>
-                  <option value="sole_proprietor">Einzelunternehmen</option>
-                  {(!isLite || reportingProfile.legalForm === 'gmbh') && <option value="gmbh">GmbH</option>}
+                  {LEGAL_FORM_OPTIONS.filter((option) => option.editions.includes(isLite ? 'lite' : 'pro') || option.value === reportingProfile.legalForm).map((option) => (
+                    <option key={option.value} value={option.value}>{option.label}</option>
+                  ))}
                 </Select>
                 <div className="col-span-2">
                   <p className="mb-1 text-caption font-medium text-foreground-secondary">Gewinnermittlung</p>
@@ -1487,7 +1604,7 @@ const SettingsForm: React.FC<{ initialSettings: AppSettings }> = ({ initialSetti
                     )}
                   </div>
                 </div>
-                {reportingProfile.legalForm === 'gmbh' && (
+                {isCapitalLegalForm(reportingProfile.legalForm) && (
                   <Select label="GmbH-Größe" aria-label="GmbH-Größe" fullWidth value={reportingProfile.hgbSizeClass ?? ''} onChange={(event) => updateReportingProfile('hgbSizeClass', event.target.value as 'micro' | 'small')}>
                     <option value="micro">Micro</option>
                     <option value="small">Small</option>
@@ -1500,23 +1617,20 @@ const SettingsForm: React.FC<{ initialSettings: AppSettings }> = ({ initialSetti
                   </Select>
                 )}
                 <Input label="Wirtschaftsjahresbeginn (MM-TT)" aria-label="Wirtschaftsjahresbeginn" fullWidth value={reportingProfile.fiscalYearStart} onChange={(event) => updateReportingProfile('fiscalYearStart', event.target.value)} placeholder="01-01" />
-                <Select label="Umsatzsteuer-Methode" aria-label="Umsatzsteuer-Methode" fullWidth value={reportingProfile.vatMethod} onChange={(event) => updateReportingProfile('vatMethod', event.target.value as BusinessReportingProfile['vatMethod'])}>
-                  <option value="soll">Soll-Versteuerung</option>
-                  <option value="ist">Ist-Versteuerung</option>
-                </Select>
               </div>
-              {reportingProfile.legalForm === 'gmbh' && reportingProfile.profitDetermination !== 'double_entry' && <p className="text-caption text-error-text">Eine GmbH muss mit doppelter Buchführung geführt werden.</p>}
+              {isCapitalLegalForm(reportingProfile.legalForm) && reportingProfile.profitDetermination !== 'double_entry' && <p className="text-caption text-error-text">Eine GmbH oder UG muss mit doppelter Buchführung geführt werden.</p>}
             </SettingsCard>
 
-            <SettingsCard
-              title="Umsatzsteuer-Basis (Übersicht)"
-              subtitle="Soll: basiert auf gestellten Rechnungen (Status ≠ Entwurf) nach Rechnungsdatum. Ist: basiert auf erfassten Zahlungen nach Zahlungsdatum."
+            {!settings.legal.smallBusinessRule && <SettingsCard
+              title="Umsatzsteuer: Soll oder Ist"
+              subtitle="Soll: Die Umsatzsteuer zählt mit der gestellten Rechnung (Rechnungsdatum). Ist: erst mit der Zahlung (Zahlungsdatum)."
             >
+              {/* The reporting profile owns the method; legal.taxAccountingMethod is derived from it on every save. */}
               <SegmentedControl
                 aria-label="Umsatzsteuer-Basis"
                 className="self-start"
-                value={settings.legal.taxAccountingMethod ?? 'soll'}
-                onChange={(method) => updateNested('legal', 'taxAccountingMethod', method)}
+                value={reportingProfile.vatMethod}
+                onChange={(method) => updateReportingProfile('vatMethod', method as BusinessReportingProfile['vatMethod'])}
                 options={[
                   { value: 'soll', label: 'Soll' },
                   { value: 'ist', label: 'Ist' },
@@ -1528,7 +1642,7 @@ const SettingsForm: React.FC<{ initialSettings: AppSettings }> = ({ initialSetti
                   ? ` Aktuell: ${settings.legal.taxAccountingMethod === 'ist' ? 'Ist' : 'Soll'} seit ${new Date(`${settings.legal.taxAccountingMethodSince}T00:00:00`).toLocaleDateString('de-DE')}, davor ${settings.legal.previousTaxAccountingMethod === 'ist' ? 'Ist' : 'Soll'}.`
                   : ''}
               </p>
-            </SettingsCard>
+            </SettingsCard>}
 
             <SettingsCard title="Standardtexte">
               <Textarea
@@ -1563,7 +1677,7 @@ const SettingsForm: React.FC<{ initialSettings: AppSettings }> = ({ initialSetti
               placeholder="https://offers.example.com"
               hint={<>Tipp: Einrichtungsseite im Portal: <span className="font-mono">/admin/setup</span></>}
             />
-            {isWebShell ? <p className="my-3 text-control text-muted">Der Publish-Schlüssel wird am Server vom Betreiber eingerichtet.</p> : <Input
+            {isWebShell ? <p className="my-3 text-control text-muted">Den Publish-Schlüssel richtet der Betreiber am Server ein (BILLME_PORTAL_PUBLISH_API_KEY). „Verbindung testen“ prüft auch ihn.</p> : <Input
               id="settings-publish-api-schlussel-optional"
               label="Publish-API-Schlüssel (optional)"
               type="password"
@@ -1588,9 +1702,10 @@ const SettingsForm: React.FC<{ initialSettings: AppSettings }> = ({ initialSetti
                     const baseUrl = settings.portal.baseUrl.trim();
                     if (!baseUrl) throw new Error('Portal-Basis-URL fehlt.');
                     const res = await ipc.portal.health({ baseUrl });
-                    setPortalTestStatus(res.ok ? `OK (${res.ts})` : 'Fehler');
+                    const checkedAt = new Date(res.ts).toLocaleString('de-DE', { dateStyle: 'medium', timeStyle: 'short' });
+                    setPortalTestStatus(res.ok ? `Verbindung steht, Veröffentlichen ist erlaubt (geprüft ${checkedAt}).` : 'Das Portal meldet einen Fehler.');
                   } catch (e) {
-                    setPortalTestStatus(`Fehler: ${String(e)}`);
+                    setPortalTestStatus(`Fehler: ${errorText(e)}`);
                   }
                 }}
               >
@@ -1716,17 +1831,20 @@ const SettingsForm: React.FC<{ initialSettings: AppSettings }> = ({ initialSetti
       <PageHeader
         title="Einstellungen"
         actions={
-          <Button onClick={handleSave} loading={setSettingsMutation.isPending}>
-            <Save size={16} aria-hidden="true" />
-            Einstellungen speichern
-          </Button>
+          <>
+            {canMutate() ? null : <span className="text-control text-muted">{READ_ONLY_HINT}</span>}
+            <Button onClick={handleSave} loading={setSettingsMutation.isPending} disabled={!canMutate()}>
+              <Save size={16} aria-hidden="true" />
+              Einstellungen speichern
+            </Button>
+          </>
         }
       />
-      <div className="relative flex h-full gap-3.5 overflow-hidden">
+      <div className="relative flex h-full flex-col gap-3.5 overflow-hidden md:flex-row">
 
         {/* Sidebar Navigation. The page is capped at the content height, so the
             tabs can outgrow it; the sidebar owns that overflow. */}
-        <div className="flex max-h-full w-56 shrink-0 flex-col self-start overflow-y-auto rounded-card border border-border bg-surface p-2.5">
+        <div className="flex max-h-48 w-full shrink-0 flex-col self-start overflow-y-auto rounded-card border border-border bg-surface p-2.5 md:max-h-full md:w-56">
           <nav aria-label="Einstellungsbereiche" className="flex flex-col gap-3">
             {navGroups.map((group) => (
               <div key={group.label}>
@@ -1764,7 +1882,7 @@ const SettingsForm: React.FC<{ initialSettings: AppSettings }> = ({ initialSetti
 
         {/* A grid of section cards; it scrolls on its own so the section list stays in view. */}
         <div className="min-w-0 flex-1 overflow-y-auto">
-          <div className="grid grid-cols-[repeat(auto-fit,minmax(340px,1fr))] items-start gap-3.5">
+          <div className="grid grid-cols-[repeat(auto-fit,minmax(min(340px,100%),1fr))] items-start gap-3.5">
             {renderActiveTab()}
           </div>
         </div>
@@ -1800,11 +1918,11 @@ const SettingsForm: React.FC<{ initialSettings: AppSettings }> = ({ initialSetti
               hint={
                 <>
                   {PROFIT_DETERMINATION_COPY[pendingProfitDetermination].hint}
-                  {reportingProfile.legalForm === 'gmbh' && <span className="mt-1 block">Eine GmbH muss mit doppelter Buchführung geführt werden.</span>}
+                  {isCapitalLegalForm(reportingProfile.legalForm) && <span className="mt-1 block">Eine GmbH oder UG muss mit doppelter Buchführung geführt werden.</span>}
                 </>
               }
             >
-              <option value="eur" disabled={reportingProfile.legalForm === 'gmbh'}>EÜR</option>
+              <option value="eur" disabled={isCapitalLegalForm(reportingProfile.legalForm)}>EÜR</option>
               <option value="double_entry">Doppelte Buchführung</option>
             </Select>
           )}

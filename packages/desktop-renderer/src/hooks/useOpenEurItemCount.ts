@@ -1,6 +1,7 @@
 import { useQuery } from '@tanstack/react-query';
-import { LATEST_SUPPORTED_EUR_TAX_YEAR } from '@billme/accounting-shared';
+import { defaultEurTaxYear } from '@billme/accounting-shared';
 import { ipc } from '../runtime-api';
+import { isDecidedEurItem } from '../components/eur/categories';
 
 /**
  * Items in the EÜR workbench's "Offen" queue for its default year. Shares the
@@ -8,10 +9,11 @@ import { ipc } from '../runtime-api';
  * Pass `enabled` only for EÜR businesses; the route rejects every other profile.
  */
 export const useOpenEurItemCount = (enabled: boolean): number | undefined => {
+  const taxYear = defaultEurTaxYear();
   const { data } = useQuery({
-    queryKey: ['eur', 'items', LATEST_SUPPORTED_EUR_TAX_YEAR],
-    queryFn: () => ipc.eur.listItems({ taxYear: LATEST_SUPPORTED_EUR_TAX_YEAR }),
+    queryKey: ['eur', 'items', taxYear],
+    queryFn: () => ipc.eur.listItems({ taxYear }),
     enabled,
   });
-  return enabled && data ? data.filter((item) => !item.classification?.eurLineId && !item.classification?.excluded).length : undefined;
+  return enabled && data ? data.filter((item) => !isDecidedEurItem(item)).length : undefined;
 };

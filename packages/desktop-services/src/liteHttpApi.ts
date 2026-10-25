@@ -101,6 +101,9 @@ const serverEurItemSchema = z.object({
   suggestionReason: z.string().optional(),
   suggestionLayer: z.enum(['rule', 'counterparty', 'bayes', 'keyword']).optional(),
   suggestedKind: z.enum(['transit', 'private-withdrawal', 'private-contribution']).optional(),
+  /** Lite: the VAT that goes with the suggested line, when it is known. */
+  suggestedVatMode: z.enum(['none', 'default']).optional(),
+  suggestedVatRate: z.number().min(0).max(100).optional(),
   kind: z.enum(['income', 'expense', 'private-withdrawal', 'private-contribution', 'pass-through', 'transit']).optional(),
   transitHint: z.string().optional(),
   splits: z.array(z.object({ amountNet: z.number(), deductibility: z.enum(['deductible', 'non-deductible']).optional(), lineId: z.string().optional(), reason: z.string().optional() })).optional(),
@@ -250,7 +253,10 @@ export const createLiteHttpBillmeApi = ({
     if (!Object.prototype.hasOwnProperty.call(ipcRoutes, key)) {
       throw new Error(`Die Lite-HTTP-Laufzeit unterstützt die IPC-Route ${String(key)} nicht.`);
     }
-    const args = ipcRoutes[key].args.parse(rawArgs) as IpcArgs<K>;
+    const checked = ipcRoutes[key].args.safeParse(rawArgs);
+    // The schema messages are the German field sentences; a raw ZodError message is JSON.
+    if (!checked.success) throw new Error([...new Set(checked.error.issues.map((issue) => issue.message))].join(' '));
+    const args = checked.data as IpcArgs<K>;
     if (downloadFile && (key === 'pdf:export' || key === 'eur:exportPdf')) {
       const connection = await resolveHttpConnection();
       if (!connection) throw new Error('Der Billme-Server ist noch nicht verfügbar.');

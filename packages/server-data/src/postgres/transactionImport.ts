@@ -103,6 +103,7 @@ export interface ServerImportBatch {
   mappingJson: unknown;
   importedCount: number;
   skippedCount: number;
+  updatedCount: number;
   errorCount: number;
   createdAt: string;
   rolledBackAt?: string;
@@ -181,6 +182,7 @@ const toImportBatch = (row: Record<string, unknown>): ServerImportBatch => ({
   mappingJson: parseJson(row.mapping_json),
   importedCount: Number(row.imported_count ?? 0),
   skippedCount: Number(row.skipped_count ?? 0),
+  updatedCount: Number(row.updated_count ?? 0),
   errorCount: Number(row.error_count ?? 0),
   createdAt: String(row.created_at),
   rolledBackAt: typeof row.rolled_back_at === 'string' && row.rolled_back_at ? row.rolled_back_at : undefined,
@@ -189,7 +191,7 @@ const toImportBatch = (row: Record<string, unknown>): ServerImportBatch => ({
 
 const importBatchSelect = `
   SELECT id, account_id, profile, file_name, file_sha256, mapping_json,
-         imported_count, skipped_count, error_count, created_at,
+         imported_count, skipped_count, updated_count, error_count, created_at,
          rolled_back_at, rollback_reason
   FROM import_batches`;
 
@@ -248,17 +250,18 @@ export const commitServerTransactionImport = async (
       session,
       `${importBatchSelect}
        WHERE tenant_id = $1 AND account_id = $2 AND file_sha256 = $3
-         AND (rolled_back_at IS NULL OR rolled_back_at = '') AND imported_count > 0
+         AND (rolled_back_at IS NULL OR rolled_back_at = '') AND (imported_count > 0 OR updated_count > 0)
        ORDER BY created_at ASC, id ASC LIMIT 1`,
       [tenant(scope), input.accountId, committed.fileSha256],
     );
     if (existing.rows[0]) {
       const batch = toImportBatch(existing.rows[0]);
+      // The same file again imports nothing; its rows count as skipped, so the user is not told they were imported twice.
       return {
         batchId: batch.id,
-        imported: batch.importedCount,
+        imported: 0,
         updated: 0,
-        skipped: batch.skippedCount,
+        skipped: batch.importedCount + batch.updatedCount + batch.skippedCount,
         errors,
         fileSha256: committed.fileSha256,
       };
@@ -361,11 +364,14 @@ export const commitServerTransactionImport = async (
     }
 
     errors.sort((left, right) => left.rowIndex - right.rowIndex);
+    // Nothing but closed months: refuse the whole file, so no empty batch is left in the import history.
+    const closedError = errors.find((error) => error.message.includes('ist festgeschrieben'));
+    if (imported === 0 && updated === 0 && closedError) throw Object.assign(new Error(closedError.message), { code: 'LITE_PERIOD_CLOSED' });
     await query(session,
       `UPDATE import_batches
-       SET imported_count = $1, skipped_count = $2, error_count = $3
+       SET imported_count = $1, skipped_count = $2, error_count = $3, updated_count = $6
        WHERE tenant_id = $4 AND id = $5`,
-      [imported, skipped, errors.length, tenant(scope), batchId],
+      [imported, skipped, errors.length, tenant(scope), batchId, updated],
     );
     await appendWithClient(session, scope, {
       occurredAt: createdAt,
@@ -662,7 +668,7 @@ const refundMatchSuggestions = (transaction: ServerTransactionRecord, invoices: 
       matchReasons.push('Kundenname im Empfänger');
       if (confidence === 'low') confidence = 'medium';
     }
-    if (matchReasons.length) suggestions.push({ invoice, confidence, matchReasons: [...matchReasons, `Erstattung: bisher ${(paid / 100).toFixed(2)} € erhalten`], amountDiff: (paid - outCents) / 100 });
+    if (matchReasons.length) suggestions.push({ invoice, confidence, matchReasons: [...matchReasons, `Erstattung: bisher ${(paid / 100).toFixed(2).replace('.', ',')} € erhalten`], amountDiff: (paid - outCents) / 100 });
   }
   const order = { high: 3, medium: 2, low: 1 };
   const named = (suggestion: InvoiceMatchSuggestion) => (transaction.purpose.toLowerCase().includes(suggestion.invoice.number.toLowerCase()) ? 1 : 0);

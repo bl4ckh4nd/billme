@@ -345,6 +345,7 @@ const importBatchSchema = z.object({
   mappingJson: z.unknown(),
   importedCount: z.number().int(),
   skippedCount: z.number().int(),
+  updatedCount: z.number().int().optional(),
   errorCount: z.number().int(),
   createdAt: z.string(),
   rolledBackAt: z.string().optional(),
@@ -509,12 +510,12 @@ export const ipcRoutes = {
   },
   'invoices:savePayment': {
     channel: 'invoices:savePayment',
-    args: z.object({ invoiceId: z.string().min(1), payment: paymentSchema, expectedPayment: paymentSchema.optional(), reason: z.string().trim().min(1) }),
+    args: z.object({ invoiceId: z.string().min(1), payment: paymentSchema, expectedPayment: paymentSchema.optional(), reason: z.string().trim().min(1), softLockOverride: z.boolean().optional() }),
     result: invoiceSchema,
   },
   'invoices:removePayment': {
     channel: 'invoices:removePayment',
-    args: z.object({ invoiceId: z.string().min(1), expectedPayment: paymentSchema, reason: z.string().trim().min(1) }),
+    args: z.object({ invoiceId: z.string().min(1), expectedPayment: paymentSchema, reason: z.string().trim().min(1), softLockOverride: z.boolean().optional() }),
     result: invoiceSchema,
   },
   'invoices:delete': {
@@ -955,7 +956,8 @@ export const ipcRoutes = {
 
   'recurring:manualRun': {
     channel: 'recurring:manualRun',
-    args: z.undefined(),
+    /** With `profileId` only that profile runs (and is refused when paused or not due). */
+    args: z.object({ profileId: z.string().min(1) }).optional(),
     result: recurringManualRunResultSchema,
   },
 

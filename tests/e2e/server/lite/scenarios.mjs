@@ -242,8 +242,9 @@ export const runLiteWorkflowScenario = async (page, scenarioKey = 'workflow') =>
 
   const companyName = `Lite Browserkunde ${identity.namespace}`;
   await clientEditor.getByLabel('Firma', { exact: true }).fill(companyName);
-  await clientEditor.getByLabel('Ansprechpartner', { exact: true }).first().fill('Regression Runner');
-  await clientEditor.getByLabel('Telefon', { exact: true }).fill('+49 30 55555555');
+  await clientEditor.getByLabel('Telefon', { exact: true }).first().fill('+49 30 55555555');
+  await clientEditor.getByRole('button', { name: '+ Ansprechpartner', exact: true }).click();
+  await clientEditor.getByLabel('Name', { exact: true }).fill('Regression Runner');
   await clientEditor.getByLabel('E-Mail-Adresse', { exact: true }).fill(`billing+${identity.namespace}@billme-e2e.local`);
   await clientEditor.getByLabel('Straße', { exact: true }).fill('Teststrasse 42');
   await clientEditor.getByLabel('PLZ', { exact: true }).fill('10115');
@@ -259,6 +260,7 @@ export const runLiteWorkflowScenario = async (page, scenarioKey = 'workflow') =>
     })
     .toBe(true);
   expect(createdClient).toBeTruthy();
+  expect(createdClient.contacts?.map((contact) => contact.name)).toEqual(['Regression Runner']);
   if (createdClient.customerNumber) {
     expect(createdClient.customerNumber.startsWith(seed.settings.numbers.customerPrefix)).toBe(true);
   }

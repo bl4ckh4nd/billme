@@ -211,6 +211,11 @@ export const runProSourceRunScenario = async () => {
   assert.equal(fiscal.result.result.netResult, 60);
   cases++;
 
+  // The closed year is soft-locked; the corrections below reopen its months the way a user does.
+  for (let month = 1; month <= 12; month++) {
+    await json(state, session, `/api/v1/pro/accounting/periods/2026-${String(month).padStart(2, '0')}/status`, undefined, { method: 'POST', body: { status: 'open', reason: 'Nachträge nach dem Jahresabschluss' } });
+  }
+
   const provision = await closing(state, session, {
     command: 'provision', sourceId: `${namespace}-provision`, sourceRevision: 'v1', idempotencyKey: `${namespace}-provision-key`, reason: 'provision adjustment',
     input: { effectiveDate: '2026-12-31', period: '2026-12', fiscalYear: 2026, currency: 'EUR', previousAmount: 10, targetAmount: 12.5, expenseAccount: '3125', provisionAccount: '1776' },
@@ -334,20 +339,21 @@ export const runProSourceRunScenario = async () => {
   assert.deepEqual(await accountingState(state, session), beforeClosed);
   cases++;
 
+  // After the month festgeschrieben above: closing is cumulative, so an earlier month would be closed too.
   const softId = `${namespace}-soft`;
-  await setHarnessProPeriodStatus(state, { tenantId: session.tenantId, period: '2026-09', status: 'soft_locked' });
+  await setHarnessProPeriodStatus(state, { tenantId: session.tenantId, period: '2026-11', status: 'soft_locked' });
   await expectError(state, session, '/api/v1/pro/accounting/closing', undefined, {
-    method: 'POST', body: { command: 'source_fact', sourceId: softId, sourceRevision: 'v1', idempotencyKey: `${softId}-key`, reason: 'soft period must reject', input: sourceFact(namespace, softId, { effectiveDate: '2026-09-15', postingDate: '2026-09-15', period: '2026-09' }) },
+    method: 'POST', body: { command: 'source_fact', sourceId: softId, sourceRevision: 'v1', idempotencyKey: `${softId}-key`, reason: 'soft period must reject', input: sourceFact(namespace, softId, { effectiveDate: '2026-11-15', postingDate: '2026-11-15', period: '2026-11' }) },
   }, 409, /SOFT_LOCK/);
   cases++;
   const softOverride = await closing(state, session, {
     command: 'source_fact', sourceId: softId, sourceRevision: 'v1', idempotencyKey: `${softId}-override-key`, reason: 'approved soft period override', softLockOverride: true, overrideReason: 'Controller approved soft-lock override',
-    input: sourceFact(namespace, softId, { effectiveDate: '2026-09-15', postingDate: '2026-09-15', period: '2026-09' }),
+    input: sourceFact(namespace, softId, { effectiveDate: '2026-11-15', postingDate: '2026-11-15', period: '2026-11' }),
   });
   assert.equal(softOverride.run.status, 'posted');
   cases++;
   await setHarnessProPeriodStatus(state, { tenantId: session.tenantId, period: '2026-10', status: 'open' });
-  await setHarnessProPeriodStatus(state, { tenantId: session.tenantId, period: '2026-09', status: 'open' });
+  await setHarnessProPeriodStatus(state, { tenantId: session.tenantId, period: '2026-11', status: 'open' });
 
   for (const [label, input, pattern] of [
     ['invalid', sourceFact(namespace, `${namespace}-invalid`, { postingDate: '2026-13-01', effectiveDate: '2026-13-01', period: '2026-13' }), /INVALID_PERIOD|INVALID_DATE|Invalid date/i],
@@ -366,7 +372,10 @@ export const runProSourceRunScenario = async () => {
   const ustvaBody = { kind: 'ustva', period: '2025-01', idempotencyKey: `${namespace}-ustva-key`, reason: 'UStVA preparation', entries: taxEntries };
   const ustva = await json(state, session, '/api/v1/pro/accounting/tax-exports/prepare', undefined, { method: 'POST', body: ustvaBody });
   assert.equal(ustva.artifact.kind, 'ustva');
-  assert.equal(ustva.artifact.rows[0].taxCaseKey, 'DE_STD_19');
+  assert.deepEqual(ustva.artifact.rows.map(({ kennziffer, taxCaseKeys, taxAmount }) => ({ kennziffer, taxCaseKeys, taxAmount })), [
+    { kennziffer: '81', taxCaseKeys: ['DE_STD_19'], taxAmount: 19 },
+    { kennziffer: '83', taxCaseKeys: [], taxAmount: 19 },
+  ]);
   cases++;
   const ustvaRefetched = await json(state, session, `/api/v1/pro/accounting/tax-exports/ustva/${encodeURIComponent(ustva.run.id)}`);
   assert.equal(ustvaRefetched.sourceHash, ustva.artifact.sourceHash);

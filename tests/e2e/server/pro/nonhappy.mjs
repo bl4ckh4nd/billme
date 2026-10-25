@@ -234,7 +234,7 @@ export const runProNonHappyAccountingScenario = async () => {
   await expectError(state, viewerSession, '/api/v1/pro/accounting/mappings', undefined, {
     method: 'POST',
     body: { reason: 'viewer mutation must fail', chart: 'SKR03', role: 'expense', accountNumber: '3125' },
-  }, 403, 'Accounting mutation');
+  }, 403, 'Mit Lesezugriff');
   await assertNoAccountingWrite(state, session, beforeViewer, 'viewer 403');
   cases++;
 
@@ -380,10 +380,11 @@ export const runProNonHappyAccountingScenario = async () => {
   const beforeDirectionPublic = await publicDocumentState(state, session, postedA.invoice.id, { bankTransactionId: directionSourceId });
   assert.equal(beforeDirectionPublic.bankTransaction?.status, 'pending');
   assert.equal(beforeDirectionPublic.bankTransaction?.type, 'expense');
+  // Without refund: false an outgoing line on a debtor is booked as a Rückzahlung.
   await expectError(state, session, '/api/v1/pro/accounting/open-items/payments', undefined, {
     method: 'POST', body: {
       reason: 'nonhappy bank source direction mismatch',
-      payment: { sourceType: 'bank_transaction', sourceId: directionSourceId, partyType: 'debtor', partyId: client.id, paymentDate: '2026-03-05', amount: 119, bankAccountNumber: '1200', allocations: [{ openItemId: itemA.id, amount: 1 }], allocationEventId: `${namespace}-direction-mismatch` },
+      payment: { sourceType: 'bank_transaction', sourceId: directionSourceId, partyType: 'debtor', partyId: client.id, paymentDate: '2026-03-05', amount: 119, bankAccountNumber: '1200', allocations: [{ openItemId: itemA.id, amount: 1 }], allocationEventId: `${namespace}-direction-mismatch`, refund: false },
     },
   }, 422, 'PAYMENT_SOURCE_DIRECTION_MISMATCH');
   await assertPublicDocumentStateUnchanged(state, session, postedA.invoice.id, beforeDirectionPublic, 'OPOS direction mismatch', { bankTransactionId: directionSourceId });

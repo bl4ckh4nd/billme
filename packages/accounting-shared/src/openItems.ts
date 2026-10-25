@@ -210,6 +210,10 @@ export interface OpenItemPaymentEntity {
   refund?: boolean;
   /** The earlier payment whose surplus (credit) this refund pays out. */
   creditedPaymentId?: string;
+  /** Read model: the invoice numbers the payment was allocated to (comma-separated). */
+  documentNumbers?: string;
+  /** Read model: customer or vendor of those items, else the bank line's counterparty. */
+  partyName?: string;
 }
 
 export interface OpenItemPaymentInput {

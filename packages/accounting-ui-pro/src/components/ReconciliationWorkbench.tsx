@@ -155,6 +155,7 @@ export default function ReconciliationWorkbench({
   // from the draft activity once the list should survive restarts.
   const [sessionMatches, setSessionMatches] = useState<Record<string, SessionMatch>>({});
   const [candidatesById, setCandidatesById] = useState<Record<string, ScoredCandidate[]>>({});
+  const [matchHintById, setMatchHintById] = useState<Record<string, string>>({});
   const requestedCandidates = useRef(new Set<string>());
   const [rules, setRules] = useState<AccountSuggestionRuleSummary[] | null>(null);
   const [rulesError, setRulesError] = useState<string | null>(null);
@@ -251,8 +252,12 @@ export default function ReconciliationWorkbench({
       requestedCandidates.current.add(id);
       findMatches(id)
         .then((candidates) => setCandidatesById((prev) => ({ ...prev, [id]: scoreCandidates(candidates) })))
-        // The matcher refuses payments that are already linked; that is "no candidate", not an error.
-        .catch(() => setCandidatesById((prev) => ({ ...prev, [id]: [] })));
+        // The matcher refuses payments that are already linked ("no candidate") and lines the bank has only
+        // reserved (vorgemerkt), which can be matched once the bank has booked them.
+        .catch((cause) => {
+          if (String(cause instanceof Error ? cause.message : cause).includes('PAYMENT_ALLOCATION_INVALID')) setMatchHintById((prev) => ({ ...prev, [id]: 'Die Bank hat diesen Umsatz nur vorgemerkt. Rechnungen lassen sich zuordnen, sobald die Bank ihn gebucht hat.' }));
+          setCandidatesById((prev) => ({ ...prev, [id]: [] }));
+        });
     }
   }, [dataAdapter, candidateIds]);
 
@@ -614,7 +619,7 @@ export default function ReconciliationWorkbench({
                           {!selectedCandidates ? (
                             <p className="text-caption text-muted" role="status">Suche passende Rechnungen…</p>
                           ) : selectedCandidates.length === 0 ? (
-                            <p className="text-caption text-muted">Keine offene Rechnung passt zu diesem Umsatz.</p>
+                            <p className="text-caption text-muted" role="status">{matchHintById[selectedTx.id] ?? 'Keine offene Rechnung passt zu diesem Umsatz.'}</p>
                           ) : (
                             <>
                               {selectedZweifelsfall && (
@@ -668,9 +673,11 @@ export default function ReconciliationWorkbench({
                             <div className="text-label text-foreground">{selectedTx.suggestion ?? 'Kein Vorschlag'}</div>
                             <div className="text-caption text-muted">Kontierungsvorschlag</div>
                           </div>
-                          <Badge tone={scoreTone(selectedTx.suggestionConfidence ?? 0.5)}>
-                            <span className="tabular-nums">Sicherheit {Math.round((selectedTx.suggestionConfidence ?? 0.5) * 100)} %</span>
-                          </Badge>
+                          {selectedTx.suggestion && (
+                            <Badge tone={scoreTone(selectedTx.suggestionConfidence ?? 0.5)}>
+                              <span className="tabular-nums">Sicherheit {Math.round((selectedTx.suggestionConfidence ?? 0.5) * 100)} %</span>
+                            </Badge>
+                          )}
                         </div>
                         <p className="mt-1.5 text-caption text-muted">
                           Entwurf enthält {draft.lines.length} Buchungszeilen und {draft.validationIssues.length} Validierungshinweise.

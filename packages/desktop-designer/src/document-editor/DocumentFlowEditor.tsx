@@ -25,6 +25,19 @@ interface TableColumn {
   align?: 'left' | 'center' | 'right';
 }
 
+
+/** A new document date moves the due date by the same number of days, so the Zahlungsziel stays (B6). Local calendar days. */
+const shiftDueDate = (previousDate: string | undefined, nextDate: string, dueDate: string | undefined): string | undefined => {
+  const day = (value: string | undefined) => {
+    const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value ?? '');
+    return match ? new Date(Number(match[1]), Number(match[2]) - 1, Number(match[3])) : null;
+  };
+  const from = day(previousDate); const to = day(nextDate); const due = day(dueDate);
+  if (!from || !to || !due) return dueDate;
+  const shifted = new Date(due.getFullYear(), due.getMonth(), due.getDate() + Math.round((to.getTime() - from.getTime()) / 86_400_000));
+  return `${shifted.getFullYear()}-${String(shifted.getMonth() + 1).padStart(2, '0')}-${String(shifted.getDate()).padStart(2, '0')}`;
+};
+
 export interface DocumentFlowEditorProps {
   /** The view model preview and print render from; supplies texts, columns and totals. */
   model: DocumentViewModel;
@@ -117,7 +130,7 @@ const lineAmount = (item: DraftItem): number => {
   const quantity = Number(item.quantity) || 0;
   const price = Number(item.price) || 0;
   const discount = Math.min(100, Math.max(0, Number(item.discountPercent) || 0));
-  return Math.round(quantity * price * (1 - discount / 100) * 100) / 100;
+  return Math.round((quantity * price * (1 - discount / 100) - Math.max(0, Number(item.discountAmount) || 0)) * 100) / 100;
 };
 
 const isBillableKind = (kind: DraftItem['kind']): boolean => kind === undefined || kind === 'item' || kind === 'time' || kind === 'optional';
@@ -149,6 +162,7 @@ interface InlineRowProps {
 type SortableBindings = Pick<ReturnType<typeof useSortable>, 'setNodeRef' | 'setActivatorNodeRef' | 'attributes' | 'listeners' | 'transform' | 'transition' | 'isDragging'>;
 
 const InlineBillingRow: React.FC<InlineRowProps> = ({ row, columns, items, onItemsChange, formatCurrency, taxRateOptions, defaultTaxRate, forceZeroVat, articles, fieldErrors, sortable }) => {
+  const [discountUnitChoice, setDiscountUnitChoice] = React.useState<'percent' | 'amount'>('percent');
   const sourceIndex = sourceIndexFromRow(row);
   const item = sourceIndex === undefined ? undefined : items[sourceIndex];
   const continuation = row.kind === 'row-continuation' || row.kind === 'group-continuation';
@@ -185,6 +199,39 @@ const InlineBillingRow: React.FC<InlineRowProps> = ({ row, columns, items, onIte
   const descriptionError = fieldErrors?.[sourceIndex];
   const descriptionErrorId = `document-item-${sourceIndex}-description-error`;
   const descriptionFieldId = `document-item-${sourceIndex}-description`;
+  const discountUnit: 'percent' | 'amount' = item.discountAmount ? 'amount' : item.discountPercent ? 'percent' : discountUnitChoice;
+  const discountValue = discountUnit === 'amount' ? item.discountAmount : item.discountPercent;
+  const setDiscount = (value: number, unit: 'percent' | 'amount') => {
+    const clean = Number.isFinite(value) && value > 0 ? (unit === 'percent' ? Math.min(100, value) : value) : undefined;
+    update(unit === 'percent' ? { discountPercent: clean, discountAmount: undefined } : { discountAmount: clean, discountPercent: undefined });
+  };
+  const renderDiscount = (className: string, suffix = '') => (
+    <span className="inline-flex items-center gap-0.5">
+      <input
+        aria-label={`Rabatt${suffix} Position ${sourceIndex + 1}`}
+        type="number"
+        min={0}
+        step="0.01"
+        value={discountValue ?? ''}
+        placeholder="0"
+        onChange={(event) => setDiscount(Number(event.target.value), discountUnit)}
+        className={`${controlClass} ${className} text-right`}
+      />
+      <select
+        aria-label={`Rabattart${suffix} Position ${sourceIndex + 1}`}
+        value={discountUnit}
+        onChange={(event) => {
+          const unit = event.target.value as 'percent' | 'amount';
+          setDiscountUnitChoice(unit);
+          setDiscount(Number(discountValue ?? 0), unit);
+        }}
+        className={`${controlClass} w-7 shrink-0 text-[10px]`}
+      >
+        <option value="percent">%</option>
+        <option value="amount">€</option>
+      </select>
+    </span>
+  );
   const renderDescription = () => (
     <>
       <div id={descriptionFieldId} data-field-block data-field-error={descriptionError ? 'true' : undefined} className="relative min-w-0">
@@ -240,7 +287,7 @@ const InlineBillingRow: React.FC<InlineRowProps> = ({ row, columns, items, onIte
         {descriptionError ? <p id={descriptionErrorId} className="mt-0.5 min-w-0 text-xs text-error-text">{descriptionError}</p> : null}
       </div>
       <div className="pointer-events-none absolute -right-14 top-1/2 z-20 flex -translate-y-1/2 items-center gap-0.5 opacity-0 motion-safe:transition-opacity motion-reduce:transition-none group-hover/line:pointer-events-auto group-hover/line:opacity-100 group-focus-within/line:pointer-events-auto group-focus-within/line:opacity-100 print:hidden">
-        <button type="button" aria-label={`Zeile ${sourceIndex + 1} duplizieren`} onClick={duplicate} className="inline-flex min-h-6 min-w-6 items-center justify-center rounded-sm px-1 text-muted hover:bg-surface-muted focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"><Plus size={12} aria-hidden="true" /></button>
+        <button type="button" aria-label={`Zeile ${sourceIndex + 1} duplizieren`} title="Zeile duplizieren" onClick={duplicate} className="inline-flex min-h-6 min-w-6 items-center justify-center rounded-sm px-1 text-muted hover:bg-surface-muted focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"><Plus size={12} aria-hidden="true" /></button>
         <button type="button" aria-label={`Zeile ${sourceIndex + 1} löschen`} onClick={remove} className="inline-flex min-h-6 min-w-6 items-center justify-center rounded-sm px-1 text-error-text hover:bg-error-bg focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"><Trash2 size={12} aria-hidden="true" /></button>
       </div>
       </div>
@@ -260,8 +307,10 @@ const InlineBillingRow: React.FC<InlineRowProps> = ({ row, columns, items, onIte
           onChange={(event) => update({ taxRate: Number(event.target.value) })}
           className={`${controlClass} w-9 shrink-0 text-right text-[10px]`}
         >
-          {taxRateOptions.map((rate) => <option key={rate} value={rate}>{rate}%</option>)}
+          {/* A rate from the article (e.g. 0 %) stays visible instead of showing the first option. */}
+          {(taxRateOptions.includes(effectiveTaxRate) ? taxRateOptions : [...taxRateOptions, effectiveTaxRate]).map((rate) => <option key={rate} value={rate}>{rate}%</option>)}
         </select></label> : null}
+        {isBillableKind(kind) && kind !== 'optional' ? <label className="flex items-center gap-1 text-muted"><span>Rabatt</span>{renderDiscount('w-12 text-[10px]')}</label> : null}
         {kind === 'summary' ? <label className="flex items-center gap-1 text-muted"><span>Summenbereich</span><select aria-label={`Summenbereich ${sourceIndex + 1}`} value={item.summaryScope ?? 'running'} onChange={(event) => update({ summaryScope: event.target.value as DraftItem['summaryScope'] })} className={`${controlClass} w-16 shrink-0 text-[10px]`}><option value="running">laufend</option><option value="group">Abschnitt</option></select></label> : null}
         {kind === 'summary' ? <label className="flex items-center gap-1 text-muted"><span>Summenmetrik</span><select aria-label={`Summenmetrik ${sourceIndex + 1}`} value={item.summaryMetric ?? 'amount'} onChange={(event) => update({ summaryMetric: event.target.value as DraftItem['summaryMetric'] })} className={`${controlClass} w-14 shrink-0 text-[10px]`}><option value="amount">Betrag</option><option value="quantity">Menge</option></select></label> : null}
       </div>
@@ -279,6 +328,7 @@ const InlineBillingRow: React.FC<InlineRowProps> = ({ row, columns, items, onIte
         else if (columnId.includes('qty') || columnId.includes('menge')) content = kind === 'group' || kind === 'summary' || kind === 'text' ? '' : <input aria-label="Menge" type="number" step="0.01" value={item.quantity} onChange={(event) => update({ quantity: Number(event.target.value) })} className={`${controlClass} w-full text-right`} />;
         else if (columnId.includes('unit') || columnId.includes('einheit')) content = kind === 'group' || kind === 'summary' || kind === 'text' ? '' : <input aria-label={`Einheit ${sourceIndex + 1}`} value={item.unit ?? ''} onChange={(event) => update({ unit: event.target.value })} className={`${controlClass} w-full text-center`} />;
         else if (columnId.includes('price') || columnId.includes('einzel')) content = kind === 'group' || kind === 'summary' || kind === 'text' ? '' : <input aria-label={`Einzelpreis ${sourceIndex + 1}`} type="number" step="0.01" value={item.price} onChange={(event) => update({ price: Number(event.target.value) })} className={`${controlClass} w-full text-right`} />;
+        else if (columnId.includes('discount') || columnId.includes('rabatt')) content = isBillableKind(kind) && kind !== 'optional' ? renderDiscount('w-full', ' (Spalte)') : '';
         else if (columnId.includes('total') || columnId.includes('gesamt')) content = kind === 'optional' ? '–' : kind === 'group' || kind === 'summary' || kind === 'text' ? cellValue(row, column, index) : formatCurrency(lineAmount(item));
         if (index === 0) {
           const dragHandle = <button ref={sortable?.setActivatorNodeRef} type="button" aria-label={`Zeile ${sourceIndex + 1} verschieben`} data-line-drag-handle={sourceIndex} {...sortable?.attributes} {...sortable?.listeners} className="absolute -left-8 top-1/2 inline-flex min-h-6 min-w-6 -translate-y-1/2 cursor-grab items-center justify-center rounded-sm px-1 text-muted hover:text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring print:hidden"><GripVertical size={12} aria-hidden="true" /></button>;
@@ -418,7 +468,7 @@ const InlineDocumentFields: React.FC<InlineDocumentFieldsProps> = ({ fields, def
           <div id="document-field-date" data-field-block data-field-error={fields.fieldErrors?.date ? 'true' : undefined}>
           <div className="flex items-center justify-end gap-2">
             <label htmlFor="document-input-date" className={documentLabelClass}>Datum{requiredMark(true)}</label>
-            <input id="document-input-date" type="date" value={document.date ?? ''} onChange={(event) => set((previous) => ({ ...previous, date: event.target.value }))} aria-label="Datum" aria-invalid={Boolean(fields.fieldErrors?.date)} aria-describedby={fields.fieldErrors?.date ? 'document-input-date-error' : undefined} aria-required="true" required className={inputClass(Boolean(fields.fieldErrors?.date), 'w-auto text-right text-[11px]')} />
+            <input id="document-input-date" type="date" value={document.date ?? ''} onChange={(event) => set((previous) => ({ ...previous, date: event.target.value, dueDate: shiftDueDate(previous.date, event.target.value, previous.dueDate) }))} aria-label="Datum" aria-invalid={Boolean(fields.fieldErrors?.date)} aria-describedby={fields.fieldErrors?.date ? 'document-input-date-error' : undefined} aria-required="true" required className={inputClass(Boolean(fields.fieldErrors?.date), 'w-auto text-right text-[11px]')} />
           </div>
           {error('document-input-date-error', fields.fieldErrors?.date)}
           </div>
@@ -441,6 +491,7 @@ const InlineDocumentFields: React.FC<InlineDocumentFieldsProps> = ({ fields, def
             <label className={documentLabelClass}>{templateType === 'offer' ? 'Leistungszeitraum' : 'Leistungsdatum'}</label>
             {dateInput(servicePeriod.start, (start) => setServicePeriod(start, servicePeriod.end), templateType === 'offer' ? 'Leistungszeitraum ab' : 'Leistungsdatum')}
           </div>
+          {templateType !== 'offer' && !servicePeriod.start ? <p className="text-right text-[10px] text-muted">Leer: Das Rechnungsdatum gilt als Leistungsdatum.</p> : null}
           <div className="flex items-center justify-end gap-2">
             <label className={documentLabelClass}>bis</label>
             {dateInput(servicePeriod.end, (end) => setServicePeriod(servicePeriod.start, end), 'Leistungszeitraum bis')}
@@ -761,6 +812,7 @@ export const DocumentFlowEditor: React.FC<DocumentFlowEditorProps> = ({
                   <option value="summary">Zwischensumme</option>
                 </select>
                 <button id="document-field-positions" type="button" aria-label="Position hinzufügen" onClick={() => add('item')} className="rounded-sm bg-accent px-2 py-1 font-semibold text-accent-foreground hover:bg-accent-hover focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring">+ Position</button>
+                {articles.length > 0 ? <button type="button" onClick={() => { setCommandQuery('artikel'); setCommandOpen(true); }} className="rounded-sm border border-control-border bg-surface px-2 py-1 font-semibold text-foreground hover:bg-surface-muted focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring">+ Artikel</button> : null}
               </div>
             ) : null}
 

@@ -55,9 +55,19 @@ export type AccountingSourceRun = {
   createdAt: string;
 };
 
+/** What a year-end preview (`domainFacts.preview: true`) would book; nothing is stored. */
+export type AccountingCommandPreview = {
+  lines: Array<{ accountNumber: string; debitAmount: number; creditAmount: number }>;
+  postingDate: string;
+  netResult?: number;
+  retainedEarningsAccount?: string;
+  openingBalanceAccount?: string;
+};
+
 export type AccountingSourcePostResult = {
-  status: 'posted' | 'rejected' | 'duplicate' | 'noop';
+  status: 'posted' | 'rejected' | 'duplicate' | 'noop' | 'preview';
   sourceRun?: AccountingSourceRun;
+  command?: unknown;
   errors: Array<{ code: string; message: string; field?: string; blocking?: boolean }>;
   idempotencyKey: string;
 };
@@ -67,6 +77,9 @@ export type AccountingCommandInput = {
   source: DomainAccountingSourceFact;
   domainFacts?: Record<string, unknown>;
   reason: string;
+  /** Books into a vorläufig gesperrten month; the server logs `overrideReason`. */
+  softLockOverride?: boolean;
+  overrideReason?: string;
 };
 
 /** Facts for a domain workflow. The workspace owns this source context. */

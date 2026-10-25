@@ -22,9 +22,10 @@ const EU_VAT_COUNTRIES = new Set([
   'HU', 'IE', 'IT', 'LT', 'LU', 'LV', 'MT', 'NL', 'PL', 'PT', 'RO', 'SE', 'SI', 'SK',
 ]);
 
-export const normalizeVatId = ({ countryCode, vatNumber }: VatValidationInput) => {
+// Same compaction as vatIdError in masterdataChecks (spaces, dots, hyphens), so a number the forms accept reaches VIES unchanged. Internal: the public seam is validateVatId.
+const normalizeVatId = ({ countryCode, vatNumber }: VatValidationInput) => {
   const country = countryCode.trim().toUpperCase();
-  const normalizedVatId = vatNumber.replace(/\s+/g, '').toUpperCase();
+  const normalizedVatId = vatNumber.replace(/[\s.-]+/g, '').toUpperCase();
   const localVatNumber = normalizedVatId.startsWith(country)
     ? normalizedVatId.slice(country.length)
     : normalizedVatId;

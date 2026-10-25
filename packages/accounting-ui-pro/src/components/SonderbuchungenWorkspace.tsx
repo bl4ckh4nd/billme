@@ -1,9 +1,11 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { Button, Card, CardHeader, EmptyState, Field, Input, Select, Stepper, Textarea, formatEmptyValue } from '@billme/ui';
+import { Button, Card, CardHeader, ConfirmDialog, EmptyState, Field, Input, Select, Stepper, Textarea, formatEmptyValue } from '@billme/ui';
 import { JournalEntryDetailModal } from './JournalEntryDetail';
 import PeriodLockPanel from './PeriodLockPanel';
 import ManualEntryPanel from './ManualEntryPanel';
 import UstvaPanel from './UstvaPanel';
+import FiscalYearClosePanel from './FiscalYearClosePanel';
+import type { BusinessReportingProfile } from '../domain/reportTypes';
 import { userFacingReference } from '../domain/references';
 import type { Account, UserRole } from '../types';
 import { permissionContextForRole } from '../domain/permissions';
@@ -30,8 +32,6 @@ const workflows: WorkflowOption[] = [
   { value: 'skonto', label: 'Skonto', group: 'Belege & Zahlungen', description: 'Zahlungsabzug und Umsatzsteuer anteilig korrigieren.' },
   { value: 'bad_debt', label: 'Forderungsausfall', group: 'Belege & Zahlungen', description: 'Uneinbringliche Forderung mit Nachweis ausbuchen.' },
   { value: 'advance_settlement', label: 'Vorauszahlung / Verrechnung', group: 'Belege & Zahlungen', description: 'Geleistete oder erhaltene Anzahlungen verrechnen.' },
-  { value: 'fiscal_close', label: 'Geschäftsjahresabschluss', group: 'Abschluss', description: 'Erfolgskonten zum Stichtag abschließen.' },
-  { value: 'carry_forward', label: 'Vortrag', group: 'Abschluss', description: 'Bestandskonten ins neue Geschäftsjahr vortragen.' },
   { value: 'provision', label: 'Rückstellung', group: 'Abschluss', description: 'Rückstellung bilden, anpassen oder auflösen.' },
   { value: 'accrual', label: 'Abgrenzung', group: 'Abschluss', description: 'Aufwand oder Ertrag periodengerecht abgrenzen.' },
   { value: 'inventory_closing', label: 'Inventurabschluss', group: 'Abschluss', description: 'Bewertete Inventurbestände zum Stichtag buchen.' },
@@ -61,6 +61,34 @@ type FormState = {
   date: string;
   domainFacts: string;
   reason: string;
+  /** Mask fields of Skonto, Forderungsausfall and Anzahlung; their facts are built from these, not from JSON. */
+  amount?: string;
+  advanceNumber?: string;
+  evidence?: string;
+};
+
+const MASK_KINDS: ReadonlySet<AccountingCommandKind> = new Set(['skonto', 'bad_debt', 'advance_settlement']);
+const RECEIVABLE = { SKR03: '1400', SKR04: '1200' } as const;
+const PAYABLE = { SKR03: '1600', SKR04: '3300' } as const;
+const BAD_DEBT_ACCOUNT = { SKR03: '2400', SKR04: '6930' } as const;
+const maskAmount = (value: string | undefined): number | null => {
+  const text = (value ?? '').trim();
+  const number = Number(text.includes(',') ? text.replace(/\./g, '').replace(',', '.') : text);
+  return text && Number.isFinite(number) && number > 0 && Math.abs(number * 100 - Math.round(number * 100)) < 1e-6 ? Math.round(number * 100) / 100 : null;
+};
+
+/** Facts of a mask workflow. The tax split and the invoice ids come from the posted invoices on the server. */
+const maskFacts = (form: FormState, chart: 'SKR03' | 'SKR04'): { facts?: Record<string, unknown>; errors: string[] } => {
+  const amount = maskAmount(form.amount);
+  const errors: string[] = [];
+  if (amount === null) errors.push(form.kind === 'skonto' ? 'Skontobetrag (brutto) fehlt.' : form.kind === 'bad_debt' ? 'Ausfallbetrag (brutto) fehlt.' : 'Verrechneter Betrag (brutto) fehlt.');
+  if (form.kind === 'bad_debt' && !form.evidence?.trim()) errors.push('Nachweis des Ausfalls fehlt (z. B. Insolvenzbekanntmachung).');
+  if (form.kind === 'advance_settlement' && !form.advanceNumber?.trim()) errors.push('Nummer der Abschlagsrechnung fehlt.');
+  if (errors.length) return { errors };
+  const base = { sourceId: form.sourceId.trim(), date: form.date, period: periodOf(form.date), fiscalYear: yearOf(form.date) };
+  if (form.kind === 'skonto') return { facts: { ...base, skontoAmount: amount }, errors };
+  if (form.kind === 'bad_debt') return { facts: { ...base, writeOffGrossAmount: amount, badDebtExpenseAccount: BAD_DEBT_ACCOUNT[chart], facts: { legalBasis: '§17 UStG', reason: 'bad_debt', adjustmentDate: form.date, evidenceReference: form.evidence!.trim() } }, errors };
+  return { facts: { ...base, finalInvoice: { number: form.sourceId.trim() }, advances: [{ number: form.advanceNumber!.trim(), kind: 'advance', grossAmount: amount }], advanceClearingReceivable: RECEIVABLE[chart], advanceClearingPayable: PAYABLE[chart] }, errors };
 };
 
 const periodOf = (date: string): string => date.slice(0, 7);
@@ -247,7 +275,11 @@ const arrayFactKeys: Partial<Record<AccountingCommandKind, readonly string[]>> =
   payroll_batch: ['lines'],
 };
 
-const parseDomainFacts = (form: FormState): { facts?: AccountingDomainFacts; errors: string[] } => {
+const parseDomainFacts = (form: FormState, chart: 'SKR03' | 'SKR04' = 'SKR03'): { facts?: AccountingDomainFacts; errors: string[] } => {
+  if (MASK_KINDS.has(form.kind)) {
+    const masked = maskFacts(form, chart);
+    return masked.facts ? { facts: masked.facts as AccountingDomainFacts, errors: [] } : { errors: masked.errors };
+  }
   let parsed: unknown;
   try { parsed = JSON.parse(form.domainFacts); } catch { return { errors: ['Domain-Fakten müssen gültiges JSON sein.'] }; }
   if (!isRecord(parsed)) return { errors: ['Domain-Fakten müssen ein JSON-Objekt sein.'] };
@@ -262,12 +294,12 @@ const parseDomainFacts = (form: FormState): { facts?: AccountingDomainFacts; err
   return { facts, errors: [] };
 };
 
-const validateForm = (form: FormState): string[] => {
+const validateForm = (form: FormState, chart: 'SKR03' | 'SKR04' = 'SKR03'): string[] => {
   const errors: string[] = [];
   if (!validDate(form.date)) errors.push('Datum muss ein gültiges ISO-Datum sein.');
-  if (!form.sourceId.trim()) errors.push('Quellbeleg ist erforderlich.');
+  if (!form.sourceId.trim()) errors.push(MASK_KINDS.has(form.kind) ? 'Rechnungsnummer ist erforderlich.' : 'Quellbeleg ist erforderlich.');
   if (!form.reason.trim()) errors.push('Audit-Grund ist erforderlich.');
-  errors.push(...parseDomainFacts(form).errors);
+  errors.push(...parseDomainFacts(form, chart).errors);
   return errors;
 };
 
@@ -290,9 +322,14 @@ type Props = {
   role?: UserRole;
   accounts?: Account[];
   chart?: 'SKR03' | 'SKR04';
+  businessReportingProfile?: BusinessReportingProfile;
+  /** "special": Sonderbuchungen und Jahresabschluss; "tax": UStVA, ZM/OSS-Vorbereitung und Perioden (Bereich Steuer). */
+  area?: 'special' | 'tax';
+  /** Opens the host's ELSTER transmission page (/tax-filing); without it the Steuer area shows no link. */
+  onOpenTaxFiling?: () => void;
 };
 
-export default function SonderbuchungenWorkspace({ dataAdapter, role = 'admin', accounts = [], chart = 'SKR03' }: Props) {
+export default function SonderbuchungenWorkspace({ dataAdapter, role = 'admin', accounts = [], chart = 'SKR03', businessReportingProfile, area = 'special', onOpenTaxFiling }: Props) {
   const [form, setForm] = useState<FormState>(initialForm);
   const [feedback, setFeedback] = useState<{ kind: 'success' | 'error'; text: string } | null>(null);
   const [history, setHistory] = useState<AccountingSourceRun[]>([]);
@@ -314,8 +351,9 @@ export default function SonderbuchungenWorkspace({ dataAdapter, role = 'admin', 
   const canMutate = permissionContextForRole(role).canMutate;
   const selectedWorkflow = workflows.find((workflow) => workflow.value === form.kind) ?? workflows[0];
 
-  const preview = useMemo(() => (form.domainFacts || form.date || form.reason ? validateForm(form) : []), [form]);
-  const parsedFacts = useMemo(() => parseDomainFacts(form).facts, [form]);
+  const preview = useMemo(() => (form.domainFacts || form.date || form.reason ? validateForm(form, chart) : []), [form, chart]);
+  const parsedFacts = useMemo(() => parseDomainFacts(form, chart).facts, [form, chart]);
+  const masked = MASK_KINDS.has(form.kind);
   const fieldErrors = useMemo(() => ({
     sourceId: form.sourceId.trim() ? null : 'Quellbeleg ist erforderlich.',
     date: validDate(form.date) ? null : 'Buchungsdatum muss ein gültiges Datum sein.',
@@ -364,28 +402,41 @@ export default function SonderbuchungenWorkspace({ dataAdapter, role = 'admin', 
     };
   }, []);
 
-  const update = (key: keyof FormState, value: string) => {
+  const update = (key: Exclude<keyof FormState, 'kind'>, value: string) => {
     setEdited(true);
     updateForm(key, value);
   };
-  const updateForm = (key: keyof FormState, value: string) => setForm((current) => {
+  const updateForm = (key: Exclude<keyof FormState, 'kind'>, value: string) => setForm((current) => {
     const next = { ...current, [key]: value };
     if (key === 'sourceId' || key === 'date' || key === 'domainFacts') {
       next.domainFacts = synchronizeDomainFactsText(next.kind, next.sourceId, next.date, next.domainFacts, key === 'sourceId' ? current.sourceId : undefined);
     }
     return next;
   });
-  const selectWorkflow = (kind: AccountingCommandKind) => setForm((current) => ({ ...current, kind, domainFacts: formatFacts(kind, current.sourceId, current.date) }));
+  const selectWorkflow = (kind: AccountingCommandKind) => setForm((current) => ({ ...current, kind, amount: '', advanceNumber: '', evidence: '', domainFacts: formatFacts(kind, current.sourceId, current.date) }));
 
-  const submit = async () => {
+  // A posting is final (only a Storno undoes it): the button first shows what will be booked and asks once.
+  const [confirming, setConfirming] = useState(false);
+  const requestSubmit = () => {
     if (busyRef.current || !dataAdapter?.postAccountingCommand || !canMutate) return;
-    const validation = validateForm(form);
+    const validation = validateForm(form, chart);
     setFeedback(validation.length ? { kind: 'error', text: validation.join(' ') } : null);
     if (validation.length) {
       setTouched({ sourceId: true, date: true, reason: true });
       return;
     }
-    const parsed = parseDomainFacts(form);
+    if (parseDomainFacts(form, chart).facts) setConfirming(true);
+  };
+  const submit = async () => {
+    setConfirming(false);
+    if (busyRef.current || !dataAdapter?.postAccountingCommand || !canMutate) return;
+    const validation = validateForm(form, chart);
+    setFeedback(validation.length ? { kind: 'error', text: validation.join(' ') } : null);
+    if (validation.length) {
+      setTouched({ sourceId: true, date: true, reason: true });
+      return;
+    }
+    const parsed = parseDomainFacts(form, chart);
     if (!parsed.facts) return;
     busyRef.current = true;
     setBusy(true);
@@ -406,7 +457,8 @@ export default function SonderbuchungenWorkspace({ dataAdapter, role = 'admin', 
         return;
       }
       setFeedback({ kind: 'success', text: result.status === 'duplicate' ? 'Diese Quelle wurde bereits gebucht. Der bestehende Lauf bleibt maßgeblich.' : 'Sonderbuchung wurde erfolgreich gebucht.' });
-      setForm(initialForm());
+      // Stay on the workflow just booked; the next Skonto or Rückstellung starts from its own template.
+      setForm((current) => ({ ...initialForm(), kind: current.kind, domainFacts: formatFacts(current.kind, '', localToday()) }));
       await refetchHistory();
       setPeriodRefresh((value) => value + 1);
     } catch (error) {
@@ -469,11 +521,13 @@ export default function SonderbuchungenWorkspace({ dataAdapter, role = 'admin', 
 
   return (
     <div className="space-y-3.5" data-testid="sonderbuchungen-workspace">
-      <h2 className="sr-only">Sonderbuchungen &amp; Abschluss</h2>
+      <h2 className="sr-only">{area === 'tax' ? 'Steuer' : 'Sonderbuchungen & Abschluss'}</h2>
 
       {!dataAdapter?.postAccountingCommand ? <p className={`border-border bg-surface-muted text-muted ${bannerClass}`} role="status">Sonderbuchungen sind in dieser Verbindung nur lesbar.</p> : null}
       {!canMutate ? <p className={`border-border bg-surface-muted text-muted ${bannerClass}`} role="status">Diese Rolle darf Sonderbuchungen nur lesen.</p> : null}
-      <ManualEntryPanel dataAdapter={dataAdapter} accounts={accounts} chart={chart} canMutate={canMutate} onPosted={(entryId) => { setSelectedJournalEntryId(entryId); setPeriodRefresh((value) => value + 1); }} />
+      {area === 'special' ? (
+        <>
+      <ManualEntryPanel dataAdapter={dataAdapter} accounts={accounts} chart={chart} canMutate={canMutate} corporation={businessReportingProfile?.legalForm === 'gmbh' || businessReportingProfile?.legalForm === 'ug'} onPosted={(entryId) => { setSelectedJournalEntryId(entryId); setPeriodRefresh((value) => value + 1); }} />
       <section aria-labelledby="special-entry-form-heading">
         <Card padding="none">
           <CardHeader className={cardHeadClass} title={<span id="special-entry-form-heading">1. Vorgang und Angaben</span>} subtitle={selectedWorkflow.description} />
@@ -484,16 +538,24 @@ export default function SonderbuchungenWorkspace({ dataAdapter, role = 'admin', 
               <Select label="Workflow" aria-label="Workflow" fullWidth value={form.kind} onChange={(event) => selectWorkflow(event.target.value as AccountingCommandKind)} disabled={!canMutate || busy}>
                 {workflowGroups.map((group) => <optgroup key={group} label={group}>{workflows.filter((workflow) => workflow.group === group).map((workflow) => <option key={workflow.value} value={workflow.value}>{workflow.label}</option>)}</optgroup>)}
               </Select>
-              <Input id="source-id" label="Quellbeleg" aria-label="Quellbeleg" required fullWidth aria-invalid={Boolean(shownErrors.sourceId)} error={shownErrors.sourceId ?? undefined} value={form.sourceId} onChange={(event) => update('sourceId', event.target.value)} onBlur={() => touch('sourceId')} disabled={!canMutate || busy} placeholder="z. B. RE-2026-10-42" />
+              <Input id="source-id" label={masked ? (form.kind === 'advance_settlement' ? 'Schlussrechnung (Nummer)' : 'Rechnung (Nummer)') : 'Quellbeleg'} aria-label="Quellbeleg" required fullWidth aria-invalid={Boolean(shownErrors.sourceId)} error={shownErrors.sourceId ?? undefined} value={form.sourceId} onChange={(event) => update('sourceId', event.target.value)} onBlur={() => touch('sourceId')} disabled={!canMutate || busy} placeholder="z. B. RE-2026-10-42" />
               <Input id="booking-date" label="Buchungsdatum" aria-label="Buchungsdatum" type="date" required fullWidth aria-invalid={Boolean(shownErrors.date)} error={shownErrors.date ?? undefined} value={form.date} onChange={(event) => update('date', event.target.value)} onBlur={() => touch('date')} disabled={!canMutate || busy} />
               <Field id="audit-reason" label="Audit-Grund (Pflicht)" className="sm:col-span-2 lg:col-span-3">
                 <Input aria-label="Audit-Grund" required fullWidth aria-invalid={Boolean(shownErrors.reason)} error={shownErrors.reason ?? undefined} value={form.reason} onChange={(event) => update('reason', event.target.value)} onBlur={() => touch('reason')} disabled={!canMutate || busy} placeholder="Warum wird diese Buchung vorgenommen?" />
               </Field>
             </div>
+            {masked ? (
+              <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3" data-testid="settlement-mask">
+                {form.kind === 'advance_settlement' ? <Input id="advance-number" label="Abschlagsrechnung (Nummer)" aria-label="Abschlagsrechnung" fullWidth value={form.advanceNumber ?? ''} onChange={(event) => update('advanceNumber', event.target.value)} disabled={!canMutate || busy} placeholder="z. B. RE-2026-0040" /> : null}
+                <Input id="settlement-amount" label={form.kind === 'skonto' ? 'Skontobetrag (brutto)' : form.kind === 'bad_debt' ? 'Ausfallbetrag (brutto)' : 'Verrechneter Betrag (brutto)'} aria-label="Betrag (brutto)" inputMode="decimal" fullWidth value={form.amount ?? ''} onChange={(event) => update('amount', event.target.value)} disabled={!canMutate || busy} placeholder="z. B. 23,80" hint="Die Aufteilung auf die Steuersätze übernimmt billme aus der gebuchten Rechnung." />
+                {form.kind === 'bad_debt' ? <Input id="bad-debt-evidence" label="Nachweis des Ausfalls" aria-label="Nachweis des Ausfalls" fullWidth value={form.evidence ?? ''} onChange={(event) => update('evidence', event.target.value)} disabled={!canMutate || busy} placeholder="z. B. Insolvenzbekanntmachung AG Berlin" /> : null}
+              </div>
+            ) : (
             <details className="border-t border-border pt-1">
               <summary className="cursor-pointer select-none py-2 text-label text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring">Fachdaten für Experten bearbeiten</summary>
               <Textarea id="domain-facts" label="Fachdaten (JSON)" aria-label="Domain-Fakten (JSON)" required fullWidth aria-invalid={preview.length > 0} hint="Nur für fachkundige Bearbeitung. Konten und Beträge werden vor der Buchung erneut validiert." value={form.domainFacts} onChange={(event) => update('domainFacts', event.target.value)} disabled={!canMutate || busy} rows={12} spellCheck={false} className="font-mono" />
             </details>
+            )}
             {preview.length && pristine ? (
               <div className={`border-border bg-surface-muted ${bannerClass}`} role="status">
                 <div className="flex flex-wrap items-center justify-between gap-2">
@@ -514,11 +576,34 @@ export default function SonderbuchungenWorkspace({ dataAdapter, role = 'admin', 
           </div>
           <div className="flex flex-wrap items-center justify-end gap-3 border-t border-border px-3.5 py-3">
             {feedback ? <p data-testid="sonderbuchungen-feedback" className={`min-w-0 flex-1 text-control ${feedback.kind === 'error' ? 'text-error-text' : 'text-success-text'}`} role={feedback.kind === 'error' ? 'alert' : 'status'} aria-live={feedback.kind === 'error' ? 'assertive' : 'polite'}>{feedback.text}</p> : null}
-            <Button type="button" variant="dark" onClick={() => void submit()} disabled={busy || preview.length > 0 || !canMutate || !dataAdapter?.postAccountingCommand} aria-busy={busy}>{busy ? 'Buchung läuft…' : 'Prüfen & verbindlich buchen'}</Button>
+            <Button type="button" variant="dark" onClick={requestSubmit} disabled={busy || preview.length > 0 || !canMutate || !dataAdapter?.postAccountingCommand} aria-busy={busy}>{busy ? 'Buchung läuft…' : 'Prüfen & verbindlich buchen'}</Button>
           </div>
+          <ConfirmDialog
+            open={confirming}
+            title={`${selectedWorkflow.label} verbindlich buchen?`}
+            description="Die Buchung wird ins Journal geschrieben. Ändern lässt sie sich danach nur noch mit einem Storno."
+            details={(
+              <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 text-control" data-testid="special-entry-confirm-summary">
+                <dt className="text-muted">Vorgang</dt><dd className="text-foreground">{selectedWorkflow.label}</dd>
+                <dt className="text-muted">{masked ? 'Rechnung' : 'Quellbeleg'}</dt><dd className="text-foreground">{formatEmptyValue(userFacingReference(form.sourceId))}</dd>
+                {masked && form.amount ? <><dt className="text-muted">Betrag (brutto)</dt><dd className="tabular-nums text-foreground">{form.amount} €</dd></> : null}
+                <dt className="text-muted">Buchungsdatum</dt><dd className="tabular-nums text-foreground">{form.date}{parsedFacts ? ` · Periode ${String(parsedFacts.period ?? periodOf(form.date))}` : ''}</dd>
+                <dt className="text-muted">Audit-Grund</dt><dd className="text-foreground">{form.reason.trim()}</dd>
+              </dl>
+            )}
+            confirmLabel="Verbindlich buchen"
+            busy={busy}
+            onConfirm={() => void submit()}
+            onCancel={() => setConfirming(false)}
+          />
         </Card>
       </section>
 
+      <FiscalYearClosePanel dataAdapter={dataAdapter} accounts={accounts} chart={chart} profile={businessReportingProfile} canMutate={canMutate} onPosted={(entryId) => { setSelectedJournalEntryId(entryId); setPeriodRefresh((value) => value + 1); void refetchHistory(); }} />
+        </>
+      ) : null}
+      {area === 'tax' ? (
+        <>
       <UstvaPanel dataAdapter={dataAdapter} initialMonth={localToday().slice(0, 7)} onOpenEntry={setSelectedJournalEntryId} />
       <section aria-labelledby="tax-preparation-heading">
         <Card padding="none">
@@ -535,15 +620,18 @@ export default function SonderbuchungenWorkspace({ dataAdapter, role = 'admin', 
               <Button type="button" variant="secondary" onClick={() => void prepareTax()} disabled={taxBusy || !dataAdapter?.prepareTaxExport} aria-busy={taxBusy}>{taxBusy ? 'Bereite vor…' : 'Vorbereitung erstellen'}</Button>
             </div>
             {taxError ? <p className="text-control text-error-text" role="alert" aria-live="assertive">{taxError}</p> : null}
-            {preparedArtifact ? <div className="flex flex-wrap items-center gap-2"><p className={`text-control ${preparedArtifact.rowCount === 0 ? 'text-muted' : 'text-success-text'}`} role="status" aria-live="polite">{preparedArtifact.rowCount === 0 ? `${taxPreparations.find((item) => item.value === preparedArtifact.kind)?.label ?? preparedArtifact.kind}: Keine meldepflichtigen Vorgänge (keine meldepflichtigen Zeilen).` : `${taxPreparations.find((item) => item.value === preparedArtifact.kind)?.label ?? preparedArtifact.kind} vorbereitet (${preparedArtifact.status}) – keine offizielle Übermittlung.`}</p>{preparedArtifact.id && dataAdapter?.exportTaxArtifact ? <Button type="button" size="sm" variant="secondary" onClick={() => void exportTax()} disabled={exportBusy} aria-busy={exportBusy}>{exportBusy ? 'Export läuft…' : 'Vorbereitungs-Export'}</Button> : null}</div> : null}
+            {preparedArtifact ? <div className="flex flex-wrap items-center gap-2"><p className={`text-control ${preparedArtifact.rowCount === 0 ? 'text-muted' : 'text-success-text'}`} role="status" aria-live="polite">{preparedArtifact.rowCount === 0 ? `${taxPreparations.find((item) => item.value === preparedArtifact.kind)?.label ?? preparedArtifact.kind}: Keine meldepflichtigen Vorgänge (keine meldepflichtigen Zeilen).` : `${taxPreparations.find((item) => item.value === preparedArtifact.kind)?.label ?? preparedArtifact.kind} ${preparedArtifact.status === 'prepared' ? 'vorbereitet und eingefroren' : 'vorbereitet'} – keine offizielle Übermittlung. Die Monate des Zeitraums sind jetzt vorläufig gesperrt.`}</p>{preparedArtifact.id && dataAdapter?.exportTaxArtifact ? <Button type="button" size="sm" variant="secondary" onClick={() => void exportTax()} disabled={exportBusy} aria-busy={exportBusy}>{exportBusy ? 'Export läuft…' : 'Vorbereitungs-Export'}</Button> : null}</div> : null}
           </div>
           <div className="grid gap-x-6 gap-y-1 border-t border-border px-3.5 py-3 text-caption text-muted sm:grid-cols-2">
             <p><strong className="font-semibold text-foreground-secondary">E-Bilanz:</strong> Vorbereitung möglich, offizieller Provider nicht verfügbar.</p>
             <p><strong className="font-semibold text-foreground-secondary">Unternehmensregister:</strong> Vorbereitung möglich, offizieller Provider nicht verfügbar.</p>
+            {onOpenTaxFiling ? <p className="flex flex-wrap items-center gap-2 sm:col-span-2"><strong className="font-semibold text-foreground-secondary">ELSTER:</strong> billme übermittelt nicht selbst. Eingefrorene EÜR- und E-Bilanz-Berichte prüfen und exportieren: <Button type="button" size="sm" variant="secondary" onClick={onOpenTaxFiling}>ELSTER-Export öffnen</Button></p> : null}
           </div>
         </Card>
       </section>
 
+        </>
+      ) : <p className="text-caption text-muted" data-testid="tax-moved-hint">UStVA, ZM und OSS stehen im Bereich Steuer.</p>}
       <PeriodLockPanel dataAdapter={dataAdapter} canMutate={canMutate} refreshToken={periodRefresh} />
       <section aria-labelledby="source-run-history-heading">
         <Card padding="none" className="overflow-hidden">
@@ -562,7 +650,7 @@ export default function SonderbuchungenWorkspace({ dataAdapter, role = 'admin', 
           )}
         </Card>
       </section>
-      <JournalEntryDetailModal entryId={selectedJournalEntryId} dataAdapter={dataAdapter} onClose={() => setSelectedJournalEntryId(null)} />
+      <JournalEntryDetailModal entryId={selectedJournalEntryId} dataAdapter={dataAdapter} accounts={accounts} canMutate={canMutate} onClose={() => setSelectedJournalEntryId(null)} />
     </div>
   );
 }

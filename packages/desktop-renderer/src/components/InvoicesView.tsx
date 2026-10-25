@@ -3,7 +3,7 @@ import {
   Search, Plus, FileText,
   ArrowLeft, Share2, ArrowUpRight,
   AlertTriangle, Mail, Gavel, CheckCircle, X,
-  Download, Printer, Send, Paperclip, MoreHorizontal, RefreshCw, Link, ExternalLink, Trash2, LayoutTemplate, Edit3, Euro, ArrowRight, Copy
+  Download, Printer, Send, Paperclip, MoreHorizontal, RefreshCw, Link, ExternalLink, Trash2, LayoutTemplate, Edit3, Euro, ArrowRight, Copy, Lock
 } from 'lucide-react';
 import {
   Badge, Button, Card, CardHeader, Checkbox, ConfirmDialog, EMPTY_VALUE, EmptyState, ErrorState, HatchedProgress, IconButton, Input, Menu, Modal,
@@ -22,21 +22,23 @@ import { useDeleteInvoiceMutation, useInvoicesQuery, useUpsertInvoiceMutation, u
 import { useDeleteOfferMutation, useOffersQuery, useUpsertOfferMutation } from '../hooks/useOffers';
 import { useSettingsQuery } from '../hooks/useSettings';
 import { formatDocumentHistoryAction } from '../documentHistory';
-import { getRendererRuntime, ipc } from '../runtime-api';
+import { READ_ONLY_HINT, canMutate, getRendererRuntime, ipc } from '../runtime-api';
 import type { IpcArgs } from '@billme/desktop-contracts/contract';
-import { useQueryClient } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { v4 as uuidv4 } from 'uuid';
 import { localIsoDate } from '@billme/desktop-utils';
 import { canDuplicateDocument, duplicateDocument } from '@billme/desktop-services/duplicateDocument';
 import { useNavigate } from '@tanstack/react-router';
 import { useUiStore } from '../ui-store';
 import { SkeletonLoader } from '../ui/components/SkeletonLoader';
+import { DunningLetterModal } from '../ui/components/DunningLetterModal';
 import { CHAIN_START_LABELS, ChainSourcePicker, type ChainStartAction } from './invoices/ChainSourcePicker';
 import {
   calculateDaysOverdue,
   calculateInvoiceTaxSnapshot,
   correctableAmount,
   correctionBlocker,
+  isCorrectionDocumentKind,
   isReceivableDocumentKind,
   orderConfirmationBlocker,
   orderSettlement,
@@ -62,25 +64,72 @@ const formatDate = (dateString: string) => {
   return Number.isNaN(date.getTime()) ? date.toLocaleDateString('de-DE') : dateFormat.format(date);
 };
 
+/** An issued invoice is an accounting artifact: the server refuses any content change, so the UI offers no editor. */
+const isLockedDocument = (doc: Invoice | Offer, type: 'invoice' | 'offer'): boolean => type === 'invoice' && doc.status !== 'draft';
+
+type StatusFilter = InvoiceStatus | 'all' | 'accepted' | 'declined' | 'expired';
+type PeriodFilter = 'all' | 'this_month' | 'last_month' | 'this_quarter' | 'this_year' | 'last_year';
+const PERIOD_LABELS: Record<PeriodFilter, string> = {
+  all: 'Gesamter Zeitraum',
+  this_month: 'Dieser Monat',
+  last_month: 'Letzter Monat',
+  this_quarter: 'Dieses Quartal',
+  this_year: 'Dieses Jahr',
+  last_year: 'Letztes Jahr',
+};
+/** Document date (a local calendar day) inside the chosen period. */
+const matchesPeriod = (date: string | undefined, period: PeriodFilter): boolean => {
+  if (period === 'all') return true;
+  if (!date) return false;
+  const today = localIsoDate();
+  const year = Number(today.slice(0, 4));
+  const month = Number(today.slice(5, 7));
+  const ym = (y: number, m: number) => `${y}-${String(m).padStart(2, '0')}`;
+  switch (period) {
+    case 'this_month': return date.startsWith(ym(year, month));
+    case 'last_month': return date.startsWith(month === 1 ? ym(year - 1, 12) : ym(year, month - 1));
+    case 'this_quarter': {
+      const first = Math.floor((month - 1) / 3) * 3 + 1;
+      return date >= `${ym(year, first)}-01` && date < (first + 3 > 12 ? `${year + 1}-01-01` : `${ym(year, first + 3)}-01`);
+    }
+    case 'this_year': return date.startsWith(`${year}-`);
+    case 'last_year': return date.startsWith(`${year - 1}-`);
+  }
+};
+const matchesOfferFilter = (offer: Offer, filter: StatusFilter): boolean => {
+  const decision = offer.shareDecision ?? (offer.status === 'accepted' || offer.status === 'declined' ? offer.status : undefined);
+  switch (filter) {
+    case 'all': return true;
+    case 'accepted': return decision === 'accepted';
+    case 'declined': return decision === 'declined';
+    case 'expired': return offer.status === 'expired' || (!decision && offer.status === 'open' && !!offer.dueDate && offer.dueDate < localIsoDate());
+    case 'open': return !decision && offer.status === 'open' && !(offer.dueDate && offer.dueDate < localIsoDate());
+    default: return offer.status === filter;
+  }
+};
+
+/** The message of a failed call, without the "Error:" prefixes transports add. */
+const errorText = (error: unknown): string => (error instanceof Error ? error.message : String(error)).replace(/^(?:Error:\s*)+/, '');
+
 // Rows rendered at once; the rest follow on request. Filter, search and selection still cover the whole list.
 const LIST_PAGE_SIZE = 100;
 
 // Documents without a linked client carry the literal "Unbekannt"; treat it as no value.
 const MISSING_COUNTERPARTY = 'Unbekannt';
 
-const getDunningBadge = (level: number | undefined) => {
-    if (!level || level < 1 || level > 3) return null;
-    const config = level === 1
-      ? { tone: 'warning' as const, label: '1. Mahnung' }
-      : level === 2
-        ? { tone: 'error' as const, label: '2. Mahnung' }
-        : { tone: 'inverse' as const, label: 'Inkasso' };
+/** Badge of the reached dunning level, named like the level in the settings. */
+const getDunningBadge = (level: number | undefined, levels: ReadonlyArray<{ id: number; name: string }>) => {
+    if (!level || level < 1) return null;
+    const config = {
+      tone: level === 1 ? 'warning' as const : level >= levels.length && levels.length > 1 ? 'inverse' as const : 'error' as const,
+      label: levels.find((candidate) => candidate.id === level)?.name ?? `${level}. Mahnstufe`,
+    };
     return (
-      <Badge tone={config.tone} className="whitespace-nowrap">
+      <span data-testid="dunning-badge"><Badge tone={config.tone} className="whitespace-nowrap">
         <span className="inline-flex items-center gap-1">
           <AlertTriangle size={12} aria-hidden="true" /> {config.label}
         </span>
-      </Badge>
+      </Badge></span>
     );
 };
 
@@ -92,7 +141,14 @@ interface DocumentsViewProps {
   initialDocumentType?: 'invoice' | 'offer';
   initialSelectedId?: string;
   initialStatus?: InvoiceStatus;
+  /** From the dashboard: unpaid receivables, or those due within the next N days. */
+  initialScope?: DocumentScope;
 }
+
+export type DocumentScope = 'unpaid' | { dueWithinDays: number };
+const scopeLabel = (scope: DocumentScope) => scope === 'unpaid'
+  ? 'Offene Forderungen (offen und überfällig)'
+  : `Fällig in den nächsten ${scope.dueWithinDays} Tagen`;
 
 type ChainAction =
   | 'order_confirmation'
@@ -128,10 +184,30 @@ const isAcceptedOffer = (offer: Offer): boolean => offer.status === 'accepted' |
 const toChainOffer = (offer: Offer) => ({ id: offer.id, amount: offer.amount, status: offer.status, share: { decision: offer.shareDecision ?? undefined } }) as never;
 
 /** Order confirmations, delivery notes and corrections are issued, not open receivables. */
-const DocumentStatusBadge: React.FC<{ document: { status: Invoice['status'] | Offer['status']; documentKind?: Invoice['documentKind'] } }> = ({ document }) =>
-  document.status === 'open' && !isReceivableDocumentKind(document.documentKind)
+const isSoftLockError = (error: unknown) => /SOFT_LOCK_OVERRIDE_REQUIRED|vorläufig gesperrt/.test(error instanceof Error ? error.message : String(error));
+/** Pro: the month of the payment is vorläufig gesperrt; the next click books it anyway with the reason in the audit. */
+const SoftLockNotice: React.FC = () => (
+  <div role="alert" className="rounded-control border border-warning-border bg-warning-bg px-3 py-2.5 text-control text-warning-text" data-testid="payment-soft-lock">
+    <strong className="font-semibold">Der Monat ist vorläufig gesperrt</strong> (UStVA vorbereitet oder Jahresabschluss). Mit der nächsten Bestätigung wird trotzdem gebucht; deine Begründung steht im Audit-Log. Prüfe danach die UStVA des Monats.
+  </div>
+);
+
+const DocumentStatusBadge: React.FC<{ document: { status: Invoice['status'] | Offer['status']; documentKind?: Invoice['documentKind']; payments?: Invoice['payments']; shareDecision?: Offer['shareDecision'] } }> = ({ document }) =>
+  document.status === 'open' && isCorrectionDocumentKind(document.documentKind)
+    ? <Badge tone="neutral">Korrektur</Badge>
+    : document.status === 'open' && !isReceivableDocumentKind(document.documentKind)
     ? <Badge tone="neutral">Ausgestellt</Badge>
-    : <Badge status={document.status as BadgeStatus} />;
+    : document.status === 'open' && (document.payments ?? []).some((payment) => Number(payment.amount) > 0)
+      ? <Badge tone="warning">Teilbezahlt</Badge>
+      : (document.status === 'open' || document.status === 'draft') && document.shareDecision === 'accepted'
+        ? <Badge tone="success">Angenommen</Badge>
+        : (document.status === 'open' || document.status === 'draft') && document.shareDecision === 'declined'
+          ? <Badge tone="error">Abgelehnt</Badge>
+          : <Badge status={document.status as BadgeStatus} />;
+
+/** Corrections reduce a receivable; show them as negative amounts. */
+const signedAmount = (document: { amount: number; documentKind?: Invoice['documentKind'] }): number =>
+  isCorrectionDocumentKind(document.documentKind) ? -Math.abs(Number(document.amount) || 0) : Number(document.amount) || 0;
 
 type AmountChainAction = Extract<ChainAction, 'advance_invoice' | 'partial_invoice' | 'final_invoice' | 'credit_note' | 'cancellation_invoice'>;
 
@@ -154,6 +230,7 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
   initialDocumentType,
   initialSelectedId,
   initialStatus,
+  initialScope,
 }) => {
   const queryClient = useQueryClient();
   const [documentType, setDocumentType] = useState<'invoice' | 'offer'>('invoice');
@@ -169,7 +246,12 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
     query.addEventListener('change', onChange);
     return () => query.removeEventListener('change', onChange);
   }, []);
-  const [filter, setFilter] = useState<InvoiceStatus | 'all'>('all');
+  const [filter, setFilter] = useState<StatusFilter>('all');
+  const [scope, setScope] = useState<DocumentScope | null>(initialScope ?? null);
+  // The route rebuilds the scope object on every render; this primitive is what changes.
+  const initialScopeKey = initialScope === undefined ? undefined : initialScope === 'unpaid' ? 'unpaid' : initialScope.dueWithinDays;
+  const [confirmFinalize, setConfirmFinalize] = useState(false);
+  const [period, setPeriod] = useState<PeriodFilter>('all');
   const [searchTerm, setSearchTerm] = useState('');
 
   // Dunning State
@@ -183,6 +265,7 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
     fee: number;
   } | null>(null);
   const [isCreatingReminder, setIsCreatingReminder] = useState(false);
+  const [dunningLetter, setDunningLetter] = useState<{ invoiceId: string; invoiceNumber: string; level: number } | null>(null);
 
   // Email State
   const [isEmailModalOpen, setIsEmailModalOpen] = useState(false);
@@ -201,6 +284,9 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
   const [paymentForm, setPaymentForm] = useState({ date: '', amount: '', method: 'Überweisung' });
   const [paymentReason, setPaymentReason] = useState('');
   const [paymentError, setPaymentError] = useState<string | null>(null);
+  // Pro: a month vorläufig gesperrt (UStVA vorbereitet, Jahresabschluss) asks once; confirmed, the booking runs with the written reason.
+  const [paymentSoftLocked, setPaymentSoftLocked] = useState(false);
+  const [paymentDeleteSoftLocked, setPaymentDeleteSoftLocked] = useState(false);
   const [isPaymentDeleteOpen, setIsPaymentDeleteOpen] = useState(false);
   const [deletingPaymentId, setDeletingPaymentId] = useState<string | null>(null);
   const [paymentDeleteReason, setPaymentDeleteReason] = useState('');
@@ -278,6 +364,13 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
         return `${left.date}-${left.number}`.localeCompare(`${right.date}-${right.number}`);
       });
   }, [documentType, invoices, selectedDocument]);
+  // The offer a chain started from is shown at its head; invoices point to it through sourceDocumentId.
+  const chainOffer = !selectedDocument
+    ? undefined
+    : documentType === 'offer'
+      ? (selectedChain.length > 0 ? selectedDocument as Offer : undefined)
+      : offers.find((offer) => selectedChain.some((invoice) => invoice.sourceDocumentId === offer.id));
+  const chainCount = selectedChain.length + (chainOffer ? 1 : 0);
   const selectedDocumentTax =
     selectedDocument && settings
       ? (selectedDocument.taxSnapshot ??
@@ -299,16 +392,33 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
 
   React.useEffect(() => {
     setFilter(initialStatus ?? 'all');
+    setScope(initialScopeKey === undefined ? null : initialScopeKey === 'unpaid' ? 'unpaid' : { dueWithinDays: initialScopeKey });
     setDocumentType(initialDocumentType ?? 'invoice');
     if (!initialSelectedId) return;
     setSelectedId(initialSelectedId);
     setViewMode('detail');
-  }, [initialDocumentType, initialSelectedId, initialStatus]);
+  }, [initialDocumentType, initialSelectedId, initialStatus, initialScopeKey]);
 
   const filteredDocuments = currentData.filter(doc => {
     const matchesKind = documentType !== 'invoice' || kindFilter === 'all' || KIND_FILTERS[kindFilter].includes((doc as Invoice).documentKind ?? 'invoice');
     if (!matchesKind) return false;
-    const matchesFilter = filter === 'all' || doc.status === filter;
+    const matchesFilter = documentType === 'offer'
+      ? matchesOfferFilter(doc as Offer, filter)
+      : filter === 'all' || filter === 'draft'
+        ? filter === 'all' || doc.status === filter
+        // Open, paid and overdue are receivable states: order confirmations, delivery notes and corrections are not.
+        : doc.status === filter && isReceivableDocumentKind((doc as Invoice).documentKind);
+    if (!matchesPeriod(doc.date, period)) return false;
+    if (scope && documentType === 'invoice') {
+      const invoice = doc as Invoice;
+      if (!(invoice.status === 'open' || invoice.status === 'overdue') || !isReceivableDocumentKind(invoice.documentKind)) return false;
+      if (scope !== 'unpaid') {
+        const today = localIsoDate();
+        const last = new Date();
+        last.setDate(last.getDate() + scope.dueWithinDays);
+        if (!invoice.dueDate || invoice.dueDate < today || invoice.dueDate > localIsoDate(last)) return false;
+      }
+    }
     const matchesSearch = doc.client.toLowerCase().includes(searchTerm.toLowerCase()) ||
                           doc.number.toLowerCase().includes(searchTerm.toLowerCase());
     return matchesFilter && matchesSearch;
@@ -326,7 +436,7 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
         return left.localeCompare(right, 'de', { numeric: true }) * factor;
       })
     : filteredDocuments;
-  const listKey = `${documentType}|${filter}|${kindFilter}|${searchTerm}|${sort?.key}|${sort?.direction}`;
+  const listKey = `${documentType}|${filter}|${period}|${kindFilter}|${searchTerm}|${sort?.key}|${sort?.direction}|${JSON.stringify(scope)}`;
   const [rowLimit, setRowLimit] = useState({ key: listKey, count: LIST_PAGE_SIZE });
   const visibleCount = rowLimit.key === listKey ? rowLimit.count : LIST_PAGE_SIZE;
   const allFilteredSelected = filteredDocuments.length > 0 && filteredDocuments.every((doc) => selectedIds.has(doc.id));
@@ -335,6 +445,14 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
   // Mirrors the level choice of the shared dunning engine, which sends the run.
   // Runs only once the user's dunning levels are loaded, never on defaults.
   const dunningLevels = dunningSettings?.levels ?? [];
+  const selectedDunningLevel = selectedInvoice?.dunningLevel ?? 0;
+  // The fees live in the dunning history, not on the invoice; keyed by level so a new reminder refetches.
+  const dunningStatus = useQuery({
+    queryKey: ['dunning', 'invoiceStatus', selectedInvoice?.id, selectedDunningLevel],
+    queryFn: () => ipc.dunning.getInvoiceStatus({ invoiceId: selectedInvoice!.id }),
+    enabled: Boolean(selectedInvoice) && selectedDunningLevel > 0,
+  });
+  const dunningFees = selectedDunningLevel > 0 ? dunningStatus.data?.totalFeesApplied ?? 0 : 0;
   const dunningPreview = dunningLevels.length > 0
     ? overdueInvoices.map((inv) => {
         const level = determineDunningLevel(calculateDaysOverdue(inv.dueDate), dunningLevels);
@@ -426,7 +544,7 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
             action: { label: 'Öffnen', onClick: () => void ipc.shell.openPath({ path: res.path }) },
           });
         } catch (e) {
-          notify('error', `PDF Fehler: ${String(e)}`);
+          notify('error', `PDF Fehler: ${errorText(e)}`);
         }
       })();
   };
@@ -441,7 +559,17 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
         const link = document.createElement('a'); link.href = url; link.download = file.fileName; document.body.appendChild(link); link.click(); link.remove(); setTimeout(() => URL.revokeObjectURL(url), 1000);
         notify('success', `${file.fileName} heruntergeladen`);
       } catch (error) {
-        notify('error', error instanceof Error ? error.message : String(error));
+        const message = errorText(error);
+        // An issued invoice is immutable: the Leitweg-ID comes in through a revision, or a correction plus a new invoice.
+        const blocker = message.includes('BT-10') && selectedDocument.status !== 'draft'
+          ? revisionBlocker(selectedDocument as Invoice, invoices)
+          : undefined;
+        const hint = blocker === undefined
+          ? ''
+          : blocker === null
+            ? ' Die Leitweg-ID trägst du über eine Revision nach (Button „Revision“, dort unter Käuferreferenz).'
+            : ` Eine Revision ist nicht möglich: ${blocker} Für eine XRechnung mit Leitweg-ID stellst du die Rechnung per Storno bzw. Gutschrift über den Rest glatt und erstellst eine neue Rechnung mit Leitweg-ID.`;
+        notify('error', `${message}${hint}`);
       }
     })();
   };
@@ -452,11 +580,12 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
       try {
         notify('progress', 'Angebot wird veröffentlicht...');
         const res = await ipc.portal.publishOffer({ offerId: selectedDocument.id });
-        await navigator.clipboard.writeText(res.publicUrl);
-        notify('success', 'Link kopiert!');
         await queryClient.invalidateQueries({ queryKey: ['offers'] });
+        // A browser may refuse the clipboard after the request; the offer is published either way.
+        const copied = await navigator.clipboard.writeText(res.publicUrl).then(() => true, () => false);
+        notify('success', copied ? 'Veröffentlicht, Link kopiert.' : `Veröffentlicht. Link: ${res.publicUrl}`);
       } catch (e) {
-        notify('error', `Portalfehler: ${String(e)}`);
+        notify('error', `Portalfehler: ${errorText(e)}`);
       }
     })();
   };
@@ -478,7 +607,7 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
       try {
         await ipc.shell.openExternal({ url });
       } catch (e) {
-        notify('error', `Link konnte nicht geöffnet werden: ${String(e)}`);
+        notify('error', `Link konnte nicht geöffnet werden: ${errorText(e)}`);
       }
     })();
   };
@@ -492,7 +621,7 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
         await queryClient.invalidateQueries({ queryKey: ['offers'] });
         notify('success', res.updated ? 'Status aktualisiert' : 'Keine Änderung');
       } catch (e) {
-        notify('error', `Synchronisierung fehlgeschlagen: ${String(e)}`);
+        notify('error', `Synchronisierung fehlgeschlagen: ${errorText(e)}`);
       }
     })();
   };
@@ -514,14 +643,15 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
           }, 100);
         }, 1500);
       } catch (e) {
-        notify('error', `Fehler: ${String(e)}`);
+        notify('error', `Fehler: ${errorText(e)}`);
       }
     })();
   };
 
-  const persistChainDocument = (action: ChainAction, amount?: number, source: Invoice | Offer | undefined = selectedDocument) => {
-    if (!source || chainIssuePending) return;
-    void (async () => {
+  /** Resolves to the refusal message, or null when the document was created. */
+  const persistChainDocument = (action: ChainAction, amount?: number, source: Invoice | Offer | undefined = selectedDocument): Promise<string | null> => {
+    if (!source || chainIssuePending) return Promise.resolve(null);
+    return (async () => {
       try {
         const today = localIsoDate();
         const reasonByAction: Record<ChainAction, string> = {
@@ -574,11 +704,14 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
           setSelectedId(issued.id);
           setViewMode('detail');
           notify('success', `${getInvoiceDocumentLabel(issued.documentKind)} ${issued.number} erstellt.`);
+          return null;
         } finally {
           setChainIssuePending(false);
         }
       } catch (error) {
-        notify('error', `Dokument konnte nicht erstellt werden: ${error instanceof Error ? error.message : String(error)}`);
+        const message = error instanceof Error ? error.message : String(error);
+        notify('error', `Dokument konnte nicht erstellt werden: ${message}`);
+        return message;
       }
     })();
   };
@@ -600,7 +733,7 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
       setChainAmountDialog({ action, source });
       return;
     }
-    persistChainDocument(action, undefined, source);
+    void persistChainDocument(action, undefined, source);
   };
 
   const canSettle = (order: Invoice) => {
@@ -634,12 +767,16 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
       return;
     }
     const { action, source } = chainAmountDialog;
-    cancelChainAmount();
-    persistChainDocument(action, amount, source);
+    // The dialog stays open with the typed amount until the document exists.
+    void persistChainDocument(action, amount, source).then((refusal) => {
+      if (refusal === null) cancelChainAmount();
+      else setChainAmountError(refusal);
+    });
   };
 
   const switchDocumentType = (type: 'invoice' | 'offer') => {
       setDocumentType(type);
+      setFilter('all');
       setSelectedId(null);
       setViewMode('list');
       clearSelection();
@@ -706,7 +843,7 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
 
           notify('success', 'E-Mail wurde versendet.');
         } catch (e) {
-          notify('error', `Fehler: ${String(e)}`);
+          notify('error', `Fehler: ${errorText(e)}`);
         }
       })();
   };
@@ -730,10 +867,12 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
         },
         {
           onSuccess: () => {
+            setConfirmFinalize(false);
             notify('success', 'Rechnung als gestellt markiert');
           },
           onError: (error) => {
-            notify('error', `Finalisieren fehlgeschlagen: ${error instanceof Error ? error.message : String(error)}`);
+            setConfirmFinalize(false);
+            notify('error', `Finalisieren fehlgeschlagen: ${errorText(error)}`);
           },
         },
       );
@@ -818,8 +957,9 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
   const handleCreateReminder = () => {
       if (!selectedDocument || documentType !== 'invoice') return;
       const currentLevel = selectedDocument.dunningLevel || 0;
-      const nextLevel = Math.min(currentLevel + 1, 3);
+      const nextLevel = currentLevel + 1;
       const levelConfig = dunningLevels.find(l => l.id === nextLevel);
+      if (!levelConfig) return;
       setReminderConfirmation({
         invoiceId: selectedDocument.id,
         invoiceNumber: selectedDocument.number,
@@ -838,7 +978,7 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
       }
 
       setIsCreatingReminder(true);
-      const nextLevel = Math.min((invoice.dunningLevel || 0) + 1, 3);
+      const nextLevel = (invoice.dunningLevel || 0) + 1;
       const historyEntry = {
           date: localIsoDate(),
           action: `${reminderConfirmation.levelName} erstellt (+${formatCurrency(reminderConfirmation.fee)})`,
@@ -861,6 +1001,43 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
       }
   };
 
+
+  const renderReminderDialogs = () => (
+    <>
+      {confirmFinalize && selectedDocument && (
+        <ConfirmDialog
+          open
+          title="Rechnung stellen"
+          description={`Rechnung ${selectedDocument.number} stellen? Danach ist sie ausgestellt und lässt sich nicht mehr bearbeiten oder löschen, nur noch über Gutschrift, Storno oder Revision korrigieren.`}
+          confirmLabel="Stellen"
+          onConfirm={handleFinalizeDraftInvoice}
+          onCancel={() => setConfirmFinalize(false)}
+          busy={upsertInvoice.isPending}
+        />
+      )}
+      {reminderConfirmation && (
+        <ConfirmDialog
+          open
+          title="Mahnung erstellen"
+          description={`${reminderConfirmation.levelName} erstellen für ${reminderConfirmation.invoiceNumber}? Gebühr: ${formatCurrency(reminderConfirmation.fee)}`}
+          confirmLabel="Erstellen"
+          onConfirm={() => void handleConfirmReminder()}
+          onCancel={() => setReminderConfirmation(null)}
+          busy={isCreatingReminder}
+        />
+      )}
+      {dunningLetter && (
+        <DunningLetterModal
+          open
+          onClose={() => setDunningLetter(null)}
+          invoiceId={dunningLetter.invoiceId}
+          invoiceNumber={dunningLetter.invoiceNumber}
+          levels={dunningLevels}
+          initialLevel={dunningLetter.level}
+        />
+      )}
+    </>
+  );
 
   // --- Dunning Modal ---
   const renderDunningModal = () => (
@@ -898,11 +1075,25 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
                            <span className="text-control font-semibold tabular-nums">{formatCurrency(inv.amount)}</span>
                        </div>
                        <div className="mt-1.5 flex flex-wrap items-center gap-2">
-                           <Badge tone="error">Fällig seit {new Date(inv.dueDate).toLocaleDateString('de-DE')}</Badge>
+                           <Badge tone="error">Fällig seit {formatDate(inv.dueDate)}</Badge>
                            {due && level ? (
                              <Badge tone="warning">{level.name}{level.fee > 0 ? ` (+${formatCurrency(level.fee)})` : ''} an {inv.clientEmail || 'keine E-Mail-Adresse'}</Badge>
                            ) : (
                              <span className="text-caption text-muted">{level ? `${level.name} bereits versendet` : 'Noch keine Mahnstufe erreicht'}</span>
+                           )}
+                           {dunningLevels.length > 0 && (
+                             <Button
+                               variant="ghost"
+                               size="sm"
+                               className="ml-auto"
+                               aria-label={`Mahnschreiben ${inv.number} ansehen`}
+                               onClick={() => {
+                                 setIsDunningModalOpen(false);
+                                 setDunningLetter({ invoiceId: inv.id, invoiceNumber: inv.number, level: level?.id ?? 1 });
+                               }}
+                             >
+                               Schreiben ansehen
+                             </Button>
                            )}
                        </div>
                    </div>
@@ -987,6 +1178,7 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
       setIsPaymentModalOpen(false);
       setEditingPaymentId(null);
       setPaymentError(null);
+      setPaymentSoftLocked(false);
     };
 
     return (
@@ -1016,7 +1208,7 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
                 type="date"
                 fullWidth
                 value={paymentForm.date}
-                onChange={(e) => setPaymentForm((p) => ({ ...p, date: e.target.value }))}
+                onChange={(e) => { setPaymentSoftLocked(false); setPaymentForm((p) => ({ ...p, date: e.target.value })); }}
               />
               <Input
                 id="invoicesview-betrag-eur"
@@ -1057,6 +1249,7 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
             />
 
             {paymentError && <div className="text-caption font-medium text-error-text">{paymentError}</div>}
+            {paymentSoftLocked ? <SoftLockNotice /> : null}
           </div>
 
           <div className="flex flex-wrap justify-end gap-2 border-t border-border px-4.5 py-3">
@@ -1094,10 +1287,11 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
 
                 if (invoicePayment.isPending) return;
                 invoicePayment.mutate(
-                  { operation: 'save', args: { invoiceId: selectedDocument.id, payment: { id: editingPaymentId ?? newPaymentId, date, amount, method: paymentForm.method || 'Überweisung' }, expectedPayment: selectedDocument.payments?.find((payment) => payment.id === editingPaymentId), reason: trimmedReason } },
+                  { operation: 'save', args: { invoiceId: selectedDocument.id, payment: { id: editingPaymentId ?? newPaymentId, date, amount, method: paymentForm.method || 'Überweisung' }, expectedPayment: selectedDocument.payments?.find((payment) => payment.id === editingPaymentId), reason: trimmedReason, ...(paymentSoftLocked ? { softLockOverride: true } : {}) } },
                   {
-                    onError: (error) => setPaymentError(error.message),
+                    onError: (error) => { if (isSoftLockError(error)) { setPaymentError(null); setPaymentSoftLocked(true); } else setPaymentError(error.message); },
                     onSuccess: () => {
+                      setPaymentSoftLocked(false);
                       setIsPaymentModalOpen(false);
                       setEditingPaymentId(null);
                       setPaymentError(null);
@@ -1108,7 +1302,7 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
                 );
               }}
             >
-              Speichern
+              {paymentSoftLocked ? 'Trotzdem buchen' : 'Speichern'}
             </Button>
           </div>
       </Modal>
@@ -1164,6 +1358,7 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
       setDeletingPaymentId(null);
       setPaymentDeleteReason('');
       setPaymentDeleteError(null);
+      setPaymentDeleteSoftLocked(false);
     };
 
     return (
@@ -1196,6 +1391,7 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
               placeholder="z.B. falsch erfasst, Doppelbuchung, ..."
             />
             {paymentDeleteError && <div className="text-caption font-medium text-error-text">{paymentDeleteError}</div>}
+            {paymentDeleteSoftLocked ? <SoftLockNotice /> : null}
           </div>
 
           <div className="flex flex-wrap justify-end gap-2 border-t border-border px-4.5 py-3">
@@ -1222,10 +1418,11 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
 
                 if (invoicePayment.isPending) return;
                 invoicePayment.mutate(
-                  { operation: 'remove', args: { invoiceId: selectedDocument.id, expectedPayment: selectedDocument.payments!.find((payment) => payment.id === deletingPaymentId)!, reason: trimmed } },
+                  { operation: 'remove', args: { invoiceId: selectedDocument.id, expectedPayment: selectedDocument.payments!.find((payment) => payment.id === deletingPaymentId)!, reason: trimmed, ...(paymentDeleteSoftLocked ? { softLockOverride: true } : {}) } },
                   {
-                    onError: (error) => setPaymentDeleteError(error.message),
+                    onError: (error) => { if (isSoftLockError(error)) { setPaymentDeleteError(null); setPaymentDeleteSoftLocked(true); } else setPaymentDeleteError(error.message); },
                     onSuccess: () => {
+                      setPaymentDeleteSoftLocked(false);
                       setIsPaymentDeleteOpen(false);
                       setDeletingPaymentId(null);
                       setPaymentDeleteReason('');
@@ -1235,7 +1432,7 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
                 );
               }}
             >
-              Löschen
+              {paymentDeleteSoftLocked ? 'Trotzdem stornieren' : 'Löschen'}
             </Button>
           </div>
       </Modal>
@@ -1266,7 +1463,45 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
   if (viewMode === 'detail' && selectedDocument) {
       const paid = sumPayments(selectedDocument);
       const grossAmount = Number(selectedDocumentTax?.grossAmount ?? selectedDocument.amount) || 0;
-      const remaining = Math.max(0, grossAmount - paid);
+      // Issued credit notes and Stornorechnungen reduce what the customer still owes.
+      const credited = documentType === 'invoice'
+        ? invoices
+          .filter((candidate) => candidate.sourceDocumentId === selectedDocument.id && isCorrectionDocumentKind(candidate.documentKind) && candidate.status !== 'draft')
+          .reduce((sum, candidate) => sum + (Number(candidate.amount) || 0), 0)
+        : 0;
+      const remaining = Math.max(0, grossAmount - paid - credited);
+      const selectedKind = documentType === 'invoice' ? (selectedDocument as Invoice).documentKind : undefined;
+      const isReceivable = documentType === 'invoice' && isReceivableDocumentKind(selectedKind);
+      const isCorrection = documentType === 'invoice' && isCorrectionDocumentKind(selectedKind);
+      const isDeliveryNote = selectedKind === 'delivery_note';
+      const sign = isCorrection ? -1 : 1;
+      const skonto = (selectedDocument as { skonto?: { percent: number; days: number } }).skonto;
+      const servicePeriodLabel = selectedDocument.servicePeriod
+        ? selectedDocument.servicePeriod.replace(/\d{4}-\d{2}-\d{2}/g, (day) => formatDate(day))
+        : undefined;
+      const sourceNumber = isCorrection
+        ? invoices.find((candidate) => candidate.id === (selectedDocument as Invoice).sourceDocumentId)?.number
+        : undefined;
+      const statusText = selectedDocument.status === 'paid'
+        ? (() => {
+            const lastPayment = (selectedDocument.payments ?? []).slice().sort((a, b) => (b.date ?? '').localeCompare(a.date ?? ''))[0];
+            return lastPayment ? `Bezahlt am ${formatDate(lastPayment.date)}` : 'Bezahlt';
+          })()
+        : documentType === 'offer'
+          ? (selectedDocument.shareDecision === 'accepted'
+              ? ((selectedDocument as Offer).acceptedBy ? `Angenommen von ${(selectedDocument as Offer).acceptedBy}` : 'Angenommen')
+              : selectedDocument.shareDecision === 'declined' ? 'Abgelehnt' : 'Noch keine Entscheidung')
+          : selectedDocument.status === 'draft'
+            ? 'Entwurf, noch nicht gestellt'
+            : isCorrection
+              ? `Korrigiert ${sourceNumber ? `Rechnung ${sourceNumber}` : 'die Ursprungsrechnung'}`
+              : !isReceivable
+                ? 'Ausgestellt, keine Zahlung fällig'
+                : selectedDocument.status === 'cancelled'
+                  ? 'Storniert'
+                  : paid > 0 || credited > 0
+                    ? `Teilweise beglichen, noch offen ${formatCurrency(remaining)}`
+                    : 'Noch nicht bezahlt';
       return (
           <div className="flex min-h-full flex-col">
 
@@ -1274,6 +1509,7 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
               {renderPaymentModal()}
               {renderPaymentDeleteModal()}
               {renderChainAmountDialog()}
+              {renderReminderDialogs()}
 
               <PageHeader
                 title={selectedDocument.number}
@@ -1299,10 +1535,22 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
                               try {
                                 notify('progress', 'PDF wird erstellt...');
                                 const res = await ipc.pdf.export({ kind: documentType, id: selectedDocument.id });
-                                await ipc.shell.openPath({ path: res.path });
-                                notify('success', 'PDF geöffnet');
+                                notify('success', 'PDF gespeichert, wird geöffnet …');
+                                try {
+                                  await ipc.shell.openPath({ path: res.path });
+                                } catch {
+                                  // The file exists; only the system viewer did not answer (none installed, or no desktop session).
+                                  // In the browser the tab was blocked; a click on "Öffnen" is a fresh gesture and opens it.
+                                  notify('error', getRendererRuntime().shell === 'web'
+                                    ? `Das PDF ${res.path} ist heruntergeladen, der Browser hat das Öffnen aber blockiert.`
+                                    : `Das PDF ist gespeichert, ließ sich aber nicht automatisch öffnen. Du findest es unter ${res.path}.`, {
+                                    action: getRendererRuntime().shell === 'web'
+                                      ? { label: 'Öffnen', onClick: () => void ipc.shell.openPath({ path: res.path }) }
+                                      : { label: 'Ordner öffnen', onClick: () => void ipc.shell.openExportsDir() },
+                                  });
+                                }
                               } catch (e) {
-                                notify('error', `PDF Fehler: ${String(e)}`);
+                                notify('error', `PDF konnte nicht erstellt werden: ${errorText(e)}`);
                               }
                             })();
                           },
@@ -1318,9 +1566,11 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
                           : []),
                       ]}
                     />
-                    <Button variant="secondary" onClick={() => onEditInvoice(selectedDocument, documentType)}>
-                      <Edit3 size={16} aria-hidden="true" /> Bearbeiten
-                    </Button>
+                    {!isLockedDocument(selectedDocument, documentType) && (
+                      <Button variant="secondary" onClick={() => onEditInvoice(selectedDocument, documentType)}>
+                        <Edit3 size={16} aria-hidden="true" /> Bearbeiten
+                      </Button>
+                    )}
                     <Button variant="secondary" onClick={handleDownloadPdf} title="PDF herunterladen">
                       <Download size={16} aria-hidden="true" /> PDF
                     </Button>
@@ -1338,7 +1588,7 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
                       ) : (
                         <Badge tone="neutral">{getInvoiceDocumentLabel(selectedDocument.documentKind)}</Badge>
                       )}
-                      {getDunningBadge(selectedDocument.dunningLevel)}
+                      {getDunningBadge(selectedDocument.dunningLevel, dunningLevels)}
                     </div>
 
                     <div className="ml-auto flex flex-wrap items-center gap-2">
@@ -1420,17 +1670,12 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
                       )}
 
                       {documentType === 'invoice' && selectedDocument.status === 'draft' && (
-                        <IconButton
-                          variant="secondary"
-                          onClick={handleFinalizeDraftInvoice}
-                          tooltip="Als gestellt markieren (Entwurf → Offen)"
-                          aria-label="Als gestellt markieren (Entwurf zu Offen)"
-                        >
-                          <CheckCircle size={16} aria-hidden="true" />
-                        </IconButton>
+                        <Button variant="secondary" onClick={() => setConfirmFinalize(true)} disabled={upsertInvoice.isPending}>
+                          <CheckCircle size={16} aria-hidden="true" /> Stellen
+                        </Button>
                       )}
 
-                      {documentType === 'offer' && getRendererRuntime().shell !== 'web' && (
+                      {documentType === 'offer' && (
                         !selectedDocument.shareToken ? (
                           <Button variant="secondary" onClick={handlePublishOffer} title="Öffentlichen Link erzeugen">
                             <Link size={16} aria-hidden="true" /> Veröffentlichen
@@ -1493,17 +1738,25 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
                                   {selectedDocument.clientAddress || selectedDocument.clientEmail}
                               </p>
                           </div>
-                          <div className="flex gap-6">
+                          <div className="flex flex-wrap gap-6">
                               <div>
                                   <p className="text-eyebrow uppercase text-muted">Datum</p>
                                   <p className="mt-1 text-control font-semibold tabular-nums text-foreground">{formatDate(selectedDocument.date)}</p>
                               </div>
-                              <div>
-                                  <p className="text-eyebrow uppercase text-muted">{documentType === 'offer' ? 'Gültig bis' : 'Fällig'}</p>
-                                  <p className={`mt-1 text-control font-semibold tabular-nums ${selectedDocument.status === 'overdue' ? 'text-error-text' : 'text-foreground'}`}>
-                                      {formatDate(selectedDocument.dueDate)}
-                                  </p>
-                              </div>
+                              {servicePeriodLabel && documentType === 'invoice' && (
+                                <div>
+                                    <p className="text-eyebrow uppercase text-muted">Leistung</p>
+                                    <p className="mt-1 text-control font-semibold tabular-nums text-foreground">{servicePeriodLabel}</p>
+                                </div>
+                              )}
+                              {(documentType === 'offer' || isReceivable) && (
+                                <div>
+                                    <p className="text-eyebrow uppercase text-muted">{documentType === 'offer' ? 'Gültig bis' : 'Fällig'}</p>
+                                    <p className={`mt-1 text-control font-semibold tabular-nums ${selectedDocument.status === 'overdue' ? 'text-error-text' : 'text-foreground'}`}>
+                                        {formatDate(selectedDocument.dueDate)}
+                                    </p>
+                                </div>
+                              )}
                           </div>
                       </div>
 
@@ -1512,21 +1765,21 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
                               <TableRow>
                                   <TableHead>Beschreibung</TableHead>
                                   <TableHead numeric>Menge</TableHead>
-                                  <TableHead numeric>Einzel</TableHead>
-                                  <TableHead numeric>Gesamt</TableHead>
+                                  {!isDeliveryNote && <TableHead numeric>Einzel</TableHead>}
+                                  {!isDeliveryNote && <TableHead numeric>Gesamt</TableHead>}
                               </TableRow>
                           </TableHeader>
                           <TableBody>
                               {selectedDocument.items.map((item, i) => item.kind === 'text' || item.kind === 'group' ? (
                                   <TableRow key={i}>
-                                      <TableCell colSpan={4} className="text-muted">{item.description}</TableCell>
+                                      <TableCell colSpan={isDeliveryNote ? 2 : 4} className="text-muted">{item.description}</TableCell>
                                   </TableRow>
                               ) : (
                                   <TableRow key={i}>
                                       <TableCell className="font-medium">{item.description}</TableCell>
                                       <TableCell numeric muted>{new Intl.NumberFormat('de-DE', { maximumFractionDigits: 4 }).format(item.quantity)}</TableCell>
-                                      <TableCell numeric muted>{formatCurrency(item.price)}</TableCell>
-                                      <TableCell numeric className="font-medium">{formatCurrency(item.total)}</TableCell>
+                                      {!isDeliveryNote && <TableCell numeric muted>{formatCurrency(item.price)}</TableCell>}
+                                      {!isDeliveryNote && <TableCell numeric className="font-medium">{formatCurrency(item.total)}</TableCell>}
                                   </TableRow>
                               ))}
                           </TableBody>
@@ -1538,13 +1791,26 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
                                <p className="mt-1 max-w-sm text-caption text-muted">
                                    {documentType === 'offer'
                                      ? `Dieses Angebot ist gültig bis ${formatDate(selectedDocument.dueDate)}.`
-                                     : `Bitte überweisen Sie den fälligen Betrag bis ${formatDate(selectedDocument.dueDate)} auf das unten angegebene Konto.`}
+                                     : isCorrection
+                                       ? `${getInvoiceDocumentLabel(selectedKind)} zu ${sourceNumber ? `Rechnung ${sourceNumber}` : 'der Ursprungsrechnung'}: Der Betrag mindert die Forderung und wird verrechnet oder erstattet. Keine Zahlungsaufforderung.`
+                                       : selectedKind === 'order_confirmation'
+                                         ? 'Auftragsbestätigung, keine Zahlungsaufforderung. Abgerechnet wird über Abschlags-, Teil- oder Schlussrechnung.'
+                                         : isDeliveryNote
+                                           ? 'Lieferschein ohne Preise und ohne Zahlungsaufforderung.'
+                                           : selectedDocument.status === 'paid'
+                                             ? 'Die Rechnung ist vollständig bezahlt.'
+                                             : `Bitte überweisen Sie den fälligen Betrag bis ${formatDate(selectedDocument.dueDate)} auf das unten angegebene Konto.`}
                                </p>
+                               {skonto && isReceivable && (
+                                 <p className="mt-1 max-w-sm text-caption text-muted">
+                                   Skonto: {String(skonto.percent).replace('.', ',')} % bei Zahlung innerhalb von {skonto.days} Tagen (bis {formatDate(localIsoDate(new Date(new Date(`${selectedDocument.date}T12:00:00`).getTime() + skonto.days * 86_400_000)))}).
+                                 </p>
+                               )}
                            </div>
-                           <div className="flex w-full flex-col gap-1.5 md:w-64">
+                           {!isDeliveryNote && <div className="flex w-full flex-col gap-1.5 md:w-64">
                                <div className="flex justify-between text-control text-muted">
                                    <span>Netto</span>
-                                   <span className="tabular-nums">{formatCurrency(selectedDocumentTax?.netAmount ?? 0)}</span>
+                                   <span className="tabular-nums">{formatCurrency(sign * (selectedDocumentTax?.netAmount ?? 0))}</span>
                                </div>
                                {(selectedDocumentTax?.vatBreakdown?.length
                                  ? selectedDocumentTax.vatBreakdown
@@ -1552,14 +1818,14 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
                                ).map((entry) => (
                                  <div key={entry.rate} className="flex justify-between text-control text-muted">
                                    <span>USt {entry.rate}% auf {formatCurrency(entry.netAmount)}</span>
-                                   <span className="tabular-nums">{formatCurrency(entry.vatAmount)}</span>
+                                   <span className="tabular-nums">{formatCurrency(sign * entry.vatAmount)}</span>
                                  </div>
                                ))}
                                <div className="flex items-baseline justify-between border-t border-border-strong pt-2 text-foreground">
                                    <span className="text-control font-semibold">Gesamt</span>
-                                   <span className="text-heading font-bold tabular-nums">{formatCurrency(selectedDocumentTax?.grossAmount ?? selectedDocument.amount)}</span>
+                                   <span className="text-heading font-bold tabular-nums">{formatCurrency(sign * (selectedDocumentTax?.grossAmount ?? selectedDocument.amount))}</span>
                                </div>
-                           </div>
+                           </div>}
                       </div>
                   </Card>
 
@@ -1576,9 +1842,31 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
                             className="border-b border-border px-3.5 py-3"
                             title="Dokumentkette"
                             subtitle="Auftrag, Abrechnung und Revisionen"
-                            count={`${selectedChain.length} Dokumente`}
+                            count={`${chainCount} ${chainCount === 1 ? 'Dokument' : 'Dokumente'}`}
                           />
                           <div className="flex flex-col gap-2 p-3.5">
+                            {chainOffer && (
+                              <button
+                                type="button"
+                                data-testid={`document-chain-item-${chainOffer.id}`}
+                                onClick={() => {
+                                  setDocumentType('offer');
+                                  setSelectedId(chainOffer.id);
+                                }}
+                                className={`w-full rounded-control border px-3 py-2 text-left transition-colors motion-reduce:transition-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring ${
+                                  documentType === 'offer' ? 'border-border-strong bg-accent-50' : 'border-border bg-surface hover:bg-surface-muted'
+                                }`}
+                              >
+                                <span className="flex items-center justify-between gap-2">
+                                  <span className="truncate text-control font-semibold text-foreground">Angebot · {chainOffer.number}</span>
+                                  <span className="shrink-0 text-micro text-muted">{documentType === 'offer' ? 'Aktuell' : 'Ursprung'}</span>
+                                </span>
+                                <span className="mt-0.5 flex items-center justify-between gap-2 text-caption text-muted tabular-nums">
+                                  <span>{formatDate(chainOffer.date)}</span>
+                                  <span>{formatCurrency(chainOffer.amount)}</span>
+                                </span>
+                              </button>
+                            )}
                             {selectedChain.map((document) => {
                               const isCurrent = document.id === selectedDocument.id;
                               const relationLabel = isCurrent
@@ -1629,28 +1917,48 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
                               <div className="flex items-center gap-2.5 rounded-control border border-error-border bg-error-bg px-3 py-2.5 text-control text-error-text">
                                   <AlertTriangle size={16} className="shrink-0" aria-hidden="true" />
                                   <p className="min-w-0 flex-1 font-medium">Zahlung überfällig</p>
-                                  <Button variant="secondary" size="sm" onClick={handleCreateReminder}>
-                                      Mahnung erstellen
-                                  </Button>
+                                  {dunningLevels.some((level) => level.id === (selectedDocument.dunningLevel || 0) + 1) ? (
+                                    <Button variant="secondary" size="sm" onClick={handleCreateReminder}>
+                                        Mahnung erstellen
+                                    </Button>
+                                  ) : (selectedDocument.dunningLevel ?? 0) > 0 ? (
+                                    <span className="text-caption">Letzte Mahnstufe erreicht</span>
+                                  ) : null}
                               </div>
+                          )}
+                          {documentType === 'invoice' && dunningLevels.length > 0 && (selectedDocument.status === 'overdue' || (selectedDocument.dunningLevel ?? 0) > 0) && (
+                              <Button
+                                variant="secondary"
+                                size="sm"
+                                className="self-start"
+                                onClick={() => setDunningLetter({
+                                  invoiceId: selectedDocument.id,
+                                  invoiceNumber: selectedDocument.number,
+                                  level: Math.min(Math.max(selectedDocument.dunningLevel || 1, 1), dunningLevels.length),
+                                })}
+                              >
+                                  <FileText size={14} aria-hidden="true" /> Mahnschreiben
+                              </Button>
                           )}
                           <div className="flex items-center gap-2">
                                <DocumentStatusBadge document={selectedDocument} />
-                               <span className="text-caption text-muted">
-                               {selectedDocument.status === 'paid'
-                                 ? (() => {
-                                     const lastPayment = (selectedDocument.payments ?? [])
-                                       .slice()
-                                       .sort((a, b) => (b.date ?? '').localeCompare(a.date ?? ''))[0];
-                                     return lastPayment
-                                       ? `Bezahlt am ${formatDate(lastPayment.date)}`
-                                       : 'Bezahlt';
-                                   })()
-                                 : documentType === 'offer'
-                                   ? (selectedDocument.shareDecision === 'accepted' ? 'Vom Kunden angenommen' : selectedDocument.shareDecision === 'declined' ? 'Vom Kunden abgelehnt' : 'Noch keine Entscheidung')
-                                   : 'Noch nicht bezahlt'}
-                               </span>
+                               <span className="text-caption text-muted">{statusText}</span>
                           </div>
+                          {isLockedDocument(selectedDocument, documentType) && (
+                            <p role="note" className="flex items-start gap-1.5 text-caption text-muted">
+                              <Lock size={13} className="mt-0.5 shrink-0" aria-hidden="true" />
+                              <span>{selectedDocument.status === 'cancelled'
+                                ? 'Storniert und schreibgeschützt. Für eine neue Abrechnung erstellst du eine neue Rechnung.'
+                                : selectedDocument.status === 'paid'
+                                  ? 'Bezahlt und schreibgeschützt. Korrektur über Gutschrift oder Storno.'
+                                  : 'Gestellt und schreibgeschützt. Korrektur über Gutschrift, Storno oder Revision.'}</span>
+                            </p>
+                          )}
+                          {dunningFees > 0 && (
+                            <p className="text-caption text-muted">
+                              Mahngebühren: <span data-testid="dunning-fees" className="tabular-nums font-semibold text-foreground">{formatCurrency(dunningFees)}</span>, zusätzlich zum offenen Betrag gefordert
+                            </p>
+                          )}
                           <div className="border-t border-border pt-3">
                             <p className="mb-1.5 text-eyebrow uppercase text-muted">Steuerbehandlung</p>
                             <Badge tone="neutral">{selectedTaxDefinition?.label ?? 'Regelbesteuerung'}</Badge>
@@ -1693,10 +2001,21 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
                               <span className="tabular-nums font-semibold text-foreground">{formatCurrency(paid)}</span>
                             </div>
                             <HatchedProgress size="sm" label="Bezahlt" value={grossAmount > 0 ? paid / grossAmount : 0} />
+                            {credited > 0 && (
+                              <div className="flex items-center justify-between text-caption text-muted">
+                                <span>Gutgeschrieben</span>
+                                <span className="tabular-nums font-semibold text-foreground">{formatCurrency(credited)}</span>
+                              </div>
+                            )}
                             <div className="flex items-center justify-between text-caption text-muted">
-                              <span>Noch offen</span>
-                              <span className="tabular-nums font-semibold text-foreground">{formatCurrency(remaining)}</span>
+                              <span>{remaining < -0.005 ? 'Überzahlt' : 'Noch offen'}</span>
+                              <span className="tabular-nums font-semibold text-foreground">{formatCurrency(Math.abs(remaining) < 0.005 ? 0 : Math.abs(remaining))}</span>
                             </div>
+                            {remaining < -0.005 && (
+                              <p role="status" className="text-caption text-warning-text">
+                                Es wurde {formatCurrency(-remaining)} mehr gezahlt als gefordert. Erstatten Sie den Betrag oder verrechnen Sie ihn mit der nächsten Rechnung.
+                              </p>
+                            )}
 
                             {(selectedDocument.payments ?? []).length === 0 ? (
                               <p className="text-caption text-muted">Noch keine Zahlungen erfasst.</p>
@@ -1870,7 +2189,7 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
 
                     notify('success', `${ids.length} Einträge gelöscht`);
                   } catch (e) {
-                    notify('error', `Löschen fehlgeschlagen: ${String(e)}`);
+                    notify('error', `Löschen fehlgeschlagen: ${errorText(e)}`);
                   } finally {
                     setIsBulkDeleting(false);
                   }
@@ -1904,7 +2223,7 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
           await ipc.shell.openExportsDir();
         }
       } catch (e) {
-        notify('error', `PDF Fehler: ${String(e)}`);
+        notify('error', `PDF Fehler: ${errorText(e)}`);
       }
     })();
   };
@@ -1930,17 +2249,7 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
           if (action) handleCreateChainDocument(action, source);
         }}
       />
-      {reminderConfirmation && (
-        <ConfirmDialog
-          open
-          title="Mahnung erstellen"
-          description={`${reminderConfirmation.levelName} erstellen für ${reminderConfirmation.invoiceNumber}? Gebühr: ${formatCurrency(reminderConfirmation.fee)}`}
-          confirmLabel="Erstellen"
-          onConfirm={() => void handleConfirmReminder()}
-          onCancel={() => setReminderConfirmation(null)}
-          busy={isCreatingReminder}
-        />
-      )}
+      {renderReminderDialogs()}
 
       <PageHeader
         title="Rechnungen & Angebote"
@@ -1981,7 +2290,7 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
                 onSelect: () => setChainStart(action),
               }))}
             />
-            <Button onClick={() => onCreateInvoice(documentType)}>
+            <Button onClick={() => onCreateInvoice(documentType)} disabled={!canMutate()} title={canMutate() ? undefined : READ_ONLY_HINT}>
               <Plus size={16} aria-hidden="true" />
               {documentType === 'invoice' ? 'Neue Rechnung' : 'Neues Angebot'}
             </Button>
@@ -2002,18 +2311,40 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
                 ))}
               </Select>
             ) : null}
-            <SegmentedControl
+            <SegmentedControl<StatusFilter>
               aria-label="Status"
               value={filter}
               onChange={setFilter}
-              options={[
-                { value: 'all', label: 'Alle' },
-                { value: 'draft', label: 'Entwurf' },
-                { value: 'open', label: 'Offen' },
-                { value: 'paid', label: 'Bezahlt' },
-                { value: 'overdue', label: 'Überfällig' },
-              ]}
+              options={documentType === 'offer'
+                ? [
+                    { value: 'all', label: 'Alle' },
+                    { value: 'draft', label: 'Entwurf' },
+                    { value: 'open', label: 'Offen' },
+                    { value: 'accepted', label: 'Angenommen' },
+                    { value: 'declined', label: 'Abgelehnt' },
+                    { value: 'expired', label: 'Abgelaufen' },
+                  ]
+                : [
+                    { value: 'all', label: 'Alle' },
+                    { value: 'draft', label: 'Entwurf' },
+                    { value: 'open', label: 'Offen' },
+                    { value: 'paid', label: 'Bezahlt' },
+                    { value: 'overdue', label: 'Überfällig' },
+                  ]}
             />
+            {scope && documentType === 'invoice' ? (
+              <span className="inline-flex items-center gap-1 rounded-full border border-border bg-surface-muted py-0.5 pl-2.5 pr-1 text-caption text-foreground">
+                {scopeLabel(scope)}
+                <IconButton size="sm" tooltip={false} aria-label="Filter aufheben" onClick={() => setScope(null)}>
+                  <X size={12} aria-hidden="true" />
+                </IconButton>
+              </span>
+            ) : null}
+            <Select aria-label="Zeitraum" value={period} onChange={(event) => setPeriod(event.target.value as PeriodFilter)}>
+              {(Object.keys(PERIOD_LABELS) as PeriodFilter[]).map((key) => (
+                <option key={key} value={key}>{PERIOD_LABELS[key]}</option>
+              ))}
+            </Select>
             <div className="ml-auto w-full sm:w-64">
               <Input
                 type="search"
@@ -2112,7 +2443,7 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
                        key={doc.id}
                        interactive
                        selected={selected || previewDocument?.id === doc.id}
-                       aria-label={`${getInvoiceDocumentLabel(doc.documentKind)} ${doc.number} öffnen`}
+                       aria-label={`${documentType === 'offer' ? 'Angebot' : getInvoiceDocumentLabel(doc.documentKind)} ${doc.number} öffnen`}
                        onClick={() => {
                          if (isSelecting) toggleSelected(doc.id);
                          else if (wide) setPreviewId(doc.id);
@@ -2133,7 +2464,7 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
                            <span className={cn('text-caption text-muted', previewDocument && 'hidden')}>
                              {documentType === 'offer' ? 'Angebot' : getInvoiceDocumentLabel(doc.documentKind)}
                            </span>
-                           {getDunningBadge(doc.dunningLevel)}
+                           {getDunningBadge(doc.dunningLevel, dunningLevels)}
                          </span>
                        </TableCell>
                        <TableCell className="max-w-64 truncate">
@@ -2141,21 +2472,23 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
                        </TableCell>
                        <TableCell muted className={cn('hidden tabular-nums', !previewDocument && 'lg:table-cell')}>{formatDate(doc.date)}</TableCell>
                        <TableCell className="hidden tabular-nums lg:table-cell">{formatDate(doc.dueDate)}</TableCell>
-                       <TableCell numeric>{formatCurrency(doc.amount)}</TableCell>
+                       <TableCell numeric>{formatCurrency(signedAmount(doc))}</TableCell>
                        <TableCell><DocumentStatusBadge document={doc} /></TableCell>
                        <TableCell className="py-0 text-right">
-                         <IconButton
-                           size="sm"
-                           className="ui-reveal"
-                           tooltip="Bearbeiten"
-                           aria-label={`${doc.number} bearbeiten`}
-                           onClick={(e) => {
-                             e.stopPropagation();
-                             onEditInvoice(doc, documentType);
-                           }}
-                         >
-                           <ArrowUpRight size={16} aria-hidden="true" />
-                         </IconButton>
+                         {!isLockedDocument(doc, documentType) && (
+                           <IconButton
+                             size="sm"
+                             className="ui-reveal"
+                             tooltip="Bearbeiten"
+                             aria-label={`${doc.number} bearbeiten`}
+                             onClick={(e) => {
+                               e.stopPropagation();
+                               onEditInvoice(doc, documentType);
+                             }}
+                           >
+                             <ArrowUpRight size={16} aria-hidden="true" />
+                           </IconButton>
+                         )}
                        </TableCell>
                      </TableRow>
                    );
@@ -2206,7 +2539,10 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
         const doc = previewDocument;
         const net = doc.taxSnapshot?.netAmount ?? (doc.items ?? []).reduce((sum, item) => sum + (Number(item.total) || 0), 0);
         const gross = doc.taxSnapshot?.grossAmount ?? (Number(doc.amount) || 0);
-        const open = Math.max(0, gross - sumPayments(doc));
+        const credited = invoices
+          .filter((candidate) => candidate.sourceDocumentId === doc.id && isCorrectionDocumentKind(candidate.documentKind) && candidate.status !== 'draft')
+          .reduce((sum, candidate) => sum + (Number(candidate.amount) || 0), 0);
+        const open = Math.max(0, gross - sumPayments(doc) - credited);
         return (
           <aside aria-label={`Übersicht ${doc.number}`} className="sticky top-0 min-w-0">
             <Card padding="none">
@@ -2235,11 +2571,11 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
               <dt className="text-caption text-muted">Datum</dt><dd className="tabular-nums">{doc.date ? formatDate(doc.date) : '–'}</dd>
               <dt className="text-caption text-muted">{documentType === 'offer' ? 'Gültig bis' : 'Fällig'}</dt><dd className="tabular-nums">{doc.dueDate ? formatDate(doc.dueDate) : '–'}</dd>
               <dt className="text-caption text-muted">Steuer</dt><dd className="truncate">{getInvoiceTaxModeDefinition(resolveInvoiceTaxMode(doc.taxMode, settings)).label}</dd>
-              {documentType === 'invoice' && (<><dt className="text-caption text-muted">Offen</dt><dd className="tabular-nums font-semibold">{formatCurrency(open)}</dd></>)}
+              {documentType === 'invoice' && isReceivableDocumentKind(doc.documentKind) && (<><dt className="text-caption text-muted">Offen</dt><dd className="tabular-nums font-semibold">{formatCurrency(open)}</dd></>)}
             </dl>
             <div className="flex flex-wrap gap-2">
               <Button size="sm" variant="secondary" onClick={() => handleOpenDetail(doc.id)}>Öffnen</Button>
-              <Button size="sm" variant="secondary" onClick={() => onEditInvoice(doc, documentType)}>Bearbeiten</Button>
+              {!isLockedDocument(doc, documentType) && <Button size="sm" variant="secondary" onClick={() => onEditInvoice(doc, documentType)}>Bearbeiten</Button>}
             </div>
             {doc.status === 'overdue' && (
               <p className="rounded-control border border-warning-border bg-warning-bg px-3 py-2.5 text-control text-warning-text" role="note">

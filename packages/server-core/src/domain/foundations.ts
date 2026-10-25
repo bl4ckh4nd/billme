@@ -142,6 +142,8 @@ export const invoiceTaxMetaSchema = z.object({
   datevSachverhaltLl: z.string().regex(/^[1-9]\d{0,2}$/).optional(),
   datevEvidenceType: z.string().min(1).optional(),
   datevEvidenceReference: z.string().min(1).optional(),
+  /** Set on the outgoing invoice of a fixed-asset sale: its revenue goes to the asset-sale account. */
+  assetSaleAssetId: z.string().min(1).optional(),
 });
 export type InvoiceTaxMeta = z.infer<typeof invoiceTaxMetaSchema>;
 
@@ -283,6 +285,8 @@ export const clientSchema = z.object({
     vatId: z.string().optional(),
     vatIdValidation: z.enum(['valid', 'invalid', 'unavailable', 'manual_override']).optional(),
     vatIdValidationAt: isoDateTimeSchema.optional(),
+    /** BT-10 Käuferreferenz a public buyer requires (Leitweg-ID); new documents for the client take it over. */
+    buyerReference: z.string().trim().max(200).optional(),
   }).optional(),
   createdAt: isoDateTimeSchema.optional(),
   updatedAt: isoDateTimeSchema.optional(),

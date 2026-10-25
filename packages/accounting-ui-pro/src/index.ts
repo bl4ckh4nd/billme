@@ -58,9 +58,11 @@ export {
 } from './domain/reportDates';
 export type {
   AssetDepreciationScheduleEntry,
+  AssetRegister,
   AssetItem,
   AssetStatus,
   AssetUpsertInput,
   DepreciationMethod,
 } from './domain/assetTypes';
+export { userFacingReference } from './domain/references';
 export * from './types';

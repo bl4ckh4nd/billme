@@ -22,6 +22,7 @@ import {
 import {
   createPostgresBillingDependencies,
   createPostgresProAccountingRepository,
+  reverseAssetSaleInTransaction,
   sha256Hex,
   stableStringify,
   type ServerDatabase,
@@ -119,6 +120,10 @@ export const settleCorrectedSource = async (transaction: ServerDatabaseSession, 
   if (!correction.sourceDocumentId || (kind !== 'cancellation_invoice' && kind !== 'credit_note')) return;
   const repositories = createPostgresBillingDependencies(transaction);
   const source = await repositories.invoiceRepo.getById(auth.scope, correction.sourceDocumentId);
+  // A Storno of the invoice that sold an asset takes the sale back: the asset is on the books again (Pro).
+  if (source && kind === 'cancellation_invoice' && auth.scope.product === 'pro') {
+    await reverseAssetSaleInTransaction(transaction, auth.scope, { invoiceId: source.id, reason, postingDate: correction.date.slice(0, 10), mutation: createMutationContext(auth, reason) });
+  }
   // A Storno cancels the invoice even when it was paid; the payment stays recorded and is owed back as a refund.
   const settleable = kind === 'cancellation_invoice' ? ['open', 'overdue', 'paid'] : ['open', 'overdue'];
   if (!source || !settleable.includes(source.status)) return;

@@ -689,6 +689,27 @@ export interface AssetDepreciationInput extends AssetMutationOptions {
   reason: string;
 }
 
+/** One asset in the Anlagenspiegel of a Wirtschaftsjahr (book values: opening + additions - disposals - AfA = closing). */
+export interface AssetRegisterRow {
+  assetId: string;
+  assetNumber: string;
+  name: string;
+  accountNumber: string;
+  opening: number;
+  additions: number;
+  disposals: number;
+  depreciation: number;
+  closing: number;
+}
+
+export interface AssetRegister {
+  year: number;
+  from: string;
+  to: string;
+  rows: AssetRegisterRow[];
+  totals: Omit<AssetRegisterRow, 'assetId' | 'assetNumber' | 'name' | 'accountNumber'>;
+}
+
 export interface AssetDepreciationResult {
   asset: AssetItem;
   scheduleEntry: AssetDepreciationScheduleEntry;
@@ -701,6 +722,8 @@ export interface AssetDisposalInput extends AssetMutationOptions {
   proceeds: number;
   taxRate?: 0 | 7 | 19;
   proceedsAccountNumber?: string;
+  /** The outgoing invoice of the sale books proceeds and VAT; the disposal then books only the book value. */
+  saleInvoiceId?: string;
   reason: string;
 }
 
@@ -724,6 +747,7 @@ export interface ProAccountingAssetRepository {
   getDepreciationSchedule(scope: TenantScope, assetId: string): Promise<AssetDepreciationScheduleEntry[]>;
   runDepreciation(scope: TenantScope, input: AssetDepreciationInput): Promise<AssetDepreciationResult>;
   disposeAsset(scope: TenantScope, input: AssetDisposalInput): Promise<AssetDisposalResult>;
+  getAssetRegister(scope: TenantScope, year: number): Promise<AssetRegister>;
 }
 
 /** Tenant-scoped persistence for immutable, auditable tax filing snapshots. */

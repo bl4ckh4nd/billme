@@ -1,7 +1,7 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { invoiceSchema, paymentSchema, type Payment } from '@billme/server-core';
-import { assertLitePeriodsOpen, bookInvoicePaymentInTransaction, findActiveOpenItemPayment, reverseOpenItemPaymentInTransaction, createPostgresBillingDependencies, creditedAmount, isSkontoPayment, periodClosedMessage, withSkontoSettlement } from '@billme/server-data';
+import { allowSoftLockedPostingsInTransaction, assertLitePeriodsOpen, bookInvoicePaymentInTransaction, findActiveOpenItemPayment, reverseOpenItemPaymentInTransaction, createPostgresBillingDependencies, creditedAmount, isSkontoPayment, periodClosedMessage, withSkontoSettlement } from '@billme/server-data';
 import { buildAuditEntry, withInvoiceHistory } from './auditHistory.js';
 import { settledInvoiceStatus } from './documentIssuance.js';
 import { isReceivableDocumentKind } from '@billme/server-core';
@@ -25,7 +25,8 @@ export const registerInvoicePaymentRoutes = (app: FastifyInstance, product: 'lit
       method: 'POST',
       url: operation === 'save' ? `${prefix}/invoices/:invoiceId/payments` : `${prefix}/invoices/:invoiceId/payments/:paymentId/reverse`,
       params: z.object({ invoiceId: z.string().min(1), paymentId: z.string().min(1).optional() }),
-      body: z.object({ reason: z.string().trim().min(1), payment: paymentCommandSchema.optional(), expectedPayment: paymentSchema.optional() }),
+      // softLockOverride: the person confirmed a booking into a vorläufig gesperrten month; the reason is the audit reason.
+      body: z.object({ reason: z.string().trim().min(1), payment: paymentCommandSchema.optional(), expectedPayment: paymentSchema.optional(), softLockOverride: z.boolean().optional() }),
       response: invoiceSchema,
       async handler({ request, params, body }) {
         const session = await requireMutationSessionFor(app, product, request.headers.authorization);
@@ -87,6 +88,7 @@ export const registerInvoicePaymentRoutes = (app: FastifyInstance, product: 'lit
             // removed gets its Zahlungsstorno and the new one is booked (Bank or Kasse an Forderungen) and
             // allocated to the open item, all in this transaction. Status follows the open item.
             const mutation = createMutationContext(session, body.reason);
+            if (body.softLockOverride === true) await allowSoftLockedPostingsInTransaction(transaction, body.reason);
             const booked = current ? await findActiveOpenItemPayment(transaction, session.scope, 'invoice_payment', current.id) : undefined;
             if (booked) await reverseOpenItemPaymentInTransaction(transaction, session.scope, { paymentId: booked.id, reason: body.reason, mutation });
             const reopened = (await repositories.invoiceRepo.getById(session.scope, before.id))!;

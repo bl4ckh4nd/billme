@@ -109,6 +109,8 @@ export const transactionSchema = z.object({
   suggestionReason: z.string().optional(),
   suggestionLayer: z.enum(['rule', 'counterparty', 'bayes', 'keyword', 'fallback']).optional(),
   suggestionConfidence: z.number().optional(),
+  /** Belege archived on the bank line (Pro). */
+  receiptDocumentCount: z.number().int().positive().optional(),
 });
 
 export const eurClassificationSchema = z.object({
@@ -386,6 +388,22 @@ export const incomingInvoiceDocumentDownloadSchema = z.object({
   document: incomingInvoiceDocumentSchema,
   data: incomingInvoiceDocumentBase64Schema,
 });
+/** A Beleg archived on a bank line; the content is stored unchanged and never replaced. */
+export const bankTransactionDocumentSchema = z.object({
+  id: z.string().min(1),
+  tenantId: z.string().min(1),
+  bankTransactionId: z.string().min(1),
+  originalFilename: z.string().min(1).max(255),
+  mimeType: incomingInvoiceDocumentMimeSchema,
+  byteLength: z.number().int().positive(),
+  sha256: z.string().regex(/^[a-f0-9]{64}$/i),
+  createdAt: z.string(),
+});
+export const bankTransactionDocumentUploadSchema = incomingInvoiceDocumentUploadSchema.omit({ invoiceId: true }).extend({ transactionId: z.string().min(1) });
+export const bankTransactionDocumentDownloadSchema = z.object({
+  document: bankTransactionDocumentSchema,
+  data: incomingInvoiceDocumentBase64Schema,
+});
 export const incomingInvoiceDocumentReviewSchema = z.object({
   documentId: z.string().min(1),
   reviewStatus: z.enum(['accepted', 'rejected']),
@@ -454,7 +472,22 @@ export const bookingDraftEntitySchema = z.object({
   validationIssues: z.array(draftValidationIssueSchema),
   updatedAt: z.string(),
   isVirtualProjection: z.boolean().optional(),
+  exceptionCase: z.object({
+    state: z.enum(['open', 'snoozed', 'resolved']),
+    owner: z.string().optional(),
+    snoozedUntil: z.string().optional(),
+    resolutionNote: z.string().optional(),
+  }).optional(),
 });
+
+/** A change of the Ausnahme of a bank line: only the given fields change; the reason is audited. */
+export const draftExceptionPatchSchema = z.object({
+  state: z.enum(['open', 'snoozed', 'resolved']).optional(),
+  owner: z.string().trim().max(200).optional(),
+  /** '' clears the pause. */
+  snoozedUntil: z.string().regex(/^(\d{4}-\d{2}-\d{2})?$/).optional(),
+  resolutionNote: z.string().trim().max(2000).optional(),
+}).strict();
 
 export const journalLineEntitySchema = z.object({
   id: z.string(),
@@ -643,6 +676,28 @@ export const assetDepreciationScheduleEntrySchema = z.object({
   postedAt: z.string().optional(),
 });
 
+const assetRegisterAmountsSchema = z.object({
+  opening: z.number(),
+  additions: z.number(),
+  disposals: z.number(),
+  depreciation: z.number(),
+  closing: z.number(),
+});
+
+/** Anlagenspiegel of a Wirtschaftsjahr, book values per asset. */
+export const assetRegisterSchema = z.object({
+  year: z.number().int(),
+  from: z.string(),
+  to: z.string(),
+  rows: z.array(assetRegisterAmountsSchema.extend({
+    assetId: z.string(),
+    assetNumber: z.string(),
+    name: z.string(),
+    accountNumber: z.string(),
+  })),
+  totals: assetRegisterAmountsSchema,
+});
+
 export const datevExportResultSchema = z.object({
   id: z.string(),
   filePath: z.string(),
@@ -807,8 +862,9 @@ const appSettingsBaseSchema = z.object({
   onboardingDraftSaved: z.boolean().optional(),
 });
 
+// A blank ledger account books on the bank role of the chart (the EÜR profile picks none).
 export const upsertAccountPayloadSchema = z.object({
-  account: accountSchema,
+  account: accountSchema.extend({ defaultSkrAccountNumber: z.string().optional() }),
 });
 
 
@@ -1047,7 +1103,7 @@ export const proPostAccountingCommandArgsSchema = proPostAccountingSourceArgsBas
 });
 
 export const proAccountingSourcePostResultSchema = z.object({
-  status: z.enum(['posted', 'rejected', 'duplicate', 'noop']),
+  status: z.enum(['posted', 'rejected', 'duplicate', 'noop', 'preview']),
   sourceRun: proAccountingSourceRunSchema.optional(),
   command: z.unknown().optional(),
   errors: z.array(z.object({

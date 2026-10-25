@@ -16,6 +16,7 @@ import {
   proValidateTaxComplianceResultSchema,
   proWorkflowEntrySchema,
   bookingDraftEntitySchema,
+  draftExceptionPatchSchema,
   journalEntryEntitySchema,
   ledgerBalanceRowSchema,
   datevExportResultSchema,
@@ -36,6 +37,7 @@ import {
   assetSchema,
   assetUpsertSchema,
   assetDepreciationScheduleEntrySchema,
+  assetRegisterSchema,
   accountingPolicySchema,
   accountingAccountMappingSchema,
   vendorSchema,
@@ -43,6 +45,9 @@ import {
   incomingInvoiceDocumentSchema,
   incomingInvoiceDocumentUploadSchema,
   incomingInvoiceDocumentDownloadSchema,
+  bankTransactionDocumentSchema,
+  bankTransactionDocumentDownloadSchema,
+  bankTransactionDocumentUploadSchema,
   incomingInvoiceDocumentReviewSchema,
   openItemSchema,
   accountingPostingPreviewSchema,
@@ -94,6 +99,7 @@ const transactionSchema = z.object({
   suggestionReason: z.string().optional(),
   suggestionLayer: z.enum(['rule', 'counterparty', 'bayes', 'keyword', 'fallback']).optional(),
   suggestionConfidence: z.number().optional(),
+  receiptDocumentCount: z.number().int().positive().optional(),
 });
 
 const invoiceMatchSuggestionSchema = z.object({
@@ -217,6 +223,7 @@ const proSaveDraftArgsSchema = z.object({
   draft: bookingDraftEntitySchema,
 });
 
+const proUpdateExceptionCaseArgsSchema = z.object({ transactionId: z.string().min(1), patch: draftExceptionPatchSchema, reason: z.string().trim().min(1) });
 const proDispatchDraftActionArgsSchema = z.object({
   transactionId: z.string().min(1),
   action: z.enum([
@@ -378,6 +385,7 @@ const proDisposeAssetArgsSchema = z.object({
   proceeds: z.number().nonnegative(),
   taxRate: z.union([z.literal(0), z.literal(7), z.literal(19)]).optional(),
   proceedsAccountNumber: z.string().min(1).optional(),
+  saleInvoiceId: z.string().min(1).optional(),
   softLockOverride: z.boolean().optional(),
   overrideReason: z.string().min(1).optional(),
   reason: z.string().min(1),
@@ -425,7 +433,7 @@ const proOutgoingInvoiceAccountingArgsSchema = proInvoiceAccountingArgsBaseSchem
 const proAllocateOpenItemPaymentArgsSchema = z.object({ payment: z.object({ paymentId: z.string().optional(), sourceType: z.enum(['bank_transaction', 'invoice_payment', 'manual']), sourceId: z.string().min(1), partyType: z.enum(['debtor', 'creditor']), partyId: z.string().optional(), paymentDate: z.string(), amount: z.number().positive(), bankAccountNumber: z.string().min(1), method: z.string().optional(), allocations: z.array(z.object({ openItemId: z.string().min(1), amount: z.number().positive() })), reason: z.string().trim().min(1), allocationEventId: z.string().trim().min(1), refund: z.boolean().optional() }) });
 const proReverseDocumentAccountingArgsSchema = z.object({ documentType: z.enum(['outgoing_invoice', 'incoming_invoice']), documentId: z.string().min(1), reason: z.string().min(1), postingDate: z.string().optional(), softLockOverride: z.boolean().optional(), overrideReason: z.string().min(1).optional() }).refine((input) => !input.softLockOverride || Boolean(input.overrideReason?.trim()), { path: ['overrideReason'], message: 'overrideReason required for soft-lock override' });
 const proAllocateRemainingPaymentArgsSchema = z.object({ paymentId: z.string().min(1), allocations: z.array(z.object({ openItemId: z.string().min(1), amount: z.number().positive() })), reason: z.string().trim().min(1), allocationEventId: z.string().trim().min(1) });
-const proOpenItemPaymentSchema = z.object({ id: z.string(), tenantId: z.string(), partyType: z.enum(['debtor', 'creditor']), partyId: z.string().optional(), paymentDate: z.string(), amount: z.number(), bankAccountNumber: z.string(), method: z.string().optional(), sourceType: z.enum(['bank_transaction', 'invoice_payment', 'manual']), sourceId: z.string(), allocatedAmount: z.number(), residualAmount: z.number(), status: z.enum(['open', 'partially_allocated', 'overpaid', 'allocated', 'reversed']), journalEntryId: z.string().optional(), createdAt: z.string(), refund: z.boolean().optional(), creditedPaymentId: z.string().optional() });
+const proOpenItemPaymentSchema = z.object({ id: z.string(), tenantId: z.string(), partyType: z.enum(['debtor', 'creditor']), partyId: z.string().optional(), paymentDate: z.string(), amount: z.number(), bankAccountNumber: z.string(), method: z.string().optional(), sourceType: z.enum(['bank_transaction', 'invoice_payment', 'manual']), sourceId: z.string(), allocatedAmount: z.number(), residualAmount: z.number(), status: z.enum(['open', 'partially_allocated', 'overpaid', 'allocated', 'reversed']), journalEntryId: z.string().optional(), createdAt: z.string(), refund: z.boolean().optional(), creditedPaymentId: z.string().optional(), documentNumbers: z.string().optional(), partyName: z.string().optional() });
 const proOpenItemPaymentReversalSchema = z.object({ paymentId: z.string(), reversalEntryIds: z.array(z.string()), reopenedItemIds: z.array(z.string()) });
 const proReverseOpenItemPaymentArgsSchema = z.object({ paymentId: z.string().min(1), reason: z.string().trim().min(1), postingDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional() });
 const proReallocateOpenItemPaymentArgsSchema = z.object({ paymentId: z.string().min(1), reason: z.string().trim().min(1), partyId: z.string().min(1), allocations: z.array(z.object({ openItemId: z.string().min(1), amount: z.number().positive() })).min(1), allocationEventId: z.string().trim().min(1) });
@@ -521,6 +529,11 @@ export const ipcRoutes = {
     args: proSaveDraftArgsSchema,
     result: bookingDraftEntitySchema,
   },
+  'pro:updateExceptionCase': {
+    channel: 'pro:updateExceptionCase',
+    args: proUpdateExceptionCaseArgsSchema,
+    result: bookingDraftEntitySchema,
+  },
   'pro:dispatchDraftAction': {
     channel: 'pro:dispatchDraftAction',
     args: proDispatchDraftActionArgsSchema,
@@ -611,6 +624,11 @@ export const ipcRoutes = {
     args: proGetDepreciationScheduleArgsSchema,
     result: z.array(assetDepreciationScheduleEntrySchema),
   },
+  'pro:getAssetRegister': {
+    channel: 'pro:getAssetRegister',
+    args: z.object({ year: z.number().int().min(2000).max(2100) }),
+    result: assetRegisterSchema,
+  },
   'pro:runDepreciation': {
     channel: 'pro:runDepreciation',
     args: proRunDepreciationArgsSchema,
@@ -627,7 +645,7 @@ export const ipcRoutes = {
       asset: assetSchema,
       residualBookValue: z.number().nonnegative(),
       gainLoss: z.number(),
-      journalEntryId: z.string().min(1),
+      journalEntryId: z.string(), // empty for the sale of a fully depreciated asset: the invoice books everything
     }),
   },
   'pro:exportDatevBuchungsstapel': {
@@ -679,6 +697,9 @@ export const ipcRoutes = {
   'pro:listIncomingInvoiceDocuments': { channel: 'pro:listIncomingInvoiceDocuments', args: z.object({ invoiceId: z.string().min(1).optional() }), result: z.array(incomingInvoiceDocumentSchema) },
   'pro:uploadIncomingInvoiceDocument': { channel: 'pro:uploadIncomingInvoiceDocument', args: incomingInvoiceDocumentUploadSchema, result: incomingInvoiceDocumentSchema },
   'pro:downloadIncomingInvoiceDocument': { channel: 'pro:downloadIncomingInvoiceDocument', args: z.object({ documentId: z.string().min(1) }), result: incomingInvoiceDocumentDownloadSchema },
+  'pro:listBankTransactionDocuments': { channel: 'pro:listBankTransactionDocuments', args: z.object({ transactionId: z.string().min(1) }), result: z.array(bankTransactionDocumentSchema) },
+  'pro:uploadBankTransactionDocument': { channel: 'pro:uploadBankTransactionDocument', args: bankTransactionDocumentUploadSchema, result: bankTransactionDocumentSchema },
+  'pro:downloadBankTransactionDocument': { channel: 'pro:downloadBankTransactionDocument', args: z.object({ documentId: z.string().min(1) }), result: bankTransactionDocumentDownloadSchema },
   'pro:reviewIncomingInvoiceDocument': { channel: 'pro:reviewIncomingInvoiceDocument', args: incomingInvoiceDocumentReviewSchema, result: incomingInvoiceDocumentSchema },
   'pro:previewOutgoingInvoiceAccounting': { channel: 'pro:previewOutgoingInvoiceAccounting', args: proInvoiceAccountingArgsSchema, result: accountingPostingPreviewSchema },
   'pro:postOutgoingInvoiceAccounting': { channel: 'pro:postOutgoingInvoiceAccounting', args: proOutgoingInvoiceAccountingArgsSchema, result: accountingPostingPreviewSchema },

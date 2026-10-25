@@ -90,12 +90,11 @@ test('ships the core SKR accounts the default drafts book against', async () => 
 test('shows a blocked draft in the inbox queues instead of hiding it', async () => {
   const { page, baseUrl } = desktop;
   await importBankExport(page);
-  const [account] = await invokeDesktopIpc(page, 'accounts:list');
-  // Point the bank account at a number that does not exist in the active chart.
-  await invokeDesktopIpc(page, 'accounts:upsert', { account: { ...account, defaultSkrAccountNumber: '0001' } });
+  // A counter account that does not exist in the active chart blocks the draft. (A bank account can no longer be
+  // pointed at such a number: saving it is refused, see pro-bank-ledger.spec.mjs.)
   const rent = await draftFor(page, 'Miete September');
   await invokeDesktopIpc(page, 'pro:saveDraft', {
-    draft: { ...rent, lines: rent.lines.map((line, index) => (index === 1 ? { ...line, accountNumber: '0001' } : line)) },
+    draft: { ...rent, lines: rent.lines.map((line, index) => (index === 0 ? { ...line, accountNumber: '0001' } : line)) },
   });
   await invokeDesktopIpc(page, 'pro:dispatchDraftAction', { transactionId: rent.transactionId, action: 'submit_for_review' });
 

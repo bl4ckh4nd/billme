@@ -28,7 +28,8 @@ const NAV_ITEMS: readonly ProNavItem[] = [
   { id: 'articles', label: 'Leistungen', icon: KontorIcon.articles, group: 'Verkauf', to: '/articles' },
   { id: 'opos', label: 'Offene Posten', icon: KontorIcon.openItems, group: 'Verkauf', to: '/accounting', search: { view: 'opos' }, profit: 'double_entry', subtitle: 'Forderungen und Verbindlichkeiten' },
   { id: 'reports', label: 'Auswertungen', icon: KontorIcon.reports, group: 'Abschluss', to: '/accounting', search: { view: 'reports' } },
-  { id: 'tax-filing', label: 'Steuer', icon: KontorIcon.tax, group: 'Abschluss', to: '/tax-filing' },
+  // UStVA, ZM/OSS-Vorbereitung and the period locks they set live together under Steuer (pro-abschluss B8/B19).
+  { id: 'tax', label: 'Steuer', icon: KontorIcon.tax, group: 'Abschluss', to: '/accounting', search: { view: 'tax' } },
   { id: 'assets', label: 'Anlagen', icon: KontorIcon.assets, group: 'Abschluss', to: '/accounting', search: { view: 'assets' } },
   { id: 'special', label: 'Sonderbuchungen', icon: KontorIcon.special, group: 'Abschluss', to: '/accounting', search: { view: 'special' } },
   { id: 'templates', label: 'Vorlagen', icon: KontorIcon.templates, group: 'Abschluss', to: '/templates' },

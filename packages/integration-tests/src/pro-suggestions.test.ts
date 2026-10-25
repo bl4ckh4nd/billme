@@ -14,6 +14,8 @@ import { addBankAccount, approveDraft, bankTransactions, getDraft, importCsv, po
  * - a learned guess outranks a remembered counterparty or an explicit rule
  * - the remembered counterparty is the oldest booking, not the newest
  * - rules do not match across umlaut / case / ß spelling
+ * - a suggested draft that a batch posts gross: the partner's one known tax case is not taken over,
+ *   or a mixed history is guessed instead of left open
  */
 describe('pro account suggestions learn from posted bookings', () => {
   let h: ProHarness;
@@ -95,6 +97,36 @@ describe('pro account suggestions learn from posted bookings', () => {
     assert.equal((await addRule({ value: 'mueller & soehne strasse', operator: 'equals', targetAccountNumber: '4950' })).status, 200);
     const folded = await suggestion('Müller & Söhne Straße');
     assert.deepEqual([folded.suggestionLayer, folded.suggestedAccountNumber], ['rule', '4950'], 'ue/ü, oe/ö and ss/ß are the same spelling');
+  });
+
+  test('a suggested draft takes over the tax case the partner always had, so posting splits the Vorsteuer; a mixed history stays open', async () => {
+    const bookWithTax = async (tx: BankTx, taxCaseKey?: string) => {
+      const d = await getDraft(h, tx.id);
+      await approveDraft(h, d, [{ ...d.lines[0]!, accountNumber: '4930', ...(taxCaseKey ? { taxCaseKey } : { taxCaseKey: undefined }) }, d.lines[1]!], { postingDate: tx.date });
+      assert.equal((await postDraft(h, d.id, { postingDate: tx.date })).status, 200);
+    };
+    await importCsv(h, bank, [
+      { date: '2026-05-04', amount: -119, counterparty: 'Steuerhaus Buero', purpose: 'Bestellung 1' },
+      { date: '2026-05-04', amount: -119, counterparty: 'Gemischt Handel', purpose: 'Bestellung A' },
+      { date: '2026-05-05', amount: -50, counterparty: 'Gemischt Handel', purpose: 'Bestellung B' },
+    ]);
+    await bookWithTax(await suggestion('Steuerhaus Buero'), 'DE_STD_19');
+    await bookWithTax(await suggestion('Gemischt Handel', 'Bestellung A'), 'DE_STD_19');
+    await bookWithTax(await suggestion('Gemischt Handel', 'Bestellung B'));
+    await importCsv(h, bank, [
+      { date: '2026-05-06', amount: -238, counterparty: 'Steuerhaus Buero', purpose: 'Bestellung 2' },
+      { date: '2026-05-06', amount: -60, counterparty: 'Gemischt Handel', purpose: 'Bestellung C' },
+    ]);
+    const known = await getDraft(h, (await suggestion('Steuerhaus Buero', 'Bestellung 2')).id);
+    const expense = known.lines.find((line) => line.accountNumber === '4930')!;
+    assert.equal(expense.taxCaseKey, 'DE_STD_19', 'the one tax case of this partner on 4930 is suggested with the account');
+    const mixed = await getDraft(h, (await suggestion('Gemischt Handel', 'Bestellung C')).id);
+    assert.equal(mixed.lines.find((line) => line.accountNumber === '4930')?.taxCaseKey, undefined, 'with and without tax before: no guess');
+    await approveDraft(h, known, known.lines, { postingDate: '2026-05-06' });
+    const posted = await postDraft(h, known.id, { postingDate: '2026-05-06' });
+    assert.equal(posted.status, 200, posted.text);
+    const lines = (posted.body.entry.lines as Array<{ accountNumber: string; debitAmount: number; creditAmount: number }>).map((line) => [line.accountNumber, line.debitAmount, line.creditAmount]);
+    assert.deepEqual(lines.sort(), [['1200', 0, 238], ['1576', 38, 0], ['4930', 200, 0]].sort(), 'net and Vorsteuer, not 238 gross on 4930');
   });
 
   test('the posted bookings stay balanced and the audit chain verifies', async () => {

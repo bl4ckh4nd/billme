@@ -3,10 +3,11 @@ import { createHash, randomUUID } from 'node:crypto';
 import { after, before, describe, test } from 'node:test';
 import { startPro, type ProHarness } from './harness.js';
 import { localIsoDate } from '@billme/server-core';
-import { newClient } from './fixtures.js';
+import { addDays, newClient, today } from './fixtures.js';
 import { sha256Hex, stableStringify } from '@billme/server-data';
+import { defaultResultAccount, isProfitAndLossAccount } from '@billme/accounting-shared';
 import {
-  addBankAccount, approveDraft, assertBalanced, assertLedgerConsistent, bankTx, cents, download, get, getDraft, importCsv, invoiceEntry, issue,
+  addBankAccount, approveDraft, assertBalanced, draft, assertLedgerConsistent, bankTx, cents, download, get, getDraft, importCsv, invoiceEntry, issue,
   journal, money, openItems, payOpenItem, periods, postDraft, statusOf, type JournalEntry,
 } from './pro-fixtures.js';
 
@@ -31,6 +32,8 @@ import {
  *   without Kapital and Privat in the Eigenkapital; a fiscal year after the
  *   newest catalogue refused instead of running on it, marked provisional; SuSa
  *   rows without the account name
+ * - EÜR profile: an imported bank line that nobody books (no draft step) missing
+ *   from the classification and the report
  * - snapshots: a frozen report that changes afterwards, a duplicate that is not
  *   recognised, a snapshot of an incomplete mapping, one without a reason
  * - DATEV: a file whose record count, hash or bytes differ from the receipt, a
@@ -38,7 +41,9 @@ import {
  *   wrong encoding, a stack spanning two periods, a bad query accepted, an
  *   export that cannot be fetched again unchanged; a net row plus a VAT row
  *   instead of one gross row (DATEV books the tax twice), the entry number in
- *   Belegfeld 1 instead of the invoice number, a Storno under another
+ *   Belegfeld 1 instead of the invoice number (also for a payment booked on
+ *   the invoice), a bank booking whose Beleg is the internal transaction id, a
+ *   Storno whose booking text does not name the original, a Storno under another
  *   Belegfeld than its original, a booking text over 60 characters that
  *   refuses the whole export, a file name without its period
  * - EÜR rules and PDF: a rule without value, line or reason accepted, a deleted
@@ -50,19 +55,38 @@ import {
  *   prepared return disagreeing, the live view locking the month, 2026 or
  *   2027 refused, years before 2025 accepted; ZM with an EU purchase in it;
  *   a tax case without a Kennzahl (§ 25a) dropped silently or frozen into a prepared return
+ * - corrections and bank bookings in the UStVA: a Stornorechnung, a partial
+ *   credit note, a Skonto or a bad debt that raises Kz 81/86 instead of lowering
+ *   them, a cancelled EU supply left in the ZM; a bank expense with a tax case
+ *   booked gross without its Vorsteuer (no Kz 66, no BU key in DATEV)
  * - year-end: a fiscal-year close or carry-forward that changes SuSa, BWA, GuV
  *   or Bilanz of the closed or the next year (result zeroed, balances counted
  *   twice), closing entries exported to DATEV, a closed year or a prepared
- *   UStVA month that stays open for postings without an override
+ *   UStVA month that stays open for postings without an override; a close that
+ *   needs every account and balance typed in by hand, a preview that books
+ *   something or differs from the booking, a second year's close that closes
+ *   the first year's result again; Erfolgskonten that open the next year with
+ *   last year's balance, an earlier year's result missing from the Eigenkapital
  * - assets: a disposal during the year refused (ASSET_DISPOSAL_PROJECTION_MISMATCH)
  *   instead of booking the AfA up to the disposal month, or accepted while an
  *   earlier AfA year is unposted; AfA years that ignore the Wirtschaftsjahr; an
  *   AfA booked outside its year; a missing AfA of a past year not reported in the
  *   health; IT hardware with a 1-year life spread over two years; degressive AfA
- *   with the wrong rate or outside its legal windows
+ *   with the wrong rate or outside its legal windows; the yearly AfA booked in full on a date
+ *   before the Wirtschaftsjahr ends; no Anlagenspiegel (opening, additions,
+ *   disposals, AfA, closing) or one that does not add up per asset
+ * - asset sale through an invoice: the sale draft deleted or the issued sale
+ *   invoice stornoed while the asset stays "verkauft" without proceeds (the
+ *   disposal and its AfA up to the sale must be reversed, the schedule planned
+ *   again, a new disposal or the year-end AfA possible); a Stornorechnung on
+ *   another revenue account than the sale invoice; a sale at residual book
+ *   value 0 refused by the database or not idempotent, a second sale invoice
+ *   for an already sold asset accepted; a sale at a book loss on the "bei
+ *   Buchgewinn" account where the chart has a "bei Buchverlust" one (SKR04 6889)
  * - Prüferpaket (Z3): journal lines or posting pairs of other periods in a
  *   package for one range, no Kontenplan, customers, vendors, incoming invoices
- *   (with their receipt files, byte-identical), open items, asset register or
+ *   (with their receipt files, byte-identical), Belege of bank lines without
+ *   their files or from bank lines of another range, open items, asset register or
  *   mappings, the retired account_mappings_hgb still exported, a file whose hash
  *   does not match its bytes
  */
@@ -115,13 +139,20 @@ describe('pro reporting', () => {
       const susa = await get<{ from: string; to: string; rows: Array<{ accountNumber: string; openingBalance: number; debitTurnover: number; creditTurnover: number; closingBalance: number }>; totals: { debit: number; credit: number; balance: number } }>(h, '/accounting/reports/susa?from=2026-01-01&to=2026-12-31');
       assert.equal(susa.totals.balance, 0);
       assert.equal(susa.totals.debit, susa.totals.credit);
+      // Erfolgskonten open every fiscal year at 0; the earlier result is carried on the result account of the legal form.
+      const resultAccount = defaultResultAccount('SKR03', (await h.api.settings.get())?.businessReportingProfile?.legalForm);
+      const accounts = [...new Set(entries.flatMap((entry) => entry.lines.map((line) => line.accountNumber)))];
+      const result2025 = accounts.filter((account) => isProfitAndLossAccount('SKR03', account)).reduce((sum, account) => sum + cents(net(entries, account, '2025-12-31')), 0);
       for (const account of susa.rows) {
-        assert.equal(cents(account.openingBalance), cents(net(entries, account.accountNumber, '2025-12-31')), `opening ${account.accountNumber}`);
-        assert.equal(cents(account.closingBalance), cents(net(entries, account.accountNumber, '2026-12-31')), `closing ${account.accountNumber}`);
+        const pnl = isProfitAndLossAccount('SKR03', account.accountNumber);
+        const opening = pnl ? 0 : cents(net(entries, account.accountNumber, '2025-12-31')) + (account.accountNumber === resultAccount ? result2025 : 0);
+        assert.equal(cents(account.openingBalance), opening, `opening ${account.accountNumber}`);
+        assert.equal(cents(account.closingBalance), opening + cents(net(entries, account.accountNumber, '2026-12-31', '2026-01-01')), `closing ${account.accountNumber}`);
         assert.equal(money(account.openingBalance + account.debitTurnover - account.creditTurnover), account.closingBalance, `roll-forward ${account.accountNumber}`);
       }
       const revenue = susa.rows.find((candidate) => candidate.accountNumber === '8400')!;
-      assert.equal(revenue.openingBalance, -500, 'the 2025 revenue is in the opening balance');
+      assert.equal(revenue.openingBalance, 0, 'the 2025 revenue is not an opening balance of 2026');
+      assert.equal(susa.rows.find((candidate) => candidate.accountNumber === resultAccount)?.openingBalance, -500, 'the 2025 result opens 2026 on the result account');
       const march = await get<typeof susa.rows>(h, '/accounting/balances?from=2026-03-01&to=2026-03-31');
       assert.equal(march.find((candidate) => candidate.accountNumber === '4930')!.debitTurnover, 119);
       assert.deepEqual(await get(h, '/accounting/balances?asOfDate=2024-12-31'), [], 'nothing before the first entry');
@@ -195,6 +226,22 @@ describe('pro reporting', () => {
         assert.ok(report.unclassifiedCount >= 1);
         assert.equal(report.summary.incomeTotal, 0, 'nothing is counted before it is classified');
         assert.ok(report.rows.some((line: any) => line.kind === 'income' && line.kennziffer === '112'));
+      });
+
+      test('an imported bank line nobody booked is a cash item of the EÜR profile: classified, it moves the result once', async () => {
+        const bank = await addBankAccount(h, `bank-eur-${randomUUID().slice(0, 6)}`);
+        const who = `EÜR Import ${randomUUID().slice(0, 6)}`;
+        await importCsv(h, bank, [{ date: '2026-04-10', amount: -59.5, counterparty: who, purpose: 'Fachbuch' }]);
+        assert.equal((await bankTx(h, who)).status, 'pending', 'the EÜR profile has no booking draft step');
+        const item = (await items(2026)).filter((row) => row.counterparty === who);
+        assert.equal(item.length, 1, 'the imported line is listed once for classification');
+        assert.deepEqual([item[0]!.flowType, item[0]!.amountGross, item[0]!.date], ['expense', 59.5, '2026-04-10']);
+        const before = await eur();
+        const saved = await classify({ sourceType: item[0]!.sourceType, sourceId: item[0]!.sourceId, eurLineId: 'E2026_KZ100' });
+        assert.equal(saved.status, 200, saved.text);
+        const after = await eur();
+        assert.ok(after.summary.expenseTotal > before.summary.expenseTotal, 'the classified line is an expense of the report');
+        assert.equal(after.unclassifiedCount, before.unclassifiedCount - 1);
       });
 
       test('a classification puts the item on its line and moves the result; excluding takes it out again', async () => {
@@ -519,6 +566,17 @@ describe('pro reporting', () => {
       assert.equal((await h.raw('POST', '/clients', { reason: 'Kunde', client: newClient({ company: 'Prüfer Kunde GmbH' }) })).status, 200);
       const asset = await h.raw('POST', '/accounting/assets', { reason: 'Anlage', asset: { assetNumber: 'A-PRUEF', name: 'Drucker', assetClass: 'IT-Hardware', status: 'aktiv', activationDate: '2026-03-05', acquisitionCost: 900, usefulLifeYears: 3, depreciationMethod: 'linear', costCenter: 'IT', location: 'Berlin', receiptLinked: true, assetAccountNumber: '0440' } });
       assert.equal(asset.status, 200, asset.text);
+      // A Beleg on a March bank line belongs in the package with its file; one on an April line does not.
+      const bankAccount = await addBankAccount(h, 'bank-pruefer');
+      await importCsv(h, bankAccount, [{ date: '2026-03-12', amount: -23.8, counterparty: 'Prüfer Bürobedarf', purpose: 'Papier' }, { date: '2026-04-12', amount: -11.9, counterparty: 'Prüfer April', purpose: 'Toner' }]);
+      const bankPdf = Buffer.concat([Buffer.from('%PDF-1.4\n'), Buffer.from(`quittung-${randomUUID()}`)]);
+      const attach = async (counterparty: string, bytes: Buffer) => {
+        const response = await h.raw('POST', `/accounting/transactions/${(await bankTx(h, counterparty)).id}/documents`, { reason: 'Quittung', originalFilename: 'quittung.pdf', mimeType: 'application/pdf', data: bytes.toString('base64') });
+        assert.equal(response.status, 200, response.text);
+        return response.body as { id: string; sha256: string };
+      };
+      const bankBeleg = await attach('Prüfer Bürobedarf', bankPdf);
+      const aprilBeleg = await attach('Prüfer April', Buffer.concat([Buffer.from('%PDF-1.4\n'), Buffer.from(`april-${randomUUID()}`)]));
       const response = await h.raw('POST', '/tax/audit-export-package', { from: '2026-03-01', to: '2026-03-31', includeDocuments: true });
       assert.equal(response.status, 200, response.text);
       const files = response.body.files as Array<{ name: string; content: string; encoding?: 'base64'; sha256: string; sizeBytes: number; rowCount?: number }>;
@@ -549,6 +607,11 @@ describe('pro reporting', () => {
       assert.ok(document && !('content_bytes' in document), 'the receipt index without the bytes');
       const receipt = files.find((entry) => entry.name.startsWith(`beleg-`) && entry.name.endsWith('.pdf') && entry.encoding === 'base64' && entry.sha256 === document.sha256);
       assert.ok(receipt && Buffer.from(receipt.content, 'base64').equals(pdf), 'the receipt file is byte-identical');
+      assert.deepEqual(rows('bank-transaction-documents.jsonl').map((entry) => entry.id), [bankBeleg.id], 'the Beleg index of the March bank lines');
+      const bankFile = files.find((entry) => entry.name.startsWith('beleg-') && entry.encoding === 'base64' && entry.sha256 === bankBeleg.sha256);
+      assert.ok(bankFile && Buffer.from(bankFile.content, 'base64').equals(bankPdf), 'the Beleg of the bank line is in the package, byte-identical');
+      assert.equal(bankFile!.name, `beleg-${bankBeleg.id}.pdf`, 'named like the receipts of incoming invoices');
+      assert.ok(!files.some((entry) => entry.sha256 === aprilBeleg.sha256), 'not the Beleg of an April bank line');
       assert.ok(rows('open-items.jsonl').every((item) => item.document_date >= '2026-03-01' && item.document_date <= '2026-03-31'));
       assert.ok(rows('open-items.jsonl').length > 0, 'open items of March');
       assert.ok(rows('assets.jsonl').some((entry) => entry.asset_number === 'A-PRUEF'), 'the asset register');
@@ -596,9 +659,11 @@ describe('pro reporting', () => {
       assert.ok(!rows.some((fields) => fields[6] === '1776' || fields[7] === '1776'), 'and no separate VAT row');
       assert.match(invoiceRow[10]!, /^"RE-\d{4}-\d{3}"$/, 'Belegfeld 1 is the invoice number');
       assert.match(exported.headers.get('content-disposition') ?? '', /filename="EXTF_Buchungsstapel_2026-03-01_2026-03-31\.csv"/);
-      const preview = await get<Array<{ belegfeld1: string; konto: string; gegenkonto: string }>>(h, '/accounting/datev/rows?from=2026-03-01&to=2026-03-31');
+      const preview = await get<Array<{ belegfeld1: string; buchungstext: string; konto: string; gegenkonto: string }>>(h, '/accounting/datev/rows?from=2026-03-01&to=2026-03-31');
       for (const entry of march) {
-        const pairs = preview.filter((row) => row.belegfeld1 === (entry.reference || String(entry.entryNumber)));
+        // A payment carries the invoice number too (Belegfeld 1 for the OPOS settlement): the booking text tells the entries apart.
+        const pairs = preview.filter((row) => row.belegfeld1 === (entry.reference || String(entry.entryNumber)) && row.buchungstext === entry.bookingText);
+        assert.ok(pairs.length > 0, `${entry.bookingText}: no DATEV rows`);
         const lineOrder = (account: string) => entry.lines.findIndex((line) => line.accountNumber === account);
         assert.deepEqual(pairs, [...pairs].sort((a, b) => lineOrder(a.konto) - lineOrder(b.konto) || lineOrder(a.gegenkonto) - lineOrder(b.gegenkonto)), 'DATEV pairs follow journal line order, never random pair IDs');
       }
@@ -887,6 +952,123 @@ describe('pro reporting', () => {
     });
   });
 
+  describe('UStVA, ZM and DATEV after corrections and bank bookings with a tax case (own tenant)', () => {
+    let c: ProHarness;
+    const month = today().slice(0, 7);
+    const from = `${month}-01`;
+    const to = addDays(`${addDays(from, 31).slice(0, 7)}-01`, -1);
+    const kennzahlen = async () => (await get<any>(c, `/accounting/vat/summary?from=${from}&to=${to}`)).kennzahlen;
+    const kzNow = async () => kz((await kennzahlen()).rows);
+    const kz = (positions: Array<{ kennziffer: string; netAmount: number; taxAmount: number }>) => Object.fromEntries(positions.map((row) => [row.kennziffer, [row.netAmount, row.taxAmount]])) as Record<string, [number, number]>;
+    /** Kennzahl movement between two snapshots, in cents, only where something moved. */
+    const delta = (before: Record<string, [number, number]>, after: Record<string, [number, number]>) => Object.fromEntries([...new Set([...Object.keys(before), ...Object.keys(after)])].sort()
+      .map((key) => [key, [money((after[key]?.[0] ?? 0) - (before[key]?.[0] ?? 0)), money((after[key]?.[1] ?? 0) - (before[key]?.[1] ?? 0))]] as const)
+      .filter(([, [n, t]]) => n !== 0 || t !== 0));
+    const correction = (invoiceId: string, kind: 'credit_note' | 'cancellation_invoice', amount?: number) =>
+      c.api.documents.chainIssue({ id: randomUUID(), date: today(), dueDate: today(), operation: 'correction', invoiceId, kind, reason: kind === 'credit_note' ? 'Gutschrift' : 'Storno', ...(amount === undefined ? {} : { amount }) } as never) as Promise<any>;
+    const mixed = [{ kind: 'item' as const, description: 'Beratung', quantity: 1, price: 1000, total: 1000, taxRate: 19 }, { kind: 'item' as const, description: 'Buch', quantity: 1, price: 100, total: 100, taxRate: 7 }];
+    before(async () => { c = await startPro(null, 'pro-ustva-corrections'); });
+    after(async () => { await c?.close(); });
+
+    test('a Storno brings Kz 81, 86 and 83 back to where they were before the invoice', async () => {
+      const start = await kzNow();
+      const invoice = await issue(c, { client: 'Storno UStVA', items: mixed });
+      assert.deepEqual(delta(start, await kzNow()), { '81': [1000, 190], '83': [0, 197], '86': [100, 7] }, 'the invoice');
+      const storno = await correction(invoice.id, 'cancellation_invoice');
+      assert.ok(storno, 'the Stornorechnung is issued');
+      assert.deepEqual(delta(start, await kzNow()), {}, 'after the Storno nothing is left');
+      const view = await kennzahlen();
+      assert.ok(view.sources.some((source: any) => source.kennziffer === '81' && source.netAmount === -1000 && source.taxAmount === -190), 'the drilldown shows the Storno as a reduction');
+    });
+
+    test('a partial credit note, a Skonto and a bad debt lower Kz 81 by their net and VAT', async () => {
+      const invoice = await issue(c, { client: 'Gutschrift UStVA', items: [mixed[0]!] });
+      let start = await kzNow();
+      const issued = await correction(invoice.id, 'credit_note', 119);
+      const creditId = issued?.id ?? issued?.document?.id;
+      const credit = (await journal(c)).find((entry) => entry.sourceKey === `outgoing-correction:${creditId}`)!;
+      assert.ok(credit, `the credit note is posted (${JSON.stringify(issued).slice(0, 200)})`);
+      const creditNet = credit.lines.find((line) => line.accountNumber === '8400')!.debitAmount;
+      assert.equal(creditNet, 100, 'a partial credit note of 119 € gross');
+      assert.deepEqual(delta(start, await kzNow()), { '81': [-creditNet, money(-creditNet * 0.19)], '83': [0, money(-creditNet * 0.19)] }, 'the credit note');
+
+      const plain = await draft(c, { client: 'Skonto UStVA', dueDate: addDays(today(), 30) });
+      const withSkonto = await c.api.invoices.upsert({ reason: 'stellen', invoice: { ...plain, skonto: { percent: 2, days: 10 }, status: 'open' } as never });
+      start = await kzNow();
+      const paid = await c.raw('POST', `/invoices/${withSkonto.id}/payments`, { reason: 'Zahlung', payment: { id: randomUUID(), date: today(), amount: 233.24, method: 'Überweisung' } });
+      assert.equal(paid.status, 200, paid.text);
+      assert.deepEqual(delta(start, await kzNow()), { '81': [-4, -0.76], '83': [0, -0.76] }, 'the Skonto');
+
+      const lost = await issue(c, { client: 'Ausfall UStVA', items: [{ kind: 'item', description: 'Ausfall', quantity: 1, price: 100, total: 100, taxRate: 19 }] });
+      start = await kzNow();
+      const id = `baddebt-${randomUUID()}`;
+      const facts = { legalBasis: '§17 UStG', reason: 'bad_debt', originalDocumentId: lost.id, originalDocumentNumber: lost.number, originalTaxEffectiveDate: lost.date, adjustmentDate: today(), evidenceReference: 'Insolvenz UStVA' };
+      const writeOff = await c.raw('POST', '/accounting/closing', { reason: 'Forderungsausfall', commandType: 'bad_debt', sourceId: id, sourceRevision: 'v1', idempotencyKey: `${id}:v1`, input: { effectiveDate: today(), postingDate: today(), period: month, fiscalYear: Number(month.slice(0, 4)), currency: 'EUR', taxBreakdown: [{ rate: 19, netAmount: 100, taxAmount: 19, grossAmount: 119 }], writeOffGrossAmount: 119, originalDocumentId: lost.id, badDebtExpenseAccount: '2400', facts } });
+      assert.equal(writeOff.status, 200, writeOff.text);
+      assert.deepEqual(delta(start, await kzNow()), { '81': [-100, -19], '83': [0, -19] }, 'the bad debt');
+    });
+
+    test('a bank expense with the tax case Inland 19 % books net and Vorsteuer, counts in Kz 66 and goes to DATEV as one gross row with BU 9', async () => {
+      const bank = await addBankAccount(c, 'bank-vorsteuer');
+      await importCsv(c, bank, [{ date: today(), amount: -35.7, counterparty: 'Telekom Deutschland', purpose: 'Rechnung 99 Telefon' }]);
+      const tx = await bankTx(c, 'Telekom Deutschland');
+      const d = await getDraft(c, tx.id);
+      const start = await kennzahlen();
+      // What the workbench sends: the gross bank amount on the expense line, with the tax case chosen there.
+      await approveDraft(c, d, [{ id: `${d.id}-1`, accountNumber: '4920', debitAmount: 35.7, creditAmount: 0, taxCode: 'USt19', taxCaseKey: 'DE_STD_19', taxRate: 19 }, { id: `${d.id}-2`, accountNumber: '1200', debitAmount: 0, creditAmount: 35.7 }] as never);
+      const posted = await postDraft(c, d.id, { postingDate: today() });
+      assert.equal(posted.status, 200, posted.text);
+      const entry = posted.body.entry as JournalEntry;
+      assert.deepEqual(entry.lines.map((line) => [line.accountNumber, line.debitAmount, line.creditAmount]), [['4920', 30, 0], ['1576', 5.7, 0], ['1200', 0, 35.7]], 'net, Vorsteuer and the bank amount');
+      const basis = entry.lines.find((line) => line.accountNumber === '4920')!;
+      assert.deepEqual([basis.taxCaseKey, basis.netAmount, basis.taxAmount, basis.grossAmount], ['DE_STD_19', 30, 5.7, 35.7]);
+      const view = await kennzahlen();
+      assert.deepEqual(delta(kz(start.rows), kz(view.rows)), { '66': [30, 5.7], '83': [0, -5.7] });
+      assert.equal(money(view.inputTaxAmount - start.inputTaxAmount), 5.7);
+      const rows = await get<Array<{ belegfeld1: string; konto: string; gegenkonto: string; umsatz: number; buSchluessel?: string }>>(c, `/accounting/datev/rows?from=${from}&to=${to}`);
+      const datev = rows.filter((row) => row.konto === '4920' || row.konto === '1576');
+      assert.deepEqual(datev.map((row) => [row.konto, row.gegenkonto, row.umsatz, row.buSchluessel]), [['4920', '1200', 35.7, '0009']], 'one gross row with the Vorsteuer key');
+    });
+
+    test('a payment, a bank booking and a Storno carry readable references into the journal and DATEV Belegfeld 1', async () => {
+      const invoice = await issue(c, { client: 'Referenz Kunde', items: [mixed[0]!] });
+      const paymentId = randomUUID();
+      const paid = await c.raw('POST', `/invoices/${invoice.id}/payments`, { reason: 'Zahlung', payment: { id: paymentId, date: today(), amount: 500, method: 'Überweisung' } });
+      assert.equal(paid.status, 200, paid.text);
+      const payment = (await journal(c)).find((entry) => entry.sourceType === 'payment' && String(entry.sourceKey).includes(paymentId))!;
+      assert.ok(payment, 'the payment is posted');
+      assert.equal(payment.reference, invoice.number, 'the payment names the invoice');
+      assert.match(payment.bookingText, new RegExp(`${invoice.number}.*Referenz Kunde`), 'and the customer');
+
+      const account = await addBankAccount(c, `bank-ref-${randomUUID().slice(0, 6)}`);
+      await importCsv(c, account, [{ date: today(), amount: -50, counterparty: 'Büro Meier', purpose: 'Rechnung 4711 Büromaterial' }]);
+      const tx = await bankTx(c, 'Büro Meier');
+      const bankDraft = await getDraft(c, tx.id) as Awaited<ReturnType<typeof getDraft>> & { reference?: string };
+      assert.notEqual(bankDraft.reference, tx.id, 'no internal id as Beleg');
+      assert.doesNotMatch(String(bankDraft.reference ?? ''), /^[0-9a-f]{8}-[0-9a-f]{4}-/, 'no UUID as Beleg');
+
+      const cancelled = await issue(c, { client: 'Referenz Storno', items: [mixed[0]!] });
+      const storno = await correction(cancelled.id, 'cancellation_invoice');
+      const stornoId = storno?.id ?? storno?.document?.id;
+      const stornoEntry = (await journal(c)).find((entry) => entry.sourceKey === `outgoing-correction:${stornoId}`)!;
+      assert.match(stornoEntry.bookingText, new RegExp(cancelled.number), 'the Storno names the invoice it cancels');
+
+      const rows = await get<Array<{ belegfeld1: string; konto: string; gegenkonto: string; umsatz: number }>>(c, `/accounting/datev/rows?from=${from}&to=${to}`);
+      const paymentRow = rows.find((row) => row.umsatz === 500 && (row.konto === '1200' || row.gegenkonto === '1200'));
+      assert.equal(paymentRow?.belegfeld1, invoice.number.replace(/[^\w$&%*+\-/]+/g, '-'), 'DATEV can settle the receivable with the invoice number');
+    });
+
+    test('a Storno of an EU supply takes it out of the ZM again', async () => {
+      const igl = await issue(c, { client: 'EU Storno', taxMode: 'intra_eu_supply_6a', taxMeta: { buyerCountryCode: 'FR', buyerVatId: 'FR98765432109', destinationVatRate: 20, datevEvidenceType: 'gelangensbestaetigung', datevEvidenceReference: 'GB-S' }, items: [{ kind: 'item', description: 'Ware', quantity: 1, price: 500, total: 500 }] });
+      await correction(igl.id, 'cancellation_invoice');
+      assert.deepEqual(delta({}, await kzNow())['41'] ?? [0, 0], [0, 0], 'Kz 41 is back to zero');
+      // Preparing locks the month softly, so this runs last in this tenant.
+      const zm = await c.raw('POST', '/accounting/tax-exports/prepare', { kind: 'zm', period: month, idempotencyKey: `zm-${randomUUID()}`, reason: 'ZM' });
+      assert.equal(zm.status, 200, zm.text);
+      assert.deepEqual(zm.body.artifact.rows.filter((row: any) => row.counterpartyVatId === 'FR98765432109' && row.netAmount !== 0), [], 'no ZM amount for a cancelled supply');
+    });
+  });
+
   describe('official tax filing operations (Pro)', () => {
     test('validate, export and submit refuse an unknown or malformed filing and need the local token', async () => {
       const record = { id: 'gibt-es-nicht', kind: 'euer', periodStart: '2025-01-01', periodEnd: '2025-12-31', sourceHash: 'a'.repeat(64), status: 'frozen' };
@@ -933,6 +1115,38 @@ describe('pro reporting', () => {
       assert.equal((await get<Array<{ status: string }>>(h, `/accounting/assets/${a.id}/schedule`))[0]!.status, 'posted');
       assert.ok((await get<Array<{ assetNumber: string }>>(h, '/accounting/assets')).some((candidate) => candidate.assetNumber === 'A-NOTEBOOK'));
       assert.ok((await h.api.audit.exportCsv()).includes('depreciation_posted') || (await h.api.audit.exportCsv()).includes('Jahres-AfA'), 'depreciation is audited');
+    });
+
+    test('the yearly AfA is not booked before the Wirtschaftsjahr ends: a mid-year date is refused and posts nothing', async () => {
+      const created = await save();
+      assert.equal(created.status, 200, created.text);
+      const entries = (await journal(h)).length;
+      const early = await depreciate(created.body.id, { postingDate: '2026-06-30' });
+      assert.equal(early.status, 400, early.text);
+      assert.match(early.body.message, /Ende des Wirtschaftsjahres/);
+      assert.equal((await journal(h)).length, entries, 'nothing is posted');
+      assert.equal((await get<Array<{ status: string }>>(h, `/accounting/assets/${created.body.id}/schedule`))[0]!.status, 'planned');
+    });
+
+    test('the Anlagenspiegel shows opening, additions, disposals, AfA and closing per asset and adds up', async () => {
+      type Row = { assetId: string; assetNumber: string; accountNumber: string; opening: number; additions: number; disposals: number; depreciation: number; closing: number };
+      const register = (year: number) => get<{ year: number; from: string; to: string; rows: Row[]; totals: Omit<Row, 'assetId' | 'assetNumber' | 'accountNumber'> }>(h, `/accounting/assets/register?year=${year}`);
+      const kept = await save();
+      const sold = await save();
+      assert.equal((await depreciate(kept.body.id)).status, 200);
+      assert.equal((await dispose(sold.body.id)).status, 200);
+      const pick = (rows: Row[], id: string) => { const row = rows.find((candidate) => candidate.assetId === id)!; return [row.opening, row.additions, row.disposals, row.depreciation, row.closing]; };
+      const y2026 = await register(2026);
+      assert.deepEqual([y2026.from, y2026.to], ['2026-01-01', '2026-12-31']);
+      assert.deepEqual(pick(y2026.rows, kept.body.id), [0, 1200, 0, 266.67, 933.33]);
+      assert.deepEqual(pick(y2026.rows, sold.body.id), [0, 1200, 933.33, 266.67, 0], 'the sale books the AfA up to the disposal month and leaves at book value');
+      assert.equal(y2026.rows.find((row) => row.assetId === kept.body.id)!.accountNumber, '0440');
+      for (const row of y2026.rows) assert.equal(money(row.opening + row.additions - row.disposals - row.depreciation) + 0, row.closing, `${row.assetNumber} adds up`);
+      assert.equal(money(y2026.rows.reduce((sum, row) => sum + row.closing, 0)), y2026.totals.closing);
+      const y2027 = await register(2027);
+      assert.deepEqual(pick(y2027.rows, kept.body.id), [933.33, 0, 0, 0, 933.33], 'the closing of 2026 opens 2027');
+      assert.ok(!y2027.rows.some((row) => row.assetId === sold.body.id), 'a disposed asset is gone from the next year');
+      assert.equal((await h.raw('GET', '/accounting/assets/register')).status, 400, 'the year is required');
     });
 
     test('the journal route cannot reverse the entries an asset owns', async () => {
@@ -1022,6 +1236,125 @@ describe('pro reporting', () => {
       const refusedDraft = await dispose(draftAsset.body.id);
       refused('the disposal of a draft asset', refusedDraft);
       assert.equal((await dispose(id, { reason: ' ' })).status, 400);
+    });
+
+    test('a sale at a book loss goes to DATEV with the VAT on the proceeds: one gross row with BU 3 against the asset, the loss without a key', async () => {
+      const number = `A-LOSS-${randomUUID().slice(0, 4)}`;
+      const created = await save({ assetNumber: number, usefulLifeYears: 1, activationDate: '2026-01-01', acquisitionCost: 10800 });
+      assert.equal(created.status, 200, created.text);
+      const sold = await dispose(created.body.id, { disposalDate: '2026-01-31', proceeds: 8000, taxRate: 19 });
+      assert.equal(sold.status, 200, sold.text);
+      const entry = (await journal(h)).find((candidate) => candidate.id === sold.body.journalEntryId)!;
+      const residual = sold.body.residualBookValue as number;
+      assert.deepEqual(entry.lines.map((line) => [line.accountNumber, line.debitAmount, line.creditAmount]).sort(), [['0440', 0, residual], ['1200', 9520, 0], ['1776', 0, 1520], ['2310', money(residual - 8000), 0]].sort());
+      const rows = (await get<Array<{ belegfeld1: string; konto: string; gegenkonto: string; umsatz: number; buSchluessel?: string }>>(h, '/accounting/datev/rows?from=2026-01-01&to=2026-01-31')).filter((row) => row.belegfeld1 === number && row.konto !== '4830' && row.gegenkonto !== '1600');
+      assert.deepEqual(rows.map((row) => [row.konto, row.gegenkonto, row.umsatz, row.buSchluessel ?? null]).sort(), [['1200', '0440', 9520, '0003'], ['2310', '0440', money(residual - 8000), null]].sort(), 'DATEV computes the 1.520 € USt from the proceeds, not from the loss');
+    });
+
+    test('a sale to a customer runs through an outgoing invoice: the invoice books revenue, VAT and the open item, the disposal only the book value', async () => {
+      const number = `A-SALE-${randomUUID().slice(0, 4)}`;
+      const created = await save({ assetNumber: number, usefulLifeYears: 1, activationDate: '2026-01-01', acquisitionCost: 1200 });
+      assert.equal(created.status, 200, created.text);
+      const assetId = created.body.id as string;
+      const sale = (over: Record<string, unknown> = {}) => draft(h, { client: 'Käufer GmbH', date: '2026-01-31', items: [{ kind: 'item', description: `Verkauf Anlage ${number} Notebook`, quantity: 1, price: 1500, total: 1500, taxRate: 19 }], taxMeta: { assetSaleAssetId: assetId } as never, ...over });
+
+      const plain = await draft(h, { client: 'Käufer GmbH', date: '2026-01-31', items: [{ kind: 'item', description: 'Beratung', quantity: 1, price: 1500, total: 1500, taxRate: 19 }] });
+      refused('an invoice that is not the sale of this asset', await dispose(assetId, { disposalDate: '2026-01-31', proceeds: 1500, taxRate: undefined, proceedsAccountNumber: undefined, saleInvoiceId: plain.id }));
+      const invoice = await sale();
+      refused('proceeds that differ from the invoice', await dispose(assetId, { disposalDate: '2026-01-31', proceeds: 1400, taxRate: undefined, proceedsAccountNumber: undefined, saleInvoiceId: invoice.id }));
+
+      const sold = await dispose(assetId, { disposalDate: '2026-01-31', proceeds: 1500, taxRate: undefined, proceedsAccountNumber: undefined, saleInvoiceId: invoice.id });
+      assert.equal(sold.status, 200, sold.text);
+      assert.equal(sold.body.gainLoss, money(1500 - sold.body.residualBookValue));
+      const disposal = (await journal(h)).find((entry) => entry.id === sold.body.journalEntryId)!;
+      const residual = sold.body.residualBookValue as number;
+      assert.deepEqual(disposal.lines.map((line) => [line.accountNumber, line.debitAmount, line.creditAmount]).sort(), [['0440', 0, residual], ['2315', residual, 0]].sort(), 'no proceeds, no VAT: those come with the invoice');
+
+      const issued = await h.api.invoices.upsert({ reason: 'Rechnung gestellt', invoice: { ...invoice, status: 'open' } as never });
+      const posted = (await invoiceEntry(h, issued.id))!;
+      assert.deepEqual(posted.lines.map((line) => [line.accountNumber, line.debitAmount, line.creditAmount]).sort(), [['1400', 1785, 0], ['1776', 0, 285], ['8829', 0, 1500]].sort(), 'revenue on the asset-sale account, VAT from the tax case');
+      assert.ok((await openItems(h)).some((item) => item.sourceId === issued.id && item.partyType === 'debtor'), 'the buyer owes the invoice in OPOS');
+      assert.equal((await journal(h)).filter((entry) => entry.lines.some((line) => line.accountNumber === '8829' && line.creditAmount === 1500)).length, 1, 'the proceeds are booked once');
+    });
+
+    // A sale draft as the Pro UI creates it: one line "Verkauf Anlage …" and the asset marker in taxMeta.
+    const saleOf = (number: string, assetId: string, proceeds: number, date = '2026-01-31') => draft(h, { client: 'Käufer GmbH', date, items: [{ kind: 'item', description: `Verkauf Anlage ${number} Notebook`, quantity: 1, price: proceeds, total: proceeds, taxRate: 19 }], taxMeta: { assetSaleAssetId: assetId } as never });
+    const sellTo = (assetId: string, invoiceId: string, proceeds: number, date = '2026-01-31') => dispose(assetId, { disposalDate: date, proceeds, taxRate: undefined, proceedsAccountNumber: undefined, saleInvoiceId: invoiceId });
+    const assetOf = async (id: string) => (await get<Array<{ id: string; status: string; disposalDate?: string | null }>>(h, '/accounting/assets')).find((row) => row.id === id)!;
+    const scheduleOf = async (id: string) => (await get<Array<{ year: number; amount: number; months: number; status: string }>>(h, `/accounting/assets/${id}/schedule`)).map((row) => [row.year, row.amount, row.months, row.status]);
+    const registerRow = async (id: string, year = 2026) => { const row = (await get<{ rows: Array<{ assetId: string; opening: number; additions: number; disposals: number; depreciation: number; closing: number }> }>(h, `/accounting/assets/register?year=${year}`)).rows.find((candidate) => candidate.assetId === id)!; return [row.opening, row.additions, row.disposals, row.depreciation, row.closing]; };
+
+    test('a deleted sale draft takes the sale back: AfA and book value reversed, the asset active and planned again, the year-end AfA possible', async () => {
+      const number = `A-UNDO-${randomUUID().slice(0, 4)}`;
+      const created = await save({ assetNumber: number, usefulLifeYears: 1, activationDate: '2026-01-01', acquisitionCost: 1200 });
+      const assetId = created.body.id as string;
+      const invoice = await saleOf(number, assetId, 1500);
+      const sold = await sellTo(assetId, invoice.id, 1500);
+      assert.equal(sold.status, 200, sold.text);
+      const afa = (await journal(h)).find((entry) => entry.bookingText === `AfA ${number} 2026 bis Abgang`)!;
+      assert.ok(afa, 'the sale booked the AfA up to January');
+
+      await h.api.invoices.delete({ id: invoice.id, reason: 'Verkauf geplatzt' });
+      const asset = await assetOf(assetId);
+      assert.deepEqual([asset.status, asset.disposalDate ?? null], ['aktiv', null], 'the asset is on the books again');
+      const entries = await journal(h);
+      assert.deepEqual([entries.find((entry) => entry.id === sold.body.journalEntryId)!.status, entries.find((entry) => entry.id === afa.id)!.status], ['reversed', 'reversed'], 'book value and AfA of the sale are reversed');
+      assert.deepEqual(await scheduleOf(assetId), [[2026, 1200, 12, 'planned']], 'the plan is back');
+      assert.deepEqual(await registerRow(assetId), [0, 1200, 0, 0, 1200], 'the Anlagenspiegel shows no disposal and no AfA');
+      assert.equal(money(net((await journal(h)).filter((entry) => entry.reference === number), '0440')), 1200, 'the asset account carries the cost again');
+
+      const yearEnd = await depreciate(assetId);
+      assert.equal(yearEnd.status, 200, yearEnd.text);
+      assert.deepEqual(await registerRow(assetId), [0, 1200, 0, 1200, 0], 'the year-end AfA after the undo');
+      await assertLedgerConsistent(h);
+    });
+
+    test('a Storno of the issued sale invoice takes the sale back on the same revenue account; the asset can be sold again', async () => {
+      const number = `A-STORNO-${randomUUID().slice(0, 4)}`;
+      const created = await save({ assetNumber: number, usefulLifeYears: 1, activationDate: '2026-01-01', acquisitionCost: 1200 });
+      const assetId = created.body.id as string;
+      const invoice = await saleOf(number, assetId, 1500);
+      const sold = await sellTo(assetId, invoice.id, 1500);
+      assert.equal(sold.status, 200, sold.text);
+      const issued = await h.api.invoices.upsert({ reason: 'Rechnung gestellt', invoice: { ...invoice, status: 'open' } as never });
+      const revenue = (entry: JournalEntry) => entry.lines.filter((line) => line.taxCaseKey).map((line) => line.accountNumber);
+      const original = (await invoiceEntry(h, issued.id))!;
+
+      const storno = await h.api.documents.chainIssue({ id: randomUUID(), date: '2026-02-10', dueDate: '2026-02-10', operation: 'correction', invoiceId: issued.id, kind: 'cancellation_invoice', reason: 'Käufer tritt zurück' } as never) as { id: string; number: string };
+      const cancellation = (await journal(h)).find((entry) => entry.bookingText === `Stornorechnung ${storno.number} zu ${issued.number}`)!;
+      assert.deepEqual(revenue(cancellation), revenue(original), 'the Storno takes the proceeds off the account the sale put them on');
+      assert.deepEqual(revenue(original), ['8829']);
+      const asset = await assetOf(assetId);
+      assert.deepEqual([asset.status, asset.disposalDate ?? null], ['aktiv', null]);
+      assert.equal((await journal(h)).find((entry) => entry.id === sold.body.journalEntryId)!.status, 'reversed');
+      assert.deepEqual(await scheduleOf(assetId), [[2026, 1200, 12, 'planned']]);
+
+      const again = await dispose(assetId, { disposalDate: '2026-03-31', proceeds: 0 });
+      assert.equal(again.status, 200, again.text);
+      assert.notEqual(again.body.journalEntryId, sold.body.journalEntryId, 'a new disposal, not the reversed one');
+      assert.equal(again.body.asset.status, 'stillgelegt');
+      await assertLedgerConsistent(h);
+    });
+
+    test('a sale at residual book value 0 is booked once; the same call again returns it, a second sale invoice is refused in words', async () => {
+      const number = `A-ZERO-${randomUUID().slice(0, 4)}`;
+      const created = await save({ assetNumber: number, usefulLifeYears: 1, activationDate: '2025-01-01', acquisitionCost: 1200 });
+      const assetId = created.body.id as string;
+      assert.equal((await depreciate(assetId, { year: 2025, postingDate: '2025-12-31' })).status, 200);
+      const invoice = await saleOf(number, assetId, 50);
+      const sold = await sellTo(assetId, invoice.id, 50);
+      assert.equal(sold.status, 200, sold.text);
+      assert.deepEqual([sold.body.residualBookValue, sold.body.gainLoss, sold.body.journalEntryId, sold.body.asset.status], [0, 50, '', 'verkauft']);
+      const entries = (await journal(h)).length;
+      const retry = await sellTo(assetId, invoice.id, 50);
+      assert.equal(retry.status, 200, retry.text);
+      assert.deepEqual([retry.body.residualBookValue, retry.body.gainLoss, retry.body.journalEntryId], [0, 50, '']);
+      const second = await saleOf(number, assetId, 50);
+      const refusedSecond = await sellTo(assetId, second.id, 50);
+      assert.equal(refusedSecond.status, 409, refusedSecond.text);
+      assert.match(refusedSecond.body.message, /bereits/);
+      assert.doesNotMatch(refusedSecond.body.message, /^[A-Z_]+$/);
+      assert.equal((await journal(h)).length, entries, 'nothing more is booked');
     });
 
     test('a disposal during the year books the AfA up to the disposal month, then the disposal; with an earlier year unposted it is refused', async () => {
@@ -1220,6 +1553,24 @@ describe('pro reporting', () => {
       assert.equal((await itemOf(advance.id)).allocatedAmount, 0);
     });
 
+    test('the Skonto and Anzahlung masks send invoice numbers and amounts only; the tax split comes from the posted invoice', async () => {
+      const mixed = await issue(h, { client: 'Maske Skonto', date: '2026-03-07', dueDate: '2026-03-21', items: [{ kind: 'item', description: 'Beratung', quantity: 1, price: 100, total: 100, taxRate: 19 }, { kind: 'item', description: 'Buch', quantity: 1, price: 100, total: 100, taxRate: 7 }] });
+      const dates = { effectiveDate: '2026-03-22', postingDate: '2026-03-22', period: '2026-03', fiscalYear: 2026, currency: 'EUR' };
+      // 2 % of 226,00: 2,38 on the 19 % part (2,00 + 0,38) and 2,14 on the 7 % part (2,00 + 0,14).
+      const skonto = await closing({ commandType: 'skonto', sourceId: mixed.number, sourceRevision: '1', idempotencyKey: `mask-${key()}`, input: { ...dates, skontoAmount: 4.52 } });
+      assert.equal(skonto.status, 200, skonto.text);
+      const entry = (await journal(h)).find((candidate) => candidate.id === skonto.body.run.journalEntryId)!;
+      const sum = (account: string, side: 'debitAmount' | 'creditAmount') => money(entry.lines.filter((line) => line.accountNumber === account).reduce((total, line) => total + line[side], 0));
+      assert.deepEqual([sum('1776', 'debitAmount'), sum('1771', 'debitAmount'), sum('1400', 'creditAmount')], [0.38, 0.14, 4.52], 'the VAT of each rate is reduced by its share');
+      assert.equal((await itemOf(mixed.id)).residualAmount, 221.48);
+
+      const final = await issue(h, { client: 'Maske Anzahlung', date: '2026-03-08', dueDate: '2026-03-22' });
+      const advance = await issue(h, { client: 'Maske Anzahlung', date: '2026-03-01', dueDate: '2026-03-15', items: [{ kind: 'item', description: 'Abschlag', quantity: 1, price: 100, total: 100, taxRate: 19 }] });
+      const settled = await closing({ commandType: 'advance_settlement', sourceId: final.number, sourceRevision: '1', idempotencyKey: `mask-${key()}`, input: { ...dates, finalInvoice: { number: final.number }, advances: [{ number: advance.number, grossAmount: 119 }], advanceClearingReceivable: '1400', advanceClearingPayable: '1600' } });
+      assert.equal(settled.status, 200, settled.text);
+      assert.deepEqual([(await itemOf(advance.id)).residualAmount, (await itemOf(final.id)).residualAmount], [0, money(GROSS - 119)], 'the advance is settled against the final invoice');
+    });
+
     test('a bad debt write-off closes the receivable against the expense account and needs that account', async () => {
       assert.ok((await get<unknown[]>(h, '/accounting/ledger/accounts?chart=SKR03&search=2400&limit=20')).length > 0, 'precondition: SKR03 has the account 2400');
       const invoice = await issue(h, { client: 'Ausfall GmbH', date: '2026-03-03', dueDate: '2026-03-17', items: [{ kind: 'item', description: 'Ausfall', quantity: 1, price: 100, total: 100, taxRate: 19 }] });
@@ -1368,6 +1719,97 @@ describe('pro reporting', () => {
       const response = await closing({ command: 'fiscal_close', sourceId: id, sourceRevision: 'v1', idempotencyKey: `${id}:v1`, input: { sourceId: id, sourceRevision: 'v1', fiscalYear: 2026, period: '2026-12', closingDate: '2026-12-31', currency: 'EUR', revenueAccounts: ['8400'], expenseAccounts: [], retainedEarningsAccount: '0860', balances: forged } });
       assert.ok(response.status >= 400 || response.body.run?.status === 'rejected', `the server posted a close of 9999 against a ledger that carries 2026 revenue of ${money(-net(await journal(h), '8400', '2026-12-31', '2026-01-01'))}`);
       assert.equal((await journal(h)).length, entries);
+    });
+  });
+
+  describe('year-end close from the ledger (own tenant)', () => {
+    let y: ProHarness;
+    const book = (lines: Array<[string, number, number]>, text: string, date: string) => y.raw('POST', '/accounting/journal', { reason: text, reference: text.slice(0, 20), documentDate: date, postingDate: date, bookingText: text, idempotencyKey: randomUUID(), lines: lines.map(([accountNumber, debitAmount, creditAmount]) => ({ accountNumber, debitAmount, creditAmount })) });
+    // What the Jahresabschluss mask sends: the year and its dates, no account lists, no balances.
+    const close = (command: 'fiscal_close' | 'carry_forward', sourceId: string, input: Record<string, unknown>) => y.raw('POST', '/accounting/closing', { command, sourceId, sourceRevision: '1', idempotencyKey: `${sourceId}:1`, reason: 'Jahresabschluss', input: { sourceId, sourceRevision: '1', currency: 'EUR', ...input } });
+    const yearEnd = (year: number, preview = false) => close('fiscal_close', `JA-${year}`, { fiscalYear: year, period: `${year}-12`, closingDate: `${year}-12-31`, ...(preview ? { preview } : {}) });
+    const opening = (year: number, preview = false) => close('carry_forward', `EB-${year}`, { fiscalYear: year, period: `${year}-01`, effectiveDate: `${year}-01-01`, ...(preview ? { preview } : {}) });
+    const linesOf = (lines: Array<{ accountNumber: string; debitAmount: number; creditAmount: number }>) => lines.map((line) => [line.accountNumber, line.debitAmount, line.creditAmount]);
+    const susa = async (year: number) => new Map((await get<{ rows: Array<{ accountNumber: string; openingBalance: number; closingBalance: number }> }>(y, `/accounting/reports/susa?from=${year}-01-01&to=${year}-12-31`)).rows.map((row) => [row.accountNumber, row]));
+    before(async () => {
+      y = await startPro(null, 'pro-year-end');
+      const settings = await y.api.settings.get();
+      assert.equal((await y.raw('PUT', '/settings', { settings: { ...settings, businessReportingProfile: { jurisdiction: 'DE', legalForm: 'gmbh', profitDetermination: 'double_entry', hgbSizeClass: 'small', fiscalYearStart: '01-01', chart: 'SKR03', vatMethod: 'soll' } } })).status, 200);
+      for (const [lines, text, date] of [
+        [[['1200', 1190, 0], ['8400', 0, 1000], ['1776', 0, 190]], 'Erlös 2025', '2025-06-10'],
+        [[['4930', 100, 0], ['1200', 0, 100]], 'Büro 2025', '2025-07-01'],
+        [[['1200', 595, 0], ['8400', 0, 500], ['1776', 0, 95]], 'Erlös 2026', '2026-03-10'],
+      ] as Array<[Array<[string, number, number]>, string, string]>) assert.equal((await book(lines, text, date)).status, 200, text);
+    });
+    after(async () => { await y?.close(); });
+
+    test('the next year opens its Erfolgskonten at 0 and the result on the Gewinnvortrag, with and without a close', async () => {
+      const carryFirst = await opening(2026, true);
+      assert.deepEqual(linesOf(carryFirst.body.command.lines).sort(), [['0860', 0, 900], ['1200', 1090, 0], ['1776', 0, 190]], 'before the close the carry-forward already opens the result on 0860, like the reports');
+      const open2026 = await susa(2026);
+      assert.equal(open2026.get('8400')?.openingBalance, 0, '8400 starts 2026 at 0');
+      assert.equal(open2026.get('4930')?.openingBalance ?? 0, 0, '4930 starts 2026 at 0');
+      assert.equal(open2026.get('0860')?.openingBalance, -900, 'the 2025 profit of 900 opens on 0860');
+      assert.equal(open2026.get('1200')?.openingBalance, 1090, 'the bank carries over');
+      assert.equal(open2026.get('8400')?.closingBalance, -500, 'the 2026 revenue alone');
+      const january = await get<Array<{ accountNumber: string; openingBalance: number }>>(y, '/accounting/balances?asOfDate=2026-01-31');
+      assert.equal(january.find((row) => row.accountNumber === '8400')?.openingBalance ?? 0, 0);
+    });
+
+    test('the close needs only the year: the preview books nothing and shows what the close books; the next year closes only its own result', async () => {
+      const before2026 = await susa(2026);
+      const entries = (await journal(y)).length;
+      const preview = await yearEnd(2025, true);
+      assert.equal(preview.status, 200, preview.text);
+      assert.equal(preview.body.status, 'preview');
+      assert.deepEqual(linesOf(preview.body.command.lines), [['8400', 1000, 0], ['4930', 0, 100], ['0860', 0, 900]]);
+      assert.equal(preview.body.command.retainedEarningsAccount, '0860', 'a GmbH closes into the Gewinnvortrag');
+      assert.equal((await journal(y)).length, entries, 'a preview books nothing');
+      const posted = await yearEnd(2025);
+      assert.equal(posted.status, 200, posted.text);
+      const entry = (await journal(y)).find((candidate) => candidate.id === posted.body.run.journalEntryId)!;
+      assert.deepEqual(linesOf(entry.lines), linesOf(preview.body.command.lines), 'the booking is the preview');
+      assert.equal((await yearEnd(2025)).body.replayed, true, 'closing the same year again changes nothing');
+
+      const carry = await opening(2026, true);
+      assert.equal(carry.status, 200, carry.text);
+      assert.deepEqual(linesOf(carry.body.command.lines).sort(), [['0860', 0, 900], ['1200', 1090, 0], ['1776', 0, 190]], 'Bestandskonten and the Gewinnvortrag, no Erfolgskonto');
+      assert.equal((await opening(2026)).status, 200);
+      assert.deepEqual(await susa(2026), before2026, 'close and carry-forward leave the 2026 report as it was');
+      const again = await close('fiscal_close', 'JA-2025-zwei', { fiscalYear: 2025, period: '2025-12', closingDate: '2025-12-31' });
+      assert.equal(again.status, 400, `a second close of 2025 under another Quellbeleg: ${again.text}`);
+      assert.match(again.body.message, /FISCAL_YEAR_ALREADY_CLOSED/);
+
+      assert.equal((await book([['1200', 238, 0], ['8400', 0, 200], ['1776', 0, 38]], 'Erlös 2026 b', '2026-05-10')).status, 200);
+      const second = await yearEnd(2026, true);
+      assert.equal(second.status, 200, second.text);
+      assert.deepEqual(linesOf(second.body.command.lines), [['8400', 700, 0], ['0860', 0, 700]], 'only the 2026 revenue, not 2025 again');
+      assert.equal((await susa(2027)).get('0860')?.openingBalance, -1600, 'both years on the Gewinnvortrag');
+    });
+  });
+
+  describe('asset sale at a book loss on SKR04 (own tenant)', () => {
+    let k: ProHarness;
+    before(async () => {
+      k = await startPro(null, 'pro-asset-sale-skr04');
+      const policy = await k.raw('PUT', '/accounting/policy', { reason: 'Kontenrahmen gewählt', activeChart: 'SKR04', vatMethod: 'soll' });
+      assert.equal(policy.status, 200, policy.text);
+    });
+    after(async () => { await k?.close(); });
+
+    test('the invoice books the proceeds "bei Buchverlust" (6889), the disposal the book value on 6895', async () => {
+      const created = await k.raw('POST', '/accounting/assets', { reason: 'Anlage erfasst', asset: { assetNumber: 'A-SKR04', name: 'Regal', assetClass: 'Büromöbel', status: 'aktiv', activationDate: '2026-01-01', acquisitionCost: 1200, usefulLifeYears: 1, depreciationMethod: 'linear', costCenter: '', location: '', receiptLinked: true, assetAccountNumber: '0650' } });
+      assert.equal(created.status, 200, created.text);
+      const invoice = await draft(k, { client: 'Käufer GmbH', date: '2026-01-31', items: [{ kind: 'item', description: 'Verkauf Anlage A-SKR04 Regal', quantity: 1, price: 500, total: 500, taxRate: 19 }], taxMeta: { assetSaleAssetId: created.body.id } as never });
+      const sold = await k.raw('POST', `/accounting/assets/${created.body.id}/dispose`, { reason: 'Verkauf', disposalDate: '2026-01-31', proceeds: 500, saleInvoiceId: invoice.id });
+      assert.equal(sold.status, 200, sold.text);
+      const residual = sold.body.residualBookValue as number;
+      assert.ok(sold.body.gainLoss < 0, 'a book loss');
+      const disposal = (await journal(k)).find((entry) => entry.id === sold.body.journalEntryId)!;
+      assert.deepEqual(disposal.lines.map((line) => [line.accountNumber, line.debitAmount, line.creditAmount]).sort(), [['0650', 0, residual], ['6895', residual, 0]].sort());
+      const issued = await k.api.invoices.upsert({ reason: 'Rechnung gestellt', invoice: { ...invoice, status: 'open' } as never });
+      const posted = (await invoiceEntry(k, issued.id))!;
+      assert.deepEqual(posted.lines.map((line) => [line.accountNumber, line.debitAmount, line.creditAmount]).sort(), [['1200', 595, 0], ['3806', 0, 95], ['6889', 0, 500]].sort());
     });
   });
 

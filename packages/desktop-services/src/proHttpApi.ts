@@ -12,11 +12,14 @@ import {
   accountingBackfillPreviewSchema,
   accountingBackfillResultSchema,
   assetDepreciationScheduleEntrySchema,
+  assetRegisterSchema,
   assetSchema,
   assetUpsertSchema,
   incomingInvoiceSchema,
   incomingInvoiceDocumentSchema,
   incomingInvoiceDocumentDownloadSchema,
+  bankTransactionDocumentSchema,
+  bankTransactionDocumentDownloadSchema,
   journalEntryEntitySchema,
   ledgerBalanceRowSchema,
   datevExportResultSchema,
@@ -194,7 +197,7 @@ const assetDisposalResultSchema = z.object({
   asset: assetSchema,
   residualBookValue: z.number().nonnegative(),
   gainLoss: z.number(),
-  journalEntryId: z.string().min(1),
+  journalEntryId: z.string(),
 });
 const bilanzReportSchema = z.object({
   kind: z.literal('hgb-bilanz').optional(),
@@ -642,6 +645,12 @@ export const createProWebClient = (config: ProWebClientConfig) => {
         '/api/v1/pro/accounting/drafts',
       );
     },
+    updateAccountingExceptionCase(transactionId: string, patch: Record<string, string | undefined>, reason: string) {
+      return requestJson(
+        { method: 'PUT', body: { reason, patch }, parser: bookingDraftEntitySchema },
+        `/api/v1/pro/accounting/drafts/${encodeURIComponent(transactionId)}/exception`,
+      );
+    },
     dispatchAccountingDraftAction(transactionId: string, action: string, reason: string, rejectReason?: string) {
       return requestJson(
         {
@@ -811,6 +820,9 @@ export const createProWebClient = (config: ProWebClientConfig) => {
         `/api/v1/pro/accounting/assets/${encodeURIComponent(assetId)}/schedule`,
       );
     },
+    getAssetRegister(year: number) {
+      return requestJson({ parser: assetRegisterSchema }, `/api/v1/pro/accounting/assets/register?year=${year}`);
+    },
     runDepreciation(args: {
       assetId: string;
       year: number;
@@ -829,6 +841,7 @@ export const createProWebClient = (config: ProWebClientConfig) => {
       proceeds: number;
       taxRate?: 0 | 7 | 19;
       proceedsAccountNumber?: string;
+      saleInvoiceId?: string;
       reason: string;
       softLockOverride?: boolean;
       overrideReason?: string;
@@ -909,6 +922,15 @@ export const createProWebClient = (config: ProWebClientConfig) => {
     },
     downloadIncomingInvoiceDocument(documentId: string) {
       return requestJson({ parser: incomingInvoiceDocumentDownloadSchema }, `/api/v1/pro/accounting/incoming-invoice-documents/${encodeURIComponent(documentId)}/download`);
+    },
+    listBankTransactionDocuments(transactionId: string) {
+      return requestJson({ parser: parseArray(bankTransactionDocumentSchema) }, `/api/v1/pro/accounting/transactions/${encodeURIComponent(transactionId)}/documents`);
+    },
+    uploadBankTransactionDocument(input: { transactionId: string; originalFilename: string; mimeType: 'application/pdf' | 'image/jpeg' | 'image/png' | 'image/webp'; data: string; reason: string }) {
+      return requestJson({ method: 'POST', body: { originalFilename: input.originalFilename, mimeType: input.mimeType, data: input.data, reason: input.reason }, parser: bankTransactionDocumentSchema }, `/api/v1/pro/accounting/transactions/${encodeURIComponent(input.transactionId)}/documents`);
+    },
+    downloadBankTransactionDocument(documentId: string) {
+      return requestJson({ parser: bankTransactionDocumentDownloadSchema }, `/api/v1/pro/accounting/bank-transaction-documents/${encodeURIComponent(documentId)}/download`);
     },
     reviewIncomingInvoiceDocument(input: { documentId: string; reviewStatus: 'accepted' | 'rejected'; reason: string }) {
       return requestJson({ method: 'POST', body: { reviewStatus: input.reviewStatus, reason: input.reason }, parser: incomingInvoiceDocumentSchema }, `/api/v1/pro/accounting/incoming-invoice-documents/${encodeURIComponent(input.documentId)}/review`);
@@ -1125,6 +1147,17 @@ export const createProHttpBillmeApi = ({ fallback, onInvoke, downloadBlob, ...cl
       }
     }
     try {
+      // The browser has no print window: the server renders the PDF (same route as Lite's web adapter).
+      if (downloadBlob && key === 'pdf:export') {
+        const pdf = ipcRoutes[key].args.parse(args) as IpcArgs<'pdf:export'>;
+        const { blob, headers } = await transport.requestBlobWithHeaders(`/api/v1/pro/documents/${pdf.kind}/${encodeURIComponent(pdf.id)}/pdf`, pdf.level ? { level: pdf.level } : undefined);
+        if (await blob.slice(0, 5).text() !== '%PDF-') throw new Error('Der Server hat keine gültige PDF-Datei geliefert.');
+        const encodedName = /filename\*=UTF-8''([^;]+)/i.exec(headers.get('content-disposition') ?? '')?.[1];
+        let fileName = `${pdf.kind}-${pdf.id}.pdf`;
+        if (encodedName) { try { fileName = decodeURIComponent(encodedName).replace(/[\\/\x00-\x1f]/g, '_'); } catch { /* use fallback name */ } }
+        downloadBlob(blob, fileName);
+        return ipcRoutes[key].result.parse({ path: fileName }) as IpcResult<K>;
+      }
       if (isSharedHttpRoute(key)) {
         return await sharedInvoke(key, ipcRoutes[key].args.parse(args)) as IpcResult<K>;
       }
@@ -1204,6 +1237,18 @@ export const createProHttpBillmeApi = ({ fallback, onInvoke, downloadBlob, ...cl
           const parsedArgs = ipcRoutes[key].args.parse(args) as IpcArgs<'pro:downloadIncomingInvoiceDocument'>;
           const result = await client.downloadIncomingInvoiceDocument(parsedArgs.documentId);
           return ipcRoutes[key].result.parse(result) as IpcResult<K>;
+        }
+        case 'pro:listBankTransactionDocuments': {
+          const parsedArgs = ipcRoutes[key].args.parse(args) as IpcArgs<'pro:listBankTransactionDocuments'>;
+          return ipcRoutes[key].result.parse(await client.listBankTransactionDocuments(parsedArgs.transactionId)) as IpcResult<K>;
+        }
+        case 'pro:uploadBankTransactionDocument': {
+          const parsedArgs = ipcRoutes[key].args.parse(args) as IpcArgs<'pro:uploadBankTransactionDocument'>;
+          return ipcRoutes[key].result.parse(await client.uploadBankTransactionDocument(parsedArgs)) as IpcResult<K>;
+        }
+        case 'pro:downloadBankTransactionDocument': {
+          const parsedArgs = ipcRoutes[key].args.parse(args) as IpcArgs<'pro:downloadBankTransactionDocument'>;
+          return ipcRoutes[key].result.parse(await client.downloadBankTransactionDocument(parsedArgs.documentId)) as IpcResult<K>;
         }
         case 'pro:reviewIncomingInvoiceDocument': {
           const parsedArgs = ipcRoutes[key].args.parse(args) as IpcArgs<'pro:reviewIncomingInvoiceDocument'>;
@@ -1365,6 +1410,10 @@ export const createProHttpBillmeApi = ({ fallback, onInvoke, downloadBlob, ...cl
           const parsedArgs = ipcRoutes[key].args.parse(args) as IpcArgs<'pro:saveDraft'>;
           const result = await client.saveAccountingDraft(parsedArgs.draft, 'Buchungsentwurf gespeichert');
           return ipcRoutes[key].result.parse(result) as IpcResult<K>;
+        }
+        case 'pro:updateExceptionCase': {
+          const parsedArgs = ipcRoutes[key].args.parse(args) as IpcArgs<'pro:updateExceptionCase'>;
+          return ipcRoutes[key].result.parse(await client.updateAccountingExceptionCase(parsedArgs.transactionId, parsedArgs.patch, parsedArgs.reason)) as IpcResult<K>;
         }
         case 'pro:dispatchDraftAction': {
           const parsedArgs = ipcRoutes[key].args.parse(args) as IpcArgs<'pro:dispatchDraftAction'>;
@@ -1538,6 +1587,11 @@ export const createProHttpBillmeApi = ({ fallback, onInvoke, downloadBlob, ...cl
           const result = await client.getDepreciationSchedule(parsedArgs.assetId);
           return ipcRoutes[key].result.parse(result) as IpcResult<K>;
         }
+        case 'pro:getAssetRegister': {
+          const parsedArgs = ipcRoutes[key].args.parse(args) as IpcArgs<'pro:getAssetRegister'>;
+          const result = await client.getAssetRegister(parsedArgs.year);
+          return ipcRoutes[key].result.parse(result) as IpcResult<K>;
+        }
         case 'pro:runDepreciation': {
           const parsedArgs = ipcRoutes[key].args.parse(args) as IpcArgs<'pro:runDepreciation'>;
           const result = await client.runDepreciation(parsedArgs);
@@ -1652,6 +1706,23 @@ export const createProHttpBillmeApi = ({ fallback, onInvoke, downloadBlob, ...cl
         case 'tax:auditExportPackage': {
           const parsedArgs = ipcRoutes[key].args.parse(args) as IpcArgs<'tax:auditExportPackage'>;
           const artifact = await client.exportTaxAuditPackage(parsedArgs);
+          // The browser cannot write a folder: the files and a manifest (as Electron writes it) land in its downloads under one prefix.
+          if (downloadBlob) {
+            const prefix = `Prüferpaket_${parsedArgs.from ?? 'alle'}_${parsedArgs.to ?? 'alle'}_`;
+            const files = await Promise.all(artifact.files.map(async (file) => {
+              const bytes = file.encoding === 'base64' ? Uint8Array.from(atob(file.content), (char) => char.charCodeAt(0)) : new TextEncoder().encode(file.content);
+              const sha256 = Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', bytes)), (byte) => byte.toString(16).padStart(2, '0')).join('');
+              if (bytes.byteLength !== file.sizeBytes || sha256 !== file.sha256) throw new Error(`Integritätsprüfung für ${file.name} fehlgeschlagen.`);
+              const path = `${prefix}${file.name.replace(/[\\/\x00-\x1f]/g, '_')}`;
+              return { entry: { name: file.name, path, sha256, sizeBytes: bytes.byteLength, ...(file.rowCount === undefined ? {} : { rowCount: file.rowCount }) }, bytes };
+            }));
+            const resultFiles = files.map(({ entry }) => entry);
+            const manifestPath = `${prefix}manifest.json`;
+            const { schemaVersion, createdAt, from, to, includeDocuments } = artifact;
+            for (const { entry, bytes } of files) downloadBlob(new Blob([bytes]), entry.path);
+            downloadBlob(new Blob([JSON.stringify({ schemaVersion, createdAt, from, to, includeDocuments, fileCount: resultFiles.length, files: resultFiles }, null, 2)], { type: 'application/json' }), manifestPath);
+            return ipcRoutes[key].result.parse({ bundleDir: 'Downloads', manifestPath, createdAt, fileCount: resultFiles.length, files: resultFiles }) as IpcResult<K>;
+          }
           if (fallback) {
             const saved = await fallback('tax:saveAuditExportPackage', artifact);
             return ipcRoutes[key].result.parse(saved) as IpcResult<K>;
@@ -1679,6 +1750,8 @@ export const createProHttpBillmeApi = ({ fallback, onInvoke, downloadBlob, ...cl
       if (error instanceof ProEmbeddedConnectionUnavailableError && fallback) {
         return fallback(key, args);
       }
+      // The schema messages are the German field sentences; a raw ZodError message is JSON.
+      if (error instanceof z.ZodError) throw new Error([...new Set(error.issues.map((issue) => issue.message))].join(' '));
       throw error;
     }
   };

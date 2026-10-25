@@ -1,4 +1,5 @@
 import type { LedgerChart } from './accounting';
+import { BANK_ACCOUNT_DEFAULT } from './moneyAccounts';
 
 /**
  * Standard DATEV accounts for the common Anlage-EÜR Kennziffern, so an EÜR
@@ -46,7 +47,7 @@ const KZ_ACCOUNTS: Record<string, { SKR03: string; SKR04: string; label: string 
   '146': { SKR03: '4530', SKR04: '6530', label: 'Laufende Kfz-Betriebskosten' },
 };
 
-const BANK = { SKR03: '1200', SKR04: '1800' } as const;
+const BANK = BANK_ACCOUNT_DEFAULT;
 const INPUT_VAT: Record<number, { SKR03: string; SKR04: string }> = { 19: { SKR03: '1576', SKR04: '1406' }, 7: { SKR03: '1571', SKR04: '1401' } };
 const OUTPUT_VAT: Record<number, { SKR03: string; SKR04: string }> = { 19: { SKR03: '1776', SKR04: '3806' }, 7: { SKR03: '1771', SKR04: '3801' } };
 

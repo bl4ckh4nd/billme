@@ -209,7 +209,7 @@ test('invalid workflow transition is rejected without changing the draft', async
     );
     expect(['imported', 'incomplete']).toContain((await invokeDesktopIpc(page, 'pro:getDraftByTransactionId', { transactionId: source.transaction.id })).workflowStatus);
     await page.goto(appUrl(desktop.baseUrl, '/accounting?view=inbox'));
-    await expect(page.getByRole('button', { name: 'Freigabe 0' })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Freigegeben 0' })).toBeVisible();
     await page.screenshot({ path: test.info().outputPath('01-no-transition.png'), fullPage: true });
 });
 
@@ -384,9 +384,9 @@ test('period soft-lock requires a runtime override reason before posting', async
   expect(activated.status).toBe('aktiv');
   expect(activated.activationJournalEntryId).toBeTruthy();
   // No route soft-locks a period: setProAccountingPeriodStatus restarts the app around the period row, so read desktop.page afterwards.
-  await expect(setProAccountingPeriodStatus(desktop, '2026-04')).resolves.toMatchObject({ period: '2026-04', status: 'soft_locked' });
+  await expect(setProAccountingPeriodStatus(desktop, '2026-12')).resolves.toMatchObject({ period: '2026-12', status: 'soft_locked' });
   const { page: restartedPage } = desktop;
-  const depreciation = { assetId, year: 2026, postingDate: '2026-04-30', reason: 'E2E soft lock validation' };
+  const depreciation = { assetId, year: 2026, postingDate: '2026-12-31', reason: 'E2E soft lock validation' };
   await expectIpcError(
     invokeDesktopIpc(restartedPage, 'pro:runDepreciation', depreciation),
     /SOFT_LOCK_OVERRIDE_REQUIRED/,

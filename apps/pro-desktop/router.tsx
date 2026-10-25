@@ -66,7 +66,7 @@ const AccountingPage: React.FC = () => {
   const navigate = useNavigate();
   return (
     <React.Suspense fallback={null}>
-      <ProAccountingPage view={view ?? 'inbox'} onViewChange={(next) => void navigate({ to: '/accounting', search: { view: next } })} />
+      <ProAccountingPage view={view ?? 'inbox'} onViewChange={(next) => void navigate({ to: '/accounting', search: { view: next } })} onOpenTaxFiling={() => void navigate({ to: '/tax-filing' })} />
     </React.Suspense>
   );
 };

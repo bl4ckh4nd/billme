@@ -17,22 +17,112 @@ import { getAllowedActions } from '../domain/workflow';
 import { permissionContextForRole } from '../domain/permissions';
 import { useAccountingWorkspace, useWorkspaceLifetime } from '../AccountingWorkspaceContext';
 import { Badge, Button, ConfirmDialog, IconButton, Input, Modal, Select, Stepper } from '@billme/ui';
-import { BOOKING_TEMPLATES } from '../domain/bookingTemplates';
+import { accountingErrorText } from '@billme/accounting-shared';
+import { BOOKING_TEMPLATES, PRIVATE_ACCOUNTS } from '../domain/bookingTemplates';
 import { Account, BookingAction, BookingDraft, JournalLine, Transaction, UserRole } from '../types';
 import AccountCombobox from './AccountCombobox';
 import ActivityTimeline from './ActivityTimeline';
 import { StatusBadge } from './IssueBadges';
 import ValidationSummary from './ValidationSummary';
 import WorkflowActionBar from './WorkflowActionBar';
+import type { BankTransactionDocument, ProAccountingDataAdapter } from '../services/accountingDataAdapter';
+
+type BankReceiptApi = Pick<ProAccountingDataAdapter, 'listBankTransactionDocuments' | 'uploadBankTransactionDocument' | 'downloadBankTransactionDocument'>;
+const RECEIPT_MIME_TYPES = new Set(['application/pdf', 'image/jpeg', 'image/png', 'image/webp']);
+const RECEIPT_MAX_BYTES = 10 * 1024 * 1024;
+const toBase64 = (bytes: Uint8Array): string => {
+  let binary = '';
+  for (let offset = 0; offset < bytes.length; offset += 0x8000) binary += String.fromCharCode(...bytes.subarray(offset, offset + 0x8000));
+  return btoa(binary);
+};
+
+/** Belege on the bank line: archived unchanged on the server; the posting names them. */
+function BankReceiptSection({ transactionId, hasReceipt, canAttach, api, onAttached }: { transactionId: string; hasReceipt: boolean; canAttach: boolean; api?: BankReceiptApi; onAttached: () => void }) {
+  const [documents, setDocuments] = useState<BankTransactionDocument[]>([]);
+  const [message, setMessage] = useState<{ kind: 'success' | 'error'; text: string } | null>(null);
+  const [uploading, setUploading] = useState(false);
+  const inputRef = useRef<HTMLInputElement>(null);
+  const list = api?.listBankTransactionDocuments;
+  useEffect(() => {
+    if (!list) return;
+    let cancelled = false;
+    void list(transactionId).then((rows) => { if (!cancelled) setDocuments(rows); }).catch(() => { if (!cancelled) setDocuments([]); });
+    return () => { cancelled = true; };
+  }, [list, transactionId]);
+  const attach = async (file: File | undefined) => {
+    if (!file || !api?.uploadBankTransactionDocument) return;
+    if (inputRef.current) inputRef.current.value = '';
+    if (!RECEIPT_MIME_TYPES.has(file.type)) { setMessage({ kind: 'error', text: 'Nur PDF-, JPEG-, PNG- und WebP-Dateien werden archiviert.' }); return; }
+    if (file.size <= 0 || file.size > RECEIPT_MAX_BYTES) { setMessage({ kind: 'error', text: 'Belege dürfen höchstens 10 MiB groß sein.' }); return; }
+    setUploading(true);
+    setMessage(null);
+    try {
+      const saved = await api.uploadBankTransactionDocument({ transactionId, originalFilename: file.name, mimeType: file.type as BankTransactionDocument['mimeType'], data: toBase64(new Uint8Array(await file.arrayBuffer())), reason: `Beleg an Bankzeile angehängt: ${file.name}` });
+      setDocuments((current) => current.some((doc) => doc.id === saved.id) ? current : [...current, saved]);
+      setMessage({ kind: 'success', text: 'Beleg archiviert. Die Buchung verweist beim Buchen auf ihn.' });
+      onAttached();
+    } catch (error) {
+      setMessage({ kind: 'error', text: accountingErrorText(error instanceof Error ? error.message : String(error)) });
+    } finally {
+      setUploading(false);
+    }
+  };
+  const download = async (doc: BankTransactionDocument) => {
+    if (!api?.downloadBankTransactionDocument) return;
+    const result = await api.downloadBankTransactionDocument(doc.id);
+    const bytes = Uint8Array.from(atob(result.data), (char) => char.charCodeAt(0));
+    const url = URL.createObjectURL(new Blob([bytes], { type: doc.mimeType }));
+    const anchor = window.document.createElement('a');
+    anchor.href = url;
+    anchor.download = doc.originalFilename;
+    anchor.click();
+    URL.revokeObjectURL(url);
+  };
+  return (
+    <section aria-label="Beleg">
+      <h3 className="mb-2 text-eyebrow uppercase text-muted">Beleg</h3>
+      {hasReceipt || documents.length ? (
+        <div className="flex items-center gap-2 text-caption text-foreground-secondary">
+          <Check size={14} aria-hidden="true" className="shrink-0 text-success-text" />
+          Beleg vorhanden
+        </div>
+      ) : (
+        <div className="rounded-control border border-dashed border-border-strong px-2.5 py-5 text-center text-sm font-semibold text-foreground">
+          Beleg fehlt
+        </div>
+      )}
+      {documents.length ? (
+        <ul className="mt-2 flex flex-col gap-1" aria-label="Archivierte Belege">
+          {documents.map((doc) => (
+            <li key={doc.id}>
+              <button type="button" className="truncate text-left text-caption text-accent underline-offset-2 hover:underline" onClick={() => void download(doc)}>{doc.originalFilename}</button>
+            </li>
+          ))}
+        </ul>
+      ) : null}
+      {canAttach && api?.uploadBankTransactionDocument ? (
+        <div className="mt-2">
+          <input ref={inputRef} id={`receipt-${transactionId}`} type="file" accept="application/pdf,image/jpeg,image/png,image/webp" className="sr-only" onChange={(event) => void attach(event.target.files?.[0])} />
+          <Button variant="secondary" size="sm" disabled={uploading} onClick={() => inputRef.current?.click()}>{uploading ? 'Wird archiviert…' : 'Beleg anhängen'}</Button>
+        </div>
+      ) : null}
+      {message ? <p role={message.kind === 'error' ? 'alert' : 'status'} data-testid="receipt-message" className={message.kind === 'error' ? 'mt-2 text-caption text-danger-text' : 'mt-2 text-caption text-success-text'}>{message.text}</p> : null}
+    </section>
+  );
+}
 
 interface BookingEditorProps {
   transactionId: string | null;
   role: UserRole;
   accounts?: Account[];
+  /** GmbH/UG: no Privat templates. */
+  corporation?: boolean;
   onBack: () => void;
   /** Reports whether the draft differs from the stored one, so the workbench can guard a switch. */
   onDirtyChange?: (dirty: boolean) => void;
   onStoreChange: () => void;
+  /** Belege on the bank line; without it the section only shows the state. */
+  receiptApi?: BankReceiptApi;
 }
 
 function formatCurrency(amount: number | string, currency: string) {
@@ -51,11 +141,21 @@ const LIVE_CHECKED_CODES = new Set(['MISSING_POSTING_DATE', 'MISSING_BOOKING_TEX
 const LINE_GRID = 'grid grid-cols-[82px_minmax(0,1.1fr)_minmax(0,1fr)_104px_32px] gap-x-2';
 const LINE_INDENT = 'pl-22.5';
 
+const ACTION_DONE: Partial<Record<BookingAction, string>> = {
+  submit_for_review: 'Zur Prüfung gegeben. Die Buchung steht jetzt in der Liste „Zur Prüfung“.',
+  approve: 'Freigegeben. Als Nächstes: Buchen.',
+  reject: 'Zur Korrektur zurückgegeben.',
+  post: 'Gebucht. Die Buchung steht im Journal.',
+  reverse: 'Storniert. Die Gegenbuchung steht im Journal.',
+  create_correction: 'Wieder offen: neu kontieren, prüfen und buchen. Original und Storno bleiben im Journal.',
+  request_receipt: 'Beleg angefordert. Die Buchung bleibt bis zum Beleg in „Ohne Beleg“.',
+};
+
 function actionRequiresConfirmation(action: BookingAction) {
   return action === 'reverse' || action === 'reject';
 }
 
-export default function BookingEditor({ transactionId, role, accounts, onBack, onStoreChange, onDirtyChange }: BookingEditorProps) {
+export default function BookingEditor({ transactionId, role, accounts, corporation = false, onBack, onStoreChange, onDirtyChange, receiptApi }: BookingEditorProps) {
   const editorId = useId();
   const store = useAccountingWorkspace();
   const captureLifetime = useWorkspaceLifetime(transactionId);
@@ -179,7 +279,9 @@ export default function BookingEditor({ transactionId, role, accounts, onBack, o
   const blockedReason = blockingIssues.length === 0
     ? undefined
     : `${blockingIssues[0].message}${blockingIssues.length > 1 ? ` (+${blockingIssues.length - 1} weitere)` : ''}`;
-  const chartTemplates = BOOKING_TEMPLATES[draft.chartFramework] ?? [];
+  const privateAccounts = Object.values(PRIVATE_ACCOUNTS[draft.chartFramework] ?? {});
+  // A GmbH/UG has no Privatkonten: their templates are left out.
+  const chartTemplates = (BOOKING_TEMPLATES[draft.chartFramework] ?? []).filter((template) => !corporation || !privateAccounts.includes(template.accountId));
   const accountByNumber = new Map(accountOptions.map((account) => [account.number, account]));
   // Bank-booking convention (see createDraftFromTransaction): incoming money debits the bank line, outgoing credits it.
   const bankSide: JournalLine['type'] = Number(transaction?.amount) >= 0 ? 'Soll' : 'Haben';
@@ -258,10 +360,10 @@ export default function BookingEditor({ transactionId, role, accounts, onBack, o
 
   async function persistDraft(localDraft: BookingDraft) {
     const isCurrent = captureLifetime();
-    const generation = store.getGeneration();
     const saved = await saveDraft(localDraft, role);
     if (!isCurrent()) return saved;
-    setDraft(generation === store.getGeneration() ? saved : getBookingDraftByTransactionId(activeTransactionId) ?? saved);
+    // The server's answer is the stored draft; a store refresh in between may still carry the previous values.
+    setDraft(saved);
     setTransaction(getTransactionById(activeTransactionId) ?? transaction);
     onStoreChange();
     return saved;
@@ -280,9 +382,14 @@ export default function BookingEditor({ transactionId, role, accounts, onBack, o
         setAnnounceMessage('Entwurf gespeichert');
         setAnnounceKind('success');
       } else {
-        const saved = await saveDraft({ ...draft }, role);
-        if (!isCurrent()) return;
-        setDraft(saved);
+        // A save sends the draft back to "Unvollständig" (the server owns the workflow), so only an edited draft
+        // is saved first; otherwise "Freigeben" right after "Zur Prüfung geben" would fail.
+        const stored = getBookingDraftByTransactionId(activeTransactionId);
+        if (!stored || JSON.stringify(stored) !== JSON.stringify(draft)) {
+          const saved = await saveDraft({ ...draft }, role);
+          if (!isCurrent()) return;
+          setDraft(saved);
+        }
         const next = await dispatchBookingAction(activeTransactionId, action, {
           role,
           actorName: role,
@@ -292,12 +399,12 @@ export default function BookingEditor({ transactionId, role, accounts, onBack, o
         setDraft(next);
         setTransaction(getTransactionById(activeTransactionId) ?? transaction);
         onStoreChange();
-        setAnnounceMessage(`Aktion ausgeführt: ${action}`);
+        setAnnounceMessage(ACTION_DONE[action] ?? 'Erledigt.');
         setAnnounceKind('success');
       }
     } catch (error) {
       if (!isCurrent()) return;
-      const message = error instanceof Error ? error.message : 'Aktion fehlgeschlagen';
+      const message = error instanceof Error ? accountingErrorText(error.message) : 'Aktion fehlgeschlagen';
       setAnnounceMessage(message);
       setAnnounceKind('error');
     } finally {
@@ -720,19 +827,7 @@ export default function BookingEditor({ transactionId, role, accounts, onBack, o
         aria-label="Beleg, Prüfungen und Verlauf"
         className="flex min-w-0 flex-col gap-3.5 rounded-card border border-border bg-surface p-3 @2xl:col-span-2 @5xl:col-span-1"
       >
-        <section aria-label="Beleg">
-          <h3 className="mb-2 text-eyebrow uppercase text-muted">Beleg</h3>
-          {transaction.hasReceipt ? (
-            <div className="flex items-center gap-2 text-caption text-foreground-secondary">
-              <Check size={14} aria-hidden="true" className="shrink-0 text-success-text" />
-              Beleg vorhanden
-            </div>
-          ) : (
-            <div className="rounded-control border border-dashed border-border-strong px-2.5 py-5 text-center text-sm font-semibold text-foreground">
-              Beleg fehlt
-            </div>
-          )}
-        </section>
+        <BankReceiptSection transactionId={transaction.id} hasReceipt={transaction.hasReceipt} canAttach={permissionCtx.canMutate} api={receiptApi} onAttached={onStoreChange} />
         <ValidationSummary issues={validationIssues} />
         <ActivityTimeline events={draft.activity} />
       </aside>

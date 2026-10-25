@@ -157,7 +157,11 @@ test('a § 13b purchase shows up in the UStVA with Kz 84/85 and 67, drills down 
   });
   expect((await invokeDesktopIpc(page, 'pro:postIncomingInvoiceAccounting', { invoiceId: 'in-13b', reason: 'E2E post § 13b' })).status).toBe('ready');
 
+  // The UStVA lives under Steuer in the sidebar, not among the Sonderbuchungen.
   await page.goto(appUrl(baseUrl, '/accounting?view=special'));
+  await expect(page.getByTestId('tax-moved-hint')).toBeVisible();
+  await page.getByRole('navigation', { name: 'Hauptnavigation' }).getByRole('button', { name: 'Steuer' }).click();
+  await expect(page).toHaveURL(/view=tax/);
   const panel = page.getByTestId('ustva-panel');
   await expect(panel).toBeVisible();
   await panel.getByRole('textbox', { name: 'UStVA-Monat' }).fill('2026-02');
@@ -184,7 +188,8 @@ test('a § 13b purchase shows up in the UStVA with Kz 84/85 and 67, drills down 
   await page.getByRole('textbox', { name: 'Steuerzeitraum' }).fill('2026-02');
   await page.getByRole('textbox', { name: 'Audit-Grund Steuerexport' }).fill('UStVA Februar vorbereitet');
   await page.getByRole('button', { name: 'Vorbereitung erstellen' }).click();
-  await expect(page.getByText(/vorbereitet \(prepared\) – keine offizielle Übermittlung/)).toBeVisible();
+  await expect(page.getByText(/vorbereitet und eingefroren – keine offizielle Übermittlung\. Die Monate des Zeitraums sind jetzt vorläufig gesperrt\./)).toBeVisible();
+  await expect(page.getByTestId('period-lock-list').locator('li[data-period="2026-02"]'), 'the soft lock is visible next to the preparation').toContainText('Vorläufig gesperrt');
   await page.screenshot({ path: test.info().outputPath('02-ustva-prepared.png'), fullPage: true });
 
   const run = (await invokeDesktopIpc(page, 'pro:listAccountingSourceRuns', undefined)).find((item) => item.sourceType === 'tax_export_ustva');

@@ -13,7 +13,7 @@ import { permissionContextForRole } from '../domain/permissions';
 import { localToday } from '../domain/reportDates';
 import type { UserRole } from '../types';
 import {
-  Badge, Button, Card, CardHeader, Checkbox, EmptyState, Input, Select, Table, TableBody, TableCell, TableHead, TableHeader, TableRow, ValidationSummary, cn,
+  Badge, Button, Card, CardHeader, Checkbox, EmptyState, Input, Select, Table, TableBody, TableCell, TableHead, TableHeader, TableRow, ValidationSummary, cn, formatEmptyValue,
   type BadgeTone,
 } from '@billme/ui';
 
@@ -69,6 +69,8 @@ const incomingInvoiceDocumentErrorLabels: Record<string, string> = {
   INCOMING_INVOICE_DOCUMENT_MIME_UNSUPPORTED: 'Dieser Dateityp wird nicht unterstützt.',
   INCOMING_INVOICE_DOCUMENT_SIZE_INVALID: 'Die Originaldatei muss zwischen 1 Byte und 10 MiB groß sein.',
   INCOMING_INVOICE_DOCUMENT_NOT_FOUND: 'Der Originalbeleg wurde nicht gefunden.',
+  PAYMENT_PARTY_MISMATCH: 'Dieser offene Posten gehört zu einem anderen Kunden oder Lieferanten als die Zahlung.',
+  OPEN_ITEM_ALLOCATION_EXCEEDS_RESIDUAL: 'Der Betrag ist höher als der offene Rest des Postens.',
 };
 const formatOposError = (cause: unknown, fallback: string): string => {
   const message = cause instanceof Error ? cause.message : '';
@@ -216,6 +218,9 @@ export default function OposView({ dataAdapter, role = 'admin', initialInvoiceId
   const [dueDate, setDueDate] = useState(today());
   const [vendorId, setVendorId] = useState('');
   const [vendorName, setVendorName] = useState('');
+  const [vendorAccount, setVendorAccount] = useState('');
+  // B18: the vendor's Standard-Aufwandskonto, which the posting uses for positions without their own account.
+  const selectedVendorDefault = vendorId ? vendors.find((vendor) => vendor.id === vendorId)?.defaultExpenseAccount : vendorAccount.trim() || undefined;
   const [invoiceLines, setInvoiceLines] = useState<IncomingInvoiceDraftLine[]>(() => [createIncomingInvoiceDraftLine()]);
   const [taxCaseKey, setTaxCaseKey] = useState('');
   const [taxCountry, setTaxCountry] = useState('');
@@ -478,7 +483,8 @@ export default function OposView({ dataAdapter, role = 'admin', initialInvoiceId
     });
   };
 
-  const correctionTargets = correction ? items.filter((item) => item.partyType === correction.payment.partyType && item.residualAmount > 0 && !item.id.startsWith('payment-credit:')) : [];
+  // A payment is moved only onto items of its own partner.
+  const correctionTargets = correction ? items.filter((item) => item.partyType === correction.payment.partyType && (!correction.payment.partyId || item.partyId === correction.payment.partyId) && item.residualAmount > 0 && !item.id.startsWith('payment-credit:')) : [];
   const submitCorrection = () => {
     if (!correction || !canMutate) return;
     const trimmed = correctionReason.trim();
@@ -540,12 +546,19 @@ export default function OposView({ dataAdapter, role = 'admin', initialInvoiceId
     }
     void run(async () => {
       let selectedVendorId = vendorId;
+      let existingVendor: string | undefined;
       if (!selectedVendorId) {
         if (!vendorName.trim()) throw new Error('Bitte einen Kreditor auswählen oder anlegen.');
-        const vendor = await dataAdapter.upsertVendor!({ id: `vendor-${Date.now()}`, name: vendorName.trim() }, invoiceReason.trim());
+        const requestedId = `vendor-${Date.now()}`;
+        const vendor = await dataAdapter.upsertVendor!({ id: requestedId, name: vendorName.trim(), ...(vendorAccount.trim() ? { defaultExpenseAccount: vendorAccount.trim() } : {}) }, invoiceReason.trim());
         selectedVendorId = vendor.id;
+        setVendorId(vendor.id);
+        existingVendor = vendor.id !== requestedId ? vendor.name : undefined;
       }
-      const id = invoiceId();
+      // Saving the selected, not yet posted document again corrects it instead of creating a second one.
+      const sameDocument = selectedInvoice && selectedInvoice.accountingStatus !== 'posted' && selectedInvoice.accountingStatus !== 'reversed'
+        && selectedInvoice.number === invoiceNumber.trim() && selectedInvoice.vendorId === selectedVendorId;
+      const id = sameDocument ? selectedInvoice.id : invoiceId();
       const saved = await dataAdapter.upsertIncomingInvoice!({
         id,
         tenantId: 'default',
@@ -577,11 +590,13 @@ export default function OposView({ dataAdapter, role = 'admin', initialInvoiceId
           ...(line.accountNumber.trim() ? { accountNumber: line.accountNumber.trim() } : {}),
           ...(line.assetAccountNumber.trim() ? { assetAccountNumber: line.assetAccountNumber.trim() } : {}),
         })),
-        createdAt: new Date().toISOString(),
+        createdAt: sameDocument ? selectedInvoice.createdAt : new Date().toISOString(),
         updatedAt: new Date().toISOString(),
       }, invoiceReason.trim());
       setSelectedInvoiceId(saved.id);
-      setFeedback({ kind: 'success', text: 'Eingangsrechnung als Entwurf gespeichert.' });
+      setPreview(null);
+      const savedText = sameDocument && selectedInvoice.status !== 'draft' ? 'Eingangsrechnung korrigiert und wieder als Entwurf gespeichert. Bitte erneut zur Buchung freigeben.' : 'Eingangsrechnung als Entwurf gespeichert.';
+      setFeedback({ kind: 'success', text: existingVendor ? `Lieferant „${existingVendor}“ existiert bereits und wurde verwendet. ${savedText}` : savedText });
       await refresh();
     });
   };
@@ -828,7 +843,7 @@ export default function OposView({ dataAdapter, role = 'admin', initialInvoiceId
                     onChange={(e) => { setRemainingItemId(e.target.value); clearPaymentError(paymentFieldIds.remainingItem); }}
                   >
                     <option value="">Weiteren offenen Posten wählen</option>
-                    {items.filter((item) => item.id !== selectedItemId && item.partyType === lastPayment.partyType).map((item) => <option key={item.id} value={item.id}>{item.documentNumber} ({euro(item.residualAmount)})</option>)}
+                    {items.filter((item) => item.id !== selectedItemId && item.partyType === lastPayment.partyType && (!lastPayment.partyId || item.partyId === lastPayment.partyId) && item.residualAmount > 0 && !item.id.startsWith('payment-credit:')).map((item) => <option key={item.id} value={item.id}>{item.documentNumber} ({euro(item.residualAmount)})</option>)}
                   </Select>
                   <Input
                     id={paymentFieldIds.remainingAmount}
@@ -853,14 +868,16 @@ export default function OposView({ dataAdapter, role = 'admin', initialInvoiceId
         </Card>
 
         {dataAdapter?.listOpenItemPayments ? (
-          <Card padding="none" className="min-w-0 overflow-hidden">
+          <Card padding="none" className="min-w-0 overflow-hidden xl:col-span-2">
             <CardHeader as="h3" className="border-b border-border px-3.5 py-3" title="Gebuchte Zahlungen" subtitle="Storno mit Gegenbuchung oder Umbuchung auf einen anderen Posten" />
             {payments.length === 0 ? <EmptyState title="Noch keine Zahlungen gebucht." /> : (
               <Table aria-label="Gebuchte Zahlungen" bare>
-                <TableHeader><TableRow><TableHead>Datum</TableHead><TableHead>Quelle</TableHead><TableHead numeric>Betrag</TableHead><TableHead>Status</TableHead><TableHead>Aktion</TableHead></TableRow></TableHeader>
+                <TableHeader><TableRow><TableHead>Datum</TableHead><TableHead>Beleg</TableHead><TableHead>Kunde / Lieferant</TableHead><TableHead>Quelle</TableHead><TableHead numeric>Betrag</TableHead><TableHead>Status</TableHead><TableHead>Aktion</TableHead></TableRow></TableHeader>
                 <TableBody>{payments.slice(0, 50).map((payment) => (
                   <TableRow key={payment.id} selected={correction?.payment.id === payment.id}>
-                    <TableCell className="whitespace-nowrap tabular-nums">{payment.paymentDate}</TableCell>
+                    <TableCell className="whitespace-nowrap tabular-nums">{formatDate(payment.paymentDate)}</TableCell>
+                    <TableCell className="whitespace-nowrap">{formatEmptyValue(payment.documentNumbers)}</TableCell>
+                    <TableCell className="max-w-56 truncate" title={payment.partyName}>{formatEmptyValue(payment.partyName)}</TableCell>
                     <TableCell>{payment.sourceType === 'bank_transaction' ? 'Bank' : payment.sourceType === 'invoice_payment' ? 'Rechnung' : 'Manuell'}</TableCell>
                     <TableCell numeric>{euro(payment.refund ? -payment.amount : payment.amount)}</TableCell>
                     <TableCell>{payment.status === 'reversed' ? <Badge tone="neutral">Storniert</Badge> : payment.refund ? <Badge tone="warning">Erstattung</Badge> : <Badge tone="success">Gebucht</Badge>}</TableCell>
@@ -930,6 +947,18 @@ export default function OposView({ dataAdapter, role = 'admin', initialInvoiceId
                       error={invoiceErrors[invoiceFieldIds.vendorName]}
                       value={vendorName}
                       onChange={(e) => { setVendorName(e.target.value); clearInvoiceError(invoiceFieldIds.vendorName); }}
+                    />
+                  ) : null}
+                  {!vendorId ? (
+                    <Input
+                      label="Standard-Aufwandskonto des Kreditors"
+                      aria-label="Standard-Aufwandskonto"
+                      inputMode="numeric"
+                      fullWidth
+                      value={vendorAccount}
+                      onChange={(e) => setVendorAccount(e.target.value)}
+                      placeholder="z. B. 4930"
+                      hint="Positionen ohne eigenes Konto werden darauf gebucht."
                     />
                   ) : null}
                   <Input label="Rechnungsdatum" type="date" fullWidth value={invoiceDate} onChange={(e) => setInvoiceDate(e.target.value)} />
@@ -1037,7 +1066,7 @@ export default function OposView({ dataAdapter, role = 'admin', initialInvoiceId
                               />
                             </div>
                             <div className="sm:col-span-3">
-                              <Input label="Aufwandskonto" aria-label="Konto" inputMode="numeric" fullWidth value={line.accountNumber} onChange={(e) => updateInvoiceLine(line.id, 'accountNumber', e.target.value)} placeholder="z. B. 4900" />
+                              <Input label="Aufwandskonto" aria-label="Konto" inputMode="numeric" fullWidth value={line.accountNumber} onChange={(e) => updateInvoiceLine(line.id, 'accountNumber', e.target.value)} placeholder={selectedVendorDefault ? `Standard ${selectedVendorDefault}` : 'z. B. 4900'} />
                             </div>
                             <div className="sm:col-span-3">
                               <Input label="Anlagekonto (optional)" aria-label="Anlagekonto" inputMode="numeric" fullWidth value={line.assetAccountNumber} onChange={(e) => updateInvoiceLine(line.id, 'assetAccountNumber', e.target.value)} placeholder="z. B. 0480" />

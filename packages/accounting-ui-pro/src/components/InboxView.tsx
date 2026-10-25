@@ -10,6 +10,7 @@ import {
 import {
   Badge, Button, Card, Checkbox, EmptyState, formatEmptyValue, Input, Select, Table, TableBody, TableCell, TableHead, TableHeader, TableRow, Textarea,
 } from '@billme/ui';
+import { isProfitAndLossAccount } from '@billme/accounting-shared';
 import { userFacingReference } from '../domain/references';
 import { bookingActionLabels, getQueueCounts, InboxQueueKey, txMatchesQueue } from '../domain/selectors';
 import { normalizeTaxCaseKey, TAX_CASE_OPTIONS, toLegacyTaxCode } from '../domain/taxCases';
@@ -187,6 +188,7 @@ export default function InboxView({
 
     let success = 0;
     let skipped = 0;
+    const withoutTaxCase: string[] = [];
 
     for (const id of ids) {
       if (!isCurrent()) return;
@@ -194,6 +196,8 @@ export default function InboxView({
       if (!draft) { skipped += 1; continue; }
       const allowed = getAllowedActions(draft.workflowStatus, permissionCtx, draft.validationIssues);
       if (!allowed.includes(preferredAction)) { skipped += 1; continue; }
+      // A batch never books gross: an Erlös-/Aufwandskonto without Steuerfall is left for a person to decide.
+      if (preferredAction === 'post' && draft.lines.some((line) => isProfitAndLossAccount(draft.chartFramework ?? 'SKR03', line.accountId) && !line.taxCaseKey && !line.taxCode)) { withoutTaxCase.push(id); continue; }
       try {
         await dispatchBookingAction(id, preferredAction, { role, actorName: role });
         success += 1;
@@ -203,8 +207,10 @@ export default function InboxView({
     }
 
     if (!isCurrent()) return;
-    setBatchMessage(`Sammelaktion '${preferredAction}': ${success} erfolgreich, ${skipped} übersprungen.`);
-    setSelectedIds((prev) => prev.filter((id) => !ids.includes(id)));
+    const taxHint = withoutTaxCase.length ? ` ${withoutTaxCase.length} ohne Steuerfall ausgelassen: Steuerfall im Entwurf wählen, dann buchen.` : '';
+    setBatchMessage(`Sammelaktion ${bookingActionLabels[preferredAction]}: ${success} erfolgreich, ${skipped} übersprungen.${taxHint}`);
+    // The skipped ones stay selected, so they can be opened and completed.
+    setSelectedIds((prev) => prev.filter((id) => !ids.includes(id) || withoutTaxCase.includes(id)));
     onRefresh();
   };
 
@@ -685,11 +691,11 @@ export default function InboxView({
                 <div className="flex flex-col gap-2.5">
                   <div>
                     <h3 className="text-eyebrow uppercase text-muted">Beleg mit VLM prüfen</h3>
-                    <p className="mt-1 text-caption text-muted">OpenRouter erstellt nur einen Vorschlag. Buchen und Validieren bleiben deterministisch.</p>
+                    <p className="mt-1 text-caption text-muted">OpenRouter erstellt nur einen Vorschlag. Die Datei wird nur geprüft, nicht an die Buchung angehängt; Belege ordnest du unter Offene Posten zu.</p>
                   </div>
                   <div className="flex flex-wrap items-center gap-2">
                     <label className="inline-flex h-7 cursor-pointer items-center rounded-control border border-border-strong bg-surface px-2.25 text-caption font-medium text-foreground hover:border-control-border hover:bg-surface-sunken focus-within:outline-2 focus-within:outline-offset-2 focus-within:outline-focus-ring">
-                      Beleg auswählen
+                      Datei zur Prüfung wählen
                       <input type="file" accept="application/pdf,image/jpeg,image/png,image/webp" className="sr-only" onChange={(event) => { const file = event.target.files?.[0]; if (file) void readVlmDocument(file); }} />
                     </label>
                     {vlmDocument ? <span className="max-w-full truncate text-caption text-muted">{vlmDocument.fileName}</span> : null}
@@ -794,9 +800,16 @@ export default function InboxView({
               <Button variant="secondary" onClick={() => onOpenTransaction(previewTx.id)}>
                 Erweitern
               </Button>
-              <Button className="flex-1" onClick={() => handleInlineAction(previewTx)} disabled={!previewPrimaryAction}>
-                {previewPrimaryAction ? nextActionLabel(previewPrimaryAction) : 'Keine Aktion'}
-              </Button>
+              {!previewPrimaryAction && previewAllowedActions.includes('reverse') ? (
+                // The Storno asks for a reason, so it runs from the full editor's confirmation.
+                <Button className="flex-1" variant="secondary" onClick={() => onOpenTransaction(previewTx.id)}>
+                  Stornieren …
+                </Button>
+              ) : (
+                <Button className="flex-1" onClick={() => handleInlineAction(previewTx)} disabled={!previewPrimaryAction}>
+                  {previewPrimaryAction ? nextActionLabel(previewPrimaryAction) : previewTx.isVirtualPosted ? 'Storno unter Offene Posten' : 'Keine Aktion'}
+                </Button>
+              )}
             </div>
           </>
         )}

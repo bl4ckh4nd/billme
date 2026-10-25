@@ -1,12 +1,13 @@
 import { expect, test } from '@playwright/test';
-import { appUrl, importPendingProTransaction, launchDesktopApp, PRO_DOUBLE_ENTRY_SETTINGS, seedDesktopData } from '../support.mjs';
+import { appUrl, importPendingProTransaction, invokeDesktopIpc, launchDesktopApp, PRO_DOUBLE_ENTRY_SETTINGS, seedDesktopData } from '../support.mjs';
 
 let desktop;
+let source;
 
 test.beforeEach(async () => {
   desktop = await launchDesktopApp({ app: 'pro' });
   await seedDesktopData(desktop.page, { app: 'pro', settingsOverrides: PRO_DOUBLE_ENTRY_SETTINGS });
-  await importPendingProTransaction(desktop.page, 'exception');
+  source = await importPendingProTransaction(desktop.page, 'exception');
   await desktop.page.reload();
 });
 
@@ -17,22 +18,30 @@ test.afterEach(async () => {
   }
 });
 
-test('keeps exception mutations unavailable for the read-only Pro adapter', async () => {
+test('an exception is assigned and resolved with feedback, "Beleg anfordern" answers, and the changes are stored (B22)', async () => {
   const { page, baseUrl } = desktop;
+  const exceptionOf = async () => (await invokeDesktopIpc(page, 'pro:getDraftByTransactionId', { transactionId: source.transaction.id })).exceptionCase;
 
   await page.goto(appUrl(baseUrl, '/'));
   await page.getByRole('navigation', { name: 'Hauptnavigation' }).getByRole('button', { name: 'Ausnahmen' }).click();
   await expect(page.getByRole('heading', { name: 'Ausnahmen', level: 1 })).toBeVisible();
-  await expect(page.getByRole('heading', { name: 'Ausnahmen', level: 2 })).toBeVisible();
-
   await page.getByRole('button', { name: 'Ohne Beleg', exact: true }).click();
-  await expect(page.getByText('Keine Einträge für den Filter.')).toHaveCount(0);
   await page.getByRole('button', { name: /E2E exception/ }).click();
-  await page.screenshot({ path: test.info().outputPath('01-exception-center-read-only.png') });
+  await expect(page.getByText('Änderungen an Ausnahmen sind in dieser Oberfläche nicht verfügbar.')).toHaveCount(0);
 
-  await expect(page.getByRole('status').filter({ hasText: 'Änderungen an Ausnahmen sind in dieser Oberfläche nicht verfügbar.' })).toBeVisible();
-  await expect(page.getByPlaceholder('Was wurde geprüft/gelöst?')).toBeDisabled();
-  await expect(page.getByRole('button', { name: 'Als gelöst markieren' })).toBeDisabled();
-  await expect(page.getByRole('button', { name: 'Zuweisen' })).toBeDisabled();
-  await expect(page.getByRole('button', { name: 'Pausieren' })).toBeDisabled();
+  await page.getByRole('button', { name: 'Beleg anfordern' }).click();
+  await expect(page.getByTestId('exception-notice')).toHaveText(/Beleg angefordert/);
+  await page.screenshot({ path: test.info().outputPath('01-receipt-requested.png') });
+
+  await page.getByLabel('Verantwortliche Person').fill('Mara Buchhaltung');
+  await page.getByRole('button', { name: 'Zuweisen' }).click();
+  await expect(page.getByTestId('exception-notice')).toHaveText('Zugewiesen an Mara Buchhaltung.');
+  await expect.poll(async () => (await exceptionOf())?.owner).toBe('Mara Buchhaltung');
+
+  await page.getByLabel('Lösungsnotiz').fill('Rechnung per Mail erhalten');
+  await page.getByRole('button', { name: 'Als gelöst markieren' }).click();
+  await expect.poll(async () => (await exceptionOf())?.state).toBe('resolved');
+  expect((await exceptionOf()).resolutionNote).toBe('Rechnung per Mail erhalten');
+  await expect(page.getByText(/Invalid workflow transition|Error:/)).toHaveCount(0);
+  await page.screenshot({ path: test.info().outputPath('02-exception-resolved.png') });
 });

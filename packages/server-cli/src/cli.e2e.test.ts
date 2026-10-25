@@ -8,6 +8,8 @@ import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { createLocalBackend } from '../../../apps/desktop/electron/localBackend.js';
 import { PRODUCT_PROFILE } from '../../../apps/desktop/productProfile.js';
+import { createProLocalBackend } from '../../../apps/pro-desktop/electron/proLocalBackend.js';
+import { PRODUCT_PROFILE as PRO_PROFILE } from '../../../apps/pro-desktop/productProfile.js';
 
 /**
  * The real `billme` binary against the Lite desktop backend (the composition
@@ -188,4 +190,55 @@ test('the Pro action list leaves out the Lite-only cash book and VAT report, whi
   assert.ok(lite.includes('cash listEntries') && lite.includes('vat getReport'), 'Lite keeps its cash book and VAT report');
   assert.deepEqual(pro.filter((line) => /^(cash|vat) /.test(line)), []);
   assert.ok(pro.includes('invoices list') && pro.includes('eur getReport'), 'Pro keeps the shared billing and its EÜR');
+});
+
+// The Prüferpaket is several files plus a manifest: with --out they land in that folder, one file each, not all on one path.
+test('billme tax auditExportPackage --out writes the Prüferpaket into a folder against the Pro desktop backend', async () => {
+  const userDataPath = await mkdtemp(join(tmpdir(), 'billme-cli-pro-'));
+  const configPath = join(userDataPath, 'cli-config.json');
+  const backend = await createProLocalBackend({ userDataPath, profile: PRO_PROFILE });
+  const app = backend.embeddedConnection()!;
+  const billme = (args: string[], onStderr?: (text: string) => void) =>
+    new Promise<{ code: number | null; stdout: string; stderr: string }>((done, fail) => {
+      const child = spawn(process.execPath, [billmeBin, ...args], {
+        env: { ...process.env, BILLME_CLI_CONFIG: configPath, BILLME_E2E_USER_DATA_DIR: userDataPath },
+      });
+      let stdout = '';
+      let stderr = '';
+      child.stdout.on('data', (chunk) => { stdout += chunk; });
+      child.stderr.on('data', (chunk) => { stderr += chunk; onStderr?.(stderr); });
+      child.on('error', fail);
+      child.on('close', (code) => done({ code, stdout, stderr }));
+      child.stdin.end('');
+    });
+  const appRequest = (method: string, path: string, body?: unknown) => fetch(`${app.baseUrl}/api/v1/pro${path}`, {
+    method,
+    headers: { 'x-billme-local-token': app.token, ...(body ? { 'content-type': 'application/json' } : {}) },
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  try {
+    let decided = false;
+    const login = await billme(['login', '--target', 'desktop', '--product', 'pro', '--no-browser', '--label', 'z3'], (text) => {
+      const code = /Code: ([A-Z0-9-]+)/.exec(text)?.[1];
+      if (!code || decided) return;
+      decided = true;
+      void appRequest('POST', '/cli-access/decide', { code, approve: true });
+    });
+    assert.equal(login.code, 0, login.stderr);
+
+    const out = join(userDataPath, 'pruefer');
+    const exported = await billme(['tax', 'auditExportPackage', '--from', '2026-01-01', '--to', '2026-12-31', '--out', out]);
+    assert.equal(exported.code, 0, exported.stderr);
+    const result = JSON.parse(exported.stdout);
+    assert.equal(result.path, out);
+    const manifest = JSON.parse(await readFile(join(out, result.files.find((name: string) => name.endsWith('manifest.json'))), 'utf8'));
+    assert.ok(manifest.files.length > 5, 'the package has its files');
+    for (const file of manifest.files) {
+      const bytes = await readFile(join(out, file.path));
+      assert.equal(bytes.byteLength, file.sizeBytes, `${file.name} is written whole, not overwritten by the next file`);
+    }
+  } finally {
+    await backend.close().catch(() => undefined);
+    await rm(userDataPath, { recursive: true, force: true });
+  }
 });

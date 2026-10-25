@@ -4,6 +4,7 @@ import { Settings2 } from 'lucide-react';
 import { Button, Card, PageHeader } from '@billme/ui';
 import {
   ProAccountingWorkspace,
+  userFacingReference,
   NATIVE_EUR_2025_RANGE,
   reportDateRange,
   type ReportFilterState,
@@ -24,6 +25,8 @@ import { ipc } from '../ipc/client';
 import { useAccountsQuery } from '../hooks/useAccounts';
 import { useSettingsQuery } from '@billme/desktop-renderer/hooks/useSettings';
 import { localIsoDate } from '@billme/desktop-utils';
+import { accountingErrorSentence, accountingErrorText } from '@billme/accounting-shared';
+import { calculateInvoiceTaxSnapshot, resolveInvoiceTaxMode } from '@billme/server-core/services';
 import { useImportSkrMutation, useProLedgerAccountsQuery, useProLedgerStatsQuery } from '../hooks/useProLedger';
 import type { IpcArgs, IpcResult } from '@billme/desktop-contracts-pro/contract';
 import type {
@@ -48,6 +51,24 @@ import {
   mapReportDrilldownEntries,
   mapSusaReport,
 } from './reportAdapters';
+
+/** Every adapter call answers a known accounting error code with its German sentence (accountingErrorText); the code stays on `cause`. */
+const withGermanErrors = <T extends object>(adapter: T): T => {
+  const translate = (error: unknown): never => {
+    const sentence = error instanceof Error ? accountingErrorSentence(error.message) : undefined;
+    throw sentence ? new Error(sentence, { cause: error }) : error;
+  };
+  return Object.fromEntries(Object.entries(adapter).map(([key, value]) => [key, typeof value === 'function'
+    ? (...args: unknown[]) => {
+      try {
+        const result = (value as (...input: unknown[]) => unknown)(...args);
+        return result instanceof Promise ? result.catch(translate) : result;
+      } catch (error) {
+        return translate(error);
+      }
+    }
+    : value])) as T;
+};
 
 const reportPeriodRange = (filters: ReportFilterState): { from?: string; to?: string } =>
   reportDateRange(filters);
@@ -143,7 +164,7 @@ const mapTransactions = (
     const draft = draftsByTransactionId.get(row.id);
     const workflowStatus: ProUiTransaction['workflowStatus'] =
       row.status === 'booked' || row.linkedInvoiceId ? 'posted' : draft?.workflowStatus ?? 'imported';
-    const missingReceipt = !row.linkedInvoiceId;
+    const missingReceipt = !row.linkedInvoiceId && !row.receiptDocumentCount;
     const draftIssues = draft?.validationIssues ?? [];
     const draftErrors = draftIssues.filter((issue) => issue.severity === 'error').length;
     const draftWarnings = draftIssues.filter((issue) => issue.severity === 'warning').length;
@@ -157,8 +178,9 @@ const mapTransactions = (
       amount: Number(row.amount || 0),
       currency: 'EUR',
       workflowStatus,
-      suggestion: row.suggestedAccountNumber,
-      suggestionConfidence: row.suggestionConfidence,
+      // The fallback layer is only the chart's first expense/revenue account, not a proposal.
+      suggestion: row.suggestionLayer === 'fallback' ? undefined : row.suggestedAccountNumber,
+      suggestionConfidence: row.suggestionLayer === 'fallback' ? undefined : row.suggestionConfidence,
       hasReceipt: !missingReceipt,
       issueCounts: {
         errors: draftErrors,
@@ -166,6 +188,7 @@ const mapTransactions = (
         infos: draftIssues.length - draftErrors - draftWarnings,
       },
       flags: missingReceipt ? ['missing_receipt'] : [],
+      ...(draft?.exceptionCase ? { exceptionCase: draft.exceptionCase } : {}),
       bookingDraftId: `draft-${row.id}`,
       owner: 'Pro Workspace',
       isVirtualPosted:
@@ -243,7 +266,8 @@ const mapUiDraftToEntityDraft = (
     postingDate: draft.postingDate,
     documentDate: draft.documentDate,
     bookingText: draft.bookingText,
-    reference: draft.externalReference,
+    // A bank line's id is no Beleg; the journal and DATEV Belegfeld only carry real document numbers.
+    reference: userFacingReference(draft.externalReference),
     period: (draft.postingDate ?? localIsoDate()).slice(0, 7),
     fiscalYear: Number((draft.postingDate ?? localIsoDate()).slice(0, 4)),
     lines: draft.lines.map((line) => ({
@@ -294,9 +318,11 @@ const AREA_TITLES: Record<string, [string, string?]> = {
 };
 
 /** `view` comes from the route (`/accounting?view=`) so the shell navigation can open an area directly. */
-export const ProAccountingPage: React.FC<{ view?: unknown; onViewChange?: (view: string) => void }> = ({ view, onViewChange }) => {
+export const ProAccountingPage: React.FC<{ view?: unknown; onViewChange?: (view: string) => void; onOpenTaxFiling?: () => void }> = ({ view, onViewChange, onOpenTaxFiling }) => {
   const queryClient = useQueryClient();
   const { data: settings } = useSettingsQuery();
+  const settingsRef = React.useRef(settings);
+  settingsRef.current = settings;
   const { data: ledgerStats, isError: ledgerStatsError, error: ledgerStatsLoadError } = useProLedgerStatsQuery();
   const policyQuery = useQuery({
     queryKey: ['pro-accounting', 'policy'],
@@ -421,7 +447,7 @@ export const ProAccountingPage: React.FC<{ view?: unknown; onViewChange?: (view:
       await invalidateProQueries();
       return result;
     } catch (error) {
-      const message = error instanceof Error ? error.message : 'Aktion konnte nicht gespeichert werden.';
+      const message = error instanceof Error ? accountingErrorText(error.message) : 'Aktion konnte nicht gespeichert werden.';
       setAdapterError(message);
       throw error;
     } finally {
@@ -451,7 +477,7 @@ export const ProAccountingPage: React.FC<{ view?: unknown; onViewChange?: (view:
         workflowStatus,
       };
     };
-    return {
+    return withGermanErrors({
       hydrate(seedData) {
         adapterTransactionsRef.current = structuredClone(seedData.transactions ?? []);
         adapterDraftsRef.current = new Map(
@@ -487,10 +513,17 @@ export const ProAccountingPage: React.FC<{ view?: unknown; onViewChange?: (view:
       async getJournalEntryById(id: string) {
         return ipc.pro.getJournalEntryById({ entryId: id });
       },
+      async reverseJournalEntry(input) {
+        const result = await ipc.pro.reverseJournalEntry(input);
+        void queryClient.invalidateQueries({ queryKey: ['pro-accounting'] });
+        return result;
+      },
       async saveDraft(draft) {
         const drafts = adapterDraftsRef.current;
         return runMutation(async () => {
-          const saved = await ipc.pro.saveDraft({ draft: mapUiDraftToEntityDraft(draft) });
+          const entity = mapUiDraftToEntityDraft(draft);
+          // A changed Kontierung of a freigegebener draft goes back to review; the server owns "approved" and refuses it from a save.
+          const saved = await ipc.pro.saveDraft({ draft: entity.workflowStatus === 'approved' ? { ...entity, workflowStatus: 'suggested' } : entity });
           const resolvedDraft = mapEntityDraftToUiDraft(saved, accountNames, activeChart);
           drafts.set(draft.transactionId, resolvedDraft);
           return structuredClone(resolvedDraft);
@@ -503,11 +536,16 @@ export const ProAccountingPage: React.FC<{ view?: unknown; onViewChange?: (view:
         const existing = adapterDraftsRef.current.get(transactionId);
         if (!existing) throw new Error('Draft not found');
         return runMutation(async () => {
-          const dispatched = await pro.dispatchDraftAction({
-            transactionId,
-            action,
-            rejectReason: options?.rejectReason,
-          });
+          // A Storno reverses the journal entry first; the server marks the draft reversed in the same transaction,
+          // so a refused reversal (gesperrter Monat) never leaves a draft that says "storniert" over a live booking.
+          const dispatched = action === 'reverse'
+            ? await pro.getDraftByTransactionId({ transactionId })
+            : await pro.dispatchDraftAction({
+              transactionId,
+              action,
+              rejectReason: options?.rejectReason,
+            });
+          if (!dispatched) throw new Error('Draft not found');
           let resolvedDraft = mapEntityDraftToUiDraft(dispatched, accountNames, activeChart);
 
           if (action === 'post') {
@@ -536,12 +574,11 @@ export const ProAccountingPage: React.FC<{ view?: unknown; onViewChange?: (view:
             // Asked server-side by draft: a list of the latest 500 entries missed older postings silently.
             const entries = await pro.listJournalEntries({ sourceDraftId: resolvedDraft.id, limit: 50, offset: 0 });
             const entry = entries.find((row) => row.sourceDraftId === resolvedDraft.id && row.status === 'posted');
-            if (entry) {
-              await pro.reverseJournalEntry({
-                entryId: entry.id,
-                reason: options?.rejectReason || 'Storno aus Pro Workspace',
-              });
-            }
+            if (!entry) throw new Error('Zu dieser Bankzeile gibt es keine gebuchte Journalbuchung mehr.');
+            await pro.reverseJournalEntry({
+              entryId: entry.id,
+              reason: options?.rejectReason || 'Storno aus Pro Workspace',
+            });
           }
 
           const authoritative = await pro.getDraftByTransactionId({ transactionId });
@@ -549,6 +586,25 @@ export const ProAccountingPage: React.FC<{ view?: unknown; onViewChange?: (view:
           drafts.set(transactionId, resolvedDraft);
           if (transactions === adapterTransactionsRef.current) setTxWorkflowStatus(transactionId, resolvedDraft.workflowStatus);
           return structuredClone(resolvedDraft);
+        });
+      },
+      async updateExceptionCase(transactionId, patch, actorName) {
+        return runMutation(async () => {
+          // Only what the server keeps; a cleared pause travels as '' (resolvedAt/By are the audit trail's).
+          const sent = {
+            ...(patch.state ? { state: patch.state } : {}),
+            ...(patch.owner !== undefined ? { owner: patch.owner } : {}),
+            ...('snoozedUntil' in patch ? { snoozedUntil: patch.snoozedUntil ?? '' } : {}),
+            ...(patch.resolutionNote !== undefined ? { resolutionNote: patch.resolutionNote } : {}),
+          };
+          const reason = patch.state === 'resolved' ? `Ausnahme gelöst: ${patch.resolutionNote || 'ohne Notiz'}`
+            : patch.state === 'snoozed' ? `Ausnahme pausiert bis ${patch.snoozedUntil}`
+              : patch.owner ? `Ausnahme zugewiesen an ${patch.owner}` : 'Ausnahme wieder geöffnet';
+          const saved = await ipc.pro.updateExceptionCase({ transactionId, patch: sent, reason: `${reason} (${actorName})` });
+          const idx = adapterTransactionsRef.current.findIndex((tx) => tx.id === transactionId);
+          if (idx === -1) throw new Error('Bankzeile nicht gefunden.');
+          adapterTransactionsRef.current[idx] = { ...adapterTransactionsRef.current[idx], exceptionCase: saved.exceptionCase };
+          return structuredClone(adapterTransactionsRef.current[idx]);
         });
       },
       listActivity(transactionId) {
@@ -686,6 +742,9 @@ export const ProAccountingPage: React.FC<{ view?: unknown; onViewChange?: (view:
           .filter((row) => row.status !== 'cancelled')
           .map((row) => ({ ...row, status: row.status as 'planned' | 'posted' })));
       },
+      getAssetRegister(year) {
+        return ipc.pro.getAssetRegister({ year });
+      },
       runDepreciation(args) {
         return ipc.pro.runDepreciation(args).then((result) => {
           if (result.scheduleEntry.status === 'cancelled') {
@@ -700,8 +759,59 @@ export const ProAccountingPage: React.FC<{ view?: unknown; onViewChange?: (view:
           };
         });
       },
-      disposeAsset(args) {
-        return ipc.pro.disposeAsset(args);
+      async disposeAsset({ saleCustomerId, ...args }) {
+        if (!saleCustomerId) return ipc.pro.disposeAsset(args);
+        // A sale to a customer goes through the normal invoice path: a draft „Verkauf Anlage …“ that books proceeds,
+        // VAT and the open item once it is issued; the disposal itself only takes the book value off.
+        const settings = settingsRef.current;
+        if (!settings) throw new Error('Einstellungen sind noch nicht geladen. Bitte erneut versuchen.');
+        const [client, asset] = await Promise.all([
+          ipc.clients.list().then((rows) => rows.find((row) => row.id === saleCustomerId)),
+          ipc.pro.listAssets().then((rows) => rows.find((row) => row.id === args.assetId)),
+        ]);
+        if (!client || !asset) throw new Error(client ? 'Die Anlage wurde nicht gefunden.' : 'Der gewählte Kunde wurde nicht gefunden.');
+        const reservation = await ipc.numbers.reserve({ kind: 'invoice' });
+        const items = [{ kind: 'item' as const, description: `Verkauf Anlage ${asset.assetNumber} ${asset.name}`.trim(), quantity: 1, price: args.proceeds, total: args.proceeds, taxRate: args.taxRate }];
+        const taxMode = resolveInvoiceTaxMode(undefined, settings);
+        const taxMeta = { assetSaleAssetId: args.assetId };
+        const taxSnapshot = calculateInvoiceTaxSnapshot({ items, taxMode, taxMeta }, settings);
+        const due = new Date(`${args.disposalDate}T12:00:00`);
+        due.setDate(due.getDate() + (settings.legal?.paymentTermsDays ?? 14));
+        const invoice = await ipc.invoices.upsert({
+          reason: args.reason,
+          invoice: {
+            id: crypto.randomUUID(),
+            number: reservation.number,
+            numberReservationId: reservation.reservationId,
+            clientId: client.id,
+            clientNumber: client.customerNumber,
+            client: client.company || client.contactPerson,
+            clientEmail: client.email,
+            clientAddress: client.address,
+            date: args.disposalDate,
+            dueDate: localIsoDate(due),
+            amount: taxSnapshot.grossAmount,
+            status: 'draft',
+            items,
+            payments: [],
+            history: [],
+            taxMode,
+            taxMeta,
+            taxSnapshot,
+          },
+        });
+        try {
+          const result = await ipc.pro.disposeAsset({ ...args, saleInvoiceId: invoice.id });
+          void queryClient.invalidateQueries({ queryKey: ['invoices'] });
+          return { ...result, saleInvoiceNumber: invoice.number };
+        } catch (error) {
+          // Without the disposal the draft would sell an asset that is still on the books.
+          await ipc.invoices.delete({ id: invoice.id, reason: 'Anlagenabgang nicht gebucht' }).catch(() => undefined);
+          throw error;
+        }
+      },
+      async listCustomers() {
+        return (await ipc.clients.list()).map((row) => ({ id: row.id, name: row.company || row.contactPerson }));
       },
       listDatevExports(limit?: number) {
         return ipc.pro.listDatevExports({ limit });
@@ -768,6 +878,29 @@ export const ProAccountingPage: React.FC<{ view?: unknown; onViewChange?: (view:
       listIncomingInvoiceDocuments(invoiceId) {
         return ipc.pro.listIncomingInvoiceDocuments({ invoiceId });
       },
+      listBankTransactionDocuments(transactionId) {
+        return ipc.pro.listBankTransactionDocuments({ transactionId });
+      },
+      async uploadBankTransactionDocument(input) {
+        const saved = await ipc.pro.uploadBankTransactionDocument(input);
+        // The line is "mit Beleg" now: the inbox queue and the editor read it without a reload.
+        const idx = adapterTransactionsRef.current.findIndex((tx) => tx.id === input.transactionId);
+        const tx = adapterTransactionsRef.current[idx];
+        if (tx && !tx.hasReceipt) {
+          adapterTransactionsRef.current[idx] = {
+            ...tx,
+            hasReceipt: true,
+            flags: tx.flags.filter((flag) => flag !== 'missing_receipt'),
+            issueCounts: { ...tx.issueCounts, warnings: Math.max(0, tx.issueCounts.warnings - 1) },
+          };
+        }
+        // The inbox reads the lines from the transactions query (receiptDocumentCount), not from this adapter copy.
+        void queryClient.invalidateQueries({ queryKey: ['pro-accounting', 'transactions'] });
+        return saved;
+      },
+      downloadBankTransactionDocument(documentId) {
+        return ipc.pro.downloadBankTransactionDocument({ documentId });
+      },
       uploadIncomingInvoiceDocument(input) {
         return ipc.pro.uploadIncomingInvoiceDocument(input);
       },
@@ -790,7 +923,8 @@ export const ProAccountingPage: React.FC<{ view?: unknown; onViewChange?: (view:
           invoiceId: invoice.id,
           invoiceNumber: invoice.number,
           client: invoice.client,
-          amount: invoice.amount,
+          // What is still open, not the invoice gross: earlier part payments are already settled.
+          amount: Math.round((invoice.amount - (invoice.payments ?? []).reduce((sum, payment) => sum + Number(payment.amount), 0)) * 100) / 100,
           dueDate: invoice.dueDate,
           confidence,
           matchReasons,
@@ -800,8 +934,8 @@ export const ProAccountingPage: React.FC<{ view?: unknown; onViewChange?: (view:
       listAccountSuggestionRules() {
         return ipc.pro.listAccountSuggestionRules({ chart: activeChart });
       },
-    };
-  }, [accountNames, activeChart, bankAccounts, invalidateProQueries, runMutation]);
+    });
+  }, [accountNames, activeChart, bankAccounts, invalidateProQueries, queryClient, runMutation]);
 
   if (txQuery.isLoading || draftQuery.isLoading || policyQuery.isLoading) {
     return (
@@ -865,6 +999,7 @@ export const ProAccountingPage: React.FC<{ view?: unknown; onViewChange?: (view:
         <ProAccountingWorkspace
           view={view}
           onViewChange={onViewChange}
+          onOpenTaxFiling={onOpenTaxFiling}
           onManageRules={() => setShowRulesModal(true)}
           seed={seed}
           dataAdapter={dataAdapter}

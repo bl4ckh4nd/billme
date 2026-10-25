@@ -362,7 +362,7 @@ test('an aborted audit append rolls back the vendor and the incoming invoice wit
     const inTransaction = <T>(work: (r: ReturnType<typeof createPostgresProAccountingRepository>) => Promise<T>) =>
       database.transaction({ isolation: 'serializable' }, (session) => work(createPostgresProAccountingRepository(session)));
 
-    await assert.rejects(() => inTransaction((r) => r.upsertVendor(scope, { id: 'vendor-rollback', name: 'Supplier', mutation })), auditBlocked);
+    await assert.rejects(() => inTransaction((r) => r.upsertVendor(scope, { id: 'vendor-rollback', name: 'Rollback Supplier', mutation })), auditBlocked);
     assert.equal(await count(database, `SELECT COUNT(*) c FROM vendors WHERE id='vendor-rollback'`), 0);
 
     await assert.rejects(() => inTransaction((r) => r.upsertIncomingInvoice(scope, incomingInvoice('in-rollback', vendor.id, { status: 'draft' }))), auditBlocked);

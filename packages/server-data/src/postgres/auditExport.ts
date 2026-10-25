@@ -61,6 +61,7 @@ const datasets: Dataset[] = [
   { name: 'tax-case-account-mappings.jsonl', table: 'tax_case_account_mappings', orderBy: 'chart ASC, tax_case_key ASC, role ASC, id ASC' },
   { name: 'report-account-mappings.jsonl', table: 'report_account_mappings', orderBy: 'report_type ASC, account_number ASC, version ASC' },
   { name: 'bank-transactions.jsonl', table: 'bank_transactions', dateColumn: 'date', orderBy: 'date ASC, id ASC' },
+  { name: 'bank-transaction-documents.jsonl', table: 'bank_transaction_documents', dateVia: 'bank_transaction_id:bank_transactions:date', columns: 'id,tenant_id,bank_transaction_id,original_filename,mime_type,byte_length,sha256,created_at', orderBy: 'created_at ASC, id ASC' },
   { name: 'datev-exports.jsonl', table: 'datev_exports', dateColumn: 'created_at', orderBy: 'created_at ASC, id ASC' },
   { name: 'booking-drafts.jsonl', table: 'booking_drafts', dateColumn: 'updated_at', orderBy: 'updated_at ASC, id ASC' },
   { name: 'draft-validation-issues.jsonl', table: 'draft_validation_issues', dateColumn: 'created_at', orderBy: 'created_at ASC, id ASC' },
@@ -147,21 +148,30 @@ export const buildPostgresTaxAuditExportArtifact = async (
   )).rows;
   files.push(file('chart-of-accounts.jsonl', jsonl(accounts), accounts.length));
 
-  // The receipts themselves (bytes as stored, hash checked against the archive) when documents are requested.
+  // The receipts themselves (bytes as stored, hash checked against the archive) when documents are requested:
+  // those of incoming invoices by invoice date, those attached to bank lines by the date of the bank line.
   if (args.includeDocuments) {
-    const receipts = (await target.query(
-      `SELECT d.id, d.original_filename, d.sha256, d.content_bytes FROM incoming_invoice_documents d
+    const range = (column: string) => `${args.from ? ` AND ${column} >= $2` : ''}${args.to ? ` AND ${column} <= $${args.from ? 3 : 2}` : ''}`;
+    const values = [tenantId, ...(args.from ? [args.from] : []), ...(args.to ? [args.to] : [])];
+    const sources = [
+      { code: 'INCOMING_INVOICE_DOCUMENT_HASH_MISMATCH', sql: `SELECT d.id, d.original_filename, d.sha256, d.content_bytes FROM incoming_invoice_documents d
        JOIN incoming_invoices i ON i.tenant_id = d.tenant_id AND i.id = d.incoming_invoice_id
-       WHERE d.tenant_id = $1${args.from ? ' AND i.invoice_date >= $2' : ''}${args.to ? ` AND i.invoice_date <= $${args.from ? 3 : 2}` : ''}
-       ORDER BY d.incoming_invoice_id, d.created_at, d.id`,
-      [tenantId, ...(args.from ? [args.from] : []), ...(args.to ? [args.to] : [])],
-    )).rows as Array<{ id: string; original_filename: string; sha256: string; content_bytes: Uint8Array }>;
-    for (const receipt of receipts) {
-      const bytes = Buffer.from(receipt.content_bytes);
-      const sha256 = crypto.createHash('sha256').update(bytes).digest('hex');
-      if (sha256 !== receipt.sha256.toLowerCase()) throw new Error(`INCOMING_INVOICE_DOCUMENT_HASH_MISMATCH:${receipt.id}`);
-      const extension = (/\.([A-Za-z0-9]{1,5})$/.exec(receipt.original_filename)?.[1] ?? 'bin').toLowerCase();
-      files.push({ name: `beleg-${receipt.id.replace(/[^A-Za-z0-9_-]/g, '-')}.${extension}`, content: bytes.toString('base64'), encoding: 'base64', sha256, sizeBytes: bytes.byteLength });
+       WHERE d.tenant_id = $1${range('i.invoice_date')}
+       ORDER BY d.incoming_invoice_id, d.created_at, d.id` },
+      { code: 'BANK_TRANSACTION_DOCUMENT_HASH_MISMATCH', sql: `SELECT d.id, d.original_filename, d.sha256, d.content_bytes FROM bank_transaction_documents d
+       LEFT JOIN bank_transactions b ON b.tenant_id = d.tenant_id AND b.id = d.bank_transaction_id
+       WHERE d.tenant_id = $1${range('b.date')}
+       ORDER BY d.created_at, d.id` },
+    ];
+    for (const source of sources) {
+      const receipts = (await target.query(source.sql, values)).rows as Array<{ id: string; original_filename: string; sha256: string; content_bytes: Uint8Array }>;
+      for (const receipt of receipts) {
+        const bytes = Buffer.from(receipt.content_bytes);
+        const sha256 = crypto.createHash('sha256').update(bytes).digest('hex');
+        if (sha256 !== receipt.sha256.toLowerCase()) throw new Error(`${source.code}:${receipt.id}`);
+        const extension = (/\.([A-Za-z0-9]{1,5})$/.exec(receipt.original_filename)?.[1] ?? 'bin').toLowerCase();
+        files.push({ name: `beleg-${receipt.id.replace(/[^A-Za-z0-9_-]/g, '-')}.${extension}`, content: bytes.toString('base64'), encoding: 'base64', sha256, sizeBytes: bytes.byteLength });
+      }
     }
   }
 

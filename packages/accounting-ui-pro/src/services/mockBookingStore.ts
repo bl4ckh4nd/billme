@@ -294,7 +294,6 @@ export function createAccountingWorkspaceStore() {
       postingDate: tx.date,
       serviceDate: tx.date,
       bookingText: tx.description || fallbackText,
-      externalReference: tx.id,
       chartFramework,
       lines:
         suggestedAccount && clearingAccount

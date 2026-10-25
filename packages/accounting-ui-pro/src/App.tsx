@@ -13,17 +13,18 @@ import WorkbenchQueue from './components/WorkbenchQueue';
 import type { InboxQueueKey } from './domain/selectors';
 import SonderbuchungenWorkspace from './components/SonderbuchungenWorkspace';
 import { JournalEntryDetailModal } from './components/JournalEntryDetail';
+import { permissionContextForRole } from './domain/permissions';
 import { createAccountingWorkspaceStore } from './services/mockBookingStore';
 import type { ProAccountingDataAdapter } from './services/accountingDataAdapter';
 import { AccountingWorkspaceContext, useAccountingWorkspace } from './AccountingWorkspaceContext';
 import { Account, BookingDraft, Transaction, UserRole } from './types';
 import { reportTabsForBusinessProfile, type BusinessReportingProfile } from './domain/reportTypes';
 
-export type AppView = 'inbox' | 'editor' | 'reconciliation' | 'exceptions' | 'assets' | 'reports' | 'opos' | 'special' | 'receipts';
+export type AppView = 'inbox' | 'editor' | 'reconciliation' | 'exceptions' | 'assets' | 'reports' | 'opos' | 'special' | 'tax' | 'receipts';
 
 const SAMPLE_DATA_HINT = 'Ohne verbundene Datenquelle zeigen Buchungen, Ausnahmen und Auswertungen einen Demo-Datensatz.';
 
-const ROUTABLE_VIEWS: readonly AppView[] = ['inbox', 'editor', 'reconciliation', 'exceptions', 'assets', 'reports', 'opos', 'special', 'receipts'];
+const ROUTABLE_VIEWS: readonly AppView[] = ['inbox', 'editor', 'reconciliation', 'exceptions', 'assets', 'reports', 'opos', 'special', 'tax', 'receipts'];
 const isAccountingView = (value: unknown): value is AppView =>
   typeof value === 'string' && (ROUTABLE_VIEWS as readonly string[]).includes(value);
 
@@ -51,6 +52,8 @@ export interface ProAccountingWorkspaceProps {
   onViewChange?: (view: AppView) => void;
   /** Opens the host's account rule editor from the Bankabgleich rules card. */
   onManageRules?: () => void;
+  /** Opens the host's ELSTER page from the Steuer area. */
+  onOpenTaxFiling?: () => void;
 }
 
 export default function App(props: ProAccountingWorkspaceProps) {
@@ -71,7 +74,7 @@ export default function App(props: ProAccountingWorkspaceProps) {
   return <AccountingWorkspaceContext.Provider value={store}><Workspace {...props} /></AccountingWorkspaceContext.Provider>;
 }
 
-function Workspace({ seed, dataAdapter, role = 'admin', assetsAvailable = true, busy = false, view, onViewChange, onManageRules }: ProAccountingWorkspaceProps) {
+function Workspace({ seed, dataAdapter, role = 'admin', assetsAvailable = true, busy = false, view, onViewChange, onManageRules, onOpenTaxFiling }: ProAccountingWorkspaceProps) {
   const [oposInvoiceId, setOposInvoiceId] = useState<string | null>(null);
   const [requestedView, setCurrentView] = useState<AppView>(isAccountingView(view) ? view : 'inbox');
 
@@ -135,6 +138,7 @@ function Workspace({ seed, dataAdapter, role = 'admin', assetsAvailable = true, 
               { view: 'reports', label: 'Auswertungen' },
               { view: 'opos', label: 'OPOS' },
               { view: 'special', label: 'Sonderbuchungen & Abschluss' },
+              { view: 'tax', label: 'Steuer' },
             ] as { view: AppView; label: string }[]
           ).map(({ view, label }) => {
             const isActive = currentView === view || (view === 'inbox' && currentView === 'editor');
@@ -205,9 +209,11 @@ function Workspace({ seed, dataAdapter, role = 'admin', assetsAvailable = true, 
                 transactionId={selectedTransactionId}
                 role={role}
                 accounts={accounts}
+                corporation={seed?.businessReportingProfile?.legalForm === 'gmbh' || seed?.businessReportingProfile?.legalForm === 'ug'}
                 onBack={handleBackToInbox}
                 onStoreChange={refresh}
                 onDirtyChange={handleDirtyChange}
+                receiptApi={dataAdapter}
               />
               <ConfirmDialog
                 open={pendingSwitchId !== null}
@@ -241,7 +247,7 @@ function Workspace({ seed, dataAdapter, role = 'admin', assetsAvailable = true, 
           ) : currentView === 'exceptions' ? (
             <ExceptionCenter
               role={role}
-              canMutateExceptions={!dataAdapter && role !== 'viewer' && role !== 'sales' && role !== 'auditor'}
+              canMutateExceptions={(!dataAdapter || Boolean(dataAdapter.updateExceptionCase)) && role !== 'viewer' && role !== 'sales' && role !== 'auditor'}
               transactions={transactions}
               onOpenTransaction={handleOpenTransaction}
               onRefresh={refresh}
@@ -261,7 +267,9 @@ function Workspace({ seed, dataAdapter, role = 'admin', assetsAvailable = true, 
           ) : currentView === 'receipts' ? (
             <ReceiptsInbox dataAdapter={dataAdapter} onOpenInvoice={(invoiceId) => { setOposInvoiceId(invoiceId); showView('opos'); }} />
           ) : currentView === 'special' ? (
-            <SonderbuchungenWorkspace dataAdapter={dataAdapter} role={role} accounts={accounts} chart={seed?.chartFramework} />
+            <SonderbuchungenWorkspace dataAdapter={dataAdapter} role={role} accounts={accounts} chart={seed?.chartFramework} businessReportingProfile={seed?.businessReportingProfile} />
+          ) : currentView === 'tax' ? (
+            <SonderbuchungenWorkspace area="tax" onOpenTaxFiling={onOpenTaxFiling} dataAdapter={dataAdapter} role={role} accounts={accounts} chart={seed?.chartFramework} businessReportingProfile={seed?.businessReportingProfile} />
           ) : currentView === 'assets' && !assetsAvailable ? (
             <div className="text-control text-muted">Anlagen sind in dieser Verbindung nicht verfügbar.</div>
           ) : (
@@ -269,7 +277,7 @@ function Workspace({ seed, dataAdapter, role = 'admin', assetsAvailable = true, 
           )}
         </div>
       </div>
-      <JournalEntryDetailModal entryId={selectedJournalEntryId} dataAdapter={dataAdapter} onClose={() => setSelectedJournalEntryId(null)} />
+      <JournalEntryDetailModal entryId={selectedJournalEntryId} dataAdapter={dataAdapter} accounts={accounts} canMutate={permissionContextForRole(role).canMutate} onClose={() => setSelectedJournalEntryId(null)} />
     </div>
   );
 }

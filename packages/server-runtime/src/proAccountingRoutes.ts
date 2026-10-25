@@ -34,9 +34,11 @@ import {
   accountingPolicySchema,
   accountingPostingPreviewSchema,
   assetDepreciationScheduleEntrySchema,
+  assetRegisterSchema,
   assetSchema,
   assetUpsertSchema,
   bookingDraftEntitySchema,
+  draftExceptionPatchSchema,
   incomingInvoiceSchema,
   incomingInvoiceDocumentSchema,
   incomingInvoiceDocumentDownloadSchema,
@@ -49,6 +51,9 @@ import {
   openItemSchema,
   standaloneAccountingSourceFactSchema,
   transactionSchema,
+  bankTransactionDocumentSchema,
+  bankTransactionDocumentDownloadSchema,
+  bankTransactionDocumentUploadSchema,
   vendorSchema,
 } from '@billme/desktop-contracts-pro/schemas';
 import { z } from 'zod';
@@ -329,6 +334,7 @@ const disposalBody = z.object({
   proceeds: z.number().nonnegative(),
   taxRate: z.union([z.literal(0), z.literal(7), z.literal(19)]).optional(),
   proceedsAccountNumber: z.string().min(1).optional(),
+  saleInvoiceId: z.string().min(1).optional(),
   softLockOverride: z.boolean().optional(),
   overrideReason: z.string().min(1).optional(),
 }).refine((value) => !value.softLockOverride || Boolean(value.overrideReason?.trim()), { path: ['overrideReason'], message: 'overrideReason required for soft-lock override' });
@@ -427,7 +433,8 @@ const mapEurRuntimeError = (error: unknown): never => {
   throw error;
 };
 
-const tenantDraft = (scope: TenantScope, draft: z.infer<typeof bookingDraftEntitySchema>) => ({
+// The Ausnahme of a line changes only through its own audited route (PUT …/exception), never with a draft save.
+const tenantDraft = (scope: TenantScope, { exceptionCase: _exception, ...draft }: z.infer<typeof bookingDraftEntitySchema>) => ({
   ...draft,
   tenantId: scope.tenantId,
   // Workflow transitions are exclusively owned by the action/post routes. A
@@ -749,6 +756,48 @@ export const registerProAccountingRoutes = (app: FastifyInstance, options: ProAc
 
   typedRoute(app, {
     method: 'GET',
+    url: `${prefix}/transactions/:transactionId/documents`,
+    params: transactionParams,
+    response: z.array(bankTransactionDocumentSchema),
+    async handler({ request, params }) {
+      const session = await requireProSession(app, request.headers.authorization);
+      return repositoryFor(app).listBankTransactionDocuments(session.scope, params.transactionId);
+    },
+  });
+
+  typedRoute(app, {
+    method: 'POST',
+    url: `${prefix}/transactions/:transactionId/documents`,
+    params: transactionParams,
+    body: bankTransactionDocumentUploadSchema.omit({ transactionId: true }),
+    bodyLimit: INCOMING_INVOICE_DOCUMENT_UPLOAD_BODY_LIMIT,
+    response: bankTransactionDocumentSchema,
+    async handler({ request, params, body }) {
+      const session = await requireMutationSession(app, request.headers.authorization);
+      return repositoryFor(app).uploadBankTransactionDocument(session.scope, {
+        transactionId: params.transactionId,
+        originalFilename: body.originalFilename,
+        mimeType: body.mimeType,
+        content: decodeIncomingInvoiceDocument(body.data),
+        mutation: mutationFor(session, body.reason),
+      });
+    },
+  });
+
+  typedRoute(app, {
+    method: 'GET',
+    url: `${prefix}/bank-transaction-documents/:documentId/download`,
+    params: z.object({ documentId: z.string().min(1) }),
+    response: bankTransactionDocumentDownloadSchema,
+    async handler({ request, params }) {
+      const session = await requireProSession(app, request.headers.authorization);
+      const downloaded = await repositoryFor(app).downloadBankTransactionDocument(session.scope, params.documentId);
+      return { document: downloaded.document, data: Buffer.from(downloaded.content).toString('base64') };
+    },
+  });
+
+  typedRoute(app, {
+    method: 'GET',
     url: `${prefix}/drafts/:transactionId`,
     params: transactionParams,
     response: bookingDraftEntitySchema.nullable(),
@@ -773,6 +822,18 @@ export const registerProAccountingRoutes = (app: FastifyInstance, options: ProAc
         mutation: mutationFor(session, body.reason),
       });
       return saved;
+    },
+  });
+
+  typedRoute(app, {
+    method: 'PUT',
+    url: `${prefix}/drafts/:transactionId/exception`,
+    params: transactionParams,
+    body: z.object({ reason: reasonSchema, patch: draftExceptionPatchSchema }),
+    response: bookingDraftEntitySchema,
+    async handler({ request, params, body }) {
+      const session = await requireMutationSession(app, request.headers.authorization);
+      return repositoryFor(app).updateDraftExceptionCase(session.scope, { transactionId: params.transactionId, patch: body.patch, mutation: mutationFor(session, body.reason) });
     },
   });
 
@@ -1352,11 +1413,15 @@ export const registerProAccountingRoutes = (app: FastifyInstance, options: ProAc
     response: vendorSchema,
     async handler({ request, body }) {
       const session = await requireMutationSession(app, request.headers.authorization);
-      const vendor = await serviceFor(app).upsertVendor(session.scope, {
-        ...body.vendor,
-        mutation: mutationFor(session, body.reason),
-      });
-      return vendor;
+      try {
+        return await serviceFor(app).upsertVendor(session.scope, {
+          ...body.vendor,
+          mutation: mutationFor(session, body.reason),
+        });
+      } catch (error) {
+        if (error instanceof Error && error.message.startsWith('VENDOR_EXISTS:')) throw new ApiError(409, error.message.slice('VENDOR_EXISTS:'.length).trim());
+        throw error;
+      }
     },
   });
 
@@ -1648,6 +1713,17 @@ export const registerProAccountingRoutes = (app: FastifyInstance, options: ProAc
     async handler({ request, body }) {
       const session = await requireMutationSession(app, request.headers.authorization);
       return serviceFor(app).upsertAsset(session.scope, body.asset, body.reason, { mutation: mutationFor(session, body.reason), softLockOverride: body.asset.softLockOverride, overrideReason: body.asset.overrideReason });
+    },
+  });
+
+  typedRoute(app, {
+    method: 'GET',
+    url: `${prefix}/assets/register`,
+    query: z.object({ year: z.coerce.number().int().min(2000).max(2100) }),
+    response: assetRegisterSchema,
+    async handler({ request, query }) {
+      const session = await requireProSession(app, request.headers.authorization);
+      return serviceFor(app).getAssetRegister(session.scope, query.year);
     },
   });
 

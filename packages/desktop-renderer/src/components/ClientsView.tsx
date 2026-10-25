@@ -12,6 +12,7 @@ import {
 } from '@billme/ui';
 import type { Client, ClientAddress, ClientContact, ClientEmail } from '@billme/desktop-core/types';
 import { useClientsQuery, useDeleteClientMutation, useUpsertClientMutation } from '../hooks/useClients';
+import { READ_ONLY_HINT, canMutate } from '../runtime-api';
 import { useDeferredDelete } from '../hooks/useDeferredDelete';
 import { useCreateIntent } from '../hooks/useCreateIntent';
 import { useInvoicesQuery } from '../hooks/useInvoices';
@@ -22,6 +23,7 @@ import { useUiStore } from '../ui-store';
 import { v4 as uuidv4 } from 'uuid';
 import { SkeletonLoader } from '../ui/components/SkeletonLoader';
 import { CsvImportDialog } from './masterdata/CsvImportDialog';
+import { vatIdError, zipError } from '@billme/server-core';
 
 type ClientEditorErrors = Record<string, string>;
 
@@ -121,19 +123,31 @@ export const ClientsView: React.FC = () => {
             c.email,
             c.customerNumber,
             c.phone,
+            c.taxProfile?.vatId,
             ...(c.emails ?? []).map((email) => email.email),
+            ...(c.addresses ?? []).flatMap((address) => [address.zip, address.city]),
         ]
             .filter(Boolean)
             .map((value) => String(value).toLowerCase());
         return searchable.some((value) => value.includes(normalizedSearch));
     });
 
+    const urlClientId = typeof locationSearch.id === 'string' ? locationSearch.id : undefined;
     React.useEffect(() => {
-        const deepLinkClientId = typeof locationSearch.id === 'string' ? locationSearch.id : undefined;
-        if (!deepLinkClientId) return;
-        if (!visibleClients.some((client) => client.id === deepLinkClientId)) return;
-        setSelectedClientId(deepLinkClientId);
-    }, [locationSearch, visibleClients]);
+        if (!urlClientId) return;
+        if (!visibleClients.some((client) => client.id === urlClientId)) return;
+        setSelectedClientId(urlClientId);
+    }, [urlClientId, visibleClients]);
+    // The open customer lives in the URL (?id=), so "Kunden" in the sidebar (plain /clients) leads back to the list.
+    const lastUrlClientId = React.useRef(urlClientId);
+    React.useEffect(() => {
+        if (lastUrlClientId.current && !urlClientId) setSelectedClientId(null);
+        lastUrlClientId.current = urlClientId;
+    }, [urlClientId]);
+    const openClient = (id: string | null) => {
+        setSelectedClientId(id);
+        void navigate({ to: '/clients', search: id ? { id } : {} });
+    };
 
     const formatCurrency = (amount: number) => {
         return new Intl.NumberFormat('de-DE', { style: 'currency', currency: 'EUR' }).format(amount);
@@ -252,8 +266,10 @@ export const ClientsView: React.FC = () => {
 
         const company = draft.company.trim();
         if (!company) {
-            addError('company', 'Firma ist erforderlich.');
+            addError('company', draft.taxProfile?.type === 'consumer' ? 'Name ist erforderlich.' : 'Firma ist erforderlich.');
         }
+        const vatIdProblem = vatIdError(draft.taxProfile?.vatId ?? '');
+        if (vatIdProblem) addError('vatId', vatIdProblem);
 
         const legacyEmail = (draft.email ?? '').trim();
         if (legacyEmail && !emailRegex.test(legacyEmail)) {
@@ -318,6 +334,10 @@ export const ClientsView: React.FC = () => {
                 address.label.length > 0,
             );
 
+        for (const address of normalizedAddresses) {
+            const zipProblem = zipError(address.zip, address.country);
+            if (zipProblem) addError(addressFieldKey(address.id, 'zip'), zipProblem);
+        }
         const billingAddress = normalizedAddresses.find((address) => address.isDefaultBilling);
         if (normalizedAddresses.length > 0 && !billingAddress) {
             addError('addresses', 'Mindestens eine Adresse muss als Standard Rechnung markiert sein.');
@@ -362,10 +382,10 @@ export const ClientsView: React.FC = () => {
 
         try {
             const saved = await upsertClient.mutateAsync(payload);
-            setSelectedClientId(saved.id);
+            openClient(saved.id);
             closeEditor();
         } catch (e) {
-            notify('error', `Speichern fehlgeschlagen: ${String(e)}`);
+            notify('error', `Speichern fehlgeschlagen: ${(e instanceof Error ? e.message : String(e)).replace(/^(?:Error:\s*)+/, '')}`);
         }
     };
 
@@ -413,6 +433,7 @@ export const ClientsView: React.FC = () => {
         const outstandingAmount = clientBilling.filter(i => ['open', 'overdue'].includes(i.status)).reduce((acc, curr) => acc + curr.amount, 0);
         const paidCount = clientBilling.filter(i => i.status === 'paid').length;
         const openCount = clientInvoices.filter(i => ['open', 'overdue'].includes(i.status)).length;
+        const lastDocument = [...clientInvoices].sort((a, b) => (b.date ?? '').localeCompare(a.date ?? ''))[0];
 
         // Paid revenue per month over the last year, oldest first, for the trend beside the total.
         const now = new Date();
@@ -436,7 +457,7 @@ export const ClientsView: React.FC = () => {
                     className="mb-0"
                     title={selectedClient.company}
                     description={[selectedClient.contactPerson, selectedClient.customerNumber].filter(Boolean).join(' · ') || undefined}
-                    back={{ label: 'Zurück zur Kundenübersicht', onClick: () => setSelectedClientId(null) }}
+                    back={{ label: 'Zurück zur Kundenübersicht', onClick: () => openClient(null) }}
                     actions={
                         <>
                             <IconButton aria-label="Kunde bearbeiten" onClick={() => openEditor(selectedClient)}>
@@ -445,8 +466,13 @@ export const ClientsView: React.FC = () => {
                             <IconButton
                                 aria-label="Kunde löschen"
                                 onClick={() => {
+                                    // Invoices keep pointing at their client for the retention period; the server refuses with 409 as well.
+                                    if (invoices.some((invoice) => invoice.clientId === selectedClient.id)) {
+                                        notify('error', 'Für diesen Kunden gibt es Rechnungen. Er kann nicht gelöscht werden. Setze ihn stattdessen auf „Inaktiv“.');
+                                        return;
+                                    }
                                     requestDelete([selectedClient.id]);
-                                    setSelectedClientId(null);
+                                    openClient(null);
                                 }}
                             >
                                 <Trash2 size={16} aria-hidden="true" />
@@ -518,8 +544,8 @@ export const ClientsView: React.FC = () => {
                                 label="Letzte Aktivität"
                                 value={selectedClient.activities[0]
                                     ? new Date(selectedClient.activities[0].date).toLocaleDateString('de-DE')
-                                    : EMPTY_VALUE}
-                                hint={<span className="block truncate">{selectedClient.activities[0]?.content ?? 'Keine Aktivitäten'}</span>}
+                                    : lastDocument ? `${lastDocument.date.slice(8, 10)}.${lastDocument.date.slice(5, 7)}.${lastDocument.date.slice(0, 4)}` : EMPTY_VALUE}
+                                hint={<span className="block truncate">{selectedClient.activities[0]?.content ?? (lastDocument ? `Beleg ${lastDocument.number}` : 'Keine Aktivitäten')}</span>}
                             />
                         </div>
                     </section>
@@ -733,7 +759,7 @@ export const ClientsView: React.FC = () => {
                             <div className="col-span-2">
                                 <Input
                                     id={getInputId('company')}
-                                    label="Firma"
+                                    label={draft.taxProfile?.type === 'consumer' ? 'Name' : 'Firma'}
                                     value={draft.company}
                                     onChange={(e) => setDraft({ ...draft, company: e.target.value })}
                                     required
@@ -814,8 +840,9 @@ export const ClientsView: React.FC = () => {
                                 fullWidth
                             />
                             <Input
-                                id="clientsview-ust-idnr"
+                                id={getInputId('vatId')}
                                 label="USt-IdNr."
+                                error={editorErrors.vatId}
                                 value={draft.taxProfile?.vatId ?? ''}
                                 onChange={(event) => setDraft({ ...draft, taxProfile: { ...draft.taxProfile, type: draft.taxProfile?.type ?? 'business', vatId: event.target.value.toUpperCase(), vatIdValidation: undefined, vatIdValidationAt: undefined } })}
                                 placeholder="DE123456789"
@@ -823,6 +850,18 @@ export const ClientsView: React.FC = () => {
                                 hint={draft.taxProfile?.vatIdValidation ? `Status: ${draft.taxProfile.vatIdValidation}` : undefined}
                                 fullWidth
                             />
+                            <div className="col-span-3">
+                                <Input
+                                    id="clientsview-leitweg-id"
+                                    label="Leitweg-ID (Käuferreferenz)"
+                                    value={draft.taxProfile?.buyerReference ?? ''}
+                                    onChange={(event) => setDraft({ ...draft, taxProfile: { ...draft.taxProfile, type: draft.taxProfile?.type ?? 'business', buyerReference: event.target.value.trim() ? event.target.value : undefined } })}
+                                    placeholder="z. B. 04011000-12345-67"
+                                    className="font-mono"
+                                    hint="Behörden und andere öffentliche Auftraggeber verlangen sie auf jeder E-Rechnung (XRechnung). Neue Rechnungen für diesen Kunden übernehmen sie."
+                                    fullWidth
+                                />
+                            </div>
                         </div>
                     </Card>
                 </div>
@@ -1233,14 +1272,18 @@ export const ClientsView: React.FC = () => {
                 description={
                     searchTerm.trim()
                         ? `Die Suche "${searchTerm.trim()}" schließt alle ${visibleClients.length} vorhandenen Kunden aus.`
-                        : 'Kunden sind die Empfänger deiner Rechnungen und Angebote. Lege den ersten Kunden über „Neuer Kunde“ oben rechts an, um Dokumente zu erstellen.'
+                        : 'Kunden sind die Empfänger deiner Rechnungen und Angebote.'
                 }
                 action={
                     searchTerm.trim() ? (
                         <Button variant="secondary" size="sm" onClick={() => setSearchTerm('')}>
                             Suche zurücksetzen
                         </Button>
-                    ) : undefined
+                    ) : (
+                        <Button size="sm" onClick={() => openEditor()}>
+                            <Plus size={16} aria-hidden="true" /> Ersten Kunden anlegen
+                        </Button>
+                    )
                 }
             />
         </Card>
@@ -1263,7 +1306,7 @@ export const ClientsView: React.FC = () => {
                                 <Button variant="secondary" onClick={() => setIsImportOpen(true)}>
                                     <FileUp size={16} aria-hidden="true" /> Importieren (CSV)
                                 </Button>
-                                <Button onClick={() => openEditor()}>
+                                <Button onClick={() => openEditor()} disabled={!canMutate()} title={canMutate() ? undefined : READ_ONLY_HINT}>
                                     <Plus size={16} aria-hidden="true" /> Neuer Kunde
                                 </Button>
                             </>
@@ -1274,7 +1317,7 @@ export const ClientsView: React.FC = () => {
                                     <Input
                                         type="search"
                                         aria-label="Kunden durchsuchen"
-                                        placeholder="Kunden suchen"
+                                        placeholder="Name, Ort, PLZ oder USt-IdNr."
                                         value={searchTerm}
                                         onChange={(e) => setSearchTerm(e.target.value)}
                                         prefix={<Search size={14} aria-hidden="true" />}
@@ -1310,7 +1353,7 @@ export const ClientsView: React.FC = () => {
                                     key={client.id}
                                     data-leaving={leavingIds.has(client.id) || undefined}
                                     type="button"
-                                    onClick={() => setSelectedClientId(client.id)}
+                                    onClick={() => openClient(client.id)}
                                     className="group flex flex-col rounded-card border border-border bg-surface p-3.5 text-left transition-colors hover:bg-surface-muted focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring motion-reduce:transition-none"
                                 >
                                     <div className="flex items-start justify-between gap-3">
@@ -1351,7 +1394,7 @@ export const ClientsView: React.FC = () => {
                                     const country = (client.taxProfile?.countryCode || billing?.country || '').trim().toUpperCase();
                                     const openBalance = openBalanceByClient.get(client.id) ?? 0;
                                     return (
-                                        <TableRow key={client.id} data-leaving={leavingIds.has(client.id) || undefined} interactive aria-label={`${client.company} öffnen`} onClick={() => setSelectedClientId(client.id)}>
+                                        <TableRow key={client.id} data-leaving={leavingIds.has(client.id) || undefined} interactive aria-label={`${client.company} öffnen`} onClick={() => openClient(client.id)}>
                                             <TableCell>
                                                 <span className="flex items-center gap-2">
                                                     <span className="truncate font-medium">{client.company}</span>

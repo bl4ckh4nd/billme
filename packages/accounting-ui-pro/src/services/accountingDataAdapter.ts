@@ -1,7 +1,7 @@
 import type { Account, AccountingActorRole, BookingAction, BookingDraft, LinkedInvoiceSummary, OpenRouterVlmConfig, Transaction, TransactionDocumentAnalysis, UserRole } from '../types';
 import type { BalanceSheetPreview, EurCashItem, EurCashClassification, GuvReport, ReportDrilldownEntry, ReportDrilldownSelection, ReportExportRequest, ReportExportResult, ReportFilterState, SusaReport } from '../domain/reportTypes';
 import type { ReportMappingHealth, ReportMappingPosition, ReportMappingOverrideInput } from '../domain/reportMapping';
-import type { AssetDepreciationScheduleEntry, AssetItem, AssetUpsertInput } from '../domain/assetTypes';
+import type { AssetDepreciationScheduleEntry, AssetItem, AssetRegister, AssetUpsertInput } from '../domain/assetTypes';
 import type { AccountingPostingPreview, IncomingInvoiceDocumentEntity, IncomingInvoiceEntity, OpenItemEntity, OpenItemPaymentEntity, OpenItemPaymentInput, VendorEntity } from '@billme/accounting-shared';
 import type { ProBankTransaction } from '@billme/accounting-shared';
 import type { AccountingCommandInput, AccountingSourcePostResult, AccountingSourceRun, EurAnnexFact, EurAnnexFactInput, EurCashFact, EurCashFactInput, TaxPreparationArtifact, TaxPreparationInput } from '../sourceRuns';
@@ -46,6 +46,16 @@ type MaybePromise<T> = T | Promise<T>;
 export type AccountingPeriodStatus = 'open' | 'soft_locked' | 'closed';
 export interface AccountingPeriodRow { period: string; status: AccountingPeriodStatus; fiscalYear?: number; entryCount: number; updatedAt?: string }
 
+export interface BankTransactionDocument {
+  id: string;
+  bankTransactionId: string;
+  originalFilename: string;
+  mimeType: 'application/pdf' | 'image/jpeg' | 'image/png' | 'image/webp';
+  byteLength: number;
+  sha256: string;
+  createdAt: string;
+}
+
 export interface ProAccountingDataAdapter {
   hydrate?: (seed: MockStoreSeed) => void;
   listTransactions?: () => Transaction[];
@@ -56,6 +66,7 @@ export interface ProAccountingDataAdapter {
   getOpenRouterVlmConfig?: () => Promise<OpenRouterVlmConfig>;
   analyzeTransactionDocument?: (input: { transaction: { id: string; date: string; amount: number; currency: string; type: 'income' | 'expense'; counterparty: string; purpose: string; linkedInvoiceId?: string; suggestedAccountNumber?: string; suggestionReason?: string }; document: { mimeType: 'application/pdf' | 'image/jpeg' | 'image/png' | 'image/webp'; data: string; fileName?: string }; model?: string }) => Promise<TransactionDocumentAnalysis>;
   getJournalEntryById?: (id: string) => MaybePromise<JournalEntryEntity | null>;
+  reverseJournalEntry?: (input: { entryId: string; reason: string; postingDate?: string; softLockOverride?: boolean; overrideReason?: string }) => Promise<unknown>;
   saveDraft?: (draft: BookingDraft, actorName?: string) => MaybePromise<BookingDraft>;
   dispatchBookingAction?: (
     transactionId: string,
@@ -111,6 +122,7 @@ export interface ProAccountingDataAdapter {
   listAssets?: () => Promise<AssetItem[]>;
   upsertAsset?: (asset: AssetUpsertInput, reason: string) => Promise<AssetItem>;
   getDepreciationSchedule?: (assetId: string) => Promise<AssetDepreciationScheduleEntry[]>;
+  getAssetRegister?: (year: number) => Promise<AssetRegister>;
   runDepreciation?: (args: {
     assetId: string;
     year: number;
@@ -124,9 +136,13 @@ export interface ProAccountingDataAdapter {
     proceeds: number;
     taxRate: 0 | 7 | 19;
     proceedsAccountNumber?: string;
+    /** A sale to this customer: a draft outgoing invoice „Verkauf Anlage …“ books the proceeds, the disposal only the book value. */
+    saleCustomerId?: string;
     reason: string;
     actorRole: AccountingActorRole;
-  }) => Promise<{ asset: AssetItem; residualBookValue: number; gainLoss: number; journalEntryId?: string }>;
+  }) => Promise<{ asset: AssetItem; residualBookValue: number; gainLoss: number; journalEntryId?: string; saleInvoiceNumber?: string }>;
+  /** Customers a fixed asset can be sold to. */
+  listCustomers?: () => Promise<Array<{ id: string; name: string }>>;
   exportDatevBuchungsstapel?: (args: {
     from: string;
     to: string;
@@ -165,6 +181,10 @@ export interface ProAccountingDataAdapter {
   listIncomingInvoices?: () => Promise<IncomingInvoiceEntity[]>;
   upsertIncomingInvoice?: (invoice: IncomingInvoiceEntity, reason: string) => Promise<IncomingInvoiceEntity>;
   listIncomingInvoiceDocuments?: (invoiceId?: string) => Promise<IncomingInvoiceDocumentEntity[]>;
+  /** Belege archived on a bank line (the booking draft's evidence). */
+  listBankTransactionDocuments?: (transactionId: string) => Promise<BankTransactionDocument[]>;
+  uploadBankTransactionDocument?: (input: { transactionId: string; originalFilename: string; mimeType: BankTransactionDocument['mimeType']; data: string; reason: string }) => Promise<BankTransactionDocument>;
+  downloadBankTransactionDocument?: (documentId: string) => Promise<{ document: BankTransactionDocument; data: string }>;
   uploadIncomingInvoiceDocument?: (input: { invoiceId: string; originalFilename: string; mimeType: 'application/pdf' | 'image/jpeg' | 'image/png' | 'image/webp'; data: string; reason: string }) => Promise<IncomingInvoiceDocumentEntity>;
   downloadIncomingInvoiceDocument?: (documentId: string) => Promise<{ document: IncomingInvoiceDocumentEntity; data: string }>;
   reviewIncomingInvoiceDocument?: (input: { documentId: string; reviewStatus: 'accepted' | 'rejected'; reason: string }) => Promise<IncomingInvoiceDocumentEntity>;

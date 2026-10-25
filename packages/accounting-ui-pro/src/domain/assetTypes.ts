@@ -20,6 +20,10 @@ export interface AssetItem {
   supplier?: string;
   invoiceRef?: string;
   assetAccountNumber: string;
+  /** Zugang über eine gebuchte Eingangsrechnung: Vorsteuer und Kreditor-OP stammen aus ihr, die Anlage bucht nichts nach. */
+  sourceIncomingInvoiceId?: string;
+  /** Zugang ohne Rechnung: das Gegenkonto der Aktivierung (z. B. Bank). */
+  acquisitionOffsetAccountNumber?: string;
   disposalDate?: string;
   disposalProceeds?: number;
 }
@@ -28,6 +32,23 @@ export type AssetUpsertInput = Omit<
   AssetItem,
   'id' | 'residualValue' | 'annualDepreciation' | 'nextDepreciation' | 'disposalDate' | 'disposalProceeds'
 > & { id?: string };
+
+export interface AssetRegisterAmounts {
+  opening: number;
+  additions: number;
+  disposals: number;
+  depreciation: number;
+  closing: number;
+}
+
+/** Anlagenspiegel of a Wirtschaftsjahr (book values from the server). */
+export interface AssetRegister {
+  year: number;
+  from: string;
+  to: string;
+  rows: Array<AssetRegisterAmounts & { assetId: string; assetNumber: string; name: string; accountNumber: string }>;
+  totals: AssetRegisterAmounts;
+}
 
 export interface AssetDepreciationScheduleEntry {
   id: string;

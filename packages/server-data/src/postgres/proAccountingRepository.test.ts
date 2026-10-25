@@ -137,7 +137,8 @@ test('real Postgres unposted incoming invoices omit empty accounting snapshots f
       netAmount: 100,
       taxAmount: 19,
       grossAmount: 119,
-      status: 'open',
+      // A draft stays unposted; an open invoice with an unknown account is refused since the walkthrough fix (B16).
+      status: 'draft',
       taxRate: 19,
       lines: [{
         id: `${invoiceId}-line`,

@@ -56,6 +56,7 @@ export type Draft = {
   id: string;
   transactionId: string;
   workflowStatus: string;
+  exceptionCase?: { state: string; owner?: string; snoozedUntil?: string; resolutionNote?: string };
   postingDate?: string;
   documentDate?: string;
   bookingText: string;
@@ -134,7 +135,7 @@ export const importCsv = async (h: ProHarness, accountId: string, rows: CsvRow[]
   return { preview: preview.body, commit: commit.body as { batchId: string; imported: number; skipped: number; errors: unknown[]; fileSha256: string } };
 };
 
-export type BankTx = { id: string; date: string; amount: number; type: 'income' | 'expense'; counterparty: string; purpose: string; status: 'pending' | 'booked'; accountId: string; linkedInvoiceId?: string; suggestedAccountNumber?: string; suggestionLayer?: string; suggestionReason?: string };
+export type BankTx = { receiptDocumentCount?: number; id: string; date: string; amount: number; type: 'income' | 'expense'; counterparty: string; purpose: string; status: 'pending' | 'booked'; accountId: string; linkedInvoiceId?: string; suggestedAccountNumber?: string; suggestionLayer?: string; suggestionReason?: string };
 /** The Pro bank workbench list (ids differ from the legacy `/transactions` list). Never index it, it is sorted by date. */
 export const bankTransactions = (h: ProHarness): Promise<BankTx[]> => get(h, '/accounting/transactions');
 export const bankTx = async (h: ProHarness, counterparty: string): Promise<BankTx> => {

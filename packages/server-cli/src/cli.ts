@@ -1,5 +1,5 @@
-import { readFile, writeFile } from 'node:fs/promises';
-import { basename } from 'node:path';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { basename, join } from 'node:path';
 import { ZodError } from 'zod';
 import {
   bootstrapRequestSchema,
@@ -464,6 +464,7 @@ const runAction = async (action: CliAction, args: ParsedArgs, io: CliIo, transpo
 
   const outPath = getStringFlag(args, 'out');
   const downloads: Promise<void>[] = [];
+  const blobs: Array<{ blob: Blob; fileName: string }> = [];
   // In the app `pdf:export` is done by the Electron shell; here the API renders the file and the CLI saves it.
   const fallback = async (key: string, routeArgs: unknown): Promise<any> => {
     let pdfPath: string;
@@ -491,9 +492,7 @@ const runAction = async (action: CliAction, args: ParsedArgs, io: CliIo, transpo
       getToken: () => context.token,
       fetch: transport.fetch,
       fallback,
-      downloadBlob: (blob, fileName) => {
-        downloads.push(blob.arrayBuffer().then((bytes) => writeFile(outPath ?? fileName, Buffer.from(bytes))));
-      },
+      downloadBlob: (blob, fileName) => { blobs.push({ blob, fileName }); },
     })
     : createLiteHttpBillmeApi({
       baseUrl: context.baseUrl,
@@ -505,7 +504,18 @@ const runAction = async (action: CliAction, args: ParsedArgs, io: CliIo, transpo
   const result = (COMPOSITE_CREATE_KEYS as readonly string[]).includes(action.key)
     ? await createDocument(api, action, input as Parameters<typeof createDocument>[2])
     : await api[action.group]![action.method]!(input);
+  // One download goes to --out itself; several (the Prüferpaket: files plus manifest) go into --out as a folder.
+  const folder = outPath && blobs.length > 1 ? outPath : undefined;
+  if (folder) await mkdir(folder, { recursive: true });
+  for (const { blob, fileName } of blobs) {
+    const target = folder ? join(folder, basename(fileName)) : outPath ?? fileName;
+    downloads.push(blob.arrayBuffer().then((bytes) => writeFile(target, Buffer.from(bytes))));
+  }
   await Promise.all(downloads);
+  if (folder) {
+    writeJson(io, { ok: true, path: folder, files: blobs.map(({ fileName }) => basename(fileName)) });
+    return;
+  }
 
   if (outPath && downloads.length === 0) {
     await writeFile(outPath, typeof result === 'string' ? result : `${JSON.stringify(result, null, 2)}\n`, 'utf8');

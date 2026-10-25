@@ -28,7 +28,7 @@ const SOURCE_TEXT: Record<ChainStartAction, { question: string; empty: string }>
   },
   advance_invoice: {
     question: 'Zu welcher Auftragsbestätigung?',
-    empty: 'Eine Abschlagsrechnung gehört zu einer Auftragsbestätigung. Lege zuerst eine aus einem angenommenen Angebot an.',
+    empty: 'Eine Abschlagsrechnung rechnet einen Teil einer Auftragsbestätigung ab, und es gibt noch keine. So geht es: Angebot unter Angebote als angenommen markieren, daraus über „Neu“ › „Auftragsbestätigung“ die Bestätigung anlegen, danach hier die Abschlagsrechnung.',
   },
   partial_invoice: {
     question: 'Zu welcher Auftragsbestätigung?',

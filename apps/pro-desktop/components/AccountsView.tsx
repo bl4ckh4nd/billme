@@ -1,5 +1,6 @@
 import { useState, type ReactElement } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
+import { isMoneyLedgerAccount } from '@billme/accounting-shared';
 import { Button, Card, CardHeader, Select, formatEmptyValue } from '@billme/ui';
 import { useSettingsQuery } from '@billme/desktop-renderer/hooks/useSettings';
 import { AccountsView as SharedAccountsView } from '@billme/desktop-renderer/components/AccountsView';
@@ -21,6 +22,8 @@ export function AccountsView(): ReactElement {
     chart: activeChart,
     limit: 3000,
   });
+  // A bank account books on a money account (Kasse/Bank); the server refuses any other.
+  const moneyAccounts = ledgerAccounts.filter((row) => isMoneyLedgerAccount(activeChart, row.accountNumber));
   const { data: ledgerStats, isPending: ledgerStatsLoading, isError: ledgerStatsError } = useProLedgerStatsQuery();
   const importSkr = useImportSkrMutation();
   const [importNotice, setImportNotice] = useState<string | null>(null);
@@ -60,6 +63,7 @@ export function AccountsView(): ReactElement {
       useAccountsQuery={useAccountsQuery}
       useDeleteAccountMutation={useDeleteAccountMutation}
       BankAccountModal={BankAccountModal}
+      canEditAccounts
       renderImportAccountMeta={(account) => (
         <span className="text-control text-muted">
           Standard-SKR <span className="font-mono text-foreground">{formatEmptyValue(account.defaultSkrAccountNumber)}</span>
@@ -80,7 +84,12 @@ export function AccountsView(): ReactElement {
                 {ledgerAccountsError ? 'SKR-Konten nicht ladbar' : 'SKR fehlt'}
               </option>
             ) : null}
-            {ledgerAccounts.map((row) => (
+            {ledgerAccounts.length > 0 && account.defaultSkrAccountNumber && !moneyAccounts.some((row) => row.accountNumber === account.defaultSkrAccountNumber) ? (
+              <option value={account.defaultSkrAccountNumber} disabled>
+                {account.defaultSkrAccountNumber} (kein Bankkonto)
+              </option>
+            ) : null}
+            {moneyAccounts.map((row) => (
               <option key={`${row.chart}:${row.accountNumber}`} value={row.accountNumber}>
                 {row.accountNumber}
               </option>

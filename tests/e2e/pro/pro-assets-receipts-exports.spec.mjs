@@ -11,7 +11,8 @@ import { appUrl, importPendingProTransaction, invokeDesktopIpc, launchDesktopApp
  * How this can fail:
  * - assets: an asset saved without reason, the activation not booked, a schedule
  *   that does not follow cost and useful life, the AfA posted without a journal
- *   entry, an edit lost
+ *   entry, an edit lost, an activation without invoice booked against 1600 without open item, an asset
+ *   bought on invoice activated with a second acquisition entry instead of the invoice's posting
  * - incoming invoices: a draft posted before it is released, an original that is
  *   not archived or not marked as reviewed, a posting without journal entry, the
  *   invoice missing from Belege or the Belege link not opening it
@@ -60,6 +61,13 @@ test('an asset is created active, shows its schedule, posts its AfA into the jou
   await form.getByLabel('Anschaffungskosten netto').fill('3600');
   await form.getByLabel('Nutzungsdauer in Jahren').fill('3');
   await form.getByLabel('Status').selectOption('aktiv');
+  // Bought from the bank account without an invoice: the counter account is chosen, not a silent 1600 without open item.
+  await form.getByLabel('Zugang gebucht über').selectOption('account');
+  await form.getByLabel('Audit-Grund').fill('Server angeschafft');
+  await form.getByRole('button', { name: 'Anlage speichern' }).click();
+  await expect(page.getByTestId('asset-mutation-feedback')).toHaveText(/Gegenkonto des Zugangs/);
+  await form.getByLabel('Gegenkonto').fill('1200');
+  await form.getByLabel('Audit-Grund').fill('');
   await form.getByRole('button', { name: 'Anlage speichern' }).click();
   await expect(form.getByLabel('Audit-Grund'), 'no save without a reason').toBeVisible();
   await form.getByLabel('Audit-Grund').fill('Server angeschafft');
@@ -70,6 +78,8 @@ test('an asset is created active, shows its schedule, posts its AfA into the jou
   const asset = (await invokeDesktopIpc(page, 'pro:listAssets')).find((candidate) => candidate.assetNumber === 'ANL-E2E-1');
   expect(asset, 'the asset is stored').toBeTruthy();
   expect(asset.status).toBe('aktiv');
+  const activation = (await invokeDesktopIpc(page, 'pro:getJournalEntryById', { entryId: asset.activationJournalEntryId }));
+  expect(activation.lines.map((line) => [line.accountNumber, line.debitAmount, line.creditAmount])).toEqual([['0420', 3600, 0], ['1200', 0, 3600]]);
   const schedule = await invokeDesktopIpc(page, 'pro:getDepreciationSchedule', { assetId: asset.id });
   expect(schedule.length, 'three years of linear AfA (plus the partial years)').toBeGreaterThanOrEqual(3);
 
@@ -92,6 +102,52 @@ test('an asset is created active, shows its schedule, posts its AfA into the jou
   await edit.getByLabel('Audit-Grund').fill('Umzug');
   await edit.getByRole('button', { name: 'Anlage speichern' }).click();
   await expect.poll(async () => (await invokeDesktopIpc(page, 'pro:listAssets')).find((candidate) => candidate.id === asset.id).location).toBe('Hamburg');
+});
+
+test('an asset bought on invoice is activated from the posted incoming invoice: Vorsteuer and open item come from the invoice, nothing is booked twice', async () => {
+  const { page, baseUrl } = desktop;
+  const now = new Date().toISOString();
+  const stamp = Date.now().toString(36);
+  const vendorId = `vendor-asset-${stamp}`;
+  const invoiceId = `incoming-asset-${stamp}`;
+  await invokeDesktopIpc(page, 'pro:upsertVendor', { vendor: { id: vendorId, tenantId: 'default', name: `Maschinenbau ${stamp}`, createdAt: now, updatedAt: now }, reason: 'E2E Lieferant' });
+  await invokeDesktopIpc(page, 'pro:upsertIncomingInvoice', {
+    invoice: {
+      id: invoiceId, tenantId: 'default', vendorId, number: `ER-CNC-${stamp}`, invoiceDate: '2026-03-02', dueDate: '2026-04-01', netAmount: 6000, taxAmount: 1140, grossAmount: 7140,
+      status: 'open', taxRate: 19, accountingStatus: 'unposted', createdAt: now, updatedAt: now,
+      lines: [{ id: `${invoiceId}-1`, incomingInvoiceId: invoiceId, position: 0, description: 'CNC-Fräse', quantity: 1, unitPrice: 6000, netAmount: 6000, taxRate: 19, taxAmount: 1140, grossAmount: 7140, assetAccountNumber: '0210' }],
+    },
+    reason: 'E2E Eingangsrechnung',
+  });
+  await invokeDesktopIpc(page, 'pro:postIncomingInvoiceAccounting', { invoiceId, reason: 'E2E gebucht' });
+  const entriesBefore = (await invokeDesktopIpc(page, 'pro:listJournalEntries', {})).length;
+
+  await page.goto(appUrl(baseUrl, '/accounting?view=assets'));
+  await page.getByRole('button', { name: 'Neue Anlage' }).first().click();
+  const form = page.locator('form').filter({ has: page.getByRole('heading', { name: 'Neue Anlage' }) });
+  await expect(form.getByLabel('Zugang gebucht über')).toHaveValue('invoice');
+  await form.getByLabel('Eingangsrechnung').selectOption({ label: `ER-CNC-${stamp} vom 02.03.2026` });
+  await expect(form.getByLabel('Anlagenkonto')).toHaveValue('0210');
+  await expect(form.getByLabel('Anschaffungskosten netto')).toHaveValue('6000');
+  await form.getByLabel('Anlagennummer').fill(`ANL-CNC-${stamp}`);
+  await form.getByLabel('Bezeichnung').fill('CNC-Fräse');
+  await form.getByLabel('Anlagenklasse').fill('Maschinen');
+  await form.getByLabel('Kostenstelle').fill('PROD-01');
+  await form.getByLabel('Standort').fill('Halle 1');
+  await form.getByLabel('Nutzungsdauer in Jahren').fill('10');
+  await form.getByLabel('Status').selectOption('aktiv');
+  await form.getByLabel('Audit-Grund').fill('Maschine laut Rechnung aktiviert');
+  await form.getByRole('button', { name: 'Anlage speichern' }).click();
+  await expect(page.getByTestId('asset-mutation-feedback')).toHaveText(/Anlage gespeichert/);
+  await page.screenshot({ path: test.info().outputPath('asset-from-invoice.png'), fullPage: true });
+
+  const asset = (await invokeDesktopIpc(page, 'pro:listAssets')).find((candidate) => candidate.assetNumber === `ANL-CNC-${stamp}`);
+  expect(asset.sourceIncomingInvoiceId).toBe(invoiceId);
+  const entries = await invokeDesktopIpc(page, 'pro:listJournalEntries', {});
+  expect(entries.length, 'no second acquisition entry').toBe(entriesBefore);
+  const source = entries.find((entry) => entry.id === asset.activationJournalEntryId);
+  expect(source.lines.map((line) => [line.accountNumber, line.debitAmount, line.creditAmount])).toEqual([['0210', 6000, 0], ['1576', 1140, 0], ['1600', 0, 7140]]);
+  expect((await invokeDesktopIpc(page, 'pro:listOpenItems')).some((item) => item.sourceId === invoiceId && item.status === 'open'), 'the vendor open item exists').toBe(true);
 });
 
 test('an incoming invoice is captured, its original archived and reviewed, released, posted and opened from Belege', async () => {

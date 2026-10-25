@@ -5,6 +5,7 @@ import type {
   AssetDepreciationScheduleEntry,
   AssetDisposalInput,
   AssetDisposalResult,
+  AssetRegister,
   AssetItem,
   AssetMutationOptions,
   AssetUpsertInput,
@@ -219,6 +220,7 @@ export interface ProAccountingAssetService {
   getDepreciationSchedule(scope: TenantScope, assetId: string): Promise<AssetDepreciationScheduleEntry[]>;
   runDepreciation(scope: TenantScope, input: AssetDepreciationInput): Promise<AssetDepreciationResult>;
   disposeAsset(scope: TenantScope, input: AssetDisposalInput): Promise<AssetDisposalResult>;
+  getAssetRegister(scope: TenantScope, year: number): Promise<AssetRegister>;
 }
 
 export interface BoundProAccountingAssetService {
@@ -227,6 +229,7 @@ export interface BoundProAccountingAssetService {
   getDepreciationSchedule(assetId: string): Promise<AssetDepreciationScheduleEntry[]>;
   runDepreciation(input: AssetDepreciationInput): Promise<AssetDepreciationResult>;
   disposeAsset(input: AssetDisposalInput): Promise<AssetDisposalResult>;
+  getAssetRegister(year: number): Promise<AssetRegister>;
 }
 
 export interface ProWorkflowService {
@@ -360,6 +363,7 @@ export const createProAccountingAssetService = (
   getDepreciationSchedule: (scope, assetId) => repository.getDepreciationSchedule(scope, assetId),
   runDepreciation: (scope, input) => repository.runDepreciation(scope, input),
   disposeAsset: (scope, input) => repository.disposeAsset(scope, input),
+  getAssetRegister: (scope, year) => repository.getAssetRegister(scope, year),
 });
 
 export const bindProAccountingScope = (
@@ -420,6 +424,7 @@ export const bindProAccountingAssetScope = (
   getDepreciationSchedule: (assetId) => service.getDepreciationSchedule(scope, assetId),
   runDepreciation: (input) => service.runDepreciation(scope, input),
   disposeAsset: (input) => service.disposeAsset(scope, input),
+  getAssetRegister: (year) => service.getAssetRegister(scope, year),
 });
 
 export const createProWorkflowService = (repository: ProWorkflowRepository): ProWorkflowService => ({

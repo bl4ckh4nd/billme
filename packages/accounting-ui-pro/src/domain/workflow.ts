@@ -16,7 +16,7 @@ export function getAllowedActions(
   const blocking = hasBlockingIssues(validationIssues);
   const actions: BookingAction[] = permissionCtx.canMutate ? ['save_draft'] : [];
 
-  if (permissionCtx.canMutate && (status === 'incomplete' || status === 'suggested' || status === 'ready_for_review')) {
+  if (permissionCtx.canMutate && (status === 'incomplete' || status === 'suggested' || status === 'ready_for_review' || status === 'corrected')) {
     actions.push('submit_for_review');
   }
 
@@ -29,7 +29,12 @@ export function getAllowedActions(
   }
 
   if (status === 'posted' && permissionCtx.canReverse) {
-    actions.push('reverse', 'create_correction');
+    actions.push('reverse');
+  }
+
+  // After a Storno the same bank line is kontiert again; the server allows reversed -> corrected only.
+  if (status === 'reversed' && permissionCtx.canReverse) {
+    actions.push('create_correction');
   }
 
   if (permissionCtx.canMutate && status !== 'posted' && status !== 'reversed') {
@@ -62,7 +67,7 @@ export function canTransition(
     case 'request_receipt':
       return status !== 'posted' && status !== 'reversed';
     case 'submit_for_review':
-      return ['incomplete', 'suggested', 'ready_for_review'].includes(status) && !blocking;
+      return ['incomplete', 'suggested', 'ready_for_review', 'corrected'].includes(status) && !blocking;
     case 'approve':
       return status === 'pending_approval' && permissionCtx.canApprove;
     case 'reject':
@@ -72,7 +77,7 @@ export function canTransition(
     case 'reverse':
       return status === 'posted' && permissionCtx.canReverse;
     case 'create_correction':
-      return status === 'posted' && permissionCtx.canReverse;
+      return status === 'reversed' && permissionCtx.canReverse;
     default:
       return false;
   }

@@ -14,7 +14,7 @@ export const inboxQueueLabels: Record<InboxQueueKey, string> = {
   all: 'Alle',
   incomplete: 'Unvollständig',
   review: 'Zur Prüfung',
-  approval: 'Freigabe',
+  approval: 'Freigegeben',
   posted: 'Gebucht',
   errors: 'Fehler',
   missing_receipt: 'Ohne Beleg',
@@ -28,7 +28,7 @@ export const bookingActionLabels: Record<BookingAction, string> = {
   reject: 'Ablehnen',
   post: 'Buchen',
   reverse: 'Stornieren',
-  create_correction: 'Korrekturbuchung',
+  create_correction: 'Neu kontieren',
   request_receipt: 'Beleg anfordern',
 };
 
@@ -38,10 +38,11 @@ export function txMatchesQueue(tx: Transaction, queue: InboxQueueKey): boolean {
       return true;
     case 'incomplete':
       return ['incomplete', 'suggested', 'period_locked'].includes(tx.workflowStatus);
+    // "Zur Prüfung geben" hands the draft to the reviewer (server status pending_approval); freigegeben waits for "Buchen".
     case 'review':
-      return tx.workflowStatus === 'ready_for_review';
+      return tx.workflowStatus === 'ready_for_review' || tx.workflowStatus === 'pending_approval';
     case 'approval':
-      return tx.workflowStatus === 'pending_approval' || tx.workflowStatus === 'approved';
+      return tx.workflowStatus === 'approved';
     case 'posted':
       return ['posted', 'reversed', 'corrected'].includes(tx.workflowStatus);
     case 'errors':
@@ -71,7 +72,7 @@ export function getStatusPresentation(status: BookingWorkflowStatus): {
     suggested: { label: 'Vorschlag', className: 'bg-info-bg text-info-text' },
     incomplete: { label: 'Unvollständig', className: 'bg-warning-bg text-warning-text' },
     ready_for_review: { label: 'Zur Prüfung', className: 'bg-info-bg text-info-text' },
-    pending_approval: { label: 'Freigabe offen', className: 'bg-warning-bg text-warning-text' },
+    pending_approval: { label: 'Zur Prüfung', className: 'bg-warning-bg text-warning-text' },
     approved: { label: 'Freigegeben', className: 'bg-success-bg text-success-text' },
     posted: { label: 'Gebucht', className: 'bg-success-bg text-success-text' },
     reversed: { label: 'Storniert', className: 'bg-error-bg text-error-text' },

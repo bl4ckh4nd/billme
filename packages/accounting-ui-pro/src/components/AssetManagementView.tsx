@@ -1,12 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent } from 'react';
 import { Search } from 'lucide-react';
 import {
-  Badge, Button, Card, CardHeader, Checkbox, EmptyState, Field, Input, Metric, Select, Table, TableBody, TableCell, TableHead, TableHeader, TableRow, Textarea,
+  Badge, Button, Card, CardHeader, Checkbox, EmptyState, Field, Input, Metric, Modal, Select, Table, TableBody, TableCell, TableHead, TableHeader, TableRow, Textarea,
   EMPTY_VALUE, cn, formatEmptyValue, type BadgeTone,
 } from '@billme/ui';
-import type { AssetDepreciationScheduleEntry, AssetItem, AssetStatus } from '../domain/assetTypes';
+import type { AssetDepreciationScheduleEntry, AssetItem, AssetRegister, AssetStatus } from '../domain/assetTypes';
 import type { ProAccountingDataAdapter } from '../services/accountingDataAdapter';
 import type { AssetUpsertInput } from '../domain/assetTypes';
+import { accountingErrorText, type IncomingInvoiceEntity } from '@billme/accounting-shared';
 import { permissionContextForRole } from '../domain/permissions';
 import { localToday } from '../domain/reportDates';
 import { toAccountingActorRole, type UserRole } from '../types';
@@ -139,6 +140,9 @@ type AssetFormState = {
   supplier: string;
   invoiceRef: string;
   assetAccountNumber: string;
+  acquisitionSource: 'invoice' | 'account';
+  sourceIncomingInvoiceId: string;
+  acquisitionOffsetAccountNumber: string;
   reason: string;
 };
 
@@ -163,19 +167,36 @@ function formFromAsset(asset?: AssetItem, activate = false): AssetFormState {
     supplier: asset?.supplier ?? '',
     invoiceRef: asset?.invoiceRef ?? '',
     assetAccountNumber: asset?.assetAccountNumber ?? '',
+    acquisitionSource: asset?.acquisitionOffsetAccountNumber && !asset.sourceIncomingInvoiceId ? 'account' : 'invoice',
+    sourceIncomingInvoiceId: asset?.sourceIncomingInvoiceId ?? '',
+    acquisitionOffsetAccountNumber: asset?.acquisitionOffsetAccountNumber ?? '',
     reason: '',
   };
 }
 
+/** Posted incoming invoices with a position on an Anlagenkonto: the clean way an asset comes in. */
+export type AssetInvoiceOption = { id: string; label: string; date: string; supplier?: string; number: string; lines: Array<{ assetAccountNumber: string; netAmount: number }> };
+
+const assetInvoiceOptions = (invoices: IncomingInvoiceEntity[]): AssetInvoiceOption[] => invoices
+  .filter((invoice) => invoice.accountingStatus === 'posted' && invoice.lines.some((line) => line.assetAccountNumber))
+  .map((invoice) => ({
+    id: invoice.id,
+    number: invoice.number,
+    date: invoice.invoiceDate,
+    label: `${invoice.number} vom ${invoice.invoiceDate.split('-').reverse().join('.')}`,
+    lines: invoice.lines.filter((line) => line.assetAccountNumber).map((line) => ({ assetAccountNumber: line.assetAccountNumber!, netAmount: line.netAmount })),
+  }));
+
 interface AssetEditorProps {
   form: AssetFormState;
+  invoices: AssetInvoiceOption[];
   busy: boolean;
   onChange: <K extends keyof AssetFormState>(key: K, value: AssetFormState[K]) => void;
   onSubmit: () => void;
   onCancel: () => void;
 }
 
-function AssetEditor({ form, busy, onChange, onSubmit, onCancel }: AssetEditorProps) {
+function AssetEditor({ form, invoices, busy, onChange, onSubmit, onCancel }: AssetEditorProps) {
   const accountingOwned = Boolean(form.id && form.status !== 'entwurf');
   const input = (key: keyof AssetFormState) => (event: ChangeEvent<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>) => {
     const value = event.currentTarget.type === 'checkbox'
@@ -198,13 +219,13 @@ function AssetEditor({ form, busy, onChange, onSubmit, onCancel }: AssetEditorPr
               ['assetNumber', 'Anlagennummer', 'z. B. ANL-2026-010'],
               ['name', 'Bezeichnung', 'z. B. Server'],
               ['assetClass', 'Anlagenklasse', 'z. B. IT-Hardware'],
-              ['costCenter', 'Kostenstelle', 'z. B. ADM-01'],
-              ['location', 'Standort', 'z. B. Berlin HQ'],
+              ['costCenter', 'Kostenstelle', 'Optional, z. B. ADM-01'],
+              ['location', 'Standort', 'Optional, z. B. Büro Berlin'],
               ['assetAccountNumber', 'Anlagenkonto', 'z. B. 0440'],
               ['supplier', 'Lieferant', 'Optional'],
               ['invoiceRef', 'Rechnungsreferenz', 'Optional'],
             ] as const).map(([key, label, placeholder]) => {
-              const required = ['assetNumber', 'name', 'assetClass', 'costCenter', 'location', 'assetAccountNumber'].includes(key);
+              const required = ['assetNumber', 'name', 'assetClass', 'assetAccountNumber'].includes(key);
               return (
                 <Field key={key} id={`asset-${key}`} label={required ? requiredLabel(label) : label}>
                   <Input fullWidth value={form[key] as string} onChange={input(key)} placeholder={placeholder} required={required} />
@@ -240,6 +261,41 @@ function AssetEditor({ form, busy, onChange, onSubmit, onCancel }: AssetEditorPr
               </Select>
             </Field>
           </div>
+          {!accountingOwned ? (
+            <div className="grid grid-cols-1 gap-3 rounded-control border border-border p-3 md:grid-cols-2" data-testid="asset-acquisition">
+              <Field id="asset-acquisition-source" label="Zugang gebucht über" hint={form.acquisitionSource === 'invoice' ? 'Die Eingangsrechnung bucht Anlagenkonto, Vorsteuer und Verbindlichkeit (offener Posten). Die Anlage übernimmt ihre Buchung und bucht nichts doppelt.' : 'Ohne Rechnung entsteht keine Vorsteuer und kein offener Posten. Für einen Kauf auf Rechnung erfasse zuerst die Eingangsrechnung mit Anlagekonto unter Offene Posten.'}>
+                <Select fullWidth value={form.acquisitionSource} onChange={input('acquisitionSource')}>
+                  <option value="invoice">Gebuchte Eingangsrechnung (Vorsteuer und offener Posten)</option>
+                  <option value="account">Gegenkonto ohne Rechnung (z. B. Bank 1200)</option>
+                </Select>
+              </Field>
+              {form.acquisitionSource === 'invoice' ? (
+                <Field id="asset-source-invoice" label="Eingangsrechnung" hint={invoices.length ? undefined : 'Keine gebuchte Eingangsrechnung mit Anlagekonto vorhanden.'}>
+                  <Select
+                    fullWidth
+                    value={form.sourceIncomingInvoiceId}
+                    onChange={(event) => {
+                      const chosen = invoices.find((invoice) => invoice.id === event.currentTarget.value);
+                      onChange('sourceIncomingInvoiceId', event.currentTarget.value);
+                      const line = chosen?.lines[0];
+                      if (chosen && line) {
+                        onChange('assetAccountNumber', line.assetAccountNumber);
+                        onChange('acquisitionCost', String(line.netAmount));
+                        onChange('activationDate', chosen.date);
+                        onChange('invoiceRef', chosen.number);
+                        onChange('receiptLinked', true);
+                      }
+                    }}
+                  >
+                    <option value="">Rechnung wählen</option>
+                    {invoices.map((invoice) => <option key={invoice.id} value={invoice.id}>{invoice.label}</option>)}
+                  </Select>
+                </Field>
+              ) : (
+                <Input id="asset-offset-account" label="Gegenkonto" fullWidth inputMode="numeric" value={form.acquisitionOffsetAccountNumber} onChange={input('acquisitionOffsetAccountNumber')} placeholder="z. B. 1200" />
+              )}
+            </div>
+          ) : null}
           <Checkbox label="Beleg ist verknüpft" checked={form.receiptLinked} onChange={input('receiptLinked')} />
           <Field id="asset-reason" label={requiredLabel('Audit-Grund')}>
             <Textarea fullWidth value={form.reason} onChange={input('reason')} required minLength={1} rows={2} placeholder="Warum wird die Anlage geändert?" />
@@ -265,14 +321,31 @@ export default function AssetManagementView({ dataAdapter, role = 'admin' }: { d
   const [scheduleError, setScheduleError] = useState<string | null>(null);
   const [feedback, setFeedback] = useState<{ kind: 'success' | 'error'; text: string } | null>(null);
   const [editForm, setEditForm] = useState<AssetFormState | null>(null);
+  const [assetInvoices, setAssetInvoices] = useState<AssetInvoiceOption[]>([]);
+  const editing = Boolean(editForm);
+  useEffect(() => {
+    if (!editing || !dataAdapter?.listIncomingInvoices) return;
+    let cancelled = false;
+    void dataAdapter.listIncomingInvoices().then((invoices) => { if (!cancelled) setAssetInvoices(assetInvoiceOptions(invoices)); }).catch(() => { if (!cancelled) setAssetInvoices([]); });
+    return () => { cancelled = true; };
+  }, [editing, dataAdapter]);
   const [busyAction, setBusyAction] = useState<'save' | 'depreciation' | 'disposal' | null>(null);
+  const [registerOpen, setRegisterOpen] = useState(false);
   const [depreciationYear, setDepreciationYear] = useState(String(new Date().getFullYear()));
-  const [postingDate, setPostingDate] = useState(today());
+  // The yearly AfA is booked at the end of the Wirtschaftsjahr (the server refuses an earlier date).
+  const [postingDate, setPostingDate] = useState(`${new Date().getFullYear()}-12-31`);
   const [depreciationReason, setDepreciationReason] = useState('');
   const [disposalDate, setDisposalDate] = useState(today());
   const [disposalProceeds, setDisposalProceeds] = useState('0');
   const [disposalTaxRate, setDisposalTaxRate] = useState<'0' | '7' | '19'>('19');
   const [proceedsAccountNumber, setProceedsAccountNumber] = useState('');
+  const [saleCustomerId, setSaleCustomerId] = useState('');
+  const [customers, setCustomers] = useState<Array<{ id: string; name: string }>>([]);
+  useEffect(() => {
+    let live = true;
+    dataAdapter?.listCustomers?.().then((rows) => { if (live) setCustomers(rows); }).catch(() => undefined);
+    return () => { live = false; };
+  }, [dataAdapter]);
   const [disposalReason, setDisposalReason] = useState('');
   const [disposalConfirmed, setDisposalConfirmed] = useState(false);
   const mutationInFlightRef = useRef(false);
@@ -415,8 +488,6 @@ export default function AssetManagementView({ dataAdapter, role = 'admin' }: { d
       ['Anlagennummer', editForm.assetNumber],
       ['Bezeichnung', editForm.name],
       ['Anlagenklasse', editForm.assetClass],
-      ['Kostenstelle', editForm.costCenter],
-      ['Standort', editForm.location],
       ['Anlagenkonto', editForm.assetAccountNumber],
       ['Aktivierungsdatum', editForm.activationDate],
       ['Anschaffungskosten netto', editForm.acquisitionCost],
@@ -429,6 +500,15 @@ export default function AssetManagementView({ dataAdapter, role = 'admin' }: { d
     }
     if (!editForm.reason.trim()) {
       setFeedback({ kind: 'error', text: 'Bitte einen Audit-Grund angeben.' });
+      return;
+    }
+    const activating = editForm.status === 'aktiv' && !editForm.id;
+    if (activating && editForm.acquisitionSource === 'invoice' && !editForm.sourceIncomingInvoiceId) {
+      setFeedback({ kind: 'error', text: 'Bitte die Eingangsrechnung wählen, über die die Anlage zugegangen ist, oder „Gegenkonto ohne Rechnung“.' });
+      return;
+    }
+    if (activating && editForm.acquisitionSource === 'account' && !editForm.acquisitionOffsetAccountNumber.trim()) {
+      setFeedback({ kind: 'error', text: 'Bitte das Gegenkonto des Zugangs angeben, z. B. 1200 für eine Barzahlung vom Bankkonto.' });
       return;
     }
     if (!Number.isFinite(acquisitionCost) || acquisitionCost < 0 || (usefulLifeYears !== undefined && (!Number.isInteger(usefulLifeYears) || usefulLifeYears < 1))) {
@@ -454,13 +534,15 @@ export default function AssetManagementView({ dataAdapter, role = 'admin' }: { d
         supplier: editForm.supplier.trim() || undefined,
         invoiceRef: editForm.invoiceRef.trim() || undefined,
         assetAccountNumber: editForm.assetAccountNumber.trim(),
+        ...(editForm.acquisitionSource === 'invoice' && editForm.sourceIncomingInvoiceId ? { sourceIncomingInvoiceId: editForm.sourceIncomingInvoiceId } : {}),
+        ...(editForm.acquisitionSource === 'account' && editForm.acquisitionOffsetAccountNumber.trim() ? { acquisitionOffsetAccountNumber: editForm.acquisitionOffsetAccountNumber.trim() } : {}),
       }, editForm.reason.trim());
       await reloadCanonical(saved.id);
       setSelectedId(saved.id);
       setEditForm(null);
       setFeedback({ kind: 'success', text: saved.status === 'aktiv' ? 'Anlage gespeichert und aktiviert.' : 'Anlage gespeichert.' });
     } catch (error) {
-      setFeedback({ kind: 'error', text: error instanceof Error ? error.message : 'Anlage konnte nicht gespeichert werden.' });
+      setFeedback({ kind: 'error', text: error instanceof Error ? accountingErrorText(error.message) : 'Anlage konnte nicht gespeichert werden.' });
     } finally {
       endMutation();
     }
@@ -491,7 +573,7 @@ export default function AssetManagementView({ dataAdapter, role = 'admin' }: { d
       setFeedback({ kind: 'success', text: `AfA ${year} gebucht${result.journalEntryId ? ` (Journal ${result.journalEntryId})` : ''}.` });
       setDepreciationReason('');
     } catch (error) {
-      setFeedback({ kind: 'error', text: error instanceof Error ? error.message : 'AfA konnte nicht gebucht werden.' });
+      setFeedback({ kind: 'error', text: error instanceof Error ? accountingErrorText(error.message) : 'AfA konnte nicht gebucht werden.' });
     } finally {
       endMutation();
     }
@@ -521,16 +603,20 @@ export default function AssetManagementView({ dataAdapter, role = 'admin' }: { d
         disposalDate,
         proceeds,
         taxRate: taxRate as 0 | 7 | 19,
-        proceedsAccountNumber: proceedsAccountNumber.trim() || undefined,
+        proceedsAccountNumber: saleCustomerId ? undefined : proceedsAccountNumber.trim() || undefined,
+        saleCustomerId: proceeds > 0 && saleCustomerId ? saleCustomerId : undefined,
         reason: disposalReason.trim(),
         actorRole: accountingActorRole,
       });
       await reloadCanonical(result.asset.id);
-      setFeedback({ kind: 'success', text: `Anlage ${result.asset.status === 'verkauft' ? 'verkauft' : 'stillgelegt'}; Ergebnis ${euro(result.gainLoss)}${result.journalEntryId ? ` (Journal ${result.journalEntryId})` : ''}.` });
+      setFeedback({ kind: 'success', text: result.saleInvoiceNumber
+        ? `Anlage verkauft; Ergebnis ${euro(result.gainLoss)}. Rechnungsentwurf ${result.saleInvoiceNumber} angelegt: Erlös, Umsatzsteuer und offener Posten werden gebucht, sobald Sie ihn unter „Rechnungen“ stellen.`
+        : `Anlage ${result.asset.status === 'verkauft' ? 'verkauft' : 'stillgelegt'}; Ergebnis ${euro(result.gainLoss)}${result.journalEntryId ? ` (Journal ${result.journalEntryId})` : ''}.` });
+      setSaleCustomerId('');
       setDisposalReason('');
       setDisposalConfirmed(false);
     } catch (error) {
-      setFeedback({ kind: 'error', text: error instanceof Error ? error.message : 'Anlage konnte nicht ausgebucht werden.' });
+      setFeedback({ kind: 'error', text: error instanceof Error ? accountingErrorText(error.message) : 'Anlage konnte nicht ausgebucht werden.' });
     } finally {
       endMutation();
     }
@@ -558,10 +644,14 @@ export default function AssetManagementView({ dataAdapter, role = 'admin' }: { d
 
   return (
     <div className="flex h-full min-w-0 flex-col gap-3.5 overflow-hidden xl:flex-row">
+      {registerOpen && dataAdapter?.getAssetRegister ? <AssetRegisterDialog load={dataAdapter.getAssetRegister} onClose={() => setRegisterOpen(false)} /> : null}
       <Card padding="none" className="flex min-h-0 flex-col overflow-hidden xl:w-96 xl:shrink-0">
         <div className="space-y-3 border-b border-border p-3.5">
           <h2 className="sr-only">Anlagenverwaltung</h2>
           <p className="sr-only">Übersicht, Aktivierung und Abschreibung.</p>
+          {dataAdapter?.getAssetRegister ? (
+            <Button type="button" variant="secondary" fullWidth onClick={() => setRegisterOpen(true)}>Anlagenspiegel</Button>
+          ) : null}
           {!dataAdapter || (canMutate && dataAdapter.upsertAsset) ? (
             <div className="flex items-center justify-between gap-2">
               {!dataAdapter ? (
@@ -660,6 +750,7 @@ export default function AssetManagementView({ dataAdapter, role = 'admin' }: { d
         {editForm ? (
           <AssetEditor
             form={editForm}
+            invoices={assetInvoices}
             busy={busyAction === 'save'}
             onChange={updateEditForm}
             onSubmit={() => { void submitAsset(); }}
@@ -790,9 +881,9 @@ export default function AssetManagementView({ dataAdapter, role = 'admin' }: { d
                       <div className="flex flex-col gap-3 p-3.5">
                         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                           <Field id="asset-depreciation-year" label={requiredLabel('Geschäftsjahr')}>
-                            <Input fullWidth type="number" min="2000" step="1" value={depreciationYear} onChange={(event) => setDepreciationYear(event.target.value)} required />
+                            <Input fullWidth type="number" min="2000" step="1" value={depreciationYear} onChange={(event) => { setDepreciationYear(event.target.value); if (/^\d{4}$/.test(event.target.value)) setPostingDate(`${event.target.value}-12-31`); }} required />
                           </Field>
-                          <Field id="asset-depreciation-date" label={requiredLabel('Buchungsdatum')}>
+                          <Field id="asset-depreciation-date" label={requiredLabel('Buchungsdatum')} hint="Ende des Wirtschaftsjahres: die AfA gilt monatsgenau bis dahin. Ein Abgang im Jahr bucht die anteilige AfA selbst.">
                             <Input fullWidth type="date" value={postingDate} onChange={(event) => setPostingDate(event.target.value)} required />
                           </Field>
                         </div>
@@ -822,7 +913,15 @@ export default function AssetManagementView({ dataAdapter, role = 'admin' }: { d
                           <Field id="asset-disposal-tax-rate" label={requiredLabel('Umsatzsteuersatz')}>
                             <Select fullWidth value={disposalTaxRate} onChange={(event) => setDisposalTaxRate(event.target.value as '0' | '7' | '19')} required><option value="0">0 %</option><option value="7">7 %</option><option value="19">19 %</option></Select>
                           </Field>
-                          <Input label="Erlöskonto / Zahlungskonto" fullWidth value={proceedsAccountNumber} onChange={(event) => setProceedsAccountNumber(event.target.value)} placeholder="Optional, z. B. 1200" />
+                          {dataAdapter.listCustomers && (
+                            <Field id="asset-disposal-customer" label="Käufer (Kunde)" hint="Mit Kunde entsteht ein Rechnungsentwurf „Verkauf Anlage …“; er bucht Erlös, Umsatzsteuer und den offenen Posten.">
+                              <Select fullWidth value={saleCustomerId} onChange={(event) => setSaleCustomerId(event.target.value)}>
+                                <option value="">Ohne Rechnung (Erlös direkt buchen)</option>
+                                {customers.map((customer) => <option key={customer.id} value={customer.id}>{customer.name}</option>)}
+                              </Select>
+                            </Field>
+                          )}
+                          {!saleCustomerId && <Input label="Erlöskonto / Zahlungskonto" fullWidth value={proceedsAccountNumber} onChange={(event) => setProceedsAccountNumber(event.target.value)} placeholder="Optional, z. B. 1200" />}
                         </div>
                         <Field id="asset-disposal-reason" label={requiredLabel('Audit-Grund')}>
                           <Textarea fullWidth value={disposalReason} onChange={(event) => setDisposalReason(event.target.value)} required rows={2} placeholder="Warum wird die Anlage ausgebucht?" />
@@ -846,3 +945,72 @@ export default function AssetManagementView({ dataAdapter, role = 'admin' }: { d
     </div>
   );
 }
+
+const germanDate = (iso: string) => iso.split('-').reverse().join('.');
+
+/** Anlagenspiegel (book values) of one Wirtschaftsjahr, read from the server. */
+function AssetRegisterDialog({ load, onClose }: { load: (year: number) => Promise<AssetRegister>; onClose: () => void }) {
+  const [year, setYear] = useState(String(new Date().getFullYear()));
+  const [register, setRegister] = useState<AssetRegister | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  useEffect(() => {
+    const value = Number(year);
+    if (!Number.isInteger(value) || value < 2000 || value > 2100) return;
+    let cancelled = false;
+    setError(null);
+    void load(value).then((result) => { if (!cancelled) setRegister(result); })
+      .catch((reason) => { if (!cancelled) { setRegister(null); setError(accountingErrorText(reason instanceof Error ? reason.message : String(reason))); } });
+    return () => { cancelled = true; };
+  }, [load, year]);
+  const columns = ['opening', 'additions', 'disposals', 'depreciation', 'closing'] as const;
+  const labels = { opening: 'Buchwert Anfang', additions: 'Zugang', disposals: 'Abgang', depreciation: 'AfA', closing: 'Buchwert Ende' };
+  return (
+    <Modal open onClose={onClose} titleId="asset-register-heading" className="max-w-5xl">
+      <div className="flex flex-wrap items-end gap-3 px-4.5 pb-2.5 pt-4">
+        <div className="min-w-0 flex-1">
+          <h2 id="asset-register-heading" className="text-title text-foreground">Anlagenspiegel</h2>
+          <p className="text-caption text-muted">
+            {register ? `Wirtschaftsjahr ${germanDate(register.from)} bis ${germanDate(register.to)}. ` : ''}
+            Buchwerte aus den gebuchten Zugängen, Abschreibungen und Abgängen; ein Abgang steht mit seinem Restbuchwert.
+          </p>
+        </div>
+        <Field id="asset-register-year" label="Geschäftsjahr">
+          <Input type="number" min="2000" max="2100" step="1" value={year} onChange={(event) => setYear(event.target.value)} />
+        </Field>
+      </div>
+      <div className="max-h-[60vh] overflow-auto px-4.5 pb-4">
+        {error ? <p role="alert" className="text-control text-danger-text">{error}</p> : null}
+        {register && register.rows.length === 0 ? <EmptyState title="Keine Anlagen in diesem Jahr." /> : null}
+        {register && register.rows.length > 0 ? (
+          <Table data-testid="asset-register">
+            <TableHeader>
+              <TableRow>
+                <TableHead>Konto</TableHead>
+                <TableHead>Anlage</TableHead>
+                {columns.map((key) => <TableHead key={key} numeric>{labels[key]}</TableHead>)}
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {register.rows.map((row) => (
+                <TableRow key={row.assetId}>
+                  <TableCell>{row.accountNumber}</TableCell>
+                  <TableCell>{row.assetNumber} · {row.name}</TableCell>
+                  {columns.map((key) => <TableCell key={key} numeric>{euro(row[key])}</TableCell>)}
+                </TableRow>
+              ))}
+              <TableRow>
+                <TableCell className="font-semibold">Summe</TableCell>
+                <TableCell />
+                {columns.map((key) => <TableCell key={key} numeric className="font-semibold">{euro(register.totals[key])}</TableCell>)}
+              </TableRow>
+            </TableBody>
+          </Table>
+        ) : null}
+      </div>
+      <div className="flex justify-end border-t border-border px-4.5 py-3">
+        <Button variant="secondary" onClick={onClose}>Schließen</Button>
+      </div>
+    </Modal>
+  );
+}
+

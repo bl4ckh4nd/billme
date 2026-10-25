@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { AlertTriangle, FileSearch, RefreshCw } from 'lucide-react';
 import { Badge, Button, Card, CardHeader, EmptyState, Input, Textarea, cn, formatEmptyValue } from '@billme/ui';
+import { accountingErrorText } from '@billme/accounting-shared';
 import { getFlagLabel } from '../domain/selectors';
 import { useAccountingWorkspace } from '../AccountingWorkspaceContext';
 import { Transaction, UserRole } from '../types';
@@ -27,6 +28,9 @@ const filterLabels: Record<ExceptionFilter, string> = {
   duplicates: 'Dubletten',
   period_locked: 'Periode gesperrt',
 };
+
+const approvalLabels = { not_required: 'Nicht nötig', pending: 'Offen', approved: 'Freigegeben', rejected: 'Abgelehnt' } as const;
+const errorText = (error: unknown, fallback: string) => error instanceof Error ? accountingErrorText(error.message) : fallback;
 
 const exceptionStateLabels = {
   open: 'Offen',
@@ -68,6 +72,7 @@ export default function ExceptionCenter({ role, canMutateExceptions = true, tran
   const [snoozeUntil, setSnoozeUntil] = useState('');
   const [resolutionNote, setResolutionNote] = useState('');
   const [mutationError, setMutationError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
 
   const items = useMemo(() => transactions.filter((tx) => matchesFilter(tx, filter)), [transactions, filter]);
   const selectedTx = items.find((tx) => tx.id === selectedId) ?? items[0] ?? null;
@@ -75,6 +80,8 @@ export default function ExceptionCenter({ role, canMutateExceptions = true, tran
   const exceptionState = selectedTx?.exceptionCase?.state ?? 'open';
 
   useEffect(() => {
+    setNotice(null);
+    setMutationError(null);
     if (!selectedTx) return;
     setOwnerDraft(selectedTx.exceptionCase?.owner ?? selectedTx.owner ?? 'Mara Buchhaltung');
     setSnoozeUntil(selectedTx.exceptionCase?.snoozedUntil ?? '');
@@ -233,11 +240,13 @@ export default function ExceptionCenter({ role, canMutateExceptions = true, tran
                     size="sm"
                     onClick={() => void (async () => {
                       setMutationError(null);
+                      setNotice(null);
                       try {
                         await dispatchBookingAction(selectedTx.id, 'request_receipt', { role, actorName: role });
+                        setNotice('Beleg angefordert. Die Buchung bleibt unvollständig, bis der Beleg da ist, und steht unter „Ohne Beleg“.');
                         onRefresh();
                       } catch (error) {
-                        setMutationError(error instanceof Error ? error.message : 'Aktion konnte nicht gespeichert werden.');
+                        setMutationError(errorText(error, 'Aktion konnte nicht gespeichert werden.'));
                       }
                     })()}
                   >
@@ -247,6 +256,7 @@ export default function ExceptionCenter({ role, canMutateExceptions = true, tran
                     <RefreshCw size={14} aria-hidden="true" /> Neu bewerten
                   </Button>
                 </div>
+                {notice ? <p className="px-3.5 pb-3.5 text-control text-success-text" role="status" aria-live="polite" data-testid="exception-notice">{notice}</p> : null}
               </Card>
 
               <Card padding="none">
@@ -272,9 +282,10 @@ export default function ExceptionCenter({ role, canMutateExceptions = true, tran
                         setMutationError(null);
                         try {
                           await assignExceptionOwner(selectedTx.id, ownerDraft || role, role);
+                          setNotice(`Zugewiesen an ${ownerDraft || role}.`);
                           onRefresh();
                         } catch (error) {
-                          setMutationError(error instanceof Error ? error.message : 'Änderung konnte nicht gespeichert werden.');
+                          setMutationError(errorText(error, 'Änderung konnte nicht gespeichert werden.'));
                         }
                       })()}>
                         Zuweisen
@@ -298,9 +309,10 @@ export default function ExceptionCenter({ role, canMutateExceptions = true, tran
                           setMutationError(null);
                           try {
                             await snoozeException(selectedTx.id, snoozeUntil, role, resolutionNote || 'Pausiert aus dem Ausnahmebereich');
+                            setNotice(`Pausiert bis ${snoozeUntil.split('-').reverse().join('.')}.`);
                             onRefresh();
                           } catch (error) {
-                            setMutationError(error instanceof Error ? error.message : 'Änderung konnte nicht gespeichert werden.');
+                            setMutationError(errorText(error, 'Änderung konnte nicht gespeichert werden.'));
                           }
                         })()}
                       >
@@ -321,9 +333,10 @@ export default function ExceptionCenter({ role, canMutateExceptions = true, tran
                         setMutationError(null);
                         try {
                           await resolveException(selectedTx.id, resolutionNote || 'Manuell als gelöst markiert', role);
+                          setNotice('Als gelöst markiert.');
                           onRefresh();
                         } catch (error) {
-                          setMutationError(error instanceof Error ? error.message : 'Änderung konnte nicht gespeichert werden.');
+                          setMutationError(errorText(error, 'Änderung konnte nicht gespeichert werden.'));
                         }
                       })()}>
                         Als gelöst markieren
@@ -332,9 +345,10 @@ export default function ExceptionCenter({ role, canMutateExceptions = true, tran
                         setMutationError(null);
                         try {
                           await reopenException(selectedTx.id, role);
+                          setNotice('Wieder geöffnet.');
                           onRefresh();
                         } catch (error) {
-                          setMutationError(error instanceof Error ? error.message : 'Änderung konnte nicht gespeichert werden.');
+                          setMutationError(errorText(error, 'Änderung konnte nicht gespeichert werden.'));
                         }
                       })()}>
                         Wieder öffnen
@@ -361,7 +375,7 @@ export default function ExceptionCenter({ role, canMutateExceptions = true, tran
                   </div>
                   <div className="flex justify-between gap-3">
                     <span className="text-muted">Freigabe</span>
-                    <span className="font-medium text-foreground">{selectedDraft.approval.status}</span>
+                    <span className="font-medium text-foreground">{approvalLabels[selectedDraft.approval.status] ?? selectedDraft.approval.status}</span>
                   </div>
                   <div className="flex justify-between gap-3">
                     <span className="text-muted">Ausnahmestatus</span>

@@ -217,7 +217,8 @@ export const reportTabsForBusinessProfile = (profile?: BusinessReportingProfile)
   if (['sole_proprietor', 'gbr', 'ek'].includes(profile.legalForm) && profile.profitDetermination === 'eur') {
     return ['eur', 'susa', 'bwa01', 'management_guv'];
   }
-  if ((profile.legalForm === 'gmbh' || profile.legalForm === 'ug') && profile.profitDetermination === 'double_entry') {
+  // Double entry gets GuV and Bilanz whatever the legal form: a balancing sole proprietor, GbR or e.K. as well.
+  if (profile.profitDetermination === 'double_entry') {
     return ['susa', 'bwa01', 'management_guv', 'hgb_guv', 'bilanz'];
   }
   return ['susa'];

@@ -286,27 +286,27 @@ export const buildFiscalClose = (input: FiscalCloseInput, context: JournalIdenti
   let netResultCents = 0;
   for (const [account, amount] of revenue) {
     if (amount < 0) {
-      lines.push(line(account, -amount, 0, 'Fiscal close revenue'));
+      lines.push(line(account, -amount, 0, 'Abschluss Erfolgskonto'));
       netResultCents -= amount;
     } else if (amount > 0) {
-      lines.push(line(account, 0, amount, 'Fiscal close revenue correction'));
+      lines.push(line(account, 0, amount, 'Abschluss Erfolgskonto'));
       netResultCents -= amount;
     }
   }
   for (const [account, amount] of expense) {
     if (amount > 0) {
-      lines.push(line(account, 0, amount, 'Fiscal close expense'));
+      lines.push(line(account, 0, amount, 'Abschluss Erfolgskonto'));
       netResultCents -= amount;
     } else if (amount < 0) {
-      lines.push(line(account, -amount, 0, 'Fiscal close expense correction'));
+      lines.push(line(account, -amount, 0, 'Abschluss Erfolgskonto'));
       netResultCents -= amount;
     }
   }
   if (!lines.length) return { status: 'noop', errors: [], value: { netResult: 0, command: undefined, reconciliation: { balanced: true, differences: [] } } };
-  if (netResultCents > 0) lines.push(line(input.retainedEarningsAccount, 0, netResultCents, 'Fiscal close result'));
-  if (netResultCents < 0) lines.push(line(input.retainedEarningsAccount, -netResultCents, 0, 'Fiscal close loss'));
+  if (netResultCents > 0) lines.push(line(input.retainedEarningsAccount, 0, netResultCents, 'Jahresergebnis'));
+  if (netResultCents < 0) lines.push(line(input.retainedEarningsAccount, -netResultCents, 0, 'Jahresergebnis'));
 
-  const command = buildJournalCommand(source('fiscal_close', input.sourceId, input.sourceRevision, input.closingDate, input.period, input.fiscalYear, input.currency, lines, `Fiscal year ${input.fiscalYear} close`, input.fiscalYearStart), [], context);
+  const command = buildJournalCommand(source('fiscal_close', input.sourceId, input.sourceRevision, input.closingDate, input.period, input.fiscalYear, input.currency, lines, `Jahresabschluss ${input.fiscalYear}`, input.fiscalYearStart), [], context);
   if (command.status !== 'ready' || !command.value) return mapError(command);
   const check = reconcileRollForward({ opening: input.balances, movements: [], closing: input.balances });
   return { status: 'ready', errors: [], value: { netResult: euros(netResultCents), command: command.value, reconciliation: check }, idempotencyKey: command.idempotencyKey };
@@ -330,17 +330,17 @@ export const buildCarryForward = (input: CarryForwardInput, context: JournalIden
   let credit = 0;
   for (const [account, amount] of selected) {
     if (amount > 0) {
-      lines.push(line(account, amount, 0, 'Carry-forward'));
+      lines.push(line(account, amount, 0, 'Saldovortrag'));
       debit += amount;
     } else if (amount < 0) {
-      lines.push(line(account, 0, -amount, 'Carry-forward'));
+      lines.push(line(account, 0, -amount, 'Saldovortrag'));
       credit -= amount;
     }
   }
-  if (debit > credit) lines.push(line(input.openingBalanceAccount, 0, debit - credit, 'Carry-forward clearing'));
-  if (credit > debit) lines.push(line(input.openingBalanceAccount, credit - debit, 0, 'Carry-forward clearing'));
+  if (debit > credit) lines.push(line(input.openingBalanceAccount, 0, debit - credit, 'Saldenvortrag'));
+  if (credit > debit) lines.push(line(input.openingBalanceAccount, credit - debit, 0, 'Saldenvortrag'));
   if (!lines.length) return { status: 'noop', errors: [], value: { lines: [], command: undefined, reconciliation: { balanced: true, differences: [] } } };
-  const command = buildJournalCommand(source('carry_forward', input.sourceId, input.sourceRevision, input.effectiveDate, input.period, input.fiscalYear, input.currency, lines, `Carry-forward ${input.fiscalYear}`, input.fiscalYearStart), [], context);
+  const command = buildJournalCommand(source('carry_forward', input.sourceId, input.sourceRevision, input.effectiveDate, input.period, input.fiscalYear, input.currency, lines, `Saldovortrag ${input.fiscalYear}`, input.fiscalYearStart), [], context);
   if (command.status !== 'ready' || !command.value) return mapError(command);
   return {
     status: 'ready',

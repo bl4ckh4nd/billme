@@ -1,9 +1,10 @@
 import assert from 'node:assert/strict';
 import { createHash, randomUUID } from 'node:crypto';
 import { after, before, describe, test } from 'node:test';
+import { createProHttpBillmeApi } from '@billme/desktop-services/proHttpApi';
 import { startPro, type ProHarness } from './harness.js';
 import { today } from './fixtures.js';
-import { bankCsv, issue, journal } from './pro-fixtures.js';
+import { bankCsv, draft, issue, journal } from './pro-fixtures.js';
 
 const stableJson = (value: unknown): string => {
   if (value === undefined) return 'null';
@@ -24,6 +25,7 @@ const stableJson = (value: unknown): string => {
  * - a contract route that maps to the wrong URL, method, query or body name
  *   (reportType vs statement, invoiceId vs documentId, reason in the query)
  * - posted drafts overwritten, correction runs rejected after committing, or EÜR actors lost
+ * - a Storno of a bank booking that leaves the draft "Gebucht", or a re-posting that hands back the reversed entry as booked
  * - canonical GuV amounts/range lost while projecting the IPC report
  * - a server response the client's schema no longer accepts
  * - the UStVA Kennzahlen or a tax preparation that do not parse through the client
@@ -31,6 +33,8 @@ const stableJson = (value: unknown): string => {
  *   the server requires, instead of being refused before the request leaves
  * - an error body the client swallows instead of showing its message
  * - a client path that skips the receipt check of a DATEV export
+ * - the Prüferpaket in the browser (a client with `downloadBlob`) answering "nicht verfügbar"
+ *   or downloading files whose bytes differ from the manifest hashes
  */
 describe('pro renderer client against the embedded backend', () => {
   let h: ProHarness;
@@ -115,7 +119,8 @@ describe('pro renderer client against the embedded backend', () => {
 
   test('the bank workbench through the client: import, transactions, drafts, workflow, posting, reversal, rules', async () => {
     await api().accounts.upsert({ account: { id: ids.bank, name: 'Client Konto', iban: 'DE02120300000000202051', balance: 0, transactions: [], type: 'bank', color: '#000000', defaultSkrAccountNumber: '1200' } });
-    const csv = bankCsv([{ date: '2026-03-02', amount: -119, counterparty: 'Client Lieferant', purpose: 'Rechnung Server' }]);
+    // Not the 119 of the open ER-C1 from the same vendor: that line would settle the open item (1600), this one is booked by the rule.
+    const csv = bankCsv([{ date: '2026-03-02', amount: -59.5, counterparty: 'Client Lieferant', purpose: 'Rechnung Server' }]);
     const preview = await api().finance.importPreview({ fileName: `client-${randomUUID().slice(0, 6)}.csv`, contentBase64: Buffer.from(csv).toString('base64'), profile: 'generic' });
     assert.equal(preview.stats.validRows, 1);
     const commit = await api().finance.importCommit({ path: preview.path, accountId: ids.bank, profile: 'generic', mapping: preview.suggestedMapping });
@@ -141,6 +146,23 @@ describe('pro renderer client against the embedded backend', () => {
     assert.ok((await api().pro.getLedgerBalances({ asOfDate: '2026-12-31' })).some((row) => row.accountNumber === '4930'));
     const reversed = await api().pro.reverseJournalEntry({ entryId: posted.entry.id, reason: 'Falsch kontiert', postingDate: '2026-03-31' });
     assert.equal(reversed.ok, true);
+    // A Storno from the journal (not only from the draft) marks the bank booking reversed in the workspace.
+    const afterStorno = (await api().pro.getDraftByTransactionId({ transactionId: tx.id }))!;
+    assert.equal(afterStorno.workflowStatus, 'reversed', 'the draft follows the reversed journal entry');
+    assert.equal((await api().pro.getJournalEntryById({ entryId: posted.entry.id }))!.status, 'reversed');
+    await assert.rejects(api().pro.reverseJournalEntry({ entryId: posted.entry.id, reason: 'zweimal' }), 'a reversed entry is not reversed twice');
+    // After the Storno the line is kontiert and booked again: a new entry; the reversed original and its Storno stay.
+    await api().pro.dispatchDraftAction({ transactionId: tx.id, action: 'create_correction' });
+    const corrected = (await api().pro.getDraftByTransactionId({ transactionId: tx.id }))!;
+    await api().pro.saveDraft({ draft: { ...corrected, workflowStatus: 'suggested' } });
+    await api().pro.dispatchDraftAction({ transactionId: tx.id, action: 'submit_for_review' });
+    await api().pro.dispatchDraftAction({ transactionId: tx.id, action: 'approve' });
+    const rebooked = await api().pro.postDraft({ draftId: draft.id, postingDate: '2026-03-31' });
+    assert.ok(rebooked.entry.id && rebooked.entry.id !== posted.entry.id, 'a new posting, not the reversed one handed back');
+    assert.equal((await api().pro.getJournalEntryById({ entryId: posted.entry.id }))!.status, 'reversed', 'the original stays reversed');
+    await assert.rejects(api().pro.postDraft({ draftId: draft.id, postingDate: '2026-03-31', idempotencyKey: 'other' } as never), /PAYMENT_SOURCE_ALREADY_BOOKED|bereits gebucht|schon gebucht/i, 'the line is booked once at a time');
+    // Leave the ledger as the following cases expect it: the second round is reversed as well.
+    assert.equal((await api().pro.reverseJournalEntry({ entryId: rebooked.entry.id, reason: 'Testlauf zurück', postingDate: '2026-03-31' })).ok, true);
     await api().pro.deleteAccountSuggestionRule({ id: rule.id });
     assert.ok(!(await api().pro.listAccountSuggestionRules({})).some((candidate) => candidate.id === rule.id));
     const checked = await api().pro.validateTaxCompliance({ transactionId: tx.id });
@@ -213,6 +235,12 @@ describe('pro renderer client against the embedded backend', () => {
     assert.equal(run.scheduleEntry.amount, 266.67);
     const sold = await api().pro.disposeAsset({ assetId: asset.id, disposalDate: '2026-12-31', proceeds: 100, taxRate: 0, proceedsAccountNumber: '1200', reason: 'Verkauf' });
     assert.deepEqual([sold.residualBookValue, sold.asset.status], [933.33, 'verkauft']);
+    // A sale with its outgoing invoice: the client must send saleInvoiceId, or the disposal books the proceeds a second time.
+    const forSale = await api().pro.upsertAsset({ reason: 'Anlage', asset: { assetNumber: 'A-CLIENT-SALE', name: 'Drucker', assetClass: 'IT-Hardware', status: 'aktiv', activationDate: '2026-01-01', acquisitionCost: 1200, usefulLifeYears: 1, depreciationMethod: 'linear', costCenter: '', location: '', receiptLinked: true, assetAccountNumber: '0440' } });
+    const saleInvoice = await draft(h, { client: 'Käufer GmbH', date: '2026-01-31', items: [{ kind: 'item', description: 'Verkauf Anlage A-CLIENT-SALE Drucker', quantity: 1, price: 1500, total: 1500, taxRate: 19 }], taxMeta: { assetSaleAssetId: forSale.id } as never });
+    const viaInvoice = await api().pro.disposeAsset({ assetId: forSale.id, disposalDate: '2026-01-31', proceeds: 1500, saleInvoiceId: saleInvoice.id, reason: 'Verkauf an Kunden' });
+    const saleEntry = (await journal(h)).find((entry) => entry.id === viaInvoice.journalEntryId)!;
+    assert.deepEqual(saleEntry.lines.map((line) => line.accountNumber).sort(), ['0440', '2315'], 'only the book value: no bank or VAT line');
 
     const receipt = await api().pro.exportDatevBuchungsstapel({ from: '2026-03-01', to: '2026-03-31', consultantNumber: '1234567', clientNumber: '12345', fiscalYearStart: '2026-01-01', accountLength: 4 });
     assert.ok(receipt.recordCount > 0);
@@ -283,6 +311,29 @@ describe('pro renderer client against the embedded backend', () => {
     assert.equal(done.status, 'completed');
     const pkg = await api().tax.auditExportPackage({ from: '2026-01-01', to: '2026-12-31' });
     assert.ok(pkg);
+  });
+
+  test('in the browser the Prüferpaket arrives as downloads whose bytes match the manifest', async () => {
+    const downloads: Array<{ name: string; bytes: Buffer }> = [];
+    const pending: Promise<void>[] = [];
+    const browserApi = createProHttpBillmeApi({
+      baseUrl: h.connection.baseUrl,
+      embeddedConnectionResolver: async () => h.connection,
+      downloadBlob: (blob, name) => { pending.push(blob.arrayBuffer().then((buffer) => { downloads.push({ name, bytes: Buffer.from(buffer) }); })); },
+    });
+    const pkg = await browserApi.tax.auditExportPackage({ from: '2026-01-01', to: '2026-12-31', includeDocuments: true });
+    await Promise.all(pending);
+    assert.equal(pkg.bundleDir, 'Downloads');
+    assert.ok(pkg.fileCount > 1);
+    assert.equal(downloads.length, pkg.fileCount + 1, 'every file plus the manifest');
+    const manifest = downloads.find((file) => file.name === pkg.manifestPath);
+    assert.equal(pkg.manifestPath, 'Prüferpaket_2026-01-01_2026-12-31_manifest.json');
+    assert.deepEqual(JSON.parse(manifest!.bytes.toString('utf8')).files, pkg.files);
+    for (const file of pkg.files) {
+      const download = downloads.find((entry) => entry.name === file.path);
+      assert.ok(download, `${file.name} downloaded`);
+      assert.equal(createHash('sha256').update(download.bytes).digest('hex'), file.sha256, `${file.name} bytes match the manifest`);
+    }
   });
 
   test('after the whole walk the ledger balances and the audit chain verifies', async () => {

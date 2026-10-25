@@ -37,7 +37,8 @@ import { draftInvoice, draftOffer, issueInvoice, newClient } from './fixtures.js
  *   exporting or auditing tenant A's clients, invoices and offers; B taking over
  *   A's number reservation; numbering counters shared between tenants; a Lite
  *   token on Pro routes and the reverse
- * - roles: viewer or sales mutating (clients, documents, settings, numbers,
+ * - roles: the refusal in English or as a raw code (the browser shows it as it is),
+ *   viewer or sales mutating (clients, documents, settings, numbers,
  *   payments, recurring profiles) or being locked out of reading
  * - route sweep: any registered route other than the public ones answering a
  *   request without a session, any mutation route open to a viewer
@@ -46,7 +47,8 @@ import { draftInvoice, draftOffer, issueInvoice, newClient } from './fixtures.js
  *   a read-only token writing, a CLI token managing CLI tokens, a revoked token
  *   still working, a token's role outliving the user's role, writes not
  *   attributed to the CLI in the audit log, tokens stored in clear
- * - PDF: the render session not bound to the caller, an unauthenticated render
+ * - PDF: the render session not bound to the caller, an unauthenticated render,
+ *   the file name hidden from the browser shell (CORS does not expose Content-Disposition)
  *   (Chromium itself is not part of this suite)
  * - Pro / tax / EÜR routes: accounting mutations without reason or role, a draft
  *   smuggling its workflow status, tax filings created by viewers, document analysis
@@ -59,6 +61,9 @@ import { draftInvoice, draftOffer, issueInvoice, newClient } from './fixtures.js
  * - migrations: journal and .sql files disagreeing, a table or column the code
  *   uses missing after migrating from empty, a second run changing anything, an
  *   API starting on an unmigrated or outdated database
+ * - 0067 asset trigger: a sold asset put back on the books without the reversal
+ *   movement of its disposal, a sale at residual book value 0 refused because it
+ *   has no journal entry of its own, a book value taken off without its entry
  */
 describe('server mode', () => {
   let h: HostedServer;
@@ -937,6 +942,8 @@ describe('server mode', () => {
         for (const [role, token] of readers()) {
           const response = await entry.act(token, owner);
           assert.equal(response.status, 403, `${role} got ${response.status} on ${entry.name}`);
+          // The renderer shows this text as it is: German, and it says what the role may do.
+          assert.match((response as { body?: { message?: string } }).body?.message ?? '', /^Dafür fehlt dir die Berechtigung/, `${role} on ${entry.name}`);
         }
       });
     }
@@ -1235,6 +1242,8 @@ describe('server mode', () => {
       assert.ok(response.text.startsWith('%PDF'));
       assert.equal(calls.length, 1);
       const call = calls[0]!;
+      const crossOrigin = await r.http('GET', '/api/v1/lite/documents/invoice/inv-1/pdf', { token: a.token, headers: { origin: 'http://web.example' } });
+      assert.match(crossOrigin.headers.get('access-control-expose-headers') ?? '', /content-disposition/i, 'the web shell names the download by the document number');
       assert.equal(call.product, 'lite');
       assert.deepEqual(call.print, { kind: 'invoice', id: 'inv-1', level: 2 });
       assert.equal(call.user.email, a.email);
@@ -1369,6 +1378,41 @@ describe('server-data migrations', () => {
       const missing = [...created].filter((table) => !present.has(table));
       assert.deepEqual(missing, [], 'tables created by the SQL files but absent after migrating');
       assert.ok(present.has('tenants') && present.has('invoices') && present.has('cli_tokens') && present.has('audit_log'));
+    } finally { await wire.close(); }
+  });
+
+  test('0065/0066: Belege on bank lines are immutable, and a draft keeps only one live journal entry', async () => {
+    const wire = await startPgliteWire({ migrate: true });
+    try {
+      const index = (await wire.sql<{ indexdef: string }>(`SELECT indexdef FROM pg_indexes WHERE indexname = 'uq_journal_entries_source_draft'`)).rows[0]!.indexdef;
+      assert.match(index, /status = 'posted'/, 'a reversed entry no longer blocks booking the line again');
+      await wire.sql(`INSERT INTO tenants (id, slug, display_name, product, created_at, updated_at) VALUES ('beleg-t', 'beleg-t', 'Beleg', 'pro', 'x', 'x')`);
+      await wire.sql(`INSERT INTO bank_transaction_documents (id, tenant_id, bank_transaction_id, original_filename, mime_type, byte_length, sha256, content_bytes, created_at) VALUES ('d1', 'beleg-t', 'line-1', 'a.pdf', 'application/pdf', 4, '${'a'.repeat(64)}', '\\x25504446', 'x')`);
+      await assert.rejects(wire.sql(`UPDATE bank_transaction_documents SET original_filename = 'b.pdf' WHERE id = 'd1'`), /immutable/);
+      await assert.rejects(wire.sql(`DELETE FROM bank_transaction_documents WHERE id = 'd1'`), /immutable/);
+      await assert.rejects(wire.sql(`INSERT INTO bank_transaction_documents (id, tenant_id, bank_transaction_id, original_filename, mime_type, byte_length, sha256, content_bytes, created_at) VALUES ('d2', 'beleg-t', 'line-1', 'a.pdf', 'application/zip', 4, '${'b'.repeat(64)}', '\\x25504446', 'x')`), /check/i, 'PDF and images only');
+    } finally { await wire.close(); }
+  });
+
+  test('0067: a sold asset goes back on the books only with the reversal of its disposal; a sale at book value 0 needs no entry', async () => {
+    const wire = await startPgliteWire({ migrate: true });
+    try {
+      await wire.sql(`INSERT INTO tenants (id, slug, display_name, product, created_at, updated_at) VALUES ('asset-t', 'asset-t', 'Anlage', 'pro', 'x', 'x')`);
+      const asset = (id: string, status: string, disposal: string | null) => wire.sql(`INSERT INTO assets (id, tenant_id, asset_number, name, asset_class, status, activation_date, acquisition_cost, useful_life_years, depreciation_method, cost_center, location, asset_account_number, disposal_date, disposal_proceeds, activation_journal_entry_id, created_at, updated_at) VALUES ('${id}', 'asset-t', '${id}', 'Notebook', 'IT', '${status}', '2025-01-01', 1200, 1, 'linear', '', '', '0440', ${disposal ? `'${disposal}'` : 'NULL'}, ${disposal ? '50' : 'NULL'}, 'je-${id}', 'x', 'x')`);
+      const movement = (assetId: string, sourceType: string, sourceKey: string, amount: number, journal: string | null) => wire.sql(`INSERT INTO asset_movements (id, tenant_id, asset_id, type, movement_date, amount, proceeds, gain_loss, journal_entry_id, source_type, source_key, reason, created_at) VALUES ('${sourceKey}', 'asset-t', '${assetId}', 'disposal', '2026-01-31', ${amount}, 50, 50, ${journal ? `'${journal}'` : 'NULL'}, '${sourceType}', '${sourceKey}', 'Verkauf', 'x')`);
+
+      await asset('sold', 'verkauft', '2026-01-31');
+      await movement('sold', 'asset_disposal', 'asset_disposal:sold', 0, null);
+      await assert.rejects(wire.sql(`UPDATE assets SET status = 'aktiv', disposal_date = NULL, disposal_proceeds = NULL WHERE id = 'sold'`), /immutable/, 'no way back without the reversal');
+      await movement('sold', 'asset_disposal_reversal', 'asset_disposal:sold:reversal', 0, null);
+      await wire.sql(`UPDATE assets SET status = 'voll_abgeschrieben', disposal_date = NULL, disposal_proceeds = NULL WHERE id = 'sold'`);
+
+      await asset('zero', 'voll_abgeschrieben', null);
+      await movement('zero', 'asset_disposal', 'asset_disposal:zero', 0, null);
+      await wire.sql(`UPDATE assets SET status = 'verkauft', disposal_date = '2026-01-31', disposal_proceeds = 50 WHERE id = 'zero'`);
+      await asset('owed', 'voll_abgeschrieben', null);
+      await movement('owed', 'asset_disposal', 'asset_disposal:owed', 300, null);
+      await assert.rejects(wire.sql(`UPDATE assets SET status = 'verkauft', disposal_date = '2026-01-31', disposal_proceeds = 50 WHERE id = 'owed'`), /immutable/, 'a book value without its entry is no disposal');
     } finally { await wire.close(); }
   });
 

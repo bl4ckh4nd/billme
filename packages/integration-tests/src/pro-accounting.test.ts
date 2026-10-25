@@ -50,7 +50,19 @@ import {
  *   posting, a reversal that does not neutralise every line, reversing twice
  * - bank drafts: a draft whose bank line does not carry the bank amount, books
  *   another ledger account than the bank account's, or the wrong side; a draft
- *   for a bank line that does not exist (a journal entry without a source)
+ *   for a bank line that does not exist (a journal entry without a source); a
+ *   payment for an open invoice drafted on revenue (counted twice) or booked as a
+ *   free draft on 1400 (ledger paid, open item still open)
+ * - booking a bank line again after its Storno: refused (the person is left
+ *   with a free entry), the original or its Storno touched, the new posting
+ *   reusing the old entry, a retry that books it twice, the bank line left
+ *   "gebucht" while nothing live is booked on it
+ * - a Beleg on a bank line: no way to attach one, a file stored changed or twice,
+ *   a wrong type or no reason accepted, the line still "ohne Beleg", the posting
+ *   without a reference to the Beleg
+ * - exceptions (Ausnahmen): an owner, pause or resolution that is not kept on
+ *   the draft (gone after a reload or the next save of the draft), changed
+ *   without a reason or without audit, accepted for a bank line that is not there
  * - free entries (Buchungssatz): an entry without Belegnummer, Belegdatum or
  *   Buchungstext, a text DATEV refuses (> 60), an unbalanced, one-sided or
  *   unknown-account entry posted anyway, a tax key the entry cannot split
@@ -62,7 +74,8 @@ import {
  * - OPOS: a payment allocated beyond the open balance or beyond the payment
  *   itself, to the wrong party, to an item that is not there, a retry that
  *   books twice, an overpayment that disappears, a bank line booked twice,
- *   the invoice status not following the open item
+ *   the invoice status not following the open item; a booked payment listed
+ *   without the invoice number and customer it settled (OPOS "Gebuchte Zahlungen")
  * - Skonto: a payment within the Skonto days less the Skonto leaving the rest
  *   open, the Skonto booked against revenue instead of gewährte Skonti or
  *   without its VAT, a Skonto for a late or short payment, a Skonto that stays
@@ -71,12 +84,18 @@ import {
  *   Soll although §13 Abs. 1 Nr. 1a S. 4 makes it due with the payment, the
  *   advance never released at the final invoice (revenue short or 1718 left
  *   standing), a Storno of the advance booking other accounts than the advance
- * - bank accounts: a deletion audited under a service name instead of the person
+ * - bank accounts: a deletion audited under a service name instead of the person;
+ *   a bank account saved on a ledger account that is no money account (0005, an
+ *   expense account), a blank ledger account stored instead of the bank role, a
+ *   changed ledger account that leaves the open drafts on the old one
  * - bank workbench: an import that double-books, a rolled-back batch that
  *   stays bookable, a suggestion rule that outranks a better one, ignores its
- *   flow/chart/active flag, or is credited for a booking it did not decide
+ *   flow/chart/active flag, or is credited for a booking it did not decide; a
+ *   rule made after a line was opened that the card shows but the draft ignores,
+ *   or that overwrites what a person entered
  * - incoming invoices and receipts: a posting with the wrong accounts or
- *   balance, the vendor's default expense account ignored, Bewirtung booked
+ *   balance, the vendor's default expense account ignored, a second vendor for the
+ *   same name, a differing IBAN/USt-IdNr. of that name dropped silently, an incoming invoice released with an account the chart does not know, Bewirtung booked
  *   100 % deductible (no 70/30 split), 7 % input VAT on the
  *   19 % account (1576 instead of 1571), amounts that do not add up posted anyway, a posted document or its
  *   vendor edited afterwards, an archived original that changes, a spoofed file
@@ -470,7 +489,7 @@ describe('pro accounting: setup and posting of issued invoices', () => {
       const entry = (await entryFor(h, `outgoing-correction:${cancellation.id}`))!;
       assert.ok(entry, 'the cancellation is posted');
       assert.deepEqual(shape(entry), [['1400', 0, GROSS], ['8400', 200, 0], ['1776', 38, 0]]);
-      assert.equal(entry.bookingText, `Stornorechnung ${cancellation.number}`);
+      assert.equal(entry.bookingText, `Stornorechnung ${cancellation.number} zu ${source.number}`, 'the Storno names the invoice it cancels');
       const original = (await invoiceEntry(h, source.id))!;
       const entries = [original, entry];
       for (const account of ['1400', '8400', '1776']) assert.equal(money(ledgerNet(entries, account)), 0, `${account} nets to zero over both entries`);
@@ -574,6 +593,77 @@ describe('pro accounting: setup and posting of issued invoices', () => {
       const tx = await bankTx(h, counterparty);
       return { tx, draft: await getDraft(h, tx.id) };
     };
+
+    test('a Beleg attached to a bank line is archived unchanged and once, marks the line mit Beleg and is named in the posting', async () => {
+      const { tx, draft: d } = await newTx({ date: '2026-03-06', amount: -23.8, counterparty: `Beleg Bank ${randomUUID().slice(0, 6)}` });
+      const pdf = Buffer.concat([Buffer.from('%PDF-1.4\n'), Buffer.from(randomUUID())]);
+      const upload = (body: Record<string, unknown>, id = tx.id) => h.raw('POST', `/accounting/transactions/${id}/documents`, { originalFilename: 'quittung.pdf', mimeType: 'application/pdf', data: pdf.toString('base64'), reason: 'Quittung nachgereicht', ...body });
+      assert.equal((await upload({ reason: ' ' })).status, 400, 'a reason is required');
+      assert.equal((await upload({ mimeType: 'application/zip' })).status, 400, 'PDF and images only');
+      assert.equal((await upload({ mimeType: 'image/png' })).status, 400, 'the content must match the type');
+      assert.equal((await upload({}, 'no-such-line')).status, 404);
+      const saved = await upload({});
+      assert.equal(saved.status, 200, saved.text);
+      assert.deepEqual([saved.body.bankTransactionId, saved.body.originalFilename, saved.body.byteLength, saved.body.sha256], [tx.id, 'quittung.pdf', pdf.byteLength, createHash('sha256').update(pdf).digest('hex')]);
+      const retry = await upload({});
+      assert.equal(retry.body.id, saved.body.id, 'the same file twice is one Beleg');
+      assert.equal((await get<unknown[]>(h, `/accounting/transactions/${tx.id}/documents`)).length, 1);
+      const download = await get<{ data: string }>(h, `/accounting/bank-transaction-documents/${saved.body.id}/download`);
+      assert.equal(download.data, pdf.toString('base64'), 'archived byte for byte');
+      assert.equal((await bankTx(h, tx.counterparty)).receiptDocumentCount, 1, 'the line is mit Beleg');
+      const approved = await approveDraft(h, d, lines(d, 23.8));
+      const posted = await postDraft(h, approved.id, { postingDate: '2026-03-06' });
+      assert.equal(posted.status, 200, posted.text);
+      assert.ok(posted.body.entry.lines.every((line: { evidenceReference?: string }) => line.evidenceReference === 'quittung.pdf'), 'every posting line names the Beleg');
+      assert.ok((await h.api.audit.exportCsv()).includes('Quittung nachgereicht'), 'the upload is audited');
+    });
+
+    test('an exception is assigned, paused and resolved on the draft with a reason; it survives a reload and the next save, and is audited', async () => {
+      const { tx, draft: d } = await newTx({ counterparty: `Ausnahme ${randomUUID().slice(0, 6)}` });
+      const put = (body: Record<string, unknown>, id = tx.id) => h.raw('PUT', `/accounting/drafts/${id}/exception`, body);
+      assert.equal((await put({ patch: { owner: 'Mara' } })).status, 400, 'a reason is required');
+      assert.equal((await put({ reason: 'x', patch: { state: 'gone' } })).status, 400, 'a known state only');
+      assert.equal((await put({ reason: 'x', patch: { state: 'resolved' } }, 'no-such-line')).status, 404);
+      assert.equal((await put({ reason: 'Zuständigkeit geklärt', patch: { owner: 'Mara Buchhaltung' } })).status, 200);
+      const until = addDays(today(), 7);
+      const snoozed = await put({ reason: 'Beleg kommt nächste Woche', patch: { state: 'snoozed', snoozedUntil: until } });
+      assert.equal(snoozed.status, 200, snoozed.text);
+      assert.deepEqual(snoozed.body.exceptionCase, { state: 'snoozed', owner: 'Mara Buchhaltung', snoozedUntil: until });
+      const resolved = await put({ reason: 'Beleg liegt vor', patch: { state: 'resolved', resolutionNote: 'Rechnung per Mail erhalten' } });
+      assert.equal(resolved.status, 200, resolved.text);
+      assert.deepEqual((await getDraft(h, tx.id)).exceptionCase, { state: 'resolved', owner: 'Mara Buchhaltung', snoozedUntil: until, resolutionNote: 'Rechnung per Mail erhalten' }, 'kept after a reload');
+      assert.equal((await saveDraft(h, d, lines(d, 119))).status, 200);
+      assert.equal((await getDraft(h, tx.id)).exceptionCase?.state, 'resolved', 'a later save of the Kontierung keeps the exception');
+      assert.ok((await h.api.audit.exportCsv()).includes('Beleg liegt vor'), 'the change is audited with its reason');
+    });
+
+    test('after a Storno the same bank line is kontiert and booked again; original and Storno stay, a retry books once', async () => {
+      const { tx, draft: d } = await newTx({ date: '2026-03-04', amount: -59.5, counterparty: `Neu buchen ${randomUUID().slice(0, 6)}` });
+      const wrong = await approveDraft(h, d, lines(d, 59.5, 59.5, { debitAccount: '4920' }));
+      const first = await postDraft(h, wrong.id, { postingDate: '2026-03-04' });
+      assert.equal(first.status, 200, first.text);
+      const original = first.body.entry;
+      const storno = await h.raw('POST', `/accounting/journal/${original.id}/reverse`, { reason: 'Falsches Konto' });
+      assert.equal(storno.status, 200, storno.text);
+      assert.equal((await getDraft(h, tx.id)).workflowStatus, 'reversed');
+      assert.equal((await bankTx(h, tx.counterparty)).status, 'pending', 'nothing live is booked on the line any more');
+
+      const reopened = await draftAction(h, tx.id, 'create_correction', 'Neu kontieren');
+      assert.equal(reopened.status, 200, reopened.text);
+      assert.equal(reopened.body.workflowStatus, 'corrected');
+      const again = await approveDraft(h, reopened.body, lines(d, 59.5, 59.5, { debitAccount: '4930' }));
+      const second = await postDraft(h, again.id, { postingDate: '2026-03-05' });
+      assert.equal(second.status, 200, second.text);
+      assert.notEqual(second.body.entry.id, original.id, 'a new entry, not the reversed one');
+      assert.deepEqual(shape(second.body.entry), [['4930', 59.5, 0], ['1200', 0, 59.5]]);
+      const replay = await postDraft(h, again.id, { postingDate: '2026-03-05' });
+      assert.equal(replay.body.entry.id, second.body.entry.id, 'a retry returns the same posting');
+      const mine = (await journal(h)).filter((entry) => entry.id === original.id || entry.id === second.body.entry.id || entry.sourceKey === `reversal:${original.id}`);
+      assert.deepEqual(mine.map((entry) => entry.status).sort(), ['posted', 'posted', 'reversed'], 'original (storniert), its Storno and the new posting');
+      assert.deepEqual(shape((await get<JournalEntry>(h, `/accounting/journal/${original.id}`))), [['4920', 59.5, 0], ['1200', 0, 59.5]], 'the original is unchanged');
+      assert.equal((await bankTx(h, tx.counterparty)).status, 'booked');
+      await assertLedgerConsistent(h);
+    });
 
     test('a draft walks imported → approved → posted, books the bank line and moves the ledger', async () => {
       const { tx, draft: d } = await newTx({ date: '2026-03-02' });
@@ -1251,6 +1341,10 @@ describe('pro accounting: setup and posting of issued invoices', () => {
       assert.deepEqual([booked.status, booked.linkedInvoiceId], ['booked', right.id]);
       const listed = await paymentsList();
       assert.equal(listed.find((payment) => payment.id === first.body.id)!.status, 'reversed', 'the reversed payment stays as history');
+      // OPOS "Gebuchte Zahlungen" names what each payment settled: invoice number and customer.
+      const named = (id: string) => (({ documentNumbers, partyName }) => [documentNumbers, partyName])(listed.find((payment) => payment.id === id) as unknown as { documentNumbers?: string; partyName?: string });
+      assert.deepEqual(named(first.body.id), [wrong.number, wrong.client], 'the reversed payment still says which invoice it was booked on');
+      assert.deepEqual(named(moved.body.payment.id), [right.number, right.client]);
       assert.ok((await h.api.audit.exportCsv()).includes('Zahlung gehört zu Kunde B'));
 
       const twice = await reversePayment(first.body.id);
@@ -1296,7 +1390,7 @@ describe('pro accounting: setup and posting of issued invoices', () => {
       assert.equal(returned.body.refund, true);
       const entry = (await journal(h)).find((candidate) => candidate.id === returned.body.journalEntryId)!;
       assert.deepEqual(shape(entry), [['1400', GROSS, 0], ['1200', 0, GROSS]], 'Forderungen an Bank');
-      assert.equal(entry.bookingText, 'Erstattung');
+      assert.equal(entry.bookingText, `Erstattung ${invoice.number} ${invoice.client}`, 'the refund names the invoice and the customer');
       assert.deepEqual([(await itemOf(invoice.id)).status, (await itemOf(invoice.id)).residualAmount, (await invoiceOf(h, invoice.id)).status], ['open', GROSS, 'open']);
       assert.equal((await bankTx(h, back.counterparty)).status, 'booked');
       // The payment that was returned cannot be reversed while the Rücklastschrift stands.
@@ -1409,6 +1503,61 @@ describe('pro accounting: setup and posting of issued invoices', () => {
       assert.ok(line, 'the deletion is in the audit log');
       assert.doesNotMatch(line!, /server-banking/);
       assert.match(line!, /""type"":""user""/, 'actor type user');
+    });
+
+    test('a bank account books on a money account: another ledger account is refused, a blank one takes the bank role, a change moves its open drafts', async () => {
+      const upsert = (id: string, defaultSkrAccountNumber?: string) => h.raw('POST', '/accounts', { account: { id, name: `Konto ${id}`, iban: '', balance: 0, transactions: [], type: 'bank', color: '#000000', ...(defaultSkrAccountNumber === undefined ? {} : { defaultSkrAccountNumber }) } });
+      const stored = async (id: string) => (await h.api.accounts.list()).find((account) => account.id === id) as { defaultSkrAccountNumber?: string } | undefined;
+      for (const wrong of ['0005', '4900', '9999']) {
+        const id = `bank-wrong-${randomUUID().slice(0, 6)}`;
+        const refused = await upsert(id, wrong);
+        assert.equal(refused.status, 422, `${wrong}: ${refused.text}`);
+        assert.match(refused.body.message, /kein Geld- oder Bankkonto/, 'a German message, no code');
+        assert.equal(await stored(id), undefined, `${wrong} is not stored`);
+      }
+      for (const blank of [undefined, '', '  ']) {
+        const id = `bank-blank-${randomUUID().slice(0, 6)}`;
+        const saved = await upsert(id, blank);
+        assert.equal(saved.status, 200, saved.text);
+        assert.equal((await stored(id))?.defaultSkrAccountNumber, '1200', 'a blank ledger account takes the bank role');
+      }
+
+      const id = await addBankAccount(h, `bank-move-${randomUUID().slice(0, 6)}`);
+      const counterparty = `Kontowechsel ${randomUUID().slice(0, 6)}`;
+      await importCsv(h, id, [{ date: today(), amount: -119, counterparty, purpose: 'Bürobedarf' }]);
+      const tx = await bankTx(h, counterparty);
+      const before = await getDraft(h, tx.id);
+      assert.equal(before.lines.find((line) => line.creditAmount === 119)?.accountNumber, '1200');
+      const moved = await upsert(id, '1240');
+      assert.equal(moved.status, 200, moved.text);
+      const after = await getDraft(h, tx.id);
+      assert.deepEqual(after.lines.map((line) => [line.accountNumber, line.debitAmount, line.creditAmount]), [[before.lines[0]!.accountNumber, 119, 0], ['1240', 0, 119]], 'the open draft books on the new ledger account');
+      assert.ok(!after.validationIssues.some((item) => item.code === 'BANK_LINE_MISMATCH'), JSON.stringify(after.validationIssues));
+    });
+
+    test('a payment received for an open invoice drafts against the receivable and is steered to OPOS, never booked as a second revenue', async () => {
+      const invoice = await issue(h, { client: `Zahlungseingang ${randomUUID().slice(0, 6)}` });
+      const account = await addBankAccount(h, `bank-receipt-${randomUUID().slice(0, 6)}`);
+      const other = `Spender ${randomUUID().slice(0, 6)}`;
+      await importCsv(h, account, [
+        { date: today(), amount: GROSS, counterparty: invoice.client, purpose: `Restzahlung ${invoice.number}` },
+        { date: today(), amount: 77.77, counterparty: other, purpose: 'Zuschuss' },
+      ]);
+      const tx = await bankTx(h, invoice.client);
+      const receipt = await getDraft(h, tx.id);
+      assert.deepEqual(receipt.lines.map((line) => [line.accountNumber, line.debitAmount, line.creditAmount]), [['1200', GROSS, 0], ['1400', 0, GROSS]], 'the counter account is the receivable, not 8400');
+      const steer = (receipt.validationIssues as Array<{ code: string; blocking: boolean; message?: string }>).find((item) => item.code === 'OPEN_ITEM_ACCOUNT_IN_DRAFT');
+      assert.ok(steer?.blocking, JSON.stringify(receipt.validationIssues));
+      assert.match(steer!.message ?? '', /In Offene Posten ausgleichen/, 'a German message with the way out');
+      const entries = (await journal(h)).length;
+      const posted = await postDraft(h, receipt.id);
+      assert.ok(JSON.stringify(posted.body).includes('OPEN_ITEM_ACCOUNT_IN_DRAFT'), posted.text.slice(0, 300));
+      assert.equal((await journal(h)).length, entries, 'a free draft on 1400 would leave the open item open while the ledger says paid');
+      const second = await issue(h, { client: `Ohne Nummer ${randomUUID().slice(0, 6)}` });
+      await importCsv(h, account, [{ date: today(), amount: GROSS, counterparty: second.client, purpose: 'Danke' }]);
+      assert.equal((await getDraft(h, (await bankTx(h, second.client)).id)).lines[1]!.accountNumber, '1400', 'the exact rest from that customer, without the number in the purpose');
+      const unrelated = await getDraft(h, (await bankTx(h, other)).id);
+      assert.deepEqual(unrelated.lines.map((line) => line.accountNumber), ['1200', '8400'], 'income without an open invoice keeps the revenue default');
     });
 
     let bank: string;
@@ -1612,6 +1761,31 @@ describe('pro accounting: setup and posting of issued invoices', () => {
       const second = (await bankTransactions(h)).find((tx) => tx.counterparty === next && tx.purpose === 'Zweite')!;
       assert.deepEqual([second.suggestionLayer, second.suggestedAccountNumber], ['counterparty', '4930']);
     });
+
+    test('a rule made after the line was opened moves the untouched draft onto its account; a draft the person edited stays', async () => {
+      const u = token();
+      await importCsv(h, bank, [
+        { date: today(), amount: -29.99, counterparty: `Hosting ${u} AG`, purpose: 'Server' },
+        { date: today(), amount: -12, counterparty: `Hosting ${u} Mail`, purpose: 'Postfach' },
+      ]);
+      const untouched = await bankTx(h, `Hosting ${u} AG`);
+      const edited = await bankTx(h, `Hosting ${u} Mail`);
+      assert.equal((await getDraft(h, untouched.id)).lines[0]!.accountNumber, '4900', 'opened before the rule: the default');
+      const mine = await getDraft(h, edited.id);
+      assert.equal((await saveDraft(h, mine, [{ ...mine.lines[0]!, accountNumber: '4930' }, mine.lines[1]!])).status, 200);
+      const made = await saveRule({ value: `hosting ${u}`, priority: 10, targetAccountNumber: '4910' });
+      assert.equal(made.status, 200, made.text);
+      try {
+        assert.deepEqual(await suggestion(`Hosting ${u} AG`), ['rule', '4910']);
+        const moved = await getDraft(h, untouched.id);
+        assert.deepEqual(moved.lines.map((line) => [line.accountNumber, line.debitAmount, line.creditAmount]), [['4910', 29.99, 0], ['1200', 0, 29.99]], 'the draft books what the card proposes');
+        assert.equal(moved.workflowStatus, 'suggested', 'and offers the next step');
+        assert.equal((await draftAction(h, untouched.id, 'submit_for_review')).status, 200);
+        assert.equal((await getDraft(h, edited.id)).lines[0]!.accountNumber, '4930', 'a person\'s choice is not overwritten');
+      } finally {
+        await dropRule(made.body.id);
+      }
+    });
   });
 
   describe('Skonto derived from the payment', () => {
@@ -1746,6 +1920,41 @@ describe('pro accounting: setup and posting of issued invoices', () => {
       assert.equal(all.filter((candidate) => candidate.id === id).length, 1);
       const names = all.map((candidate) => candidate.name);
       assert.deepEqual(names, [...names].sort((a, b) => a.localeCompare(b)), 'sorted by name');
+    });
+
+    test('a vendor saved again under a new id but the same name is the same vendor, not a second one', async () => {
+      const name = `Bau Schmidt ${randomUUID().slice(0, 6)}`;
+      const first = await h.raw('POST', '/accounting/vendors', vendor(`v-${randomUUID().slice(0, 6)}`, { name, vendorNumber: undefined }));
+      assert.equal(first.status, 200, first.text);
+      const again = await h.raw('POST', '/accounting/vendors', vendor(`v-${randomUUID().slice(0, 6)}`, { name: `  ${name.toUpperCase()} `, vendorNumber: undefined }));
+      assert.equal(again.status, 200, again.text);
+      assert.equal(again.body.id, first.body.id, 'the existing vendor is returned');
+      const all = await get<Array<{ name: string }>>(h, '/accounting/vendors');
+      assert.equal(all.filter((candidate) => candidate.name.trim().toLowerCase() === name.toLowerCase()).length, 1);
+      // A differing IBAN or USt-IdNr. is never dropped silently: the save is refused and the existing vendor stays as it was.
+      const otherIban = await h.raw('POST', '/accounting/vendors', vendor(`v-${randomUUID().slice(0, 6)}`, { name, vendorNumber: undefined, iban: 'DE89370400440532013000' }));
+      assert.equal(otherIban.status, 409, otherIban.text);
+      assert.match(otherIban.body.message, /existiert bereits/);
+      assert.match(otherIban.body.message, /IBAN/);
+      const otherVat = await h.raw('POST', '/accounting/vendors', vendor(`v-${randomUUID().slice(0, 6)}`, { name, vendorNumber: undefined, vatId: 'DE999999999' }));
+      assert.equal(otherVat.status, 409, otherVat.text);
+      assert.match(otherVat.body.message, /USt-IdNr/);
+      const kept = (await get<Array<{ id: string; iban?: string; vatId?: string }>>(h, '/accounting/vendors')).find((candidate) => candidate.id === first.body.id)!;
+      assert.deepEqual([kept.iban, kept.vatId], [first.body.iban, first.body.vatId], 'the existing vendor is unchanged');
+    });
+
+    test('an incoming invoice with an account the chart does not know cannot be released for posting, and stays correctable', async () => {
+      const id = `in-${randomUUID().slice(0, 6)}`;
+      const lines = (accountNumber: string) => [{ id: `l-${id}`, incomingInvoiceId: id, position: 0, description: 'Bauleistung', quantity: 1, unitPrice: 100, netAmount: 100, taxRate: 19, taxAmount: 19, grossAmount: 119, accountNumber }];
+      assert.equal((await h.raw('POST', '/accounting/incoming-invoices', incoming(id, { status: 'draft', lines: lines('4400') }))).status, 200, 'a draft may hold an unfinished account');
+      const released = await h.raw('POST', '/accounting/incoming-invoices', incoming(id, { status: 'open', lines: lines('4400') }));
+      assert.equal(released.status, 422, released.text);
+      assert.match(released.body.message, /4400.*nicht im Kontenrahmen/, 'a German message naming the account');
+      assert.equal((await listed(id)).status, 'draft', 'still a draft');
+      const fixed = await h.raw('POST', '/accounting/incoming-invoices', incoming(id, { status: 'open', lines: lines('3100') }));
+      assert.equal(fixed.status, 200, fixed.text);
+      assert.equal((await listed(id)).lines[0].accountNumber, '3100');
+      assert.equal((await post(id)).status, 200);
     });
 
     test('a line without its own account books the vendor\'s default expense account; a line account still wins', async () => {

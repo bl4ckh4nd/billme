@@ -19,17 +19,18 @@ import type {
   IncomingInvoiceDocumentDownload, IncomingInvoiceDocumentEntity, IncomingInvoiceDocumentReviewInput,
   IncomingInvoiceDocumentUploadInput,
   IncomingInvoiceLineEntity, OpenItemEntity, OpenItemPaymentEntity, OpenItemPaymentInput, VendorEntity,
-  BookingDraftEntity, JournalEntryEntity, JournalLineEntity, LedgerBalance, ValidationIssue, AccountingMutationContext, DatevExportContent, DatevExportSourceSnapshot, DatevTaxEvidence, TaxCaseDefinition, TaxCaseKey,
+  BookingDraftEntity, DraftExceptionCase, JournalEntryEntity, JournalLineEntity, LedgerBalance, ValidationIssue, AccountingMutationContext, DatevExportContent, DatevExportSourceSnapshot, DatevTaxEvidence, TaxCaseDefinition, TaxCaseKey,
   ReportKind, ReportingCalculationProfile, ReportingMapping, ReportResult, Bwa01Report, ManagementGuvReport, HgbGuvReport, HgbBilanzReport,
 } from '@billme/accounting-shared';
 import { datevDestinationCases, datevSachverhaltCases, normalizeDatevTaxEvidence, validateDatevTaxEvidence, INCOMING_INVOICE_DOCUMENT_MAX_BYTES, assertIncomingInvoiceDocumentContent, isSelfAssessedPurchase, TAX_CASE_RECEIPT_MODE } from '@billme/accounting-shared';
 import type {
   TenantScope, ProAccountingAssetRepository, ProAccountingRepository, PostDraftOptions, ProDraftActionRequest, ReverseJournalEntryOptions,
-  AssetDepreciationInput, AssetDepreciationResult, AssetDepreciationScheduleEntry, AssetDisposalInput, AssetDisposalResult,
+  AssetDepreciationInput, AssetDepreciationResult, AssetDepreciationScheduleEntry, AssetDisposalInput, AssetDisposalResult, AssetRegister,
   AssetItem, AssetMutationOptions, AssetStatus, AssetUpsertInput,
 } from '@billme/server-core';
 import { businessReportingProfileSchema, localIsoDate } from '@billme/server-core';
-import { AccountingPolicyError } from '@billme/accounting-shared';
+import { AccountingPolicyError, BANK_ACCOUNT_DEFAULT, isMoneyLedgerAccount } from '@billme/accounting-shared';
+import { defaultResultAccount, isProfitAndLossAccount } from '@billme/accounting-shared';
 import { runInTransaction, type PostgresQueryable, type PostgresTransactionClient } from './connection.js';
 import { suggestAccountForTransaction } from '@billme/finance-intelligence';
 import { loadAccountSuggestionContext } from './accountSuggestions.js';
@@ -43,7 +44,7 @@ import {
 } from './reporting.js';
 import { getServerEurReport, type ServerEurReportResult } from './eurReport.js';
 import { assertServerEurCashSource, assertServerEurProfile, listServerEurCashItems, type ServerEurCashItem } from './eurReport.js';
-import { saveServerEurClassification, type ServerEurClassificationRecord } from './proAccounting.js';
+import { saveServerBankAccount, saveServerEurClassification, type ServerBankAccountRecord, type ServerEurClassificationRecord } from './proAccounting.js';
 import { createPostgresAccountingSourceRunRepository, sourceEntries, type AccountingSourceRunRepository } from './accountingSourceRuns.js';
 import { ACCOUNT_ROLE_DEFAULTS, accountRoleMappings, taxCaseAccount } from './taxAccounts.js';
 import { DATEV_AUTOMATIC_ACCOUNTS } from './datevAutomaticAccounts.js';
@@ -189,6 +190,34 @@ const eurBalanceAccounts = async (db: PostgresQueryable, scope: TenantScope, cha
  */
 const RUNNING_JOURNAL = `COALESCE(je.source_type,'') NOT IN ('fiscal_close','carry_forward')`;
 
+/**
+ * Erfolgskonten open every fiscal year at 0. Opening balances are split at the start of the fiscal year of
+ * `from`: before it, a booked close of an earlier year counts (it moved that year's Erfolgskonten onto the
+ * result account); what an unclosed earlier year leaves on Erfolgskonten is carried on the default result account.
+ * `$yearStart` is the SQL parameter of that date; lines of the opening columns are `opening_prior` / `opening_year`.
+ */
+const yearOpeningJournal = (yearStart: string) => `(${RUNNING_JOURNAL} OR (je.source_type='fiscal_close' AND ${yearStart}::text IS NOT NULL AND je.posting_date < ${yearStart}))`;
+const yearStartOf = async (db: PostgresQueryable, t: string, from: string | undefined): Promise<string | null> => {
+  if (!from) return null;
+  const start = await reportingFiscalYearStart(db, t);
+  return fiscalYearRange(fiscalYearForDate(from, start), start).start;
+};
+const foldYearOpening = async <R extends { account_number: unknown; opening_prior: unknown; opening_year: unknown }>(db: PostgresQueryable, t: string, chart: 'SKR03' | 'SKR04', rows: R[], blank: (accountNumber: string) => R): Promise<Array<R & { opening_balance: number }>> => {
+  let carriedCents = 0;
+  const out = rows.map((row) => {
+    const prior = Math.round(Number(row.opening_prior) * 100);
+    const pnl = isProfitAndLossAccount(chart, String(row.account_number));
+    if (pnl) carriedCents += prior;
+    return { ...row, opening_balance: ((pnl ? 0 : prior) + Math.round(Number(row.opening_year) * 100)) / 100 };
+  });
+  if (!carriedCents) return out;
+  const settings = parse<any>((await q<any>(db, `SELECT settings_json FROM server_settings WHERE tenant_id=$1 LIMIT 1`, [t]))[0]?.settings_json, {});
+  const resultAccount = defaultResultAccount(chart, settings.businessReportingProfile?.legalForm);
+  const target = out.find((row) => String(row.account_number) === resultAccount) ?? (() => { const row = { ...blank(resultAccount), opening_balance: 0 }; out.push(row); return row; })();
+  target.opening_balance = (Math.round(target.opening_balance * 100) + carriedCents) / 100;
+  return out.sort((a, b) => String(a.account_number).localeCompare(String(b.account_number)));
+};
+
 const calculateDatabaseReport = async <T extends DatabaseReportType>(db: PostgresQueryable, scope: TenantScope, reportType: T, args: { from?: string; to?: string; asOfDate?: string; chart?: 'SKR03' | 'SKR04' }): Promise<DatabaseReportFor<T>> => {
   const p = await policy(db, tenant(scope));
   if (args.chart && args.chart !== p.activeChart) throw new Error('REPORT_CHART_MISMATCH');
@@ -200,7 +229,8 @@ const calculateDatabaseReport = async <T extends DatabaseReportType>(db: Postgre
   const ledgerFromDate = reportType === 'hgb-bilanz' && !fromDate && reportTo && balanceProfile
     ? fiscalYearRange(fiscalYearForDate(reportTo, balanceProfile.fiscalYearStart), balanceProfile.fiscalYearStart).start
     : fromDate;
-  const queriedBalances = await q<any>(db, `SELECT jl.account_number,COALESCE(SUM(CASE WHEN $3::text IS NOT NULL AND je.posting_date < $3 THEN jl.debit_amount-jl.credit_amount ELSE 0 END),0) opening_balance,COALESCE(SUM(CASE WHEN $3::text IS NULL OR je.posting_date >= $3 THEN jl.debit_amount ELSE 0 END),0) debit_turnover,COALESCE(SUM(CASE WHEN $3::text IS NULL OR je.posting_date >= $3 THEN jl.credit_amount ELSE 0 END),0) credit_turnover FROM journal_lines jl JOIN journal_entries je ON je.id=jl.entry_id AND je.tenant_id=jl.tenant_id WHERE jl.tenant_id=$1 AND je.status IN ('posted','reversed') AND ${RUNNING_JOURNAL} AND ($2::text IS NULL OR je.posting_date <= $2) GROUP BY jl.account_number ORDER BY jl.account_number`, [tenant(scope), reportTo ?? null, ledgerFromDate ?? null]);
+  const yearStart = await yearStartOf(db, tenant(scope), ledgerFromDate);
+  const queriedBalances = await foldYearOpening(db, tenant(scope), chart, await q<any>(db, `SELECT jl.account_number,COALESCE(SUM(CASE WHEN $4::text IS NOT NULL AND je.posting_date < $4 THEN jl.debit_amount-jl.credit_amount ELSE 0 END),0) opening_prior,COALESCE(SUM(CASE WHEN $3::text IS NOT NULL AND je.posting_date < $3 AND ($4::text IS NULL OR je.posting_date >= $4) THEN jl.debit_amount-jl.credit_amount ELSE 0 END),0) opening_year,COALESCE(SUM(CASE WHEN $3::text IS NULL OR je.posting_date >= $3 THEN jl.debit_amount ELSE 0 END),0) debit_turnover,COALESCE(SUM(CASE WHEN $3::text IS NULL OR je.posting_date >= $3 THEN jl.credit_amount ELSE 0 END),0) credit_turnover FROM journal_lines jl JOIN journal_entries je ON je.id=jl.entry_id AND je.tenant_id=jl.tenant_id WHERE jl.tenant_id=$1 AND je.status IN ('posted','reversed') AND ${yearOpeningJournal('$4')} AND ($2::text IS NULL OR je.posting_date <= $2) GROUP BY jl.account_number ORDER BY jl.account_number`, [tenant(scope), reportTo ?? null, ledgerFromDate ?? null, yearStart]), (accountNumber) => ({ account_number: accountNumber, opening_prior: 0, opening_year: 0, debit_turnover: 0, credit_turnover: 0 }));
   const profile = balanceProfile ?? await reportProfile(db, tenant(scope), chart, reportType);
   const mappings = await reportMappings(db, scope, chart, reportTo);
   const excluded = await eurBalanceAccounts(db, scope, chart, reportType);
@@ -274,6 +304,7 @@ const draftFromRows = (row: any, lines: any[], issues: any[], scope: TenantScope
     period: value.period ?? period(value.postingDate ?? now().slice(0, 10)), fiscalYear: Number(value.fiscalYear ?? new Date().getUTCFullYear()),
     lines: value.lines && issues.some((item) => item.code === 'DUPLICATE_LINE_ID') ? value.lines : lines.map((line) => ({ id: line.id, accountNumber: line.account_number, debitAmount: Number(line.debit_amount || 0), creditAmount: Number(line.credit_amount || 0), taxCode: line.tax_code ?? undefined, taxCaseKey: line.tax_case_key ?? undefined, taxRate: line.tax_rate == null ? undefined : Number(line.tax_rate), netAmount: line.net_amount == null ? undefined : Number(line.net_amount), taxAmount: line.tax_amount == null ? undefined : Number(line.tax_amount), grossAmount: line.gross_amount == null ? undefined : Number(line.gross_amount), countryCode: line.country_code ?? undefined, counterpartyVatId: line.counterparty_vat_id ?? undefined, evidenceType: line.evidence_type ?? undefined, evidenceReference: line.evidence_reference ?? undefined, datevSachverhaltLl: line.datev_sachverhalt_ll ?? undefined, costCenter: line.cost_center ?? undefined, memo: line.memo ?? undefined })),
     validationIssues: issues.map((item) => parse<ValidationIssue>(item.issue_json, { id: item.id, code: item.code, severity: item.severity, message: item.message, fieldPath: item.field_path ?? undefined, blocking: Boolean(item.blocking), source: item.source })), updatedAt: row.updated_at,
+    ...(value.exceptionCase ? { exceptionCase: value.exceptionCase } : {}),
   };
 };
 const getDraft = async (db: PostgresQueryable, scope: TenantScope, transactionId: string): Promise<BookingDraftEntity | null> => {
@@ -315,6 +346,38 @@ const backfillConfig = async (db: PostgresQueryable, t: string): Promise<unknown
 };
 // Fail closed: without a catalogue for the chart no account exists; a deactivated tenant account does not either.
 const accountExists = async (db: PostgresQueryable, chart: string, account: string, tenantId: string): Promise<boolean> => (await usableAccountNumbers(db, tenantId, chart, [account])).has(account);
+/**
+ * A line keyed with an automatic tax case (standard VAT above 0 %, no destination country) carries the gross amount;
+ * it books the net on its own account and the tax on the case's VAT account (taxCaseAccount). Other cases return
+ * undefined. `skipAccounts`: a tax account already in the entry means the user split it by hand.
+ */
+const automaticTaxSplit = async (db: PostgresQueryable, t: string, chart: 'SKR03'|'SKR04', line: JournalLineEntity, date: string, skipAccounts: ReadonlySet<string> = new Set()): Promise<JournalLineEntity[] | undefined> => {
+  if (!line.taxCaseKey) return undefined;
+  const taxCase = (await q<any>(db, `SELECT mechanism,default_rate,requires_country,active FROM tax_cases WHERE key=$1`, [line.taxCaseKey]))[0];
+  const rate = Number(taxCase?.default_rate ?? 0);
+  if (!taxCase || !taxCase.active || taxCase.mechanism !== 'standard_vat' || !(rate > 0) || taxCase.requires_country) return undefined;
+  const debit = cents(line.debitAmount) ?? 0; const credit = cents(line.creditAmount) ?? 0;
+  const debitSide = debit > 0; const gross = debitSide ? debit : credit;
+  const net = Math.round(gross * 100 / (100 + rate)); const tax = gross - net;
+  const m = await mappings(db, t, chart);
+  // 7 % Vorsteuer/Umsatzsteuer have their own accounts (SKR03 1571/1771, SKR04 1401/3801): taxCaseAccount knows them.
+  const taxAccount = debitSide
+    ? await taxCaseAccount(db, t, chart, line.taxCaseKey, 'input_tax', m.input_vat!, date)
+    : await taxCaseAccount(db, t, chart, line.taxCaseKey, 'output_tax', m.output_vat!, date);
+  if (skipAccounts.has(taxAccount)) return undefined;
+  if (!(await accountExists(db, chart, taxAccount, t))) throw new Error(`UNKNOWN_ACCOUNT:${taxAccount} (Steuerkonto) ist im Kontenrahmen ${chart} nicht vorhanden.`);
+  return [
+    { ...line, debitAmount: debitSide ? net / 100 : 0, creditAmount: debitSide ? 0 : net / 100, taxRate: rate, netAmount: net / 100, taxAmount: tax / 100, grossAmount: gross / 100 },
+    ...(tax > 0 ? [{ id: randomUUID(), accountNumber: taxAccount, debitAmount: debitSide ? tax / 100 : 0, creditAmount: debitSide ? 0 : tax / 100, memo: `${debitSide ? 'Vorsteuer' : 'USt'} ${line.taxCaseKey}` }] : []),
+  ];
+};
+/** The lines a bank draft posts: a gross line with a tax case is split; the bank line and lines with their own tax figures stay. */
+const draftPostingLines = async (db: PostgresQueryable, t: string, chart: 'SKR03'|'SKR04', lines: JournalLineEntity[], date: string, bankAccount: string): Promise<JournalLineEntity[]> => {
+  const booked = new Set(lines.map((line) => line.accountNumber));
+  const out: JournalLineEntity[] = [];
+  for (const line of lines) out.push(...(line.accountNumber === bankAccount || line.taxAmount != null ? undefined : await automaticTaxSplit(db, t, chart, line, date, booked)) ?? [line]);
+  return out;
+};
 type DraftBankLine = { account_id: unknown; amount: unknown; type: string };
 /** The money of a bank line moved on its bank account: the draft books exactly that amount there, on that side. */
 const bankLineIssue = async (db: PostgresQueryable, t: string, draft: BookingDraftEntity, bank: DraftBankLine): Promise<ValidationIssue | undefined> => {
@@ -326,6 +389,31 @@ const bankLineIssue = async (db: PostgresQueryable, t: string, draft: BookingDra
   const euro = (amount / 100).toFixed(2).replace('.', ',');
   return issue('BANK_LINE_MISMATCH', `Die Bankzeile muss ${euro} € im ${bank.type === 'income' ? 'Soll' : 'Haben'} auf dem Konto ${account} des Bankkontos buchen.`, 'lines');
 };
+/** The customer or vendor of an open item, for booking texts. */
+const openItemPartnerName = async (db: PostgresQueryable, t: string, item: { source_type: string; source_id: string }): Promise<string | undefined> => {
+  if (item.source_type === 'outgoing_invoice') return (await q<any>(db, `SELECT client FROM invoices WHERE tenant_id=$1 AND id=$2`, [t, item.source_id]))[0]?.client || undefined;
+  if (item.source_type === 'incoming_invoice') return (await q<any>(db, `SELECT v.name FROM incoming_invoices i JOIN vendors v ON v.tenant_id=i.tenant_id AND v.id=i.vendor_id WHERE i.tenant_id=$1 AND i.id=$2`, [t, item.source_id]))[0]?.name || undefined;
+  return undefined;
+};
+/** A bank line that pays an open item of its side: the document number in the purpose, or exactly the residual of that customer/vendor (by name). */
+/**
+ * The tax case a partner's bank bookings on this account carried so far, when it is one and the same every time.
+ * A suggested draft takes it over, so a batch posting splits Vorsteuer/USt like a hand-made one; an unknown or mixed
+ * history leaves the line without a tax case and the batch skips it instead of booking the gross amount.
+ */
+const partnerTaxCase = async (db: PostgresQueryable, t: string, counterparty: string, accountNumber: string): Promise<TaxCaseKey | undefined> => {
+  const rows = await q<{ k: string }>(db, `SELECT DISTINCT COALESCE(jl.tax_case_key,'') AS k FROM journal_entries je JOIN booking_drafts bd ON bd.id=je.source_draft_id AND bd.tenant_id=je.tenant_id JOIN bank_transactions bt ON bt.id=bd.transaction_id AND bt.tenant_id=bd.tenant_id JOIN journal_lines jl ON jl.entry_id=je.id AND jl.tenant_id=je.tenant_id WHERE je.tenant_id=$1 AND je.status='posted' AND lower(trim(bt.counterparty))=lower(trim($2)) AND jl.account_number=$3`, [t, counterparty, accountNumber]);
+  return rows.length === 1 && rows[0]!.k ? rows[0]!.k as TaxCaseKey : undefined;
+};
+const paysOpenItem = async (db: PostgresQueryable, t: string, row: { type: string; amount: unknown; counterparty?: string | null; purpose?: string | null }): Promise<boolean> => (await q<any>(db,
+  `SELECT 1 FROM open_items oi
+     LEFT JOIN invoices i ON i.tenant_id=oi.tenant_id AND oi.source_type='outgoing_invoice' AND i.id=oi.source_id
+     LEFT JOIN incoming_invoices ii ON ii.tenant_id=oi.tenant_id AND oi.source_type='incoming_invoice' AND ii.id=oi.source_id
+     LEFT JOIN vendors v ON v.tenant_id=oi.tenant_id AND v.id=ii.vendor_id
+    WHERE oi.tenant_id=$1 AND oi.party_type=$2 AND oi.status IN ('open','partially_paid') AND oi.residual_amount>0
+      AND ((COALESCE(oi.document_number,'')<>'' AND position(lower(oi.document_number) in lower($3))>0)
+        OR (oi.residual_amount=$4 AND lower(btrim($5)) IN (lower(oi.party_id), lower(COALESCE(i.client,'')), lower(COALESCE(v.name,''))))) LIMIT 1`,
+  [t, row.type === 'income' ? 'debtor' : 'creditor', row.purpose ?? '', round(Math.abs(Number(row.amount))), row.counterparty ?? ''])).length > 0;
 const validateDraft = async (db: PostgresQueryable, scope: TenantScope, draft: BookingDraftEntity, periodStatus: string, chart: 'SKR03'|'SKR04', bank?: DraftBankLine): Promise<ValidationIssue[]> => {
   const out: ValidationIssue[] = []; const debit = draft.lines.reduce((sum, l) => sum + (cents(l.debitAmount) ?? 0), 0); const credit = draft.lines.reduce((sum, l) => sum + (cents(l.creditAmount) ?? 0), 0);
   if (!isoDate(draft.postingDate)) out.push(issue('INVALID_POSTING_DATE', 'Buchungsdatum ist ungültig.', 'postingDate'));
@@ -342,6 +430,12 @@ const validateDraft = async (db: PostgresQueryable, scope: TenantScope, draft: B
     if (line.accountNumber && !(await accountExists(db, chart, line.accountNumber, tenant(scope)))) out.push(issue('UNKNOWN_ACCOUNT', `Sachkonto ${line.accountNumber} ist im Kontenrahmen nicht vorhanden.`, `lines[${index}].accountNumber`));
   }
   if (bank) { const mismatch = await bankLineIssue(db, tenant(scope), draft, bank); if (mismatch) out.push(mismatch); }
+  if (bank) {
+    // A payment on the receivable or payable settles an open item; booked as a free draft the ledger would say paid while OPOS stays open.
+    const m = await mappings(db, tenant(scope), chart);
+    const control = draft.lines.find((line) => line.accountNumber === m.accounts_receivable || line.accountNumber === m.accounts_payable);
+    if (control) out.push(issue('OPEN_ITEM_ACCOUNT_IN_DRAFT', `Eine Zahlung auf ${control.accountNumber === m.accounts_receivable ? 'Forderungen' : 'Verbindlichkeiten'} (${control.accountNumber}) gleicht einen offenen Posten aus. Buchen Sie sie über „In Offene Posten ausgleichen“.`, 'lines'));
+  }
   if (periodStatus === 'closed') out.push(issue('POSTING_DATE_IN_CLOSED_PERIOD', 'Periode ist geschlossen.'));
   out.push(...await validateJournalLineDatevEvidence(db, draft.lines));
   return out;
@@ -349,8 +443,11 @@ const validateDraft = async (db: PostgresQueryable, scope: TenantScope, draft: B
 const saveDraftTarget = async (db: PostgresQueryable, scope: TenantScope, draft: BookingDraftEntity, mutation?: AccountingMutationContext): Promise<BookingDraftEntity> => {
   const draftMutation = mutation ?? (draft as BookingDraftEntity & { mutation?: AccountingMutationContext }).mutation;
   const { mutation: _ignoredMutation, ...draftData } = draft as BookingDraftEntity & { mutation?: AccountingMutationContext };
-  const existing = (await q<any>(db, `SELECT workflow_status FROM booking_drafts WHERE tenant_id=$1 AND id=$2 FOR UPDATE`, [tenant(scope), draft.id]))[0];
+  const existing = (await q<any>(db, `SELECT workflow_status,draft_json FROM booking_drafts WHERE tenant_id=$1 AND id=$2 FOR UPDATE`, [tenant(scope), draft.id]))[0];
   if (existing?.workflow_status === 'posted') throw Object.assign(new Error('POSTED_DRAFT_IMMUTABLE'), { statusCode: 409 });
+  // The Ausnahme belongs to the bank line, not to the Kontierung a save sends: a save without it keeps the stored one.
+  const keptException = draftData.exceptionCase ?? parse<Partial<BookingDraftEntity>>(existing?.draft_json, {}).exceptionCase;
+  if (keptException) draftData.exceptionCase = keptException;
   const t = tenant(scope); const transactionOwner = (await q<any>(db, `SELECT tenant_id,account_id,amount,type FROM bank_transactions WHERE id=$1`, [draft.transactionId]))[0]; if (!transactionOwner || transactionOwner.tenant_id !== t) throw new Error('BANK_TRANSACTION_NOT_FOUND: Ein Buchungsentwurf gehört zu einer Bankzeile; ohne Bankzeile ist es eine freie Buchung mit Beleg.'); const foreignDraft = (await q<any>(db, `SELECT tenant_id FROM booking_drafts WHERE id=$1 AND tenant_id<>$2`, [draft.id, t]))[0]; if (foreignDraft) throw new Error('DRAFT_NOT_FOUND'); const p = await policy(db, t); const postingDate = draft.postingDate ?? now().slice(0, 10); const normalized = { ...draftData, tenantId: t, lines: (draft.lines ?? []).map((line, i) => ({ ...line, id: line.id || `${draft.id}-${i + 1}`, debitAmount: round(line.debitAmount), creditAmount: round(line.creditAmount) })), period: draft.period || period(postingDate), fiscalYear: isoDate(postingDate) ? await reportingFiscalYear(db, t, postingDate) : draft.fiscalYear || Number((draft.period || period(postingDate)).slice(0, 4)), updatedAt: now() };
   const periodStatus = await ensurePeriod(db, scope, normalized.period, isoDate(postingDate) ? postingDate : undefined); normalized.validationIssues = await validateDraft(db, scope, normalized, periodStatus, p.activeChart, transactionOwner); normalized.workflowStatus = normalized.validationIssues.some((x) => x.blocking) ? periodStatus === 'closed' ? 'period_locked' : 'incomplete' : normalized.workflowStatus;
   await q(db, `INSERT INTO booking_drafts (id,tenant_id,transaction_id,workflow_status,draft_json,updated_at) VALUES ($1,$2,$3,$4,$5,$6) ON CONFLICT (id) DO UPDATE SET transaction_id=EXCLUDED.transaction_id,workflow_status=EXCLUDED.workflow_status,draft_json=EXCLUDED.draft_json,updated_at=EXCLUDED.updated_at`, [normalized.id, t, normalized.transactionId, normalized.workflowStatus, JSON.stringify(normalized), normalized.updatedAt]);
@@ -419,8 +516,8 @@ const pairLines = (lines: JournalLineEntity[]): Array<{ debit: JournalLineEntity
   return out.filter((x) => x.amount > 0);
 };
 const insertEntry = async (db: PostgresQueryable, scope: TenantScope, sourceType: string, sourceKey: string, postingDate: string, bookingText: string, lines: JournalLineEntity[], options: { documentDate?: string; reference?: string; sourceDraftId?: string; softLockOverride?: boolean; overrideReason?: string; mutation?: AccountingMutationContext; datevBuKeys?: Array<string | null> }): Promise<string> => {
-  const t = tenant(scope); const sourceLockKey = options.sourceDraftId ? `billme:draft:${t}:${options.sourceDraftId}` : `billme:source:${t}:${sourceType}:${sourceKey}`; await q(db, `SELECT pg_advisory_xact_lock(hashtext($1))`, [sourceLockKey]); const existing = await q<any>(db, `SELECT id FROM journal_entries WHERE tenant_id=$1 AND ((source_type=$2 AND source_key=$3) OR ($4::text IS NOT NULL AND source_draft_id=$4))`, [t, sourceType, sourceKey, options.sourceDraftId ?? null]); if (existing[0]) return existing[0].id;
-  if (!isoDate(postingDate)) throw new Error('INVALID_POSTING_DATE'); const fiscalYear = await reportingFiscalYear(db, t, postingDate); const status = await ensurePeriod(db, scope, period(postingDate), postingDate); if (status === 'closed') throw new Error('POSTING_DATE_IN_CLOSED_PERIOD'); if (status === 'soft_locked' && (!options.softLockOverride || !options.overrideReason?.trim())) throw new Error('SOFT_LOCK_OVERRIDE_REQUIRED');
+  const t = tenant(scope); const sourceLockKey = options.sourceDraftId ? `billme:draft:${t}:${options.sourceDraftId}` : `billme:source:${t}:${sourceType}:${sourceKey}`; await q(db, `SELECT pg_advisory_xact_lock(hashtext($1))`, [sourceLockKey]); const existing = await q<any>(db, `SELECT id FROM journal_entries WHERE tenant_id=$1 AND ((source_type=$2 AND source_key=$3) OR ($4::text IS NOT NULL AND source_draft_id=$4 AND status='posted'))`, [t, sourceType, sourceKey, options.sourceDraftId ?? null]); if (existing[0]) return existing[0].id;
+  if (!isoDate(postingDate)) throw new Error('INVALID_POSTING_DATE'); const fiscalYear = await reportingFiscalYear(db, t, postingDate); const status = await ensurePeriod(db, scope, period(postingDate), postingDate); if (status === 'closed') throw new Error('POSTING_DATE_IN_CLOSED_PERIOD'); if (status === 'soft_locked' && (!options.softLockOverride || !options.overrideReason?.trim())) { const granted = (await q<{ reason: string | null }>(db, `SELECT current_setting('billme.soft_lock_override', true) AS reason`))[0]?.reason?.trim(); if (!granted) throw new Error('SOFT_LOCK_OVERRIDE_REQUIRED'); options = { ...options, softLockOverride: true, overrideReason: granted }; }
   if (!lines.length) throw new Error('EMPTY_ENTRY'); const totalDebit = lines.reduce((sum, l) => sum + (cents(l.debitAmount) ?? -1), 0); const totalCredit = lines.reduce((sum, l) => sum + (cents(l.creditAmount) ?? -1), 0); if (totalDebit <= 0 || totalDebit !== totalCredit) throw new Error('UNBALANCED_ENTRY');
   for (const line of lines) { if (!line.accountNumber || (cents(line.debitAmount) ?? -1) < 0 || (cents(line.creditAmount) ?? -1) < 0 || (Number(line.debitAmount) > 0 && Number(line.creditAmount) > 0)) throw new Error(`INVALID_JOURNAL_LINE:${line.accountNumber}`); }
   await q(db, `SELECT pg_advisory_xact_lock(hashtext($1))`, [`billme:entry-number:${t}`]); const nr = await q<any>(db, `SELECT COALESCE(MAX(entry_number),0)+1 AS n FROM journal_entries WHERE tenant_id=$1`, [t]); const entryNumber = Number(nr[0].n); const id = randomUUID(); const stamp = now();
@@ -593,13 +690,16 @@ const postingPreview = async (db: PostgresQueryable, scope: TenantScope, row: an
     : row.document_kind;
   const advance = type === 'outgoing_invoice' && chainKind === 'advance_invoice';
   const vatMethod: 'soll' | 'ist' = advance ? 'ist' : p.vatMethod;
+  // The invoice of a fixed-asset sale books its proceeds on the asset-sale account (the disposal books the book value).
+  const assetSaleId = type === 'outgoing_invoice' && !advance ? parse<any>(row.tax_meta_json, null)?.assetSaleAssetId : undefined;
+  const assetSale = Boolean(assetSaleId) && (await q<any>(db, `SELECT 1 FROM assets WHERE tenant_id=$1 AND id=$2`, [t, assetSaleId])).length > 0;
   if (type === 'outgoing_invoice') {
     for (const entry of tax.breakdown) {
       // Under Ist the VAT waits on the not-yet-due account of its rate until the money comes in.
       const outputAccount = vatMethod === 'ist'
         ? await taxCaseAccount(db, t, p.activeChart, entry.taxCaseKey, 'output_tax_deferred', undefined, row.date)
         : await taxCaseAccount(db, t, p.activeChart, entry.taxCaseKey, 'output_tax', m.output_vat, row.date);
-      const revenueAccount = await taxCaseAccount(db, t, p.activeChart, entry.taxCaseKey, advance ? 'customer_advance' : 'revenue', undefined, row.date);
+      const revenueAccount = assetSale ? await assetSaleRevenueAccount(db, t, p.activeChart, assetSaleId, row) : await taxCaseAccount(db, t, p.activeChart, entry.taxCaseKey, advance ? 'customer_advance' : 'revenue', undefined, row.date);
       // Ist VAT is deferred and must not appear in the initial VAT report.
       // Preserve the case only in the stable basis memo for payment-time
       // recognition; the control line itself remains unkeyed.
@@ -712,15 +812,22 @@ const assertOpenItemSource = async (db: PostgresQueryable, t: string, item: any)
   }
 };
 
-const reverseEntryInTransaction = async (db: PostgresQueryable, scope: TenantScope, entryId: string, reason: string, options: ReverseJournalEntryOptions & { allowDocumentSource?: boolean; allowPaymentSource?: boolean } = {}): Promise<{ ok: true; reversalEntryId: string }> => {
-  const t = tenant(scope); const entry = (await q<any>(db, `SELECT * FROM journal_entries WHERE tenant_id=$1 AND id=$2 FOR UPDATE`, [t, entryId]))[0]; if (!entry) throw new Error('Journal entry not found'); if (!reason.trim()) throw new Error('Reversal reason is required'); if (!options.allowDocumentSource && (entry.source_type === 'outgoing_invoice' || entry.source_type === 'incoming_invoice')) throw new Error('DOCUMENT_REVERSAL_REQUIRED: reverseDocumentAccounting must be used for document-owned entries'); if (entry.source_type === 'asset_activation' || entry.source_type === 'asset_depreciation' || entry.source_type === 'asset_disposal') throw new Error('ASSET_REVERSAL_REQUIRED: use the asset-specific correction flow'); if (!options.allowPaymentSource && (entry.source_type === 'payment' || entry.source_type === 'payment_vat' || entry.source_type === 'skonto')) throw new Error('PAYMENT_REVERSAL_REQUIRED: Zahlungen werden über den Zahlungsstorno im OPOS storniert'); if (['fiscal_close', 'carry_forward', 'provision', 'accrual', 'inventory_closing', 'fx_valuation', 'loan_schedule', 'payroll_batch', 'correction'].includes(entry.source_type) || (entry.source_type === 'standalone_source' && /^(correction|settlement):/.test(String(entry.source_key ?? '')))) throw new Error('AGGREGATE_REVERSAL_BLOCKED: use the source-specific correction flow'); if (entry.status === 'reversed' || entry.reversed_entry_id || entry.source_type === 'reversal') throw new Error('Journal entry cannot be reversed again');
+const reverseEntryInTransaction = async (db: PostgresQueryable, scope: TenantScope, entryId: string, reason: string, options: ReverseJournalEntryOptions & { allowDocumentSource?: boolean; allowPaymentSource?: boolean; allowAssetSource?: boolean } = {}): Promise<{ ok: true; reversalEntryId: string }> => {
+  const t = tenant(scope); const entry = (await q<any>(db, `SELECT * FROM journal_entries WHERE tenant_id=$1 AND id=$2 FOR UPDATE`, [t, entryId]))[0]; if (!entry) throw new Error('Journal entry not found'); if (!reason.trim()) throw new Error('Reversal reason is required'); if (!options.allowDocumentSource && (entry.source_type === 'outgoing_invoice' || entry.source_type === 'incoming_invoice')) throw new Error('DOCUMENT_REVERSAL_REQUIRED: reverseDocumentAccounting must be used for document-owned entries'); if (!options.allowAssetSource && (entry.source_type === 'asset_activation' || entry.source_type === 'asset_depreciation' || entry.source_type === 'asset_disposal')) throw new Error('ASSET_REVERSAL_REQUIRED: use the asset-specific correction flow'); if (!options.allowPaymentSource && (entry.source_type === 'payment' || entry.source_type === 'payment_vat' || entry.source_type === 'skonto')) throw new Error('PAYMENT_REVERSAL_REQUIRED: Zahlungen werden über den Zahlungsstorno im OPOS storniert'); if (['fiscal_close', 'carry_forward', 'provision', 'accrual', 'inventory_closing', 'fx_valuation', 'loan_schedule', 'payroll_batch', 'correction'].includes(entry.source_type) || (entry.source_type === 'standalone_source' && /^(correction|settlement):/.test(String(entry.source_key ?? '')))) throw new Error('AGGREGATE_REVERSAL_BLOCKED: use the source-specific correction flow'); if (entry.status === 'reversed' || entry.reversed_entry_id || entry.source_type === 'reversal') throw new Error('Journal entry cannot be reversed again');
   const postingDate = options.postingDate ?? now().slice(0, 10); if (!isoDate(postingDate)) throw new Error('Invalid reversal posting date'); const lines = await q<any>(db, `SELECT * FROM journal_lines WHERE tenant_id=$1 AND entry_id=$2 ORDER BY line_no`, [t, entryId]); if (!lines.length) throw new Error('Journal entry has no lines');
   const originalPairs = await q<any>(db, `SELECT jp.amount,jp.tax_case_key,jp.datev_bu_key,dl.account_number AS debit_account,cl.account_number AS credit_account FROM journal_posting_pairs jp JOIN journal_lines dl ON dl.id=jp.debit_line_id AND dl.tenant_id=jp.tenant_id JOIN journal_lines cl ON cl.id=jp.credit_line_id AND cl.tenant_id=jp.tenant_id WHERE jp.tenant_id=$1 AND jp.entry_id=$2`, [t, entryId]);
   const reversalLines = lines.map((line) => ({ ...mapLine(line), id: randomUUID(), debitAmount: Number(line.credit_amount), creditAmount: Number(line.debit_amount), netAmount: line.net_amount == null ? undefined : -Number(line.net_amount), taxAmount: line.tax_amount == null ? undefined : -Number(line.tax_amount), grossAmount: line.gross_amount == null ? undefined : -Number(line.gross_amount) }));
   const originalBu = new Map(originalPairs.map((pair) => [`${pair.amount}|${pair.tax_case_key ?? ''}|${pair.credit_account}|${pair.debit_account}`, pair.datev_bu_key ?? null]));
   const datevBuKeys = pairLines(reversalLines).map((pair) => originalBu.get(`${pair.amount}|${pair.taxCaseKey ?? ''}|${pair.debit.accountNumber}|${pair.credit.accountNumber}`) ?? null);
   const reversalEntryId = await insertEntry(db, scope, 'reversal', `reversal:${entryId}`, postingDate, `Storno ${entry.entry_number}: ${reason.trim()}`, reversalLines, { documentDate: entry.document_date, reference: entry.reference ?? undefined, softLockOverride: options.softLockOverride, overrideReason: options.overrideReason, mutation: options.mutation, datevBuKeys });
-  await q(db, `UPDATE journal_entries SET status='reversed',reversed_entry_id=$1 WHERE tenant_id=$2 AND id=$3`, [reversalEntryId, t, entryId]); await audit(db as PostgresTransactionClient, scope, 'pro_journal_entry', entryId, 'reverse', reason.trim(), { status: 'posted' }, { status: 'reversed', reversalEntryId, postingDate }, options.mutation); return { ok: true, reversalEntryId };
+  await q(db, `UPDATE journal_entries SET status='reversed',reversed_entry_id=$1 WHERE tenant_id=$2 AND id=$3`, [reversalEntryId, t, entryId]);
+  // A reversed bank booking is no longer "Gebucht" in the booking workspace, whichever screen started the Storno, and
+  // its bank line is open again: "Neu kontieren" books it once more (migration 0066 keeps one live entry per draft).
+  if (entry.source_type === 'booking_draft' && entry.source_draft_id) {
+    await q(db, `UPDATE booking_drafts SET workflow_status='reversed',updated_at=$1 WHERE tenant_id=$2 AND id=$3 AND workflow_status='posted'`, [now(), t, entry.source_draft_id]);
+    await q(db, `UPDATE bank_transactions SET status='pending',updated_at=$1 WHERE tenant_id=$2 AND linked_invoice_id IS NULL AND id=(SELECT transaction_id FROM booking_drafts WHERE tenant_id=$2 AND id=$3)`, [now(), t, entry.source_draft_id]);
+  }
+  await audit(db as PostgresTransactionClient, scope, 'pro_journal_entry', entryId, 'reverse', reason.trim(), { status: 'posted' }, { status: 'reversed', reversalEntryId, postingDate }, options.mutation); return { ok: true, reversalEntryId };
 };
 
 const buildLegacyDatevRows = async (db: PostgresQueryable, scope: TenantScope, args: { from?: string; to?: string } = {}) => {
@@ -782,9 +889,26 @@ const recognizeIstVat = async (
   if (payableLines.length) await insertEntry(db, scope, 'payment_vat', `payment-vat:${paymentId}:${allocationId}`, paymentDate, 'USt Vereinnahmung', payableLines, {});
 };
 
+/** A Beleg archived on a bank line (immutable, migration 0065). */
+export interface BankTransactionDocument {
+  id: string;
+  tenantId: string;
+  bankTransactionId: string;
+  originalFilename: string;
+  mimeType: IncomingInvoiceDocumentUploadInput['mimeType'];
+  byteLength: number;
+  sha256: string;
+  createdAt: string;
+}
+const rowBankTransactionDocument = (row: any): BankTransactionDocument => ({ id: row.id, tenantId: row.tenant_id, bankTransactionId: row.bank_transaction_id, originalFilename: row.original_filename, mimeType: row.mime_type, byteLength: Number(row.byte_length), sha256: row.sha256, createdAt: row.created_at });
+
 export type ProAccountingReportRepository = Omit<ProAccountingRepository, 'getGuvReport' | 'getBilanzReport'> & ProAccountingAssetRepository & AccountingSourceRunRepository & {
   listAccountingPeriods(scope: TenantScope, year: number): Promise<AccountingPeriodRecord[]>;
   listOpenItemPayments(scope: TenantScope): Promise<OpenItemPaymentEntity[]>;
+  updateDraftExceptionCase(scope: TenantScope, input: { transactionId: string; patch: Partial<DraftExceptionCase>; mutation: AccountingMutationContext }): Promise<BookingDraftEntity>;
+  listBankTransactionDocuments(scope: TenantScope, transactionId: string): Promise<BankTransactionDocument[]>;
+  uploadBankTransactionDocument(scope: TenantScope, input: { transactionId: string; originalFilename: string; mimeType: IncomingInvoiceDocumentUploadInput['mimeType']; content: Uint8Array; mutation: AccountingMutationContext }): Promise<BankTransactionDocument>;
+  downloadBankTransactionDocument(scope: TenantScope, documentId: string): Promise<{ document: BankTransactionDocument; content: Uint8Array }>;
   reverseOpenItemPayment(scope: TenantScope, input: { paymentId: string; reason: string; postingDate?: string; mutation?: AccountingMutationContext }): Promise<OpenItemPaymentReversal>;
   reallocateOpenItemPayment(scope: TenantScope, input: { paymentId: string; reason: string; partyId: string; allocations: Array<{ openItemId: string; amount: number }>; allocationEventId: string; mutation?: AccountingMutationContext }): Promise<{ reversal: OpenItemPaymentReversal; payment: OpenItemPaymentEntity }>;
   setAccountingPeriodStatus(scope: TenantScope, input: { period: string; status: AccountingPeriodStatus; mutation: AccountingMutationContext }): Promise<AccountingPeriodStatusChange>;
@@ -813,7 +937,62 @@ export type ProAccountingReportRepository = Omit<ProAccountingRepository, 'getGu
 export const createPostgresProAccountingRepository = (db: PostgresQueryable): ProAccountingReportRepository => ({
   ...createPostgresAccountingSourceRunRepository(db),
   listAccountingPeriods: (scope, year) => listAccountingPeriods(db, scope, year),
-  async listOpenItemPayments(scope) { return (await q<any>(db, `SELECT * FROM open_item_payments WHERE tenant_id=$1 ORDER BY payment_date DESC,created_at DESC,id`, [tenant(scope)])).map(rowPayment); },
+  async listBankTransactionDocuments(scope, transactionId) {
+    return (await q<any>(db, `SELECT id,tenant_id,bank_transaction_id,original_filename,mime_type,byte_length,sha256,created_at FROM bank_transaction_documents WHERE tenant_id=$1 AND bank_transaction_id=$2 ORDER BY created_at,id`, [tenant(scope), transactionId])).map(rowBankTransactionDocument);
+  },
+  async uploadBankTransactionDocument(scope, input) {
+    if (!input.mutation.reason?.trim()) throw new Error('ACCOUNTING_AUDIT_REASON_REQUIRED');
+    assertIncomingInvoiceDocumentInput({ incomingInvoiceId: input.transactionId, originalFilename: input.originalFilename, mimeType: input.mimeType, content: input.content });
+    return inTx(db, async (tx) => {
+      const t = tenant(scope);
+      if (!(await q<any>(tx, `SELECT id FROM bank_transactions WHERE tenant_id=$1 AND id=$2`, [t, input.transactionId]))[0]) throw Object.assign(new Error('BANK_TRANSACTION_NOT_FOUND: Diese Bankzeile gibt es nicht.'), { statusCode: 404 });
+      const content = Buffer.from(input.content);
+      const sha256 = createHash('sha256').update(content).digest('hex');
+      // The same file again on the same line is the archived Beleg, not a second one.
+      const inserted = await q<any>(tx, `INSERT INTO bank_transaction_documents (id,tenant_id,bank_transaction_id,original_filename,mime_type,byte_length,sha256,content_bytes,created_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) ON CONFLICT (tenant_id,bank_transaction_id,sha256) DO NOTHING RETURNING id`, [randomUUID(), t, input.transactionId, input.originalFilename.trim(), input.mimeType, content.byteLength, sha256, content, now()]);
+      const saved = rowBankTransactionDocument((await q<any>(tx, `SELECT * FROM bank_transaction_documents WHERE tenant_id=$1 AND bank_transaction_id=$2 AND sha256=$3`, [t, input.transactionId, sha256]))[0]);
+      if (inserted[0]) await audit(tx as PostgresTransactionClient, scope, 'bank_transaction_document', saved.id, 'upload', input.mutation.reason.trim(), null, saved, input.mutation);
+      return saved;
+    });
+  },
+  async downloadBankTransactionDocument(scope, documentId) {
+    const row = (await q<any>(db, `SELECT * FROM bank_transaction_documents WHERE tenant_id=$1 AND id=$2`, [tenant(scope), documentId]))[0];
+    if (!row) throw Object.assign(new Error('BANK_TRANSACTION_DOCUMENT_NOT_FOUND: Diesen Beleg gibt es nicht.'), { statusCode: 404 });
+    const content = incomingInvoiceDocumentContent(row.content_bytes);
+    if (content.byteLength !== Number(row.byte_length) || createHash('sha256').update(content).digest('hex') !== row.sha256) throw new Error('INCOMING_INVOICE_DOCUMENT_HASH_MISMATCH');
+    return { document: rowBankTransactionDocument(row), content };
+  },
+  async updateDraftExceptionCase(scope, input) {
+    if (!input.mutation.reason?.trim()) throw new Error('ACCOUNTING_AUDIT_REASON_REQUIRED');
+    // An untouched line gets its draft first, as opening it in the editor would.
+    await this.getDraftByTransactionId(scope, input.transactionId);
+    return inTx(db, async (tx) => {
+    const t = tenant(scope);
+    const row = (await q<any>(tx, `SELECT * FROM booking_drafts WHERE tenant_id=$1 AND transaction_id=$2 FOR UPDATE`, [t, input.transactionId]))[0];
+    if (!row) throw Object.assign(new Error('BANK_TRANSACTION_NOT_FOUND: Zu dieser Bankzeile gibt es keinen Buchungsentwurf.'), { statusCode: 404 });
+    const value = parse<Partial<BookingDraftEntity>>(row.draft_json, {});
+    const before = value.exceptionCase ?? null;
+    const merged: DraftExceptionCase = { state: 'open', ...(before ?? {}) };
+    for (const [key, next] of Object.entries(input.patch) as Array<[keyof DraftExceptionCase, string | undefined]>) { if (next === undefined) continue; if (next === '' && key !== 'state') delete merged[key]; else (merged as unknown as Record<string, string>)[key] = next; }
+    const updatedAt = now();
+    await q(tx, `UPDATE booking_drafts SET draft_json=$1,updated_at=$2 WHERE tenant_id=$3 AND id=$4`, [JSON.stringify({ ...value, exceptionCase: merged, updatedAt }), updatedAt, t, row.id]);
+    await audit(tx as PostgresTransactionClient, scope, 'booking_draft', row.id, 'exception_update', input.mutation.reason.trim(), before, merged, input.mutation);
+    return (await getDraft(tx, scope, input.transactionId))!;
+  }); },
+  async listOpenItemPayments(scope) {
+    // What each payment settled (invoice numbers, customer or vendor) for the OPOS list; a Storno keeps its history.
+    const rows = await q<any>(db, `SELECT p.*,
+        (SELECT string_agg(DISTINCT oi.document_number, ', ') FROM open_item_allocations a JOIN open_items oi ON oi.tenant_id=a.tenant_id AND oi.id=a.open_item_id
+          WHERE a.tenant_id=p.tenant_id AND a.payment_id=p.id AND a.amount>0 AND COALESCE(oi.document_number,'')<>'') AS document_numbers,
+        COALESCE((SELECT string_agg(DISTINCT COALESCE(NULLIF(btrim(i.client),''), v.name), ', ') FROM open_item_allocations a JOIN open_items oi ON oi.tenant_id=a.tenant_id AND oi.id=a.open_item_id
+            LEFT JOIN invoices i ON i.tenant_id=oi.tenant_id AND oi.source_type='outgoing_invoice' AND i.id=oi.source_id
+            LEFT JOIN incoming_invoices ii ON ii.tenant_id=oi.tenant_id AND oi.source_type='incoming_invoice' AND ii.id=oi.source_id
+            LEFT JOIN vendors v ON v.tenant_id=oi.tenant_id AND v.id=ii.vendor_id
+          WHERE a.tenant_id=p.tenant_id AND a.payment_id=p.id AND a.amount>0),
+          (SELECT NULLIF(btrim(bt.counterparty),'') FROM bank_transactions bt WHERE p.source_type='bank_transaction' AND bt.tenant_id=p.tenant_id AND bt.id=p.source_id)) AS party_name
+      FROM open_item_payments p WHERE p.tenant_id=$1 ORDER BY p.payment_date DESC,p.created_at DESC,p.id`, [tenant(scope)]);
+    return rows.map((row) => ({ ...rowPayment(row), ...(row.document_numbers ? { documentNumbers: row.document_numbers } : {}), ...(row.party_name ? { partyName: row.party_name } : {}) }));
+  },
   reverseOpenItemPayment: (scope, input) => inTx(db, (tx) => reverseOpenItemPaymentInTransaction(tx, scope, input)),
   // Umbuchung: Zahlungsstorno and the new allocation of the same money in one transaction, under one reason.
   reallocateOpenItemPayment: (scope, input) => inTx(db, async (tx) => {
@@ -855,7 +1034,7 @@ export const createPostgresProAccountingRepository = (db: PostgresQueryable): Pr
   },
   async listBankTransactions(scope) {
     const [rows, suggestionContext] = await Promise.all([
-      q<any>(db, `SELECT * FROM bank_transactions WHERE tenant_id=$1 ORDER BY date DESC,id`, [tenant(scope)]),
+      q<any>(db, `SELECT b.*, (SELECT count(*) FROM bank_transaction_documents d WHERE d.tenant_id=b.tenant_id AND d.bank_transaction_id=b.id) AS receipt_document_count FROM bank_transactions b WHERE b.tenant_id=$1 ORDER BY b.date DESC,b.id`, [tenant(scope)]),
       loadAccountSuggestionContext(db, scope),
     ]);
     return rows.map((r) => {
@@ -865,19 +1044,29 @@ export const createPostgresProAccountingRepository = (db: PostgresQueryable): Pr
       return {
         id: r.id, tenantId: r.tenant_id, accountId: r.account_id, date: r.date, amount: Number(r.amount), type,
         counterparty: r.counterparty, purpose: r.purpose, status: r.status === 'booked' ? 'booked' : 'pending', linkedInvoiceId: r.linked_invoice_id ?? undefined,
+        ...(Number(r.receipt_document_count) > 0 ? { receiptDocumentCount: Number(r.receipt_document_count) } : {}),
         suggestedAccountNumber: suggestion.accountNumber, suggestionReason: suggestion.reason, suggestionLayer: suggestion.layer, suggestionConfidence: suggestion.confidence,
       };
     });
   },
-  async getDraftByTransactionId(scope, transactionId) { return inTx(db, async (tx) => { const existing = await getDraft(tx, scope, transactionId); if (existing) return existing; const row = (await q<any>(tx, `SELECT * FROM bank_transactions WHERE tenant_id=$1 AND id=$2`, [tenant(scope), transactionId]))[0]; if (!row) return null; const p = await policy(tx, tenant(scope)); const m = await mappings(tx, tenant(scope), p.activeChart); const bankAccount = await bankLedgerAccount(tx, tenant(scope), row.account_id); const amount = round(Math.abs(row.amount)); const suggestion = row.status === 'booked' ? {} : suggestAccountForTransaction(await loadAccountSuggestionContext(tx, scope), { flowType: row.type === 'income' ? 'income' : 'expense', counterparty: row.counterparty ?? '', purpose: row.purpose ?? '' }); const suggested = suggestion.layer && suggestion.layer !== 'fallback' ? suggestion.accountNumber : undefined; const draft: BookingDraftEntity = { id: `draft-${row.id}`, tenantId: tenant(scope), transactionId: row.id, workflowStatus: row.status === 'booked' ? 'posted' : suggested ? 'suggested' : 'imported', postingDate: row.date, documentDate: row.date, bookingText: row.purpose || (row.type === 'income' ? 'Einnahme' : 'Ausgabe'), reference: row.id, period: period(row.date), fiscalYear: await reportingFiscalYear(tx, tenant(scope), row.date), lines: [{ id: `draft-${row.id}-1`, accountNumber: row.type === 'income' ? bankAccount : suggested ?? m.expense, debitAmount: amount, creditAmount: 0 }, { id: `draft-${row.id}-2`, accountNumber: row.type === 'income' ? suggested ?? m.revenue : bankAccount, debitAmount: 0, creditAmount: amount }], validationIssues: [], updatedAt: now() }; if (row.status !== 'booked') return saveDraftTarget(tx, scope, draft); const postedSourceDraft = (await q<any>(tx, `SELECT id FROM journal_entries WHERE tenant_id=$1 AND source_draft_id=$2 AND status='posted' LIMIT 1`, [tenant(scope), draft.id]))[0]; return postedSourceDraft ? draft : { ...draft, isVirtualProjection: true }; }); },
+  async getDraftByTransactionId(scope, transactionId) { return inTx(db, async (tx) => { const existing = await getDraft(tx, scope, transactionId); /* A draft nobody has saved yet (imported/suggested) follows the current rules and open items; a person's draft stays. */ if (existing && !['imported', 'suggested'].includes(existing.workflowStatus)) return existing; const row = (await q<any>(tx, `SELECT * FROM bank_transactions WHERE tenant_id=$1 AND id=$2`, [tenant(scope), transactionId]))[0]; if (!row) return existing; const p = await policy(tx, tenant(scope)); const m = await mappings(tx, tenant(scope), p.activeChart); const bankAccount = await bankLedgerAccount(tx, tenant(scope), row.account_id); const amount = round(Math.abs(row.amount)); const suggestion = row.status === 'booked' ? {} : suggestAccountForTransaction(await loadAccountSuggestionContext(tx, scope), { flowType: row.type === 'income' ? 'income' : 'expense', counterparty: row.counterparty ?? '', purpose: row.purpose ?? '' }); const suggested = suggestion.layer && suggestion.layer !== 'fallback' ? suggestion.accountNumber : undefined; const settles = row.status !== 'booked' && await paysOpenItem(tx, tenant(scope), row); const rememberedTax = suggested && !settles && String(row.counterparty ?? '').trim() ? await partnerTaxCase(tx, tenant(scope), row.counterparty, suggested) : undefined; if (existing) { const counter = existing.lines.findIndex((line) => line.accountNumber !== bankAccount); const target = settles ? (row.type === 'income' ? m.accounts_receivable : m.accounts_payable) : suggested; if (row.status === 'booked' || existing.lines.length !== 2 || counter < 0 || !target || existing.lines[counter]!.accountNumber === target) return existing; return saveDraftTarget(tx, scope, { ...existing, workflowStatus: 'suggested', lines: existing.lines.map((line, index) => index === counter ? (({ taxCaseKey: _previousTax, ...rest }) => ({ ...rest, accountNumber: target, ...(target === suggested && rememberedTax ? { taxCaseKey: rememberedTax } : {}) }))(line) : line), updatedAt: now() }); } const draft: BookingDraftEntity = { id: `draft-${row.id}`, tenantId: tenant(scope), transactionId: row.id, workflowStatus: row.status === 'booked' ? 'posted' : suggested ? 'suggested' : 'imported', postingDate: row.date, documentDate: row.date, bookingText: row.purpose || (row.type === 'income' ? 'Einnahme' : 'Ausgabe'), /* The Beleg is the person's to name; the internal transaction id is no Belegnummer. */ reference: undefined, period: period(row.date), fiscalYear: await reportingFiscalYear(tx, tenant(scope), row.date), lines: [{ id: `draft-${row.id}-1`, accountNumber: row.type === 'income' ? bankAccount : settles ? m.accounts_payable : suggested ?? m.expense, debitAmount: amount, creditAmount: 0, ...(row.type !== 'income' && rememberedTax ? { taxCaseKey: rememberedTax } : {}) }, { id: `draft-${row.id}-2`, accountNumber: row.type === 'income' ? settles ? m.accounts_receivable : suggested ?? m.revenue : bankAccount, debitAmount: 0, creditAmount: amount, ...(row.type === 'income' && rememberedTax ? { taxCaseKey: rememberedTax } : {}) }], validationIssues: [], updatedAt: now() }; if (row.status !== 'booked') return saveDraftTarget(tx, scope, draft); const postedSourceDraft = (await q<any>(tx, `SELECT id FROM journal_entries WHERE tenant_id=$1 AND source_draft_id=$2 AND status='posted' LIMIT 1`, [tenant(scope), draft.id]))[0]; return postedSourceDraft ? draft : { ...draft, isVirtualProjection: true }; }); },
   async saveDraft(scope, draft) { return inTx(db, (tx) => saveDraftTarget(tx, scope, draft, draft.mutation)); },
-  async dispatchDraftAction(scope, args) { return inTx(db, async (tx) => { const draft = await getDraft(tx, scope, args.transactionId); if (!draft) throw new Error('Draft not found'); const transitions: Record<string, string[]> = { imported: ['suggested','incomplete','pending_approval'], suggested: ['suggested','incomplete','pending_approval'], incomplete: ['suggested','incomplete','pending_approval'], ready_for_review: ['pending_approval'], pending_approval: ['approved','incomplete'], approved: ['approved'], posted: ['reversed'], reversed: ['corrected'], corrected: ['suggested','incomplete'], period_locked: ['incomplete','suggested'], integration_error: ['incomplete','suggested'] }; const targets: Record<string, string> = { save_draft: 'suggested', submit_for_review: 'pending_approval', approve: 'approved', reject: 'incomplete', post: 'approved', reverse: 'reversed', create_correction: 'corrected', request_receipt: 'incomplete' }; const target = targets[args.action]; if (!transitions[draft.workflowStatus]?.includes(target)) throw new Error(`Invalid workflow transition: ${draft.workflowStatus} -> ${target}`); return saveDraftTarget(tx, scope, { ...draft, workflowStatus: target as BookingDraftEntity['workflowStatus'], validationIssues: args.action === 'reject' && args.rejectReason ? [{ id: randomUUID(), code: 'MANUAL_REVIEW_REJECTED', severity: 'warning', message: args.rejectReason, blocking: false, source: 'user' }] : draft.validationIssues }, args.mutation); }); },
+  async dispatchDraftAction(scope, args) { return inTx(db, async (tx) => { const draft = await getDraft(tx, scope, args.transactionId); if (!draft) throw new Error('Draft not found'); const transitions: Record<string, string[]> = { imported: ['suggested','incomplete','pending_approval'], suggested: ['suggested','incomplete','pending_approval'], incomplete: ['suggested','incomplete','pending_approval'], ready_for_review: ['pending_approval'], pending_approval: ['approved','incomplete'], approved: ['approved'], posted: ['reversed'], reversed: ['corrected'], corrected: ['suggested','incomplete','pending_approval'], period_locked: ['incomplete','suggested'], integration_error: ['incomplete','suggested'] }; const targets: Record<string, string> = { save_draft: 'suggested', submit_for_review: 'pending_approval', approve: 'approved', reject: 'incomplete', post: 'approved', reverse: 'reversed', create_correction: 'corrected', request_receipt: 'incomplete' }; const target = targets[args.action]; if (!transitions[draft.workflowStatus]?.includes(target)) throw new Error(`Invalid workflow transition: ${draft.workflowStatus} -> ${target}`); return saveDraftTarget(tx, scope, { ...draft, workflowStatus: target as BookingDraftEntity['workflowStatus'], validationIssues: args.action === 'reject' && args.rejectReason ? [{ id: randomUUID(), code: 'MANUAL_REVIEW_REJECTED', severity: 'warning', message: args.rejectReason, blocking: false, source: 'user' }] : draft.validationIssues }, args.mutation); }); },
   async validateTaxCompliance(scope, args) { const draft = args.draftId ? (await q<any>(db, `SELECT * FROM booking_drafts WHERE tenant_id=$1 AND id=$2`, [tenant(scope), args.draftId]))[0] : args.transactionId ? await getDraft(db, scope, args.transactionId) : null; if (!draft) throw new Error('Draft not found'); if ('draft_json' in draft) { const lines = await q<any>(db, `SELECT * FROM booking_draft_lines WHERE tenant_id=$1 AND draft_id=$2 ORDER BY line_no`, [tenant(scope), draft.id]); const issues = await q<any>(db, `SELECT * FROM draft_validation_issues WHERE tenant_id=$1 AND draft_id=$2`, [tenant(scope), draft.id]); const parsed = draftFromRows(draft, lines, issues, scope); const saved = await inTx(db, (tx) => saveDraftTarget(tx, scope, parsed, args.mutation)); return { ok: !saved.validationIssues.some((x) => x.blocking), issues: saved.validationIssues }; } return { ok: !(draft as BookingDraftEntity).validationIssues.some((x) => x.blocking), issues: (draft as BookingDraftEntity).validationIssues }; },
-  async postDraft(scope, draftId, options: PostDraftOptions = {}) { return inTx(db, async (tx) => { const t = tenant(scope); const sourceKey = options.idempotencyKey?.trim() || `booking-draft:${draftId}`; const existing = await q<any>(tx, `SELECT id FROM journal_entries WHERE tenant_id=$1 AND source_type='booking_draft' AND source_key=$2`, [t, sourceKey]); if (existing[0]) return { entry: (await loadEntry(tx, scope, existing[0].id))!, issues: [] }; const rows = await q<any>(tx, `SELECT * FROM booking_drafts WHERE tenant_id=$1 AND id=$2`, [t, draftId]); if (!rows[0]) throw new Error('Draft not found'); const lines = await q<any>(tx, `SELECT * FROM booking_draft_lines WHERE tenant_id=$1 AND draft_id=$2 ORDER BY line_no`, [t, draftId]); const savedIssues = await q<any>(tx, `SELECT * FROM draft_validation_issues WHERE tenant_id=$1 AND draft_id=$2`, [t, draftId]); const draft = draftFromRows(rows[0], lines, savedIssues, scope); const bankLine = (await q<any>(tx, `SELECT status,linked_invoice_id,account_id,amount,type FROM bank_transactions WHERE tenant_id=$1 AND id=$2 FOR UPDATE`, [t, draft.transactionId]))[0]; if (!bankLine) throw new Error('BANK_TRANSACTION_NOT_FOUND: Ein Buchungsentwurf ohne Bankzeile wird nicht gebucht; das ist eine freie Buchung mit Beleg.'); if (bankLine.status === 'booked' || bankLine.linked_invoice_id) throw new Error('PAYMENT_SOURCE_ALREADY_BOOKED'); const postingDate = options.postingDate ?? draft.postingDate; const p = await policy(tx, t); const fiscalYear = postingDate && isoDate(postingDate) ? await reportingFiscalYear(tx, t, postingDate) : draft.fiscalYear; const periodStatus = postingDate && isoDate(postingDate) ? await ensurePeriod(tx, scope, period(postingDate), postingDate) : 'open'; const issues = await validateDraft(tx, scope, { ...draft, postingDate, period: postingDate ? period(postingDate) : draft.period, fiscalYear }, periodStatus, p.activeChart, bankLine); if (rows[0].workflow_status !== 'approved') issues.push(issue('DRAFT_NOT_APPROVED', 'Nur freigegebene Entwürfe dürfen gebucht werden.')); if (periodStatus === 'soft_locked' && (!options.softLockOverride || !options.overrideReason?.trim())) issues.push(issue('SOFT_LOCK_OVERRIDE_REQUIRED', 'Vorläufig gesperrte Periode benötigt Freigabe und Begründung.')); if (issues.some((x) => x.blocking)) return { entry: { id: '', tenantId: t, entryNumber: 0, postingDate: postingDate ?? '', bookingText: draft.bookingText, period: draft.period, fiscalYear, status: 'posted', createdAt: now(), lines: [] }, issues }; const normalized = { ...draft, postingDate: postingDate!, period: period(postingDate!), fiscalYear }; const entryId = await insertEntry(tx, scope, 'booking_draft', sourceKey, postingDate!, normalized.bookingText, normalized.lines, { documentDate: normalized.documentDate, reference: normalized.reference, sourceDraftId: normalized.id, softLockOverride: options.softLockOverride, overrideReason: options.overrideReason, mutation: options.mutation }); await q(tx, `UPDATE booking_drafts SET workflow_status='posted',draft_json=$1,updated_at=$2 WHERE tenant_id=$3 AND id=$4`, [JSON.stringify({ ...normalized, workflowStatus: 'posted' }), now(), t, draftId]); await q(tx, `UPDATE bank_transactions SET status='booked',updated_at=$1 WHERE tenant_id=$2 AND id=$3`, [now(), t, draft.transactionId]); return { entry: (await loadEntry(tx, scope, entryId))!, issues: [] }; }); },
+  async postDraft(scope, draftId, options: PostDraftOptions = {}) { return inTx(db, async (tx) => { const t = tenant(scope); /* Booked again after a Storno: its own key per round, so the replay below finds this round's entry and the old one stays. */ const earlier = Number((await q<any>(tx, `SELECT count(*) AS n FROM journal_entries WHERE tenant_id=$1 AND source_draft_id=$2 AND status='reversed'`, [t, draftId]))[0]?.n ?? 0); const sourceKey = options.idempotencyKey?.trim() || (earlier ? `booking-draft:${draftId}:${earlier + 1}` : `booking-draft:${draftId}`); /* A replay returns the live entry; a reversed one is never handed back as a fresh posting. */ const existing = await q<any>(tx, `SELECT id FROM journal_entries WHERE tenant_id=$1 AND source_type='booking_draft' AND source_key=$2 AND status='posted'`, [t, sourceKey]); if (existing[0]) return { entry: (await loadEntry(tx, scope, existing[0].id))!, issues: [] }; const rows = await q<any>(tx, `SELECT * FROM booking_drafts WHERE tenant_id=$1 AND id=$2`, [t, draftId]); if (!rows[0]) throw new Error('Draft not found'); const lines = await q<any>(tx, `SELECT * FROM booking_draft_lines WHERE tenant_id=$1 AND draft_id=$2 ORDER BY line_no`, [t, draftId]); const savedIssues = await q<any>(tx, `SELECT * FROM draft_validation_issues WHERE tenant_id=$1 AND draft_id=$2`, [t, draftId]); const draft = draftFromRows(rows[0], lines, savedIssues, scope); const bankLine = (await q<any>(tx, `SELECT status,linked_invoice_id,account_id,amount,type FROM bank_transactions WHERE tenant_id=$1 AND id=$2 FOR UPDATE`, [t, draft.transactionId]))[0]; if (!bankLine) throw new Error('BANK_TRANSACTION_NOT_FOUND: Ein Buchungsentwurf ohne Bankzeile wird nicht gebucht; das ist eine freie Buchung mit Beleg.'); if (bankLine.status === 'booked' || bankLine.linked_invoice_id) throw new Error('PAYMENT_SOURCE_ALREADY_BOOKED'); const postingDate = options.postingDate ?? draft.postingDate; const p = await policy(tx, t); const fiscalYear = postingDate && isoDate(postingDate) ? await reportingFiscalYear(tx, t, postingDate) : draft.fiscalYear; const periodStatus = postingDate && isoDate(postingDate) ? await ensurePeriod(tx, scope, period(postingDate), postingDate) : 'open'; const issues = await validateDraft(tx, scope, { ...draft, postingDate, period: postingDate ? period(postingDate) : draft.period, fiscalYear }, periodStatus, p.activeChart, bankLine); if (rows[0].workflow_status !== 'approved') issues.push(issue('DRAFT_NOT_APPROVED', 'Nur freigegebene Entwürfe dürfen gebucht werden.')); if (periodStatus === 'soft_locked' && (!options.softLockOverride || !options.overrideReason?.trim())) issues.push(issue('SOFT_LOCK_OVERRIDE_REQUIRED', 'Vorläufig gesperrte Periode benötigt Freigabe und Begründung.')); if (issues.some((x) => x.blocking)) return { entry: { id: '', tenantId: t, entryNumber: 0, postingDate: postingDate ?? '', bookingText: draft.bookingText, period: draft.period, fiscalYear, status: 'posted', createdAt: now(), lines: [] }, issues }; const normalized = { ...draft, postingDate: postingDate!, period: period(postingDate!), fiscalYear }; const postingLines = await draftPostingLines(tx, t, p.activeChart, normalized.lines, postingDate!, await bankLedgerAccount(tx, t, bankLine.account_id)); /* The reversed round still owns the draft's line ids. */ const roundIds = earlier ? postingLines.map((line) => ({ ...line, id: `${line.id || randomUUID()}-r${earlier + 1}` })) : postingLines; /* A Beleg archived on the bank line is the evidence of every posting line that names none. */ const belege = await q<any>(tx, `SELECT original_filename FROM bank_transaction_documents WHERE tenant_id=$1 AND bank_transaction_id=$2 ORDER BY created_at,id`, [t, draft.transactionId]); const beleg = belege.length ? `${belege[0].original_filename}${belege.length > 1 ? ` (+${belege.length - 1})` : ''}` : undefined; const roundLines = beleg ? roundIds.map((line) => line.evidenceReference ? line : { ...line, evidenceType: 'bank_document', evidenceReference: beleg }) : roundIds; const entryId = await insertEntry(tx, scope, 'booking_draft', sourceKey, postingDate!, normalized.bookingText, roundLines, { documentDate: normalized.documentDate, reference: normalized.reference, sourceDraftId: normalized.id, softLockOverride: options.softLockOverride, overrideReason: options.overrideReason, mutation: options.mutation }); await q(tx, `UPDATE booking_drafts SET workflow_status='posted',draft_json=$1,updated_at=$2 WHERE tenant_id=$3 AND id=$4`, [JSON.stringify({ ...normalized, workflowStatus: 'posted' }), now(), t, draftId]); await q(tx, `UPDATE bank_transactions SET status='booked',updated_at=$1 WHERE tenant_id=$2 AND id=$3`, [now(), t, draft.transactionId]); return { entry: (await loadEntry(tx, scope, entryId))!, issues: [] }; }); },
   async reverseJournalEntry(scope, entryId, reason, options: ReverseJournalEntryOptions = {}) { return inTx(db, (tx) => reverseEntryInTransaction(tx, scope, entryId, reason, options)); },
   async listJournalEntries(scope, args = {}) { const t = tenant(scope); const values: unknown[] = [t]; const where = ['tenant_id=$1']; if (args.from) { values.push(args.from); where.push(`posting_date >= $${values.length}`); } if (args.to) { values.push(args.to); where.push(`posting_date <= $${values.length}`); } if (args.accountNumbers?.length) { values.push(args.accountNumbers); where.push(`id IN (SELECT entry_id FROM journal_lines WHERE tenant_id=$1 AND account_number = ANY($${values.length}))`); } if (args.sourceDraftId) { values.push(args.sourceDraftId); where.push(`source_draft_id = $${values.length}`); } values.push(Math.max(1, Math.min(5000, args.limit ?? 500)), Math.max(0, args.offset ?? 0)); const rows = await q<any>(db, `SELECT * FROM journal_entries WHERE ${where.join(' AND ')} ORDER BY posting_date DESC,entry_number DESC LIMIT $${values.length - 1} OFFSET $${values.length}`, values); return Promise.all(rows.map((r) => loadEntry(db, scope, r.id))).then((items) => items.filter(Boolean) as JournalEntryEntity[]); },
   async getJournalEntryById(scope, entryId) { return loadEntry(db, scope, entryId); },
-  async getLedgerBalances(scope, args = {}) { const values: unknown[] = [tenant(scope)]; const conditions = [`jl.tenant_id=$1`, `je.status IN ('posted','reversed')`, RUNNING_JOURNAL]; const asOf = args.to ?? args.asOfDate; const from = args.fromDate ?? args.from ?? (asOf ? `${asOf.slice(0, 4)}-01-01` : undefined); if (asOf) { values.push(asOf); conditions.push(`je.posting_date <= $${values.length}`); } if (from) values.push(from); const rangeParam = from ? `$${values.length}` : ''; const rows = await q<any>(db, `SELECT jl.account_number,COALESCE(SUM(CASE WHEN ${from ? `je.posting_date < ${rangeParam}` : 'FALSE'} THEN jl.debit_amount ELSE 0 END),0) opening_debit,COALESCE(SUM(CASE WHEN ${from ? `je.posting_date < ${rangeParam}` : 'FALSE'} THEN jl.credit_amount ELSE 0 END),0) opening_credit,COALESCE(SUM(CASE WHEN ${from ? `je.posting_date >= ${rangeParam}` : 'TRUE'} THEN jl.debit_amount ELSE 0 END),0) debit,COALESCE(SUM(CASE WHEN ${from ? `je.posting_date >= ${rangeParam}` : 'TRUE'} THEN jl.credit_amount ELSE 0 END),0) credit FROM journal_lines jl JOIN journal_entries je ON je.id=jl.entry_id AND je.tenant_id=jl.tenant_id WHERE ${conditions.join(' AND ')} GROUP BY jl.account_number ORDER BY jl.account_number`, values); return rows.map((r) => ({ accountNumber: r.account_number, openingBalance: round(Number(r.opening_debit) - Number(r.opening_credit)), debitTurnover: round(r.debit), creditTurnover: round(r.credit), closingBalance: round(Number(r.opening_debit) - Number(r.opening_credit) + Number(r.debit) - Number(r.credit)) } as LedgerBalance)); },
+  async getLedgerBalances(scope, args = {}) {
+    const t = tenant(scope);
+    const asOf = args.to ?? args.asOfDate;
+    const from = args.fromDate ?? args.from ?? (asOf ? `${asOf.slice(0, 4)}-01-01` : undefined);
+    const yearStart = await yearStartOf(db, t, from);
+    const chart = (await policy(db, t)).activeChart;
+    const rows = await q<any>(db, `SELECT jl.account_number,COALESCE(SUM(CASE WHEN $4::text IS NOT NULL AND je.posting_date < $4 THEN jl.debit_amount-jl.credit_amount ELSE 0 END),0) opening_prior,COALESCE(SUM(CASE WHEN $3::text IS NOT NULL AND je.posting_date < $3 AND ($4::text IS NULL OR je.posting_date >= $4) THEN jl.debit_amount-jl.credit_amount ELSE 0 END),0) opening_year,COALESCE(SUM(CASE WHEN $3::text IS NULL OR je.posting_date >= $3 THEN jl.debit_amount ELSE 0 END),0) debit,COALESCE(SUM(CASE WHEN $3::text IS NULL OR je.posting_date >= $3 THEN jl.credit_amount ELSE 0 END),0) credit FROM journal_lines jl JOIN journal_entries je ON je.id=jl.entry_id AND je.tenant_id=jl.tenant_id WHERE jl.tenant_id=$1 AND je.status IN ('posted','reversed') AND ${yearOpeningJournal('$4')} AND ($2::text IS NULL OR je.posting_date <= $2) GROUP BY jl.account_number ORDER BY jl.account_number`, [t, asOf ?? null, from ?? null, yearStart]);
+    const folded = await foldYearOpening(db, t, chart, rows, (accountNumber) => ({ account_number: accountNumber, opening_prior: 0, opening_year: 0, debit: 0, credit: 0 }));
+    return folded.map((r) => ({ accountNumber: String(r.account_number), openingBalance: round(r.opening_balance), debitTurnover: round(r.debit), creditTurnover: round(r.credit), closingBalance: round(r.opening_balance + Number(r.debit) - Number(r.credit)) } as LedgerBalance));
+  },
   async getSusaReport(scope, args = {}) {
     const requestedChart = (args as typeof args & { chart?: 'SKR03' | 'SKR04' }).chart;
     if (requestedChart) {
@@ -1038,7 +1227,7 @@ export const createPostgresProAccountingRepository = (db: PostgresQueryable): Pr
     return result;
   },
   async getAccountingPolicy(scope) { return policy(db, tenant(scope)); },
-  async setAccountingPolicy(scope, input) { return inTx(db, async (tx) => { const t = tenant(scope); const before = await policy(tx, t); if (input.activeChart !== before.activeChart && (await q<any>(tx, `SELECT 1 FROM journal_entries WHERE tenant_id=$1 AND status='posted' LIMIT 1`, [t]))[0]) throw new AccountingPolicyError('ACCOUNTING_CHART_LOCKED', 'Der Kontenrahmen kann nach einer gebuchten Journalbuchung nicht mehr geändert werden.'); const stamp = now(); await q(tx, `INSERT INTO accounting_policies (tenant_id,active_chart,vat_method,period_policy,updated_at) VALUES ($1,$2,$3,'calendar_month',$4) ON CONFLICT (tenant_id) DO UPDATE SET active_chart=EXCLUDED.active_chart,vat_method=EXCLUDED.vat_method,updated_at=EXCLUDED.updated_at`, [t, input.activeChart, input.vatMethod, stamp]); await audit(tx as PostgresTransactionClient, scope, 'accounting_policy', t, 'update', 'Accounting policy changed', before, { activeChart: input.activeChart, vatMethod: input.vatMethod }, input.mutation); return policy(tx, t); }); },
+  async setAccountingPolicy(scope, input) { return inTx(db, (tx) => writeAccountingPolicy(tx, scope, input)); },
   async listAccountingAccountMappings(scope, chart) { const rows = await q<any>(db, `SELECT * FROM accounting_account_mappings WHERE tenant_id=$1${chart ? ' AND chart=$2' : ''} ORDER BY chart,role`, chart ? [tenant(scope), chart] : [tenant(scope)]); return rows.map((r) => ({ id: r.id, tenantId: r.tenant_id, chart: r.chart, role: r.role, accountNumber: r.account_number, updatedAt: r.updated_at })); },
   async saveTenantLedgerAccount(scope, input) { return inTx(db, async (tx) => {
     const t = tenant(scope); const number = input.accountNumber.trim(); const stamp = now();
@@ -1060,7 +1249,7 @@ export const createPostgresProAccountingRepository = (db: PostgresQueryable): Pr
   }); },
   async upsertAccountingAccountMapping(scope, input) { return inTx(db, async (tx) => { const t = tenant(scope); if (!(await accountExists(tx, input.chart, input.accountNumber.trim(), t))) throw new Error(`UNKNOWN_ACCOUNT:${input.accountNumber.trim()}`); const id = input.id ?? randomUUID(); const stamp = now(); await q(tx, `INSERT INTO accounting_account_mappings (id,tenant_id,chart,role,account_number,updated_at) VALUES ($1,$2,$3,$4,$5,$6) ON CONFLICT (tenant_id,chart,role) DO UPDATE SET account_number=EXCLUDED.account_number,updated_at=EXCLUDED.updated_at`, [id, t, input.chart, input.role, input.accountNumber.trim(), stamp]); await audit(tx as PostgresTransactionClient, scope, 'accounting_mapping', id, 'update', 'Accounting mapping changed', null, { chart: input.chart, role: input.role, accountNumber: input.accountNumber }, input.mutation); const row = (await q<any>(tx, `SELECT * FROM accounting_account_mappings WHERE tenant_id=$1 AND chart=$2 AND role=$3`, [t, input.chart, input.role]))[0]; return { id: row.id, tenantId: row.tenant_id, chart: row.chart, role: row.role, accountNumber: row.account_number, updatedAt: row.updated_at }; }); },
   async listVendors(scope) { return (await q<any>(db, `SELECT * FROM vendors WHERE tenant_id=$1 ORDER BY name,id`, [tenant(scope)])).map(rowVendor); },
-  async upsertVendor(scope, input) { return inTx(db, async (tx) => { const t = tenant(scope); const id = input.id || randomUUID(); const stamp = now(); const existing = (await q<any>(tx, `SELECT * FROM vendors WHERE tenant_id=$1 AND id=$2`, [t, id]))[0]; const foreign = (await q<any>(tx, `SELECT tenant_id FROM vendors WHERE id=$1 AND tenant_id<>$2`, [id, t]))[0]; if (foreign) throw new Error('VENDOR_NOT_FOUND'); if (existing && (await q<any>(tx, `SELECT accounting_status FROM incoming_invoices WHERE tenant_id=$1 AND vendor_id=$2 AND accounting_status='posted' LIMIT 1`, [t, id]))[0]) throw new Error('VENDOR_HAS_POSTED_DOCUMENTS'); await q(tx, `INSERT INTO vendors (id,tenant_id,vendor_number,name,email,address,vat_id,iban,default_expense_account,created_at,updated_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$10) ON CONFLICT (id) DO UPDATE SET vendor_number=EXCLUDED.vendor_number,name=EXCLUDED.name,email=EXCLUDED.email,address=EXCLUDED.address,vat_id=EXCLUDED.vat_id,iban=EXCLUDED.iban,default_expense_account=EXCLUDED.default_expense_account,updated_at=EXCLUDED.updated_at`, [id, t, input.vendorNumber ?? null, input.name, input.email ?? null, input.address ?? null, input.vatId ?? null, input.iban ?? null, input.defaultExpenseAccount ?? null, stamp]); await audit(tx as PostgresTransactionClient, scope, 'vendor', id, 'upsert', 'Vendor changed', existing ?? null, { ...input, mutation: undefined }, input.mutation); return rowVendor((await q<any>(tx, `SELECT * FROM vendors WHERE tenant_id=$1 AND id=$2`, [t, id]))[0]); }); },
+  async upsertVendor(scope, input) { return inTx(db, async (tx) => { const t = tenant(scope); const id = input.id || randomUUID(); const stamp = now(); const existing = (await q<any>(tx, `SELECT * FROM vendors WHERE tenant_id=$1 AND id=$2`, [t, id]))[0]; /* A new vendor under a name that exists (trimmed, any case) is that vendor, not a duplicate. */ if (!existing) { const same = (await q<any>(tx, `SELECT * FROM vendors WHERE tenant_id=$1 AND lower(btrim(name))=lower(btrim($2)) ORDER BY created_at LIMIT 1`, [t, input.name]))[0]; if (same) { /* Never drop what the new entry says differently: refuse it and name the field, the person opens the existing vendor. */ const norm = (value: unknown) => String(value ?? '').replace(/\s+/g, '').toUpperCase(); const differs = [['IBAN', input.iban, same.iban], ['USt-IdNr.', input.vatId, same.vat_id], ['Standard-Aufwandskonto', input.defaultExpenseAccount, same.default_expense_account]].filter(([, given, stored]) => norm(given) && norm(given) !== norm(stored)).map(([label]) => label); if (differs.length) throw new Error(`VENDOR_EXISTS: Der Lieferant „${String(same.name).trim()}“ existiert bereits, abweichend: ${differs.join(', ')}. Wähle ihn als Kreditor und ändere die Angaben dort, gespeichert wurde nichts.`); return rowVendor(same); } } const foreign = (await q<any>(tx, `SELECT tenant_id FROM vendors WHERE id=$1 AND tenant_id<>$2`, [id, t]))[0]; if (foreign) throw new Error('VENDOR_NOT_FOUND'); if (existing && (await q<any>(tx, `SELECT accounting_status FROM incoming_invoices WHERE tenant_id=$1 AND vendor_id=$2 AND accounting_status='posted' LIMIT 1`, [t, id]))[0]) throw new Error('VENDOR_HAS_POSTED_DOCUMENTS'); await q(tx, `INSERT INTO vendors (id,tenant_id,vendor_number,name,email,address,vat_id,iban,default_expense_account,created_at,updated_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$10) ON CONFLICT (id) DO UPDATE SET vendor_number=EXCLUDED.vendor_number,name=EXCLUDED.name,email=EXCLUDED.email,address=EXCLUDED.address,vat_id=EXCLUDED.vat_id,iban=EXCLUDED.iban,default_expense_account=EXCLUDED.default_expense_account,updated_at=EXCLUDED.updated_at`, [id, t, input.vendorNumber ?? null, input.name, input.email ?? null, input.address ?? null, input.vatId ?? null, input.iban ?? null, input.defaultExpenseAccount ?? null, stamp]); await audit(tx as PostgresTransactionClient, scope, 'vendor', id, 'upsert', 'Vendor changed', existing ?? null, { ...input, mutation: undefined }, input.mutation); return rowVendor((await q<any>(tx, `SELECT * FROM vendors WHERE tenant_id=$1 AND id=$2`, [t, id]))[0]); }); },
   async listIncomingInvoices(scope) { const rows = await q<any>(db, `SELECT * FROM incoming_invoices WHERE tenant_id=$1 ORDER BY invoice_date DESC,number`, [tenant(scope)]); return Promise.all(rows.map(async (r) => rowIncoming(r, await q(db, `SELECT * FROM incoming_invoice_lines WHERE tenant_id=$1 AND incoming_invoice_id=$2 ORDER BY position`, [tenant(scope), r.id])))); },
   async listIncomingInvoiceDocuments(scope, invoiceId) {
     const rows = await q<any>(db, `SELECT d.*, i.accounting_journal_entry_id FROM incoming_invoice_documents d JOIN incoming_invoices i ON i.id=d.incoming_invoice_id AND i.tenant_id=d.tenant_id WHERE d.tenant_id=$1${invoiceId ? ' AND d.incoming_invoice_id=$2' : ''} ORDER BY d.created_at,d.id`, invoiceId ? [tenant(scope), invoiceId] : [tenant(scope)]);
@@ -1113,7 +1302,7 @@ export const createPostgresProAccountingRepository = (db: PostgresQueryable): Pr
       return after;
     });
   },
-  async upsertIncomingInvoice(scope, input) { return inTx(db, async (tx) => { const t = tenant(scope); const existing = (await q<any>(tx, `SELECT * FROM incoming_invoices WHERE tenant_id=$1 AND id=$2`, [t, input.id]))[0]; const foreign = (await q<any>(tx, `SELECT tenant_id FROM incoming_invoices WHERE id=$1 AND tenant_id<>$2`, [input.id, t]))[0]; if (foreign) throw new Error('INCOMING_INVOICE_NOT_FOUND'); if (existing?.accounting_status === 'posted' || existing?.accounting_status === 'reversed') { const oldLines = await q(tx, `SELECT * FROM incoming_invoice_lines WHERE tenant_id=$1 AND incoming_invoice_id=$2 ORDER BY position`, [t, input.id]); return rowIncoming(existing, oldLines); } const vendor = (await q<any>(tx, `SELECT id FROM vendors WHERE tenant_id=$1 AND id=$2`, [t, input.vendorId]))[0]; if (!vendor) throw new Error('VENDOR_NOT_FOUND'); const stamp = now(); await q(tx, `INSERT INTO incoming_invoices (id,tenant_id,vendor_id,number,invoice_date,due_date,service_period,net_amount,tax_amount,gross_amount,status,tax_rate,tax_case_key,notes,accounting_status,accounting_snapshot_json,accounting_journal_entry_id,created_at,updated_at,tax_meta_json) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,'unposted',NULL,NULL,$15,$16,$17) ON CONFLICT (id) DO UPDATE SET tax_meta_json=EXCLUDED.tax_meta_json, vendor_id=EXCLUDED.vendor_id,number=EXCLUDED.number,invoice_date=EXCLUDED.invoice_date,due_date=EXCLUDED.due_date,service_period=EXCLUDED.service_period,net_amount=EXCLUDED.net_amount,tax_amount=EXCLUDED.tax_amount,gross_amount=EXCLUDED.gross_amount,status=EXCLUDED.status,tax_rate=EXCLUDED.tax_rate,tax_case_key=EXCLUDED.tax_case_key,notes=EXCLUDED.notes,updated_at=EXCLUDED.updated_at`, [input.id, t, input.vendorId, input.number, input.invoiceDate, input.dueDate, input.servicePeriod ?? null, input.netAmount, input.taxAmount, input.grossAmount, input.status, input.taxRate, input.taxCaseKey ?? null, input.notes ?? null, input.createdAt || stamp, stamp, input.taxMeta && Object.values(input.taxMeta).some((value) => value !== undefined) ? JSON.stringify(input.taxMeta) : null]); await q(tx, `DELETE FROM incoming_invoice_lines WHERE tenant_id=$1 AND incoming_invoice_id=$2`, [t, input.id]); for (const line of input.lines) await q(tx, `INSERT INTO incoming_invoice_lines (id,tenant_id,incoming_invoice_id,position,description,quantity,unit_price,net_amount,tax_rate,tax_amount,gross_amount,account_number,asset_account_number) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`, [line.id, t, input.id, line.position, line.description, line.quantity, line.unitPrice, line.netAmount, line.taxRate, line.taxAmount, line.grossAmount, line.accountNumber ?? null, line.assetAccountNumber ?? null]); await audit(tx as PostgresTransactionClient, scope, 'incoming_invoice', input.id, 'upsert', 'Incoming invoice changed', existing ?? null, { ...input, accountingStatus: undefined, accountingSnapshot: undefined, mutation: undefined }, input.mutation); return rowIncoming((await q<any>(tx, `SELECT * FROM incoming_invoices WHERE tenant_id=$1 AND id=$2`, [t, input.id]))[0], await q(tx, `SELECT * FROM incoming_invoice_lines WHERE tenant_id=$1 AND incoming_invoice_id=$2 ORDER BY position`, [t, input.id])); }); },
+  async upsertIncomingInvoice(scope, input) { return inTx(db, async (tx) => { const t = tenant(scope); const existing = (await q<any>(tx, `SELECT * FROM incoming_invoices WHERE tenant_id=$1 AND id=$2`, [t, input.id]))[0]; const foreign = (await q<any>(tx, `SELECT tenant_id FROM incoming_invoices WHERE id=$1 AND tenant_id<>$2`, [input.id, t]))[0]; if (foreign) throw new Error('INCOMING_INVOICE_NOT_FOUND'); if (existing?.accounting_status === 'posted' || existing?.accounting_status === 'reversed') { const oldLines = await q(tx, `SELECT * FROM incoming_invoice_lines WHERE tenant_id=$1 AND incoming_invoice_id=$2 ORDER BY position`, [t, input.id]); return rowIncoming(existing, oldLines); } const vendor = (await q<any>(tx, `SELECT id FROM vendors WHERE tenant_id=$1 AND id=$2`, [t, input.vendorId]))[0]; if (!vendor) throw new Error('VENDOR_NOT_FOUND'); if (input.status !== 'draft') { /* Released for posting only with accounts the chart knows; a draft may hold an unfinished one. */ const chart = (await policy(tx, t)).activeChart; const accounts = [...new Set(input.lines.map((line) => line.accountNumber ?? line.assetAccountNumber).filter((account): account is string => Boolean(account)))]; const usable = await usableAccountNumbers(tx, t, chart, accounts); const unknown = accounts.find((account) => !usable.has(account)); if (unknown) throw Object.assign(new Error(`Das Konto ${unknown} ist nicht im Kontenrahmen ${chart} vorhanden oder deaktiviert. Wählen Sie ein vorhandenes Konto; bis dahin bleibt der Beleg ein Entwurf.`), { statusCode: 422 }); } const stamp = now(); await q(tx, `INSERT INTO incoming_invoices (id,tenant_id,vendor_id,number,invoice_date,due_date,service_period,net_amount,tax_amount,gross_amount,status,tax_rate,tax_case_key,notes,accounting_status,accounting_snapshot_json,accounting_journal_entry_id,created_at,updated_at,tax_meta_json) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,'unposted',NULL,NULL,$15,$16,$17) ON CONFLICT (id) DO UPDATE SET tax_meta_json=EXCLUDED.tax_meta_json, vendor_id=EXCLUDED.vendor_id,number=EXCLUDED.number,invoice_date=EXCLUDED.invoice_date,due_date=EXCLUDED.due_date,service_period=EXCLUDED.service_period,net_amount=EXCLUDED.net_amount,tax_amount=EXCLUDED.tax_amount,gross_amount=EXCLUDED.gross_amount,status=EXCLUDED.status,tax_rate=EXCLUDED.tax_rate,tax_case_key=EXCLUDED.tax_case_key,notes=EXCLUDED.notes,updated_at=EXCLUDED.updated_at`, [input.id, t, input.vendorId, input.number, input.invoiceDate, input.dueDate, input.servicePeriod ?? null, input.netAmount, input.taxAmount, input.grossAmount, input.status, input.taxRate, input.taxCaseKey ?? null, input.notes ?? null, input.createdAt || stamp, stamp, input.taxMeta && Object.values(input.taxMeta).some((value) => value !== undefined) ? JSON.stringify(input.taxMeta) : null]); await q(tx, `DELETE FROM incoming_invoice_lines WHERE tenant_id=$1 AND incoming_invoice_id=$2`, [t, input.id]); for (const line of input.lines) await q(tx, `INSERT INTO incoming_invoice_lines (id,tenant_id,incoming_invoice_id,position,description,quantity,unit_price,net_amount,tax_rate,tax_amount,gross_amount,account_number,asset_account_number) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`, [line.id, t, input.id, line.position, line.description, line.quantity, line.unitPrice, line.netAmount, line.taxRate, line.taxAmount, line.grossAmount, line.accountNumber ?? null, line.assetAccountNumber ?? null]); await audit(tx as PostgresTransactionClient, scope, 'incoming_invoice', input.id, 'upsert', 'Incoming invoice changed', existing ?? null, { ...input, accountingStatus: undefined, accountingSnapshot: undefined, mutation: undefined }, input.mutation); return rowIncoming((await q<any>(tx, `SELECT * FROM incoming_invoices WHERE tenant_id=$1 AND id=$2`, [t, input.id]))[0], await q(tx, `SELECT * FROM incoming_invoice_lines WHERE tenant_id=$1 AND incoming_invoice_id=$2 ORDER BY position`, [t, input.id])); }); },
   async previewOutgoingInvoice(scope, invoiceId) { const row = await readInvoice(db, scope, invoiceId); if (!row) throw new Error('INVOICE_NOT_FOUND'); return postingPreview(db, scope, row, 'outgoing_invoice'); },
   async postOutgoingInvoice(scope, invoiceId, options = {}) { return inTx(db, (tx) => postDocument(tx, scope, 'outgoing_invoice', invoiceId, options)); },
   async previewIncomingInvoice(scope, invoiceId) { const row = (await q<any>(db, `SELECT * FROM incoming_invoices WHERE tenant_id=$1 AND id=$2`, [tenant(scope), invoiceId]))[0]; if (!row) throw new Error('INCOMING_INVOICE_NOT_FOUND'); return postingPreview(db, scope, row, 'incoming_invoice'); },
@@ -1189,7 +1378,7 @@ export const createPostgresProAccountingRepository = (db: PostgresQueryable): Pr
     return inTx(db, async (tx) => {
       const row = await assetRow(tx, scope, input.assetId, true); const schedule = await assetSchedule(tx, scope, row.id, true); const entry = schedule.find((item) => item.year === input.year);
       if (!entry) throw new Error('DEPRECIATION_SCHEDULE_NOT_FOUND');
-      const sourceKey = `asset_depreciation:${row.id}:${input.year}`;
+      const sourceKey = await depreciationSourceKey(tx, scope, row.id, input.year);
       if (entry.status === 'posted' && entry.journalEntryId) return { asset: mapAsset(row, schedule), scheduleEntry: entry, journalEntryId: entry.journalEntryId };
       if (entry.status === 'cancelled') throw new Error('DEPRECIATION_SCHEDULE_CANCELLED');
       if (row.accounting_repair_required) throw new Error('ASSET_ACTIVATION_REPAIR_REQUIRED');
@@ -1197,13 +1386,16 @@ export const createPostgresProAccountingRepository = (db: PostgresQueryable): Pr
       if (!isoDate(input.postingDate)) throw new Error('INVALID_POSTING_DATE');
       // The AfA of a Wirtschaftsjahr is booked inside that Wirtschaftsjahr, not in the year before or after.
       if (await reportingFiscalYear(tx, tenant(scope), input.postingDate) !== input.year) throw new Error(`INVALID_DEPRECIATION_POSTING_DATE: Die AfA ${input.year} muss im Wirtschaftsjahr ${input.year} gebucht werden.`);
+      // The schedule year is the whole, month-exact AfA of the Wirtschaftsjahr; booked earlier it would claim months that have not passed.
+      const yearEnd = fiscalYearRange(input.year, await reportingFiscalYearStart(tx, tenant(scope))).end;
+      if (input.postingDate < yearEnd) throw new Error(`INVALID_DEPRECIATION_POSTING_DATE: Die AfA ${input.year} wird zum Ende des Wirtschaftsjahres (${yearEnd.split('-').reverse().join('.')}) gebucht, monatsgenau bis dahin. Ein Verkauf oder Abgang im Jahr bucht die anteilige AfA selbst.`);
       const status = await ensurePeriod(tx, scope, period(input.postingDate), input.postingDate);
       if (status === 'closed') throw new Error('POSTING_DATE_IN_CLOSED_PERIOD');
       if (status === 'soft_locked' && (!input.softLockOverride || !input.overrideReason?.trim())) throw new Error('SOFT_LOCK_OVERRIDE_REQUIRED');
       const chart = (await policy(tx, tenant(scope))).activeChart; const expense = DEPRECIATION_EXPENSE_ACCOUNTS[chart]; await assertAccounts(tx, chart, [expense, row.asset_account_number], 'DEPRECIATION_ACCOUNT_NOT_IN_CHART', tenant(scope));
       const journalEntryId = await insertEntry(tx, scope, 'asset_depreciation', sourceKey, input.postingDate, `AfA ${row.asset_number} ${input.year}`, [
-        { id: `${row.id}-expense-${input.year}`, accountNumber: expense, debitAmount: entry.amount, creditAmount: 0, evidenceType: 'asset_depreciation', evidenceReference: row.invoice_ref ?? row.asset_number, costCenter: row.cost_center, memo: input.reason },
-        { id: `${row.id}-asset-${input.year}`, accountNumber: row.asset_account_number, debitAmount: 0, creditAmount: entry.amount, costCenter: row.cost_center, memo: input.reason },
+        { id: `${row.id}-expense-${input.year}${keyRound(sourceKey)}`, accountNumber: expense, debitAmount: entry.amount, creditAmount: 0, evidenceType: 'asset_depreciation', evidenceReference: row.invoice_ref ?? row.asset_number, costCenter: row.cost_center || undefined, memo: input.reason },
+        { id: `${row.id}-asset-${input.year}${keyRound(sourceKey)}`, accountNumber: row.asset_account_number, debitAmount: 0, creditAmount: entry.amount, costCenter: row.cost_center || undefined, memo: input.reason },
       ], { reference: row.asset_number, softLockOverride: input.softLockOverride, overrideReason: input.overrideReason, mutation: input.mutation });
       const stamp = now();
       await q(tx, `UPDATE asset_depreciation_schedule SET status='posted',journal_entry_id=$1,source_type='asset_depreciation',source_key=$2,posted_at=$3 WHERE tenant_id=$4 AND id=$5 AND status='planned'`, [journalEntryId, sourceKey, stamp, tenant(scope), entry.id]);
@@ -1216,13 +1408,25 @@ export const createPostgresProAccountingRepository = (db: PostgresQueryable): Pr
   async disposeAsset(scope, input): Promise<AssetDisposalResult> {
     if (!input.reason.trim()) throw new Error('ACCOUNTING_AUDIT_REASON_REQUIRED');
     return inTx(db, async (tx) => {
-      const row = await assetRow(tx, scope, input.assetId, true); const sourceKey = `asset_disposal:${row.id}`;
+      const row = await assetRow(tx, scope, input.assetId, true); const sourceKey = await disposalSourceKey(tx, scope, row.id);
       const existing = (await q<any>(tx, `SELECT journal_entry_id,amount,gain_loss,proceeds FROM asset_movements WHERE tenant_id=$1 AND asset_id=$2 AND source_type='asset_disposal' AND source_key=$3 LIMIT 1`, [tenant(scope), row.id, sourceKey]))[0];
-      if (existing?.journal_entry_id) return { asset: await getAsset(tx, scope, row.id), residualBookValue: round(existing.amount), gainLoss: round(existing.gain_loss ?? Number(existing.proceeds) - Number(existing.amount)), journalEntryId: existing.journal_entry_id };
+      if (existing) {
+        // A retry returns the recorded disposal. A sale invoice other than the one the asset was sold with is a second sale.
+        if (input.saleInvoiceId && (Math.abs(Number(existing.proceeds ?? 0) - input.proceeds) > 0.005 || await otherAssetSaleInvoice(tx, scope, row.id, input.saleInvoiceId))) throw new Error(`ASSET_ALREADY_DISPOSED: Die Anlage ${row.asset_number} ist bereits ausgebucht. Ein zweiter Verkauf ist nicht möglich; zum Rückgängigmachen den Verkaufsentwurf löschen oder die Verkaufsrechnung stornieren.`);
+        return { asset: await getAsset(tx, scope, row.id), residualBookValue: round(existing.amount), gainLoss: round(existing.gain_loss ?? Number(existing.proceeds) - Number(existing.amount)), journalEntryId: existing.journal_entry_id ?? '' };
+      }
       if (!isoDate(input.disposalDate)) throw new Error('INVALID_DISPOSAL_DATE');
       const status = await ensurePeriod(tx, scope, period(input.disposalDate), input.disposalDate); if (status === 'closed') throw new Error('POSTING_DATE_IN_CLOSED_PERIOD'); if (status === 'soft_locked' && (!input.softLockOverride || !input.overrideReason?.trim())) throw new Error('SOFT_LOCK_OVERRIDE_REQUIRED');
       if (row.depreciation_method === 'pool') throw new Error('POOL_INDIVIDUAL_DISPOSAL_NOT_SUPPORTED');
-      if (row.accounting_repair_required) throw new Error('ASSET_ACTIVATION_REPAIR_REQUIRED'); if (row.status === 'entwurf' || !row.activation_journal_entry_id) throw new Error('ASSET_NOT_ACTIVE'); if (row.disposal_date) throw new Error('ASSET_ALREADY_DISPOSED'); if (input.proceeds > 0 && input.taxRate === undefined) throw new Error('TAX_RATE_REQUIRED_FOR_PROCEEDS');
+      if (row.accounting_repair_required) throw new Error('ASSET_ACTIVATION_REPAIR_REQUIRED'); if (row.status === 'entwurf' || !row.activation_journal_entry_id) throw new Error('ASSET_NOT_ACTIVE'); if (row.disposal_date) throw new Error(`ASSET_ALREADY_DISPOSED: Die Anlage ${row.asset_number} ist bereits ausgebucht.`);
+      // A sale to a customer: its outgoing invoice books proceeds, VAT and the open item, so the disposal only takes the book value off.
+      const saleInvoice = input.saleInvoiceId ? (await q<any>(tx, `SELECT id,status,items_json,tax_meta_json FROM invoices WHERE tenant_id=$1 AND id=$2`, [tenant(scope), input.saleInvoiceId]))[0] : undefined;
+      if (input.saleInvoiceId) {
+        if (!saleInvoice || parse<any>(saleInvoice.tax_meta_json, null)?.assetSaleAssetId !== row.id || saleInvoice.status === 'cancelled') throw new Error('ASSET_SALE_INVOICE_MISMATCH: Die Rechnung gehört nicht zum Verkauf dieser Anlage.');
+        const invoiceNet = round(parse<any[]>(saleInvoice.items_json, []).filter((item) => (item.kind ?? 'item') === 'item').reduce((sum, item) => sum + Number(item.total ?? 0), 0));
+        if (input.proceeds <= 0 || Math.abs(invoiceNet - input.proceeds) > 0.005) throw new Error(`ASSET_SALE_INVOICE_MISMATCH: Der Erlös muss dem Nettobetrag der Rechnung entsprechen (${invoiceNet.toFixed(2).replace('.', ',')} €).`);
+      }
+      if (input.proceeds > 0 && input.taxRate === undefined && !saleInvoice) throw new Error('TAX_RATE_REQUIRED_FOR_PROCEEDS');
       const fiscalYearStart = await reportingFiscalYearStart(tx, tenant(scope));
       const disposal = computeAssetDisposal({ ...assetInputFor(row), fiscalYearStart, disposalDate: input.disposalDate, proceeds: input.proceeds });
       const chart = (await policy(tx, tenant(scope))).activeChart; const accounts = disposalAccounts(chart);
@@ -1236,24 +1440,41 @@ export const createPostgresProAccountingRepository = (db: PostgresQueryable): Pr
       if (schedule.some((entry) => entry.year < disposalYear && entry.status === 'planned') || partial < -0.01 || (partial > 0.005 && !yearEntry)) throw new Error('ASSET_DISPOSAL_PROJECTION_MISMATCH');
       if (partial > 0.005 && yearEntry) {
         const expense = DEPRECIATION_EXPENSE_ACCOUNTS[chart]; await assertAccounts(tx, chart, [expense, row.asset_account_number], 'DEPRECIATION_ACCOUNT_NOT_IN_CHART', tenant(scope));
-        const depreciationKey = `asset_depreciation:${row.id}:${disposalYear}`;
+        const depreciationKey = await depreciationSourceKey(tx, scope, row.id, disposalYear);
         const depreciationEntryId = await insertEntry(tx, scope, 'asset_depreciation', depreciationKey, input.disposalDate, `AfA ${row.asset_number} ${disposalYear} bis Abgang`, [
-          { id: `${row.id}-expense-${disposalYear}`, accountNumber: expense, debitAmount: partial, creditAmount: 0, evidenceType: 'asset_depreciation', evidenceReference: row.invoice_ref ?? row.asset_number, costCenter: row.cost_center, memo: input.reason },
-          { id: `${row.id}-asset-${disposalYear}`, accountNumber: row.asset_account_number, debitAmount: 0, creditAmount: partial, costCenter: row.cost_center, memo: input.reason },
+          { id: `${row.id}-expense-${disposalYear}${keyRound(depreciationKey)}`, accountNumber: expense, debitAmount: partial, creditAmount: 0, evidenceType: 'asset_depreciation', evidenceReference: row.invoice_ref ?? row.asset_number, costCenter: row.cost_center || undefined, memo: input.reason },
+          { id: `${row.id}-asset-${disposalYear}${keyRound(depreciationKey)}`, accountNumber: row.asset_account_number, debitAmount: 0, creditAmount: partial, costCenter: row.cost_center || undefined, memo: input.reason },
         ], { reference: row.asset_number, softLockOverride: input.softLockOverride, overrideReason: input.overrideReason, mutation: input.mutation });
         const months = Math.max(1, Math.min(yearEntry.months, Math.round(yearEntry.months * partial / yearEntry.amount)));
         await q(tx, `UPDATE asset_depreciation_schedule SET amount=$1,months=$2,status='posted',journal_entry_id=$3,source_type='asset_depreciation',source_key=$4,posted_at=$5 WHERE tenant_id=$6 AND id=$7 AND status='planned'`, [partial, months, depreciationEntryId, depreciationKey, now(), tenant(scope), yearEntry.id]);
         await q(tx, `INSERT INTO asset_movements (id,tenant_id,asset_id,type,movement_date,amount,proceeds,gain_loss,journal_entry_id,source_type,source_key,reason,created_at) VALUES ($1,$2,$3,'depreciation',$4,$5,NULL,NULL,$6,'asset_depreciation',$7,$8,$9)`, [randomUUID(), tenant(scope), row.id, input.disposalDate, partial, depreciationEntryId, depreciationKey, input.overrideReason?.trim() || input.reason, now()]);
       }
       const residualBookValue = round(Math.max(0, Number(row.acquisition_cost) - posted - Math.max(0, partial)));
-      if (Math.abs(disposal.residualBookValue - residualBookValue) > 0.01) throw new Error('ASSET_DISPOSAL_PROJECTION_MISMATCH'); const proceedsAccount = input.proceedsAccountNumber || await accountFor(tx, scope, chart, 'bank'); if (input.proceeds > 0 && !proceedsAccount) throw new Error('PROCEEDS_ACCOUNT_REQUIRED');
+      if (Math.abs(disposal.residualBookValue - residualBookValue) > 0.01) throw new Error('ASSET_DISPOSAL_PROJECTION_MISMATCH'); if (saleInvoice) {
+        // Bruttomethode: the invoice put the proceeds on the asset-sale account; the book value goes to the Restbuchwert account.
+        const residualAccount = input.proceeds - residualBookValue >= 0 ? accounts.residualOnGain : accounts.loss;
+        await assertAccounts(tx, chart, [row.asset_account_number, residualAccount], 'DISPOSAL_ACCOUNT_NOT_IN_CHART', tenant(scope));
+        const gainLoss = round(input.proceeds - residualBookValue);
+        const lines: JournalLineEntity[] = residualBookValue > 0 ? [
+          { id: `${row.id}${keyRound(sourceKey)}-residual-expense`, accountNumber: residualAccount, debitAmount: residualBookValue, creditAmount: 0, evidenceType: 'asset_disposal', evidenceReference: row.asset_number, memo: input.reason },
+          { id: `${row.id}${keyRound(sourceKey)}-residual`, accountNumber: row.asset_account_number, debitAmount: 0, creditAmount: residualBookValue, memo: input.reason },
+        ] : [];
+        const journalEntryId = lines.length ? await insertEntry(tx, scope, 'asset_disposal', sourceKey, input.disposalDate, `Anlagenverkauf ${row.asset_number}`, lines, { reference: row.asset_number, softLockOverride: input.softLockOverride, overrideReason: input.overrideReason, mutation: input.mutation }) : null;
+        const stamp = now(); await q(tx, `INSERT INTO asset_movements (id,tenant_id,asset_id,type,movement_date,amount,proceeds,gain_loss,journal_entry_id,source_type,source_key,reason,created_at) VALUES ($1,$2,$3,'disposal',$4,$5,$6,$7,$8,'asset_disposal',$9,$10,$11)`, [randomUUID(), tenant(scope), row.id, input.disposalDate, residualBookValue, input.proceeds, gainLoss, journalEntryId, sourceKey, input.overrideReason?.trim() || input.reason, stamp]);
+        await q(tx, `UPDATE assets SET status='verkauft',disposal_date=$1,disposal_proceeds=$2,updated_at=$3 WHERE tenant_id=$4 AND id=$5`, [input.disposalDate, input.proceeds, stamp, tenant(scope), row.id]);
+        await q(tx, `UPDATE asset_depreciation_schedule SET status='cancelled' WHERE tenant_id=$1 AND asset_id=$2 AND status='planned'`, [tenant(scope), row.id]);
+        const afterRow = await assetRow(tx, scope, row.id); const afterSchedule = await assetSchedule(tx, scope, row.id); await audit(tx as PostgresTransactionClient, scope, 'asset', row.id, 'dispose', input.reason, { asset: assetSnapshot(row) }, { asset: assetSnapshot(afterRow), schedule: afterSchedule, residualBookValue, gainLoss, journalEntryId, saleInvoiceId: saleInvoice.id }, input.mutation);
+        return { asset: mapAsset(afterRow, afterSchedule), residualBookValue, gainLoss, journalEntryId: journalEntryId ?? '' };
+      }
+      const proceedsAccount = input.proceedsAccountNumber || await accountFor(tx, scope, chart, 'bank'); if (input.proceeds > 0 && !proceedsAccount) throw new Error('PROCEEDS_ACCOUNT_REQUIRED');
       const taxAccount = input.taxRate && input.taxRate > 0 ? await taxCaseAccount(tx, tenant(scope), chart, input.taxRate === 7 ? 'DE_STD_7' : 'DE_STD_19', 'output_tax', outputTaxAccount(chart, input.taxRate), input.disposalDate) : undefined; await assertAccounts(tx, chart, [row.asset_account_number, accounts.loss, accounts.gain, ...(input.proceeds > 0 && proceedsAccount ? [proceedsAccount] : []), ...(taxAccount ? [taxAccount] : [])], 'DISPOSAL_ACCOUNT_NOT_IN_CHART', tenant(scope));
       const gainLoss = round(input.proceeds - residualBookValue); const gross = round(input.proceeds * (1 + (input.taxRate ?? 0) / 100)); const vat = round(gross - input.proceeds); const lines: JournalLineEntity[] = [];
-      if (input.proceeds > 0) lines.push({ id: `${row.id}-proceeds`, accountNumber: proceedsAccount!, debitAmount: gross, creditAmount: 0, memo: input.reason });
-      if (gainLoss < 0) lines.push({ id: `${row.id}-loss`, accountNumber: accounts.loss, debitAmount: -gainLoss, creditAmount: 0, memo: input.reason });
-      if (gainLoss > 0) lines.push({ id: `${row.id}-gain`, accountNumber: accounts.gain, debitAmount: 0, creditAmount: gainLoss, taxCaseKey: 'DE_ZERO_EXEMPT', evidenceType: 'asset_disposal', evidenceReference: row.asset_number, memo: input.reason });
-      if (residualBookValue > 0) lines.push({ id: `${row.id}-residual`, accountNumber: row.asset_account_number, debitAmount: 0, creditAmount: residualBookValue, memo: input.reason });
-      if (vat > 0) lines.push({ id: `${row.id}-vat`, accountNumber: taxAccount!, debitAmount: 0, creditAmount: vat, taxCaseKey: (input.taxRate === 7 ? 'DE_STD_7' : 'DE_STD_19') as any, taxRate: input.taxRate, netAmount: input.proceeds, taxAmount: vat, grossAmount: gross, memo: `USt ${input.taxRate}%` });
+      if (input.proceeds > 0) lines.push({ id: `${row.id}${keyRound(sourceKey)}-proceeds`, accountNumber: proceedsAccount!, debitAmount: gross, creditAmount: 0, memo: input.reason });
+      // The VAT follows the proceeds, so the posting pairs (and DATEV) put the tax on the sale, never on a book loss.
+      if (vat > 0) lines.push({ id: `${row.id}${keyRound(sourceKey)}-vat`, accountNumber: taxAccount!, debitAmount: 0, creditAmount: vat, taxCaseKey: (input.taxRate === 7 ? 'DE_STD_7' : 'DE_STD_19') as any, taxRate: input.taxRate, netAmount: input.proceeds, taxAmount: vat, grossAmount: gross, memo: `USt ${input.taxRate}%` });
+      if (gainLoss < 0) lines.push({ id: `${row.id}${keyRound(sourceKey)}-loss`, accountNumber: accounts.loss, debitAmount: -gainLoss, creditAmount: 0, memo: input.reason });
+      if (gainLoss > 0) lines.push({ id: `${row.id}${keyRound(sourceKey)}-gain`, accountNumber: accounts.gain, debitAmount: 0, creditAmount: gainLoss, taxCaseKey: 'DE_ZERO_EXEMPT', evidenceType: 'asset_disposal', evidenceReference: row.asset_number, memo: input.reason });
+      if (residualBookValue > 0) lines.push({ id: `${row.id}${keyRound(sourceKey)}-residual`, accountNumber: row.asset_account_number, debitAmount: 0, creditAmount: residualBookValue, memo: input.reason });
       const journalEntryId = await insertEntry(tx, scope, 'asset_disposal', sourceKey, input.disposalDate, `${input.proceeds > 0 ? 'Anlagenverkauf' : 'Anlagenabgang'} ${row.asset_number}`, lines, { reference: row.asset_number, softLockOverride: input.softLockOverride, overrideReason: input.overrideReason, mutation: input.mutation });
       const stamp = now(); await q(tx, `INSERT INTO asset_movements (id,tenant_id,asset_id,type,movement_date,amount,proceeds,gain_loss,journal_entry_id,source_type,source_key,reason,created_at) VALUES ($1,$2,$3,'disposal',$4,$5,$6,$7,$8,'asset_disposal',$9,$10,$11)`, [randomUUID(), tenant(scope), row.id, input.disposalDate, residualBookValue, input.proceeds, gainLoss, journalEntryId, sourceKey, input.overrideReason?.trim() || input.reason, stamp]);
       await q(tx, `UPDATE assets SET status=$1,disposal_date=$2,disposal_proceeds=$3,updated_at=$4 WHERE tenant_id=$5 AND id=$6`, [input.proceeds > 0 ? 'verkauft' : 'stillgelegt', input.disposalDate, input.proceeds, stamp, tenant(scope), row.id]);
@@ -1261,6 +1482,25 @@ export const createPostgresProAccountingRepository = (db: PostgresQueryable): Pr
       const afterRow = await assetRow(tx, scope, row.id); const afterSchedule = await assetSchedule(tx, scope, row.id); await audit(tx as PostgresTransactionClient, scope, 'asset', row.id, 'dispose', input.reason, { asset: assetSnapshot(row) }, { asset: assetSnapshot(afterRow), schedule: afterSchedule, residualBookValue, gainLoss, journalEntryId }, input.mutation);
       return { asset: mapAsset(afterRow, afterSchedule), residualBookValue, gainLoss, journalEntryId };
     });
+  },
+  async getAssetRegister(scope, year): Promise<AssetRegister> {
+    const t = tenant(scope);
+    const { start: from, end: to } = fiscalYearRange(year, await reportingFiscalYearStart(db, t));
+    // Book values from the asset movements: activation adds the cost, AfA and the disposal (at residual book value) take it off.
+    const rows = await q<any>(db, `SELECT a.id,a.asset_number,a.name,a.asset_account_number,
+        COALESCE(SUM(CASE WHEN m.movement_date < $2 THEN CASE WHEN m.type='activation' THEN m.amount ELSE -m.amount END ELSE 0 END),0) AS opening,
+        COALESCE(SUM(CASE WHEN m.movement_date >= $2 AND m.type='activation' THEN m.amount ELSE 0 END),0) AS additions,
+        COALESCE(SUM(CASE WHEN m.movement_date >= $2 AND m.type='disposal' THEN m.amount ELSE 0 END),0) AS disposals,
+        COALESCE(SUM(CASE WHEN m.movement_date >= $2 AND m.type='depreciation' THEN m.amount ELSE 0 END),0) AS depreciation
+      FROM assets a JOIN asset_movements m ON m.tenant_id=a.tenant_id AND m.asset_id=a.id
+      WHERE a.tenant_id=$1 AND m.movement_date <= $3 AND m.type IN ('activation','depreciation','disposal')
+      GROUP BY a.id,a.asset_number,a.name,a.asset_account_number ORDER BY a.asset_account_number,a.asset_number,a.id`, [t, from, to]);
+    const register = rows.map((row) => {
+      const [opening, additions, disposals, depreciation] = [row.opening, row.additions, row.disposals, row.depreciation].map((value) => round(Number(value)));
+      return { assetId: String(row.id), assetNumber: String(row.asset_number), name: String(row.name ?? ''), accountNumber: String(row.asset_account_number ?? ''), opening, additions, disposals, depreciation, closing: round(opening + additions - disposals - depreciation) + 0 };
+    }).filter((row) => row.opening !== 0 || row.additions !== 0 || row.disposals !== 0 || row.depreciation !== 0);
+    const sum = (key: 'opening' | 'additions' | 'disposals' | 'depreciation' | 'closing') => round(register.reduce((total, row) => total + row[key], 0));
+    return { year, from, to, rows: register, totals: { opening: sum('opening'), additions: sum('additions'), disposals: sum('disposals'), depreciation: sum('depreciation'), closing: sum('closing') } };
   },
   async ensureSeedData(scope) { await inTx(db, async (tx) => { const t = tenant(scope); const stamp = now(); await q(tx, `INSERT INTO accounting_policies (tenant_id,active_chart,vat_method,period_policy,updated_at) VALUES ($1,'SKR03','soll','calendar_month',$2) ON CONFLICT (tenant_id) DO NOTHING`, [t, stamp]); const p = await policy(tx, t); for (const [role, accountNumber] of Object.entries(defaults[p.activeChart])) await q(tx, `INSERT INTO accounting_account_mappings (id,tenant_id,chart,role,account_number,updated_at) VALUES ($1,$2,$3,$4,$5,$6) ON CONFLICT (tenant_id,chart,role) DO NOTHING`, [randomUUID(), t, p.activeChart, role, accountNumber, stamp]); // HGB report mappings are explicit tenant data; never infer them from account-number digits.
  await ensurePeriod(tx, scope, period(stamp.slice(0, 10)), stamp.slice(0, 10)); }); },
@@ -1336,7 +1576,40 @@ const accountFor = async (db: PostgresQueryable, scope: TenantScope, chart: 'SKR
 const assertAccounts = async (db: PostgresQueryable, chart: 'SKR03' | 'SKR04', accounts: string[], code: string, tenantId: string): Promise<void> => {
   if ((await Promise.all(accounts.map((account) => accountExists(db, chart, account, tenantId)))).some((exists) => !exists)) throw new Error(code);
 };
-const disposalAccounts = (chart: 'SKR03' | 'SKR04') => chart === 'SKR03' ? { loss: '2310', gain: '8829' } : { loss: '6895', gain: '4849' };
+// Proceeds of a sale through an invoice: "bei Buchgewinn" or "bei Buchverlust" (SKR04 4849/6889). The SKR03 catalogue in
+// the repo has no Sachanlagen account "bei Buchverlust" (8800 is missing, 8801 is a DATEV automatic account at 19 % that
+// would book the VAT a second time), so SKR03 keeps 8829 for both; gain or loss still shows on 2315/2310.
+const disposalAccounts = (chart: 'SKR03' | 'SKR04') => chart === 'SKR03' ? { loss: '2310', gain: '8829', lossProceeds: '8829', residualOnGain: '2315' } : { loss: '6895', gain: '4849', lossProceeds: '6889', residualOnGain: '4855' };
+
+/** Keys of a disposal and of an AfA year get a round suffix after a reversal, so booking them again does not collide. */
+const disposalSourceKey = async (db: PostgresQueryable, scope: TenantScope, assetId: string): Promise<string> => {
+  const reversed = Number((await q<any>(db, `SELECT count(*) AS n FROM asset_movements WHERE tenant_id=$1 AND asset_id=$2 AND source_type='asset_disposal_reversal'`, [tenant(scope), assetId]))[0]?.n ?? 0);
+  return reversed ? `asset_disposal:${assetId}:r${reversed + 1}` : `asset_disposal:${assetId}`;
+};
+/** Line ids of a later round carry its suffix (journal line ids are unique). */
+const keyRound = (sourceKey: string): string => { const round = sourceKey.match(/:(r\d+)$/)?.[1]; return round ? `-${round}` : ''; };
+const depreciationSourceKey = async (db: PostgresQueryable, scope: TenantScope, assetId: string, year: number): Promise<string> => {
+  const base = `asset_depreciation:${assetId}:${year}`;
+  const reversed = Number((await q<any>(db, `SELECT count(*) AS n FROM journal_entries WHERE tenant_id=$1 AND source_type='asset_depreciation' AND status='reversed' AND (source_key=$2 OR source_key LIKE $3)`, [tenant(scope), base, `${base}:r%`]))[0]?.n ?? 0);
+  return reversed ? `${base}:r${reversed + 1}` : base;
+};
+const assetSaleInvoices = async (db: PostgresQueryable, scope: TenantScope, assetId: string): Promise<Array<{ id: string; status: string; number: string }>> =>
+  (await q<any>(db, `SELECT id,status,number,tax_meta_json FROM invoices WHERE tenant_id=$1 AND tax_meta_json LIKE $2 AND COALESCE(document_kind,'invoice') NOT IN ('credit_note','cancellation_invoice')`, [tenant(scope), `%${assetId}%`]))
+    .filter((row) => parse<any>(row.tax_meta_json, null)?.assetSaleAssetId === assetId);
+const otherAssetSaleInvoice = async (db: PostgresQueryable, scope: TenantScope, assetId: string, invoiceId: string): Promise<boolean> =>
+  (await assetSaleInvoices(db, scope, assetId)).some((row) => row.id !== invoiceId && row.status !== 'cancelled');
+
+/** The revenue account of a sale invoice follows the disposal; a Storno or credit note takes the account of its original. */
+const assetSaleRevenueAccount = async (db: PostgresQueryable, t: string, chart: 'SKR03' | 'SKR04', assetId: string, row: any): Promise<string> => {
+  const accounts = disposalAccounts(chart);
+  if (row.source_document_id && (row.document_kind === 'credit_note' || row.document_kind === 'cancellation_invoice')) {
+    const original = parse<AccountingSnapshot | undefined>((await q<any>(db, `SELECT accounting_snapshot_json FROM invoices WHERE tenant_id=$1 AND id=$2`, [t, row.source_document_id]))[0]?.accounting_snapshot_json, undefined);
+    const account = original?.lines.find((line) => line.creditAmount > 0 && line.taxCaseKey && (line.accountNumber === accounts.gain || line.accountNumber === accounts.lossProceeds))?.accountNumber;
+    if (account) return account;
+  }
+  const disposal = (await q<any>(db, `SELECT gain_loss FROM asset_movements WHERE tenant_id=$1 AND asset_id=$2 AND type='disposal' AND source_type='asset_disposal' ORDER BY created_at DESC LIMIT 1`, [t, assetId]))[0];
+  return disposal && Number(disposal.gain_loss) < 0 ? accounts.lossProceeds : accounts.gain;
+};
 const outputTaxAccount = (chart: 'SKR03' | 'SKR04', rate: 0 | 7 | 19): string => chart === 'SKR03' ? (rate === 7 ? '1771' : '1776') : (rate === 7 ? '3801' : '3806');
 const movementSourceExists = async (db: PostgresQueryable, scope: TenantScope, sourceType: string, sourceKey: string): Promise<boolean> => Boolean((await q(db, `SELECT 1 FROM asset_movements WHERE tenant_id=$1 AND source_type=$2 AND source_key=$3 LIMIT 1`, [tenant(scope), sourceType, sourceKey]))[0]);
 
@@ -1346,8 +1619,8 @@ const postAssetActivation = async (db: PostgresQueryable, scope: TenantScope, in
   await assertAccounts(db, chart, [input.assetAccountNumber, offset], 'ACQUISITION_ACCOUNT_NOT_IN_CHART', tenant(scope));
   const sourceKey = `asset_activation:${id}`;
   const journalEntryId = await insertEntry(db, scope, 'asset_activation', sourceKey, input.activationDate, `Anlagenzugang ${input.assetNumber}`, [
-    { id: `${id}-asset`, accountNumber: input.assetAccountNumber, debitAmount: round(input.acquisitionCost), creditAmount: 0, costCenter: input.costCenter, memo: reason },
-    { id: `${id}-offset`, accountNumber: offset, debitAmount: 0, creditAmount: round(input.acquisitionCost), costCenter: input.costCenter, memo: reason },
+    { id: `${id}-asset`, accountNumber: input.assetAccountNumber, debitAmount: round(input.acquisitionCost), creditAmount: 0, costCenter: input.costCenter || undefined, memo: reason },
+    { id: `${id}-offset`, accountNumber: offset, debitAmount: 0, creditAmount: round(input.acquisitionCost), costCenter: input.costCenter || undefined, memo: reason },
   ], { reference: input.assetNumber, softLockOverride: options.softLockOverride, overrideReason: options.overrideReason, mutation: options.mutation });
   return { journalEntryId, offset };
 };
@@ -1400,13 +1673,17 @@ const postDocument = async (db: PostgresQueryable, scope: TenantScope, type: 'ou
   const correction = type === 'outgoing_invoice'
     && (row.document_kind === 'credit_note' || row.document_kind === 'cancellation_invoice');
   // Credit and cancellation documents carry the same tax/accounting snapshot
-  // as an invoice, but their journal is the exact inverse of that snapshot.
+  // as an invoice, but their journal is the exact inverse of that snapshot,
+  // tax figures included (as in a journal reversal): UStVA, ZM and OSS read them.
+  const negate = (value: number | undefined) => (value == null ? value : -Math.abs(value));
   const accountingSnapshot: AccountingSnapshot = correction
-    ? { ...preview.snapshot, lines: preview.snapshot.lines.map((line) => ({ ...line, debitAmount: line.creditAmount, creditAmount: line.debitAmount })) }
+    ? { ...preview.snapshot, lines: preview.snapshot.lines.map((line) => ({ ...line, debitAmount: line.creditAmount, creditAmount: line.debitAmount, netAmount: negate(line.netAmount), taxAmount: negate(line.taxAmount), grossAmount: negate(line.grossAmount) })) }
     : preview.snapshot;
   const sourceKey = correction ? `outgoing-correction:${id}` : `${type === 'incoming_invoice' ? 'incoming-invoice' : 'outgoing-invoice'}:${id}`;
+  // A correction names the invoice it corrects, so the journal leads back to the original.
+  const original = correction && row.source_document_id ? (await q<any>(db, `SELECT number FROM invoices WHERE tenant_id=$1 AND id=$2`, [t, row.source_document_id]))[0]?.number : undefined;
   const bookingText = type === 'outgoing_invoice'
-    ? `${row.document_kind === 'credit_note' ? 'Gutschrift' : row.document_kind === 'cancellation_invoice' ? 'Stornorechnung' : 'Rechnung'} ${row.number}`
+    ? `${row.document_kind === 'credit_note' ? 'Gutschrift' : row.document_kind === 'cancellation_invoice' ? 'Stornorechnung' : 'Rechnung'} ${row.number}${original ? ` zu ${original}` : ''}`
     : `Eingangsrechnung ${row.number}`;
   const entryId = await insertEntry(db, scope, type, sourceKey, type === 'outgoing_invoice' ? row.date : row.invoice_date, bookingText, accountingSnapshot.lines.map((line) => ({
     ...line,
@@ -1686,7 +1963,11 @@ const allocatePayment = async (db: PostgresQueryable, scope: TenantScope, input:
   const paymentId = input.paymentId ?? randomUUID();
   // The first booking of a source keeps its historic key; a source booked again after a Zahlungsstorno gets its own.
   const rebooked = (await q<any>(db, `SELECT 1 FROM open_item_payments WHERE tenant_id=$1 AND source_type=$2 AND source_id=$3 AND status='reversed' LIMIT 1`, [t, input.sourceType, input.sourceId]))[0];
-  const entryId = await insertEntry(db, scope, 'payment', `payment:${input.sourceType}:${input.sourceId}${rebooked ? `:${paymentId}` : ''}`, input.paymentDate, input.bookingText?.trim() || (refund ? 'Erstattung' : 'Zahlung'), lines, { mutation: input.mutation });
+  // The journal and DATEV Belegfeld 1 name what the payment settles: the document number(s) and the partner.
+  const numbers = [...new Set(items.map((allocation) => String(allocation.item.document_number ?? '')).filter(Boolean))];
+  const partner = items[0] ? await openItemPartnerName(db, t, items[0].item) : undefined;
+  const defaultText = [refund ? 'Erstattung' : 'Zahlung', numbers.join(', '), partner].filter(Boolean).join(' ');
+  const entryId = await insertEntry(db, scope, 'payment', `payment:${input.sourceType}:${input.sourceId}${rebooked ? `:${paymentId}` : ''}`, input.paymentDate, input.bookingText?.trim() || defaultText, lines, { reference: numbers[0], mutation: input.mutation });
   await q(db, `INSERT INTO open_item_payments (id,tenant_id,party_type,party_id,payment_date,amount,bank_account_number,method,source_type,source_id,allocated_amount,residual_amount,status,journal_entry_id,created_at,refund,credited_payment_id) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)`, [paymentId, t, input.partyType, input.partyId ?? items[0]?.item.party_id ?? credited?.payment.party_id ?? null, input.paymentDate, total, input.bankAccountNumber, input.method ?? null, input.sourceType, input.sourceId, 0, total, 'open', entryId, stamp, refund, credited?.payment.id ?? null]);
   for (const allocation of items) {
     const allocationId = randomUUID();
@@ -1728,6 +2009,45 @@ const bankLedgerAccount = async (db: PostgresQueryable, t: string, accountId: un
   if (typeof own === 'string' && own.trim()) return own.trim();
   const p = await policy(db, t);
   return (await mappings(db, t, p.activeChart)).bank!;
+};
+
+/**
+ * Saves a Pro bank account. Its ledger account must be a money account of the active chart (Kasse/Bank); a blank one
+ * takes the bank role. When it changes, the drafts of its bank lines that are not posted yet move to the new account.
+ */
+export const saveProServerBankAccount = async (db: PostgresQueryable, scope: TenantScope, record: ServerBankAccountRecord): Promise<ServerBankAccountRecord> => inTx(db, async (tx) => {
+  const t = tenant(scope);
+  const p = await policy(tx, t);
+  const requested = record.defaultSkrAccountNumber?.trim();
+  const ledgerAccount = requested || (await mappings(tx, t, p.activeChart)).bank!;
+  const refuse = (message: string) => Object.assign(new Error(message), { statusCode: 422 });
+  if (!isMoneyLedgerAccount(p.activeChart, ledgerAccount)) throw refuse(`Das Konto ${ledgerAccount} ist kein Geld- oder Bankkonto im ${p.activeChart}. Wählen Sie ein Bank- oder Kassenkonto, zum Beispiel ${BANK_ACCOUNT_DEFAULT[p.activeChart]}.`);
+  if (!(await accountExists(tx, p.activeChart, ledgerAccount, t))) throw refuse(`Das Konto ${ledgerAccount} ist im Kontenrahmen ${p.activeChart} nicht vorhanden oder deaktiviert.`);
+  const exists = (await q<any>(tx, `SELECT 1 FROM accounts WHERE tenant_id=$1 AND id=$2`, [t, record.id]))[0];
+  const previous = exists ? await bankLedgerAccount(tx, t, record.id) : undefined;
+  const saved = await saveServerBankAccount(tx, { ...record, defaultSkrAccountNumber: ledgerAccount });
+  if (previous && previous !== ledgerAccount) {
+    const drafts = await q<any>(tx, `SELECT bd.transaction_id FROM booking_drafts bd JOIN bank_transactions bt ON bt.tenant_id=bd.tenant_id AND bt.id=bd.transaction_id WHERE bd.tenant_id=$1 AND bt.account_id=$2 AND bd.workflow_status<>'posted' ORDER BY bd.id`, [t, record.id]);
+    for (const row of drafts) {
+      const draft = await getDraft(tx, scope, row.transaction_id);
+      if (!draft || !draft.lines.some((line) => line.accountNumber === previous)) continue;
+      await saveDraftTarget(tx, scope, { ...draft, lines: draft.lines.map((line) => (line.accountNumber === previous ? { ...line, accountNumber: ledgerAccount } : line)) });
+    }
+  }
+  return saved;
+});
+
+const writeAccountingPolicy = async (tx: PostgresQueryable, scope: TenantScope, input: { activeChart: 'SKR03' | 'SKR04'; vatMethod: 'soll' | 'ist'; mutation?: AccountingMutationContext }) => { const t = tenant(scope); const before = await policy(tx, t); if (input.activeChart !== before.activeChart && (await q<any>(tx, `SELECT 1 FROM journal_entries WHERE tenant_id=$1 AND status='posted' LIMIT 1`, [t]))[0]) throw new AccountingPolicyError('ACCOUNTING_CHART_LOCKED', 'Der Kontenrahmen kann nach einer gebuchten Journalbuchung nicht mehr geändert werden.'); const stamp = now(); await q(tx, `INSERT INTO accounting_policies (tenant_id,active_chart,vat_method,period_policy,updated_at) VALUES ($1,$2,$3,'calendar_month',$4) ON CONFLICT (tenant_id) DO UPDATE SET active_chart=EXCLUDED.active_chart,vat_method=EXCLUDED.vat_method,updated_at=EXCLUDED.updated_at`, [t, input.activeChart, input.vatMethod, stamp]); await audit(tx as PostgresTransactionClient, scope, 'accounting_policy', t, 'update', 'Accounting policy changed', before, { activeChart: input.activeChart, vatMethod: input.vatMethod }, input.mutation); return policy(tx, t); };
+/**
+ * The Pro settings own the user's choice of chart and Soll/Ist; the posting policy follows a changed choice in the
+ * same transaction as the settings save. A chart switch after the first posting is refused (ACCOUNTING_CHART_LOCKED).
+ */
+export const applyProSettingsToAccountingPolicy = async (tx: PostgresQueryable, scope: TenantScope, change: { activeChart?: 'SKR03' | 'SKR04'; vatMethod?: 'soll' | 'ist' }, mutation?: AccountingMutationContext): Promise<void> => {
+  if (!change.activeChart && !change.vatMethod) return;
+  const before = await policy(tx, tenant(scope));
+  const next = { activeChart: change.activeChart ?? before.activeChart, vatMethod: change.vatMethod ?? before.vatMethod };
+  if (next.activeChart === before.activeChart && next.vatMethod === before.vatMethod) return;
+  await writeAccountingPolicy(tx, scope, { ...next, mutation });
 };
 
 /** The id under which an OPOS payment shows on the invoice (payments_json). */
@@ -1776,6 +2096,59 @@ export interface OpenItemPaymentReversal {
  * status follow, the invoice no longer lists the payment, and a bank line is open again for a new
  * allocation. The reversal is dated like the payment unless a date is given; a closed month refuses it.
  */
+/**
+ * A person confirmed a posting into a vorläufig gesperrten month (with a written reason) for a whole command whose
+ * postings run deep in the repository (invoice payment, its Zahlungsstorno, Skonto, Ist-VAT): every entry of this
+ * transaction passes the soft lock and carries the reason in its audit. A closed month stays closed.
+ */
+export const allowSoftLockedPostingsInTransaction = async (db: PostgresQueryable, reason: string): Promise<void> => {
+  if (!reason.trim()) throw new Error('ACCOUNTING_AUDIT_REASON_REQUIRED');
+  await q(db, `SELECT set_config('billme.soft_lock_override', $1, true)`, [reason.trim()]);
+};
+/**
+ * Takes a sale through an invoice back when its draft is deleted or the issued invoice is stornoed: the book value and
+ * the AfA up to the sale are reversed on the given date (Gegenbuchung, the originals stay in the journal), the asset is
+ * on the books again and its AfA plan planned. Nothing happens for an invoice that sells no asset, for an asset that is
+ * not disposed, or while another live sale invoice of the asset keeps the sale (the replacement of a revision).
+ */
+export const reverseAssetSaleInTransaction = async (db: PostgresQueryable, scope: TenantScope, input: { invoiceId: string; reason: string; postingDate: string; softLockOverride?: boolean; overrideReason?: string; mutation?: AccountingMutationContext }): Promise<void> => {
+  if (scope.product !== 'pro') return;
+  const t = tenant(scope);
+  const assetId = parse<any>((await q<any>(db, `SELECT tax_meta_json FROM invoices WHERE tenant_id=$1 AND id=$2`, [t, input.invoiceId]))[0]?.tax_meta_json, null)?.assetSaleAssetId;
+  if (!assetId) return;
+  const row = (await q<AssetDbRow>(db, `SELECT * FROM assets WHERE tenant_id=$1 AND id=$2 FOR UPDATE`, [t, assetId]))[0];
+  if (!row?.disposal_date || await otherAssetSaleInvoice(db, scope, assetId, input.invoiceId)) return;
+  const disposalKey = await disposalSourceKey(db, scope, assetId);
+  const disposal = (await q<any>(db, `SELECT * FROM asset_movements WHERE tenant_id=$1 AND asset_id=$2 AND type='disposal' AND source_type='asset_disposal' AND source_key=$3`, [t, assetId, disposalKey]))[0];
+  if (!disposal) return;
+  const reason = input.reason.trim() || 'Anlagenverkauf rückgängig';
+  const options = { postingDate: input.postingDate, softLockOverride: input.softLockOverride, overrideReason: input.overrideReason, mutation: input.mutation, allowAssetSource: true };
+  const stamp = now();
+  const reversals: string[] = [];
+  const disposalReversal = disposal.journal_entry_id ? (await reverseEntryInTransaction(db, scope, disposal.journal_entry_id, reason, options)).reversalEntryId : null;
+  if (disposalReversal) reversals.push(disposalReversal);
+  // Counter-movements of the same type keep the Anlagenspiegel right: the disposal and the AfA of the sale net to zero.
+  await q(db, `INSERT INTO asset_movements (id,tenant_id,asset_id,type,movement_date,amount,proceeds,gain_loss,journal_entry_id,source_type,source_key,reason,created_at) VALUES ($1,$2,$3,'disposal',$4,$5,NULL,$6,$7,'asset_disposal_reversal',$8,$9,$10)`, [randomUUID(), t, assetId, input.postingDate, -Number(disposal.amount), disposal.gain_loss == null ? null : -Number(disposal.gain_loss), disposalReversal, `${disposalKey}:reversal`, reason, stamp]);
+  // The AfA the disposal booked up to the sale month; the year is depreciated in full again at its end.
+  const partial = (await q<any>(db, `SELECT m.journal_entry_id,m.amount,m.source_key FROM asset_movements m JOIN journal_entries je ON je.tenant_id=m.tenant_id AND je.id=m.journal_entry_id WHERE m.tenant_id=$1 AND m.asset_id=$2 AND m.type='depreciation' AND m.source_type='asset_depreciation' AND m.movement_date=$3 AND je.status='posted' AND je.booking_text LIKE '% bis Abgang'`, [t, assetId, disposal.movement_date]))[0];
+  if (partial) {
+    const { reversalEntryId } = await reverseEntryInTransaction(db, scope, partial.journal_entry_id, reason, options);
+    reversals.push(reversalEntryId);
+    await q(db, `INSERT INTO asset_movements (id,tenant_id,asset_id,type,movement_date,amount,proceeds,gain_loss,journal_entry_id,source_type,source_key,reason,created_at) VALUES ($1,$2,$3,'depreciation',$4,$5,NULL,NULL,$6,'asset_depreciation_reversal',$7,$8,$9)`, [randomUUID(), t, assetId, input.postingDate, -Number(partial.amount), reversalEntryId, `${partial.source_key}:reversal`, reason, stamp]);
+  }
+  const plan = buildDepreciationSchedule({ ...assetInputFor(row), method: resolveDepreciationMethod(assetInputFor(row)), fiscalYearStart: await reportingFiscalYearStart(db, t) });
+  for (const entry of await assetSchedule(db, scope, assetId)) {
+    if (entry.status !== 'cancelled' && !(partial && entry.journalEntryId === partial.journal_entry_id)) continue;
+    const planned = plan.find((candidate) => candidate.year === entry.year);
+    await q(db, `UPDATE asset_depreciation_schedule SET status='planned',amount=$1,months=$2,journal_entry_id=NULL,source_type=NULL,source_key=NULL,posted_at=NULL WHERE tenant_id=$3 AND id=$4`, [planned?.amount ?? entry.amount, planned?.months ?? entry.months, t, entry.id]);
+  }
+  const schedule = await assetSchedule(db, scope, assetId);
+  const status = schedule.length > 0 && schedule.every((entry) => entry.status === 'posted') ? 'voll_abgeschrieben' : 'aktiv';
+  await q(db, `UPDATE assets SET status=$1,disposal_date=NULL,disposal_proceeds=NULL,updated_at=$2 WHERE tenant_id=$3 AND id=$4`, [status, stamp, t, assetId]);
+  const after = await assetRow(db, scope, assetId);
+  await audit(db as PostgresTransactionClient, scope, 'asset', assetId, 'disposal_reversed', reason, { asset: assetSnapshot(row) }, { asset: assetSnapshot(after), schedule, invoiceId: input.invoiceId, reversalEntryIds: reversals }, input.mutation);
+};
+
 export const reverseOpenItemPaymentInTransaction = async (db: PostgresQueryable, scope: TenantScope, input: { paymentId: string; reason: string; postingDate?: string; mutation?: AccountingMutationContext }): Promise<OpenItemPaymentReversal> => {
   const t = tenant(scope);
   const reason = input.reason?.trim();
@@ -1982,30 +2355,19 @@ export const postManualJournalEntryInTransaction = async (db: PostgresQueryable,
   if (!key && !input.sourceKey) throw new Error('MISSING_IDEMPOTENCY_KEY');
   if (!Array.isArray(input.lines) || input.lines.length < 2) throw new Error('UNBALANCED_ENTRY: Eine Buchung hat mindestens zwei Zeilen.');
   const p = await policy(db, t);
-  const m = await mappings(db, t, p.activeChart);
   const lines: JournalLineEntity[] = [];
   for (const [index, line] of input.lines.entries()) {
     const accountNumber = String(line.accountNumber ?? '').trim();
     const debit = cents(line.debitAmount ?? 0); const credit = cents(line.creditAmount ?? 0);
     if (debit === null || credit === null || debit < 0 || credit < 0 || (debit > 0) === (credit > 0)) throw new Error(`INVALID_LINE_AMOUNT: Zeile ${index + 1} braucht einen Centbetrag im Soll oder im Haben.`);
     if (!accountNumber || !(await accountExists(db, p.activeChart, accountNumber, tenant(scope)))) throw new Error(`UNKNOWN_ACCOUNT:${accountNumber} ist im Kontenrahmen ${p.activeChart} nicht vorhanden.`);
-    const debitSide = debit > 0;
-    const gross = debitSide ? debit : credit;
     if (!line.taxCaseKey) {
       lines.push({ id: randomUUID(), accountNumber, debitAmount: debit / 100, creditAmount: credit / 100, memo: line.memo });
       continue;
     }
-    const taxCase = (await q<any>(db, `SELECT mechanism,default_rate,requires_country,active FROM tax_cases WHERE key=$1`, [line.taxCaseKey]))[0];
-    const rate = Number(taxCase?.default_rate ?? 0);
-    if (!taxCase || !taxCase.active || taxCase.mechanism !== 'standard_vat' || !(rate > 0) || taxCase.requires_country) throw new Error(`TAX_CASE_NOT_AUTOMATIC: Steuerschlüssel ${line.taxCaseKey} lässt sich in der freien Buchung nicht automatisch aufteilen; Steuerzeile bitte als eigene Zeile buchen.`);
-    const net = Math.round(gross * 100 / (100 + rate)); const tax = gross - net;
-    // 7 % Vorsteuer/Umsatzsteuer have their own accounts (SKR03 1571/1771, SKR04 1401/3801): taxCaseAccount knows them.
-    const taxAccount = debitSide
-      ? await taxCaseAccount(db, t, p.activeChart, line.taxCaseKey, 'input_tax', m.input_vat!, postingDate)
-      : await taxCaseAccount(db, t, p.activeChart, line.taxCaseKey, 'output_tax', m.output_vat!, postingDate);
-    if (!(await accountExists(db, p.activeChart, taxAccount, tenant(scope)))) throw new Error(`UNKNOWN_ACCOUNT:${taxAccount} (Steuerkonto) ist im Kontenrahmen ${p.activeChart} nicht vorhanden.`);
-    lines.push({ id: randomUUID(), accountNumber, debitAmount: debitSide ? net / 100 : 0, creditAmount: debitSide ? 0 : net / 100, taxCaseKey: line.taxCaseKey as TaxCaseKey, taxRate: rate, netAmount: net / 100, taxAmount: tax / 100, grossAmount: gross / 100, memo: line.memo });
-    if (tax > 0) lines.push({ id: randomUUID(), accountNumber: taxAccount, debitAmount: debitSide ? tax / 100 : 0, creditAmount: debitSide ? 0 : tax / 100, memo: `${debitSide ? 'Vorsteuer' : 'USt'} ${line.taxCaseKey}` });
+    const split = await automaticTaxSplit(db, t, p.activeChart, { id: randomUUID(), accountNumber, debitAmount: debit / 100, creditAmount: credit / 100, taxCaseKey: line.taxCaseKey as TaxCaseKey, memo: line.memo }, postingDate);
+    if (!split) throw new Error(`TAX_CASE_NOT_AUTOMATIC: Steuerschlüssel ${line.taxCaseKey} lässt sich in der freien Buchung nicht automatisch aufteilen; Steuerzeile bitte als eigene Zeile buchen.`);
+    lines.push(...split);
   }
   const entryId = await insertEntry(db, scope, input.sourceType ?? 'manual', input.sourceKey ?? `manual-entry:${key}`, postingDate, bookingText, lines, {
     documentDate: input.documentDate, reference, softLockOverride: input.softLockOverride, overrideReason: input.overrideReason, mutation: input.mutation,

@@ -3,6 +3,11 @@ import { usableAccountNumbers } from './tenantLedgerAccounts.js';
 import {
   CANONICAL_TAX_CASES,
   CorrectionSettlementError,
+  OPENING_BALANCE_ACCOUNT,
+  defaultResultAccount,
+  fiscalYearForDate,
+  fiscalYearRange,
+  isProfitAndLossAccount,
   type AccountingMutationContext,
   type AccountingSourceFact,
   type CorrectionDeltaInput,
@@ -37,7 +42,7 @@ import {
 } from '@billme/accounting-engine';
 import type { TenantScope } from '@billme/server-core';
 import { appendWithClient } from './audit.js';
-import { lockPeriodRow, periodsBetween, softLockPeriods } from './accountingPeriods.js';
+import { lockPeriodRow, periodsBetween, reportingFiscalYearStart, softLockPeriods } from './accountingPeriods.js';
 import { accountRoleMappings, taxCaseAccount } from './taxAccounts.js';
 import {
   runInTransaction,
@@ -418,7 +423,10 @@ export const sourceEntries = async (db: PostgresQueryable, scope: TenantScope, s
   for (const row of rows) {
     const key = `${row.posting_date}:${row.status}:${row.entry_id ?? ''}`;
     const current: TaxExportEntry = grouped.get(key) ?? { postingDate: row.posting_date, status: row.status, lines: [], entryId: row.entry_id, entryNumber: row.entry_number == null ? undefined : Number(row.entry_number), reference: row.reference ?? undefined, sourceType: row.source_type };
-    if (row.tax_case_key) current.lines.push({ taxCaseKey: row.tax_case_key, direction: taxExportDirectionFromPersistedSource(row), netAmount: row.net_amount == null ? undefined : Number(row.net_amount), taxAmount: row.tax_amount == null ? undefined : Number(row.tax_amount), grossAmount: row.gross_amount == null ? undefined : Number(row.gross_amount), taxRate: row.tax_rate == null ? undefined : Number(row.tax_rate), countryCode: row.country_code ?? undefined, counterpartyVatId: row.counterparty_vat_id ?? undefined, evidenceType: row.evidence_type ?? undefined, evidenceReference: row.evidence_reference ?? undefined, datevSachverhaltLl: row.datev_sachverhalt_ll ?? undefined });
+    // A credit note or Stornorechnung lowers the figures; entries posted before its tax figures were negated carry them positive.
+    const sign = row.source_type === 'outgoing_invoice' && String(row.source_key ?? '').startsWith('outgoing-correction:') ? -1 : 1;
+    const figure = (value: unknown) => (value == null ? undefined : sign < 0 ? -Math.abs(Number(value)) : Number(value));
+    if (row.tax_case_key) current.lines.push({ taxCaseKey: row.tax_case_key, direction: taxExportDirectionFromPersistedSource(row), netAmount: figure(row.net_amount), taxAmount: figure(row.tax_amount), grossAmount: figure(row.gross_amount), taxRate: row.tax_rate == null ? undefined : Number(row.tax_rate), countryCode: row.country_code ?? undefined, counterpartyVatId: row.counterparty_vat_id ?? undefined, evidenceType: row.evidence_type ?? undefined, evidenceReference: row.evidence_reference ?? undefined, datevSachverhaltLl: row.datev_sachverhalt_ll ?? undefined });
     grouped.set(key, current);
   }
   return [...grouped.values()];
@@ -553,6 +561,67 @@ const settlementDocumentAmount = (document: Record<string, any>): number => {
   return round((Array.isArray(document.taxBreakdown) ? document.taxBreakdown : []).reduce((sum: number, line: any) => sum + Number(line.grossAmount ?? Number(line.netAmount) + Number(line.taxAmount)), 0));
 };
 
+/** Tax split of a posted outgoing invoice per rate, read from its journal entry (the revenue lines carry net and tax). */
+const invoiceTaxBreakdown = async (db: PostgresQueryable, scope: TenantScope, invoiceId: string): Promise<Array<{ rate: number; netAmount: number; taxAmount: number; grossAmount: number }> | undefined> => {
+  const rows = await q<any>(db, `SELECT jl.tax_rate,COALESCE(SUM(jl.net_amount),0) net,COALESCE(SUM(jl.tax_amount),0) tax FROM invoices i JOIN journal_lines jl ON jl.tenant_id=i.tenant_id AND jl.entry_id=i.accounting_journal_entry_id WHERE i.tenant_id=$1 AND i.id=$2 AND jl.tax_rate IS NOT NULL AND jl.net_amount IS NOT NULL GROUP BY jl.tax_rate ORDER BY jl.tax_rate DESC`, [tenant(scope), invoiceId]);
+  if (!rows.length) return undefined;
+  return rows.map((row) => ({ rate: Number(row.tax_rate), netAmount: round(Math.abs(Number(row.net))), taxAmount: round(Math.abs(Number(row.tax))), grossAmount: round(Math.abs(Number(row.net)) + Math.abs(Number(row.tax))) }));
+};
+
+const invoiceByIdOrNumber = async (db: PostgresQueryable, scope: TenantScope, reference: unknown): Promise<{ id: string; number: string } | undefined> => {
+  const value = textValue(reference);
+  if (!value) return undefined;
+  const rows = await q<any>(db, `SELECT id,number FROM invoices WHERE tenant_id=$1 AND (id=$2 OR number=$2) LIMIT 2`, [tenant(scope), value]);
+  return rows.length === 1 ? { id: String(rows[0].id), number: String(rows[0].number) } : undefined;
+};
+
+/**
+ * The Skonto, Forderungsausfall and Anzahlung masks name invoices by number and give amounts; the tax split of
+ * each invoice comes from its own posting, never from the client. Facts that already carry a split keep it.
+ */
+const completeSettlementFacts = async (db: PostgresQueryable, scope: TenantScope, kind: SettlementCommandKind, facts: Record<string, any>, sourceId: string): Promise<void> => {
+  if (settlementDocumentType(facts) !== 'outgoing_invoice') return;
+  if (kind !== 'advance_settlement') {
+    const originalId = settlementReference(facts);
+    if (originalId && !Array.isArray(facts.taxBreakdown)) {
+      const breakdown = await invoiceTaxBreakdown(db, scope, originalId);
+      if (breakdown) facts.taxBreakdown = breakdown;
+    }
+    return;
+  }
+  const finalInvoice = facts.finalInvoice && typeof facts.finalInvoice === 'object' ? { ...facts.finalInvoice } : {};
+  const final = await invoiceByIdOrNumber(db, scope, finalInvoice.id ?? finalInvoice.number ?? facts.finalInvoiceId ?? sourceId);
+  if (final) {
+    finalInvoice.id ??= final.id;
+    if (!Array.isArray(finalInvoice.taxBreakdown)) {
+      const breakdown = await invoiceTaxBreakdown(db, scope, final.id);
+      if (breakdown) {
+        finalInvoice.taxBreakdown = breakdown;
+        finalInvoice.grossAmount ??= round(breakdown.reduce((sum, row) => sum + row.grossAmount, 0));
+      }
+    }
+    facts.finalInvoice = finalInvoice;
+  }
+  if (Array.isArray(facts.advances)) {
+    facts.advances = await Promise.all(facts.advances.map(async (advance: any) => {
+      if (!advance || typeof advance !== 'object') return advance;
+      const found = await invoiceByIdOrNumber(db, scope, advance.id ?? advance.number);
+      const next = { kind: 'advance', ...advance, ...(found ? { id: found.id } : {}) };
+      if (found && !Array.isArray(next.taxBreakdown)) {
+        const breakdown = await invoiceTaxBreakdown(db, scope, found.id);
+        const gross = breakdown ? breakdown.reduce((sum, row) => sum + row.grossAmount, 0) : 0;
+        // The settled part of the advance carries the advance's own split, scaled to the amount settled.
+        if (breakdown && gross > 0) {
+          const share = Number(next.grossAmount ?? gross) / gross;
+          next.taxBreakdown = breakdown.map((row) => ({ rate: row.rate, netAmount: round(row.netAmount * share), taxAmount: round(row.taxAmount * share), grossAmount: round(row.grossAmount * share) }));
+        }
+        next.grossAmount ??= round(gross);
+      }
+      return next;
+    }));
+  }
+};
+
 const applySettlementOpenItems = async (
   db: PostgresQueryable,
   scope: TenantScope,
@@ -635,6 +704,9 @@ export const createPostgresAccountingSourceRunRepository = (db: PostgresQueryabl
     const commandName = String(input.commandType ?? input.command ?? 'source_fact');
     const sourceInput = { ...(input.input ?? input) } as Record<string, any>;
     delete sourceInput.reason; delete sourceInput.command; delete sourceInput.commandType; delete sourceInput.input; delete sourceInput.mutation; delete sourceInput.idempotencyKey; delete sourceInput.softLockOverride; delete sourceInput.overrideReason;
+    // A preview builds the year-end entry from the same ledger and returns its lines without booking anything.
+    const preview = sourceInput.preview === true && (commandName === 'fiscal_close' || commandName === 'carry_forward');
+    delete sourceInput.preview;
     const sourceType = closingSourceType(commandName);
     const sourceId = required(input.sourceId ?? sourceInput.sourceId ?? sourceInput.batchId ?? sourceInput.flowId, 'MISSING_SOURCE_ID');
     const sourceRevision = required(input.sourceRevision ?? sourceInput.sourceRevision, 'MISSING_SOURCE_REVISION');
@@ -658,6 +730,8 @@ export const createPostgresAccountingSourceRunRepository = (db: PostgresQueryabl
           }
         }
       }
+      // Before hashing: the split comes from the posted invoice, so a replay derives the same facts.
+      if (commandName === 'skonto' || commandName === 'bad_debt' || commandName === 'advance_settlement') await completeSettlementFacts(tx, scope, commandName, sourceInput, sourceId);
       const existing = (await q<any>(tx, `SELECT * FROM accounting_source_runs WHERE tenant_id=$1 AND source_type=$2 AND source_id=$3 AND source_revision=$4 FOR UPDATE`, [tenant(scope), sourceType, sourceId, sourceRevision]))[0];
       const source = { command: commandName, input: sourceInput };
       if (existing) {
@@ -666,15 +740,43 @@ export const createPostgresAccountingSourceRunRepository = (db: PostgresQueryabl
       }
       let closingInput = sourceInput;
       if (commandName === 'fiscal_close' || commandName === 'carry_forward') {
-        const date = String(commandName === 'fiscal_close' ? sourceInput.closingDate : sourceInput.effectiveDate);
-        const ledger = await q<any>(tx, `SELECT jl.account_number,COALESCE(SUM(jl.debit_amount-jl.credit_amount),0) balance FROM journal_lines jl JOIN journal_entries je ON je.tenant_id=jl.tenant_id AND je.id=jl.entry_id WHERE jl.tenant_id=$1 AND je.status IN ('posted','reversed') AND COALESCE(je.source_type,'') NOT IN ('fiscal_close','carry_forward') AND (je.posting_date < $2 OR ($3::boolean AND je.posting_date=$2)) GROUP BY jl.account_number`, [tenant(scope), date, commandName === 'fiscal_close']);
+        const close = commandName === 'fiscal_close';
+        // One close and one carry-forward per fiscal year: a second one under another Quellbeleg would book the year again.
+        const booked = await q<any>(tx, `SELECT 1 FROM journal_entries WHERE tenant_id=$1 AND source_type=$2 AND fiscal_year=$3 AND status='posted' LIMIT 1`, [tenant(scope), commandName, Number(sourceInput.fiscalYear)]);
+        if (booked.length) throw new Error(`CLOSING_COMMAND_REJECTED:${close ? 'FISCAL_YEAR_ALREADY_CLOSED' : 'CARRY_FORWARD_ALREADY_BOOKED'}`);
+        const date = String(close ? sourceInput.closingDate : sourceInput.effectiveDate);
+        // The close takes the result of its own fiscal year only; the carry-forward the balances up to the new
+        // year, earlier closes included (they moved the Erfolgskonten onto the result account).
+        const fiscalYearStart = await reportingFiscalYearStart(tx, tenant(scope));
+        let yearStart: string | null = null;
+        try { yearStart = close ? fiscalYearRange(fiscalYearForDate(date, fiscalYearStart), fiscalYearStart).start : null; } catch { yearStart = null; }
+        const ledger = await q<any>(tx, `SELECT jl.account_number,COALESCE(SUM(jl.debit_amount-jl.credit_amount),0) balance FROM journal_lines jl JOIN journal_entries je ON je.tenant_id=jl.tenant_id AND je.id=jl.entry_id WHERE jl.tenant_id=$1 AND je.status IN ('posted','reversed') AND (COALESCE(je.source_type,'') NOT IN ('fiscal_close','carry_forward') OR (NOT $3::boolean AND je.source_type='fiscal_close')) AND (je.posting_date < $2 OR ($3::boolean AND je.posting_date=$2)) AND ($4::text IS NULL OR je.posting_date >= $4) GROUP BY jl.account_number`, [tenant(scope), date, close, yearStart]);
         const balances = new Map(ledger.map((row) => [String(row.account_number), Number(row.balance)]));
-        const selected = commandName === 'fiscal_close' ? [...(sourceInput.revenueAccounts ?? []), ...(sourceInput.expenseAccounts ?? [])] : sourceInput.balanceSheetAccounts ?? [];
+        const selected = close ? [...(sourceInput.revenueAccounts ?? []), ...(sourceInput.expenseAccounts ?? [])] : sourceInput.balanceSheetAccounts ?? [];
         for (const account of selected) {
           const submitted = (sourceInput.balances ?? []).filter((row: any) => row.accountNumber === account).reduce((sum: number, row: any) => sum + Math.round(Number(row.closingBalance ?? (row.openingBalance + row.debitTurnover - row.creditTurnover)) * 100), 0);
           if (submitted !== Math.round((balances.get(account) ?? 0) * 100)) throw new Error('CLOSING_COMMAND_REJECTED:LEDGER_BALANCE_MISMATCH');
         }
         closingInput = { ...sourceInput, balances: ledger.map((row) => ({ accountNumber: String(row.account_number), openingBalance: 0, debitTurnover: Math.max(0, Number(row.balance)), creditTurnover: Math.max(0, -Number(row.balance)), closingBalance: Number(row.balance) })) };
+        // The Jahresabschluss mask names only the year: the accounts come from the chart's classes and the ledger.
+        const listed = close ? Array.isArray(sourceInput.revenueAccounts) || Array.isArray(sourceInput.expenseAccounts) : Array.isArray(sourceInput.balanceSheetAccounts);
+        if (!listed) {
+          const chart = (await activeChart(tx, scope)) as 'SKR03' | 'SKR04';
+          const settings = parse<any>((await q<any>(tx, `SELECT settings_json FROM server_settings WHERE tenant_id=$1 LIMIT 1`, [tenant(scope)]))[0]?.settings_json, {});
+          const open = [...balances].filter(([, balance]) => Math.round(balance * 100) !== 0).sort(([a], [b]) => a.localeCompare(b));
+          if (close) {
+            const pnl = open.filter(([account]) => isProfitAndLossAccount(chart, account));
+            closingInput = { ...closingInput, revenueAccounts: pnl.filter(([, balance]) => balance < 0).map(([account]) => account), expenseAccounts: pnl.filter(([, balance]) => balance > 0).map(([account]) => account), retainedEarningsAccount: sourceInput.retainedEarningsAccount || defaultResultAccount(chart, settings.businessReportingProfile?.legalForm) };
+          } else {
+            // What an earlier year without a close left on Erfolgskonten opens on the result account, as in the reports.
+            const resultAccount = String(sourceInput.retainedEarningsAccount || defaultResultAccount(chart, settings.businessReportingProfile?.legalForm));
+            const carriedCents = open.filter(([account]) => isProfitAndLossAccount(chart, account)).reduce((sum, [, balance]) => sum + Math.round(balance * 100), 0);
+            const carried = new Map(open.filter(([account]) => !isProfitAndLossAccount(chart, account) && !/^9\d{3}$/.test(account)));
+            if (carriedCents) carried.set(resultAccount, (Math.round((carried.get(resultAccount) ?? 0) * 100) + carriedCents) / 100);
+            const rows = [...carried].filter(([, balance]) => Math.round(balance * 100) !== 0).sort(([a], [b]) => a.localeCompare(b));
+            closingInput = { ...closingInput, balanceSheetAccounts: rows.map(([account]) => account), openingBalanceAccount: sourceInput.openingBalanceAccount || OPENING_BALANCE_ACCOUNT, balances: rows.map(([accountNumber, balance]) => ({ accountNumber, openingBalance: 0, debitTurnover: Math.max(0, balance), creditTurnover: Math.max(0, -balance), closingBalance: balance })) };
+          }
+        }
       }
       const isSettlement = commandName === 'skonto' || commandName === 'bad_debt' || commandName === 'advance_settlement';
       if (isSettlement) await assertSettlementReferences(tx, scope, commandName as SettlementCommandKind, sourceInput);
@@ -707,6 +809,20 @@ export const createPostgresAccountingSourceRunRepository = (db: PostgresQueryabl
       // directly, while schedules wrap all derived entries in `commands`.
       // Persist every derived command; never trust a submitted command list.
       const commands = [value.command, ...(value.commands ?? []), ...(value.entry ? [value] : [])].filter(Boolean) as any[];
+      if (preview) {
+        return {
+          status: 'preview',
+          errors: [],
+          idempotencyKey,
+          command: {
+            lines: commands.flatMap((command) => command.entry?.lines ?? []).map((line: any) => ({ accountNumber: line.accountNumber, debitAmount: line.debitAmount, creditAmount: line.creditAmount })),
+            postingDate: commands[0]?.entry?.postingDate ?? String(commandName === 'fiscal_close' ? sourceInput.closingDate : sourceInput.effectiveDate),
+            netResult: value.netResult,
+            retainedEarningsAccount: closingInput.retainedEarningsAccount,
+            openingBalanceAccount: closingInput.openingBalanceAccount,
+          },
+        } as any;
+      }
       const resultJson = { command: commandName, result: value, status: built.status };
       const journalEntryIds: string[] = [];
       for (const derived of commands) journalEntryIds.push(await insertCommand(tx, scope, derived, input));

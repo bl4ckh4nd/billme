@@ -34,11 +34,13 @@ type Props = {
   accounts: Account[];
   chart: 'SKR03' | 'SKR04';
   canMutate: boolean;
+  /** A GmbH/UG has no Privatkonten (Gesellschaftervorgänge go through their own workflow). */
+  corporation?: boolean;
   onPosted?: (entryId: string) => void;
 };
 
 /** Freie Buchung (Buchungssatz): Beleg, Text, Soll- und Haben-Zeilen; posted directly, with a reason. */
-export default function ManualEntryPanel({ dataAdapter, accounts, chart, canMutate, onPosted }: Props) {
+export default function ManualEntryPanel({ dataAdapter, accounts, chart, canMutate, corporation = false, onPosted }: Props) {
   const [documentDate, setDocumentDate] = useState(localToday());
   const [reference, setReference] = useState('');
   const [bookingText, setBookingText] = useState('');
@@ -109,7 +111,7 @@ export default function ManualEntryPanel({ dataAdapter, accounts, chart, canMuta
           className="border-b border-border px-3.5 py-3"
           title={<span id="manual-entry-heading">Neue Buchung (Buchungssatz)</span>}
           subtitle="Für Vorgänge ohne Bankzeile: Umbuchung, Korrektur, Barentnahme. Gebucht wird nur mit Beleg."
-          actions={(
+          actions={corporation ? undefined : (
             <span className="flex gap-2">
               <Button type="button" size="sm" variant="secondary" disabled={disabled} onClick={() => preset('withdrawal')}>Privatentnahme bar</Button>
               <Button type="button" size="sm" variant="secondary" disabled={disabled} onClick={() => preset('contribution')}>Privateinlage bar</Button>

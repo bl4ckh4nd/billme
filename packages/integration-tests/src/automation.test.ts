@@ -27,14 +27,18 @@ import { addDays, asSmallBusiness, draftInvoice, issueInvoice, newClient, today 
  *   an end date ignored or a profile never switched off; a second or a
  *   concurrent run creating the invoice twice; inactive profiles or inactive
  *   and unknown clients run, or one broken profile stopping the others; a
- *   failed profile burning an invoice number; generated invoices untraceable
+ *   failed profile burning an invoice number; generated invoices untraceable;
+ *   "Jetzt ausführen" on one profile running every due profile, or running a
+ *   paused or not yet due one; a profile stamped §19 while the business was a
+ *   Kleinunternehmer still billing without VAT after it switched to regular VAT
  * - dunning: invoices dunned that are not overdue, paid, still a draft, not
  *   receivables or already settled by a Stornorechnung/full credit note; the wrong level; a fee charged twice or for a mail that was
  *   never sent, or added to the issued invoice's amount (it is the customer's own debt, not taxable
- *   revenue); in Pro a fee missing from the journal and OPOS, booked with VAT or twice, or silently not booked because its month is locked; a reminder whose %A demands what was already paid or credited; the
+ *   revenue); in Pro a fee missing from the journal and OPOS, booked with VAT or twice, or silently not booked because its month is locked; a reminder created by hand in the invoice view ("Mahnung erstellen") that raises the level but leaves no history row, no fee and no journal entry; a reminder whose %A demands what was already paid or credited; the
  *   40 € Pauschale charged to a consumer or on top of fees it replaces; one level mailed twice; the same invoice escalated twice in
  *   one day; a rejected mail recorded as sent; a run that silently does
- *   nothing when automation, levels or the mail provider are missing
+ *   nothing when automation, levels or the mail provider are missing, or explains it
+ *   in English (the Mahnlauf dialog shows the message as it comes)
  * - e-mail: a mail reported as queued when no provider can deliver it, the
  *   same request queued twice, unknown documents or bad recipients accepted
  * - backup: an archive that does not bring the data back as it was, a corrupt
@@ -473,6 +477,44 @@ for (const product of PRODUCTS) describe(`automation (${product})`, () => {
       assert.deepEqual({ mode: invoice!.taxMode, vat: invoice!.taxSnapshot!.vatAmount, amount: invoice!.amount }, { mode: 'small_business_19_ustg', vat: 0, amount: 100 });
     });
 
+    test('a run for one profile bills only that profile; a paused or not yet due one is refused with a reason', async () => {
+      const owner = await billingClient();
+      const chosen = profileBody(owner.id, { name: 'Gewählt' });
+      const other = profileBody(owner.id, { name: 'Anderes fälliges' });
+      const paused = profileBody(owner.id, { name: 'Pausiert', active: false });
+      const future = profileBody(owner.id, { name: 'Später', nextRun: addDays(today(), 5) });
+      for (const body of [chosen, other, paused, future]) assert.equal((await saveProfile(body)).status, 200);
+
+      const run = await h.raw('POST', '/recurring/manual-run', { profileId: chosen.id });
+      assert.equal(run.status, 200, run.text);
+      assert.deepEqual(run.body, { success: true, result: { generated: 1, deactivated: 0, errors: [] } });
+      assert.equal((await profileOf(chosen.id)).lastRun, today());
+      assert.equal((await profileOf(other.id)).lastRun, undefined, 'the other due profile was not run');
+      assert.equal((await invoicesOf(owner.id)).length, 1);
+
+      const refusedPaused = await h.raw('POST', '/recurring/manual-run', { profileId: paused.id });
+      assert.equal(refusedPaused.status, 409);
+      assert.match(refusedPaused.body.message, /pausiert/);
+      const refusedFuture = await h.raw('POST', '/recurring/manual-run', { profileId: future.id });
+      assert.equal(refusedFuture.status, 409);
+      assert.match(refusedFuture.body.message, /erst am \d{2}\.\d{2}\.\d{4} fällig/);
+      assert.equal((await h.raw('POST', '/recurring/manual-run', { profileId: randomUUID() })).status, 404);
+      assert.equal((await invoicesOf(owner.id)).length, 1, 'refused runs create nothing');
+      assert.equal((await profileOf(paused.id)).lastRun, undefined);
+    });
+
+    test('a profile stamped §19 bills with VAT once the business is no longer a Kleinunternehmer', async () => {
+      const owner = await billingClient();
+      const body = profileBody(owner.id, { name: 'Früher KU', items: [{ kind: 'item', description: 'Wartung', quantity: 1, price: 100, total: 100, taxRate: 19 }] });
+      await asSmallBusiness(h.api, async () => {
+        assert.equal((await saveProfile(body)).status, 200);
+      });
+      assert.equal((await profileOf(body.id)).taxMode, 'small_business_19_ustg', 'the profile was stamped while §19 applied');
+      await h.api.recurring.manualRun();
+      const [invoice] = await invoicesOf(owner.id);
+      assert.deepEqual({ mode: invoice!.taxMode, vat: invoice!.taxSnapshot!.vatAmount, amount: invoice!.amount }, { mode: 'standard_vat', vat: 19, amount: 119 });
+    });
+
     test('two simultaneous runs claim a due profile exactly once', async () => {
       const owner = await billingClient();
       const body = profileBody(owner.id, { name: 'Gleichzeitig' });
@@ -588,20 +630,20 @@ for (const product of PRODUCTS) describe(`automation (${product})`, () => {
 
       const disabled = await h.api.dunning.manualRun();
       assert.equal(disabled.success, false);
-      assert.match(disabled.error!, /not enabled/i, 'automation switched off');
+      assert.match(disabled.error!, /^Das automatische Mahnwesen ist ausgeschaltet/, 'automation switched off, in German');
       await untouched();
 
       await withSettings((settings) => ({ ...smtp(settings), automation: { ...settings.automation, dunningEnabled: true }, dunning: { levels: [] } }), async () => {
         const noLevels = await h.api.dunning.manualRun();
         assert.equal(noLevels.success, false);
-        assert.match(noLevels.error!, /levels/i);
+        assert.match(noLevels.error!, /^Keine Mahnstufe ist aktiv/);
         await untouched();
       });
 
       await withSettings((settings) => ({ ...settings, automation: { ...settings.automation, dunningEnabled: true }, dunning: { levels: [level(1, 7, 0)] } }), async () => {
         const noProvider = await h.api.dunning.manualRun();
         assert.equal(noProvider.success, false);
-        assert.match(noProvider.error!, /provider/i);
+        assert.match(noProvider.error!, /^Kein E-Mail-Versand eingerichtet/);
         await untouched();
       });
 
@@ -610,7 +652,7 @@ for (const product of PRODUCTS) describe(`automation (${product})`, () => {
         try {
           const noPassword = await h.api.dunning.manualRun();
           assert.equal(noPassword.success, false);
-          assert.match(noPassword.error!, /password/i);
+          assert.match(noPassword.error!, /SMTP-Passwort fehlt/);
           await untouched();
         } finally {
           process.env.SMTP_PASSWORD = 'integration-secret';
@@ -699,6 +741,25 @@ for (const product of PRODUCTS) describe(`automation (${product})`, () => {
       const paid = await h.raw('POST', '/accounting/open-items/payments', { reason: 'Gebühr bezahlt', payment: { sourceType: 'manual', sourceId: `pay-${randomUUID()}`, partyType: 'debtor', paymentDate: today(), amount: 5, bankAccountNumber: '1200', allocations: [{ openItemId: fee.id, amount: 5 }], allocationEventId: `event-${randomUUID()}` } });
       assert.equal(paid.status, 200, paid.text);
       assert.equal((await items()).find((item) => item.id === fee.id)!.status, 'paid');
+    });
+
+    test('"Mahnung erstellen" in the invoice view records the reminder with its fee once, and Pro books the fee', async () => {
+      const invoice = await overdueInvoice(15, 'Gebuehr manuell');
+      await withSettings(dunningSetup([level(1, 7, 2.5), level(2, 14, 5)]), async () => {
+        const stored = await invoiceOf(invoice.id);
+        // What InvoicesView.handleConfirmReminder sends: the invoice with the next level and reason dunning_create.
+        await h.api.invoices.upsert({ reason: 'dunning_create', invoice: { ...stored, dunningLevel: 1, history: [...(stored.history ?? []), { date: today(), action: 'Zahlungserinnerung erstellt (+2,50 €)' }] } });
+        await h.api.invoices.upsert({ reason: 'edit', invoice: await invoiceOf(invoice.id) });
+      });
+      const status = await statusOf(invoice.id);
+      assert.deepEqual(status.history.map((entry) => [entry.dunningLevel, entry.feeApplied, entry.emailSent]), [[1, charged(2.5), false]], 'one history row, a second save charges nothing');
+      assert.equal(status.totalFeesApplied, charged(2.5));
+      assert.equal((await invoiceOf(invoice.id)).amount, invoice.amount, 'the issued invoice keeps its amount');
+      if (product === 'pro') {
+        const entries = ((await h.raw('GET', '/accounting/journal?limit=5000')).body as Array<{ sourceType: string; reference?: string; lines: Array<{ accountNumber: string; debitAmount: number; creditAmount: number }> }>)
+          .filter((entry) => entry.sourceType === 'dunning_fee' && entry.reference === invoice.number);
+        assert.deepEqual(entries.map((entry) => entry.lines.map((line) => [line.accountNumber, line.debitAmount, line.creditAmount])), [[['1400', 2.5, 0], ['2700', 0, 2.5]]]);
+      }
     });
 
     if (product === 'pro') test('a dunning fee dated in a locked month is booked on the first day of the next open month, with the reminder date in the text', async () => {

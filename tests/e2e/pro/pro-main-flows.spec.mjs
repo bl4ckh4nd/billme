@@ -59,7 +59,8 @@ const issueInvoiceThroughUi = async ({ page, baseUrl }, { description, net }) =>
   const draft = await find();
   await page.getByText(draft.number, { exact: true }).first().click();
   await page.screenshot({ path: shot(`invoice-${draft.number}-draft`), fullPage: true });
-  await page.getByRole('button', { name: 'Als gestellt markieren (Entwurf zu Offen)' }).click();
+  await page.getByRole('button', { name: 'Stellen', exact: true }).click();
+  await page.getByRole('dialog', { name: 'Rechnung stellen' }).getByRole('button', { name: 'Stellen', exact: true }).click();
   await expect.poll(async () => (await find())?.status).toBe('open');
   return await find();
 };
@@ -229,27 +230,52 @@ test('imports a bank file, accepts the rule suggestion in the workbench and book
 
   await nav(page, 'Buchen');
   await expect(page.getByRole('heading', { name: 'Buchungs-Inbox', level: 2 })).toBeVisible();
-  await page.getByRole('button', { name: /^Freigabe \d/ }).click();
+  // "Zur Prüfung geben" puts the draft in the review queue; once freigegeben it waits under "Freigegeben".
+  await page.getByRole('button', { name: /^Zur Prüfung \d/ }).click();
   await page.getByRole('checkbox', { name: 'Hausverwaltung Nord markieren' }).check();
   await page.getByRole('button', { name: 'Freigeben', exact: true }).click();
   await expect.poll(async () => (await invokeDesktopIpc(page, 'pro:getDraftByTransactionId', { transactionId: rent.id }))?.workflowStatus).toBe('approved');
+  await page.getByRole('button', { name: /^Freigegeben \d/ }).click();
   await page.getByRole('checkbox', { name: 'Hausverwaltung Nord markieren' }).check();
   await page.getByRole('button', { name: 'Sammel-Buchen' }).click();
-  await expect(page.getByRole('status').filter({ hasText: "Sammelaktion 'post': 1 erfolgreich, 0 übersprungen." })).toBeVisible();
+  // The rule knows the account, not the VAT: the batch leaves the rent for a decision instead of booking it gross.
+  await expect(page.getByRole('status').filter({ hasText: 'Sammelaktion Buchen: 0 erfolgreich, 0 übersprungen. 1 ohne Steuerfall ausgelassen' })).toBeVisible();
+  expect(await journal(page)).toEqual(journalBefore);
+  await page.getByRole('button', { name: /^Hausverwaltung Nord/ }).click();
+  await page.getByRole('combobox', { name: 'Steuerfall' }).selectOption('DE_STD_19');
+  await expect.poll(async () => (await invokeDesktopIpc(page, 'pro:getDraftByTransactionId', { transactionId: rent.id }))?.lines.find((line) => line.accountNumber === '4210')?.taxCaseKey).toBe('DE_STD_19');
+  // Changing the Kontierung of a freigegebener draft sends it through review again.
+  expect((await invokeDesktopIpc(page, 'pro:getDraftByTransactionId', { transactionId: rent.id })).workflowStatus).toBe('incomplete');
+  // It left the Freigegeben queue; the preview of the line stays open under Alle.
+  await page.getByRole('button', { name: /^Alle \d/ }).click();
+  const preview = page.getByRole('complementary').last();
+  await preview.getByRole('button', { name: 'Zur Prüfung geben', exact: true }).click();
+  await expect.poll(async () => (await invokeDesktopIpc(page, 'pro:getDraftByTransactionId', { transactionId: rent.id }))?.workflowStatus).toBe('pending_approval');
+  await preview.getByRole('button', { name: 'Freigeben', exact: true }).click();
+  await expect.poll(async () => (await invokeDesktopIpc(page, 'pro:getDraftByTransactionId', { transactionId: rent.id }))?.workflowStatus).toBe('approved');
+  await page.getByRole('button', { name: /^Freigegeben \d/ }).click();
+  await page.getByRole('checkbox', { name: 'Hausverwaltung Nord markieren' }).check();
+  await page.getByRole('button', { name: 'Sammel-Buchen' }).click();
+  await expect(page.getByRole('status').filter({ hasText: 'Sammelaktion Buchen: 1 erfolgreich, 0 übersprungen.' })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Gebucht 1' })).toBeVisible();
   await page.screenshot({ path: shot('03-posted-in-inbox'), fullPage: true });
+  // B26: a posted bank line offers its Storno instead of "Keine Aktion".
+  // The preview stays on the line it was opened for.
+  await page.getByRole('button', { name: 'Gebucht 1' }).click();
+  await expect(page.getByRole('complementary').last().getByRole('button', { name: 'Stornieren …' })).toBeVisible();
 
   // The posting is in the journal: expense on the rule's account, bank credited; the other line is untouched.
   const posted = (await journal(page)).filter((entry) => entry.sourceType === 'booking_draft');
   expect(posted).toHaveLength(1);
   expect(posted[0]).toMatchObject({ bookingText: 'Miete Oktober', postingDate: '2026-09-22', status: 'posted' });
-  expect(shape(posted[0])).toEqual([['4210', 1190, 0], ['1200', 0, 1190]]);
+  // Gewerbemiete with VAT: net on the rule's account, Vorsteuer split off, not 1.190 gross on 4210.
+  expect(shape(posted[0])).toEqual([['4210', 1000, 0], ['1576', 190, 0], ['1200', 0, 1190]]);
   expect((await invokeDesktopIpc(page, 'pro:listBankTransactions')).find((row) => row.purpose === 'Zahlung Projekt')?.status).toBe('pending');
   expect(await journal(page)).toHaveLength(journalBefore.length + 1);
 
-  // ...and in the accounting UI: the SuSa carries the rent on 4210.
+  // ...and in the accounting UI: the SuSa carries the net rent on 4210.
   await nav(page, 'Auswertungen');
-  await expect(page.getByRole('table', { name: 'Summen- und Saldenliste' }).getByRole('row', { name: /^4210 .* 1\.190,00 € 0,00 € 1\.190,00 €/ })).toBeVisible();
+  await expect(page.getByRole('table', { name: 'Summen- und Saldenliste' }).getByRole('row', { name: /^4210 .* 1\.000,00 € 0,00 € 1\.000,00 €/ })).toBeVisible();
   await page.screenshot({ path: shot('04-susa-with-rent'), fullPage: true });
 });
 

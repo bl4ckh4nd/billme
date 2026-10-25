@@ -29,7 +29,8 @@ const assertDatevReceiptCors = (response: { headers: Record<string, unknown> }) 
       ?.split(',')
       .map((header) => header.trim().toLowerCase())
       .sort(),
-    [...receiptHeaderNames].sort(),
+    // content-disposition is exposed too: the browser shells name downloads after it.
+    ['content-disposition', ...receiptHeaderNames].sort(),
   );
   for (const headerName of receiptHeaderNames) {
     assert.ok(readHeader(response, headerName), `${headerName} must be present`);

@@ -3,6 +3,11 @@ import { BusinessOnboarding, type BusinessOnboardingDraft } from '../components/
 import type { AppSettings, BusinessReportingProfile } from '@billme/desktop-core/types';
 import { useSetSettingsMutation } from '../../hooks/useSettings';
 
+const POSTPONED_KEY = 'billme.onboardingPostponed';
+const readPostponed = (): boolean => {
+  try { return globalThis.sessionStorage?.getItem(POSTPONED_KEY) === '1'; } catch { return false; }
+};
+
 export interface OnboardingWizardProps {
   settings: AppSettings;
   onComplete: () => void;
@@ -25,6 +30,8 @@ export const OnboardingWizard: React.FC<OnboardingWizardProps> = ({
   defaultReportingProfile,
 }) => {
   const setSettingsMutation = useSetSettingsMutation();
+  // „Später fortsetzen“ holds for this window session: a reload keeps it closed, the next start opens it again.
+  const [postponed] = React.useState(() => readPostponed());
 
   const initialData = React.useMemo<BusinessOnboardingDraft>(() => ({
     company: {
@@ -98,7 +105,10 @@ export const OnboardingWizard: React.FC<OnboardingWizardProps> = ({
       onboardingCompleted: false,
       onboardingDraftSaved: true,
     });
+    try { globalThis.sessionStorage?.setItem(POSTPONED_KEY, '1'); } catch { /* storage blocked: the wizard returns on reload */ }
   };
+
+  if (postponed) return null;
 
   return (
     <BusinessOnboarding

@@ -30,7 +30,10 @@ import {
  *   closed month instead of posting in an open one; an asset activation or a
  *   journal reversal that still posts into it
  * - soft lock: an override without a (non-blank) written reason, an override
- *   flag on the wrong request, a reason that is not kept in the audit trail
+ *   flag on the wrong request, a reason that is not kept in the audit trail; a
+ *   payment recorded on the invoice (or its Zahlungsstorno) that has no way past
+ *   the soft lock even after the person confirmed it, or books without that
+ *   confirmation
  * - restart: entries, open items, the audit chain, vendors, the receipts
  *   archive (bytes and hash) or posting state that changes across a restart
  * - SKR04 / Ist-VAT: SKR03 accounts used on an SKR04 tenant, output VAT reported
@@ -38,6 +41,9 @@ import {
  *   (overpayment), a chart switch after the first posting, a report of the other
  *   chart, a UStVA that reports the invoice basis instead of the paid VAT or
  *   fails on the Ist basis markers, a § 13b purchase on SKR03 accounts
+ * - settings: Ist-Versteuerung or a chart chosen in the settings that the
+ *   ledger ignores (policy stays Soll/SKR03), a chart switch after the first
+ *   posting saved in the settings without effect instead of being refused
  * - Ist-VAT accounts and corrections: not-yet-due VAT on the USt-Vorauszahlungen
  *   account (1780) or all rates on one account; a Skonto, a Forderungsausfall or
  *   a Storno of a paid invoice reducing the due VAT (1776) that was never due, or
@@ -240,6 +246,30 @@ test('closed and soft-locked periods stop every posting path, and ledger, open i
     assert.equal(refused.status, 409, refused.text);
     assert.equal((await journal(h)).length, entries);
     assert.deepEqual((await h.api.invoices.list()).find((candidate) => candidate.id === invoice.id)!.payments ?? [], [], 'the invoice does not list the refused payment');
+  });
+
+  await t.test('a payment recorded on the invoice into a soft-locked month asks first; confirmed with the reason it is booked, and so is its Zahlungsstorno', async () => {
+    const invoice = await issue(h, { client: 'Rechnungszahlung Februar' });
+    const entries = (await journal(h)).length;
+    const payment = { id: randomUUID(), date: '2026-02-20', amount: 50, method: 'Überweisung' };
+    const refused = await h.raw('POST', `/invoices/${invoice.id}/payments`, { reason: 'Zahlung Februar', payment });
+    assert.equal(refused.status, 409, refused.text);
+    assert.match(refused.body.message, /SOFT_LOCK_OVERRIDE_REQUIRED/);
+    assert.equal((await journal(h)).length, entries, 'nothing booked without the confirmation');
+    const booked = await h.raw('POST', `/invoices/${invoice.id}/payments`, { reason: 'Zahlung Februar nachgetragen', payment, softLockOverride: true });
+    assert.equal(booked.status, 200, booked.text);
+    const paymentEntry = (await journal(h)).find((entry) => entry.sourceType === 'payment' && entry.postingDate === '2026-02-20' && entry.reference === invoice.number);
+    assert.ok(paymentEntry, 'the payment is booked on its date in February');
+    const listed = (await h.api.invoices.list()).find((candidate) => candidate.id === invoice.id)!.payments!.find((candidate) => candidate.id === payment.id)!;
+    const storno = await h.raw('POST', `/invoices/${invoice.id}/payments/${payment.id}/reverse`, { reason: 'Zahlung doppelt', expectedPayment: listed });
+    assert.equal(storno.status, 409, storno.text);
+    assert.match(storno.body.message, /SOFT_LOCK_OVERRIDE_REQUIRED/);
+    assert.equal((await get<JournalEntry>(h, `/accounting/journal/${paymentEntry!.id}`)).status, 'posted');
+    const reversed = await h.raw('POST', `/invoices/${invoice.id}/payments/${payment.id}/reverse`, { reason: 'Zahlung doppelt erfasst', expectedPayment: listed, softLockOverride: true });
+    assert.equal(reversed.status, 200, reversed.text);
+    assert.equal((await get<JournalEntry>(h, `/accounting/journal/${paymentEntry!.id}`)).status, 'reversed');
+    const csv = await h.api.audit.exportCsv();
+    assert.ok(csv.includes('Zahlung Februar nachgetragen') && csv.includes('Zahlung doppelt erfasst'), 'both confirmations are audited with their reason');
   });
 
   await t.test('a soft-locked period needs an override with a written reason, and the reason is audited', async () => {
@@ -550,5 +580,34 @@ describe('SKR03 with Ist-VAT: not-yet-due VAT per rate, Skonto, Forderungsausfal
     assert.ok(!reopened.payments?.some((payment) => payment.method === 'Skonto'));
     assert.deepEqual([(await itemOf(invoice.id)).allocatedAmount, (await itemOf(invoice.id)).residualAmount], [0, GROSS]);
     await assertLedgerConsistent(h);
+  });
+});
+
+describe('the Pro settings drive the accounting policy', () => {
+  let h: ProHarness;
+  before(async () => { h = await startPro(null, 'pro-settings-policy'); });
+  after(async () => { await h.close(); });
+  const saveSettings = async (change: (settings: any) => any) => h.raw('PUT', '/settings', { reason: 'Einstellungen gespeichert', settings: change(await h.api.settings.get()) });
+
+  test('choosing Ist-Versteuerung in the settings books the next invoice with not-yet-due VAT', async () => {
+    const saved = await saveSettings((settings) => ({ ...settings, legal: { ...settings.legal, taxAccountingMethod: 'ist' }, businessReportingProfile: settings.businessReportingProfile ? { ...settings.businessReportingProfile, vatMethod: 'ist' } : settings.businessReportingProfile }));
+    assert.equal(saved.status, 200, saved.text);
+    assert.equal((await get(h, '/accounting/policy')).vatMethod, 'ist');
+    const invoice = await issue(h, { client: 'Ist aus Einstellungen' });
+    assert.deepEqual(shape((await invoiceEntry(h, invoice.id))!), [['1400', GROSS, 0], ['8400', 0, 200], ['1766', 0, 38]], 'Umsatzsteuer nicht fällig');
+    const back = await saveSettings((settings) => ({ ...settings, legal: { ...settings.legal, taxAccountingMethod: 'soll' }, businessReportingProfile: settings.businessReportingProfile ? { ...settings.businessReportingProfile, vatMethod: 'soll' } : settings.businessReportingProfile }));
+    assert.equal(back.status, 200, back.text);
+    assert.equal((await h.api.settings.get())?.legal.taxAccountingMethod, 'soll', JSON.stringify((await h.api.settings.get())?.legal));
+    assert.equal((await get(h, '/accounting/policy')).vatMethod, 'soll');
+  });
+
+  test('a chart switch in the settings after the first posting is refused with a reason, and the settings stay as they were', async () => {
+    assert.ok((await journal(h)).length > 0, 'precondition: the ledger has postings');
+    const before = await h.api.settings.get();
+    const refused = await saveSettings((settings) => ({ ...settings, businessReportingProfile: { ...(settings.businessReportingProfile ?? { jurisdiction: 'DE', legalForm: 'gmbh', profitDetermination: 'double_entry', fiscalYearStart: '01-01', vatMethod: 'soll' }), chart: 'SKR04' } }));
+    assert.equal(refused.status, 409, refused.text);
+    assert.match(refused.body.message, /Kontenrahmen kann nach einer gebuchten/);
+    assert.equal((await get(h, '/accounting/policy')).activeChart, 'SKR03');
+    assert.deepEqual(await h.api.settings.get(), before, 'nothing was saved');
   });
 });

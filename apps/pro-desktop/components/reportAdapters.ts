@@ -250,7 +250,8 @@ export const mapHgbBilanzReport = (
 };
 
 export const mapEurReport = (report: IpcResult<'eur:getReport'>): GuvReport => {
-  const lines = report.rows.map((row) => ({
+  // Master data (Kalenderjahr, Wirtschafts-ID, Art des Betriebs, Rechtsform …) is no amount: never a "0,00 €" line (as Lite's EurReportPanel).
+  const lines = report.rows.filter((row) => row.providerPath !== 'general').map((row) => ({
     id: row.lineId,
     code: row.kennziffer ?? row.lineId,
     label: row.label,

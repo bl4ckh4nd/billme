@@ -1,50 +1,69 @@
 import { useEffect, useId, useRef, useState } from 'react';
 import { X } from 'lucide-react';
 import { Button, IconButton, Input, Modal, Select } from '@billme/ui';
+import type { Account as BaseAccount } from '@billme/desktop-core/types';
 import { ipc } from '../ipc/client';
-import { useQueryClient } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { v4 as uuidv4 } from 'uuid';
+import { BANK_ACCOUNT_DEFAULT, isMoneyLedgerAccount } from '@billme/accounting-shared';
+import { useSettingsQuery } from '@billme/desktop-renderer/hooks/useSettings';
 import { useProActiveChart, useProLedgerAccountsQuery } from '../hooks/useProLedger';
 
 interface BankAccountModalProps {
   isOpen: boolean;
   onClose: () => void;
+  /** Edit this account instead of creating a new one. */
+  account?: Account;
 }
 
-export const BankAccountModal = ({ isOpen, onClose }: BankAccountModalProps) => {
+// Pro accounts carry the ledger account they book on (accounts:list returns it).
+type Account = BaseAccount & { defaultSkrAccountNumber?: string };
+
+const formOf = (account?: Account) => ({
+  name: account?.name ?? '',
+  iban: account?.iban ?? '',
+  balance: String(account?.balance ?? 0),
+  defaultSkrAccountNumber: account?.defaultSkrAccountNumber ?? '',
+});
+
+export const BankAccountModal = ({ isOpen, onClose, account }: BankAccountModalProps) => {
   const queryClient = useQueryClient();
   const titleId = useId();
   const descriptionId = useId();
   const activeChart = useProActiveChart();
-  const { data: ledgerAccounts = [], isError: ledgerAccountsError } = useProLedgerAccountsQuery({
+  // Under EÜR nobody picks a ledger account: the account books on the bank role of the chart (server default).
+  const { data: settings } = useSettingsQuery();
+  const eur = settings?.businessReportingProfile?.profitDetermination === 'eur';
+  const { data: chartAccounts = [], isError: ledgerAccountsError } = useProLedgerAccountsQuery({
     chart: activeChart,
     limit: 3000,
   });
-  const [formData, setFormData] = useState({
-    name: '',
-    iban: '',
-    balance: '0',
-    defaultSkrAccountNumber: '',
+  // A bank account books on a money account (Kasse/Bank) only; the server refuses any other.
+  const ledgerAccounts = chartAccounts.filter((row) => isMoneyLedgerAccount(activeChart, row.accountNumber));
+  const { data: roleMappings } = useQuery({
+    queryKey: ['pro-accounting', 'account-mappings', activeChart],
+    queryFn: () => ipc.pro.listAccountingAccountMappings({ chart: activeChart }),
   });
+  const bankRole = roleMappings?.find((mapping) => mapping.role === 'bank')?.accountNumber ?? BANK_ACCOUNT_DEFAULT[activeChart];
+  const [formData, setFormData] = useState(() => formOf(account));
   const [isSaving, setIsSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [showNameError, setShowNameError] = useState(false);
   const nameInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
-    if (!formData.defaultSkrAccountNumber && ledgerAccounts.length > 0) {
-      setFormData((prev) => ({
-        ...prev,
-        defaultSkrAccountNumber: prev.defaultSkrAccountNumber || ledgerAccounts[0]!.accountNumber,
-      }));
+    if (isOpen) { setFormData(formOf(account)); setError(null); setShowNameError(false); }
+  }, [isOpen, account]);
+
+  // Preselect the bank role of the chart (1200 / 1800, or the tenant's own mapping), never the first account of the list.
+  const preselected = ledgerAccounts.some((row) => row.accountNumber === bankRole) ? bankRole : ledgerAccounts[0]?.accountNumber;
+  useEffect(() => {
+    if (!formData.defaultSkrAccountNumber && roleMappings && preselected) {
+      setFormData((prev) => ({ ...prev, defaultSkrAccountNumber: prev.defaultSkrAccountNumber || preselected }));
     }
-  }, [formData.defaultSkrAccountNumber, ledgerAccounts]);
+  }, [formData.defaultSkrAccountNumber, roleMappings, preselected]);
 
   const handleSave = async () => {
-    if (!formData.defaultSkrAccountNumber) {
-      setError('Standard-SKR-Konto ist erforderlich.');
-      return;
-    }
     if (!formData.name.trim()) {
       // The submit stays enabled so this is reachable: a muted button that
       // explains nothing is the worse failure (see the projects/recurring forms,
@@ -54,7 +73,7 @@ export const BankAccountModal = ({ isOpen, onClose }: BankAccountModalProps) => 
       nameInputRef.current?.focus();
       return;
     }
-    if (!formData.defaultSkrAccountNumber) {
+    if (!eur && !formData.defaultSkrAccountNumber) {
       setError('Bitte wählen Sie ein Standard-SKR-Konto.');
       return;
     }
@@ -64,22 +83,22 @@ export const BankAccountModal = ({ isOpen, onClose }: BankAccountModalProps) => 
     try {
       await ipc.accounts.upsert({
         account: {
-          id: uuidv4(),
+          id: account?.id ?? uuidv4(),
           name: formData.name,
           iban: formData.iban || '',
           balance: parseFloat(formData.balance) || 0,
-          defaultSkrAccountNumber: formData.defaultSkrAccountNumber,
-          type: 'bank',
-          color: '#4B5563',
+          defaultSkrAccountNumber: eur ? undefined : formData.defaultSkrAccountNumber,
+          type: account?.type ?? 'bank',
+          color: account?.color ?? '#4B5563',
           transactions: [],
         }
       });
       await queryClient.invalidateQueries({ queryKey: ['accounts'] });
       onClose();
-      setFormData({ name: '', iban: '', balance: '0', defaultSkrAccountNumber: '' });
+      setFormData(formOf());
     } catch (error) {
       console.error('Failed to create account:', error);
-      setError('Konto konnte nicht erstellt werden. Prüfe die Eingaben und versuche es erneut.');
+      setError(error instanceof Error && error.message ? error.message : 'Konto konnte nicht gespeichert werden. Prüfe die Eingaben und versuche es erneut.');
     } finally {
       setIsSaving(false);
     }
@@ -95,9 +114,9 @@ export const BankAccountModal = ({ isOpen, onClose }: BankAccountModalProps) => 
     >
       <div className="flex items-start gap-3 px-4.5 pt-4 pb-2.5">
         <div className="min-w-0 flex-1">
-          <h2 id={titleId} className="text-title text-foreground">Neues Bankkonto</h2>
+          <h2 id={titleId} className="text-title text-foreground">{account ? 'Bankkonto bearbeiten' : 'Neues Bankkonto'}</h2>
           <p id={descriptionId} className="text-caption text-muted">
-            Fügen Sie ein neues Konto hinzu
+            {account ? 'Name, IBAN, Anfangssaldo und Geldkonto ändern' : 'Fügen Sie ein neues Konto hinzu'}
           </p>
         </div>
         <IconButton aria-label="Dialog schließen" tooltip={false} size="sm" onClick={onClose}>
@@ -151,7 +170,7 @@ export const BankAccountModal = ({ isOpen, onClose }: BankAccountModalProps) => 
           fullWidth
         />
 
-        <Select
+        {eur ? null : <Select
           id="bank-account-skr"
           label={`Standard-SKR-Konto (${activeChart})`}
           value={formData.defaultSkrAccountNumber}
@@ -174,7 +193,7 @@ export const BankAccountModal = ({ isOpen, onClose }: BankAccountModalProps) => 
               {row.accountNumber} - {row.name}
             </option>
           ))}
-        </Select>
+        </Select>}
       </div>
 
       <div className="flex flex-wrap justify-end gap-2 border-t border-border px-4.5 py-3">

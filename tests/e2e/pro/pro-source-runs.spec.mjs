@@ -91,6 +91,14 @@ test.afterEach(async () => {
   }
 });
 
+// The posting asks once with a summary (B10); the booking only runs after "Verbindlich buchen".
+const confirmPost = async (page) => {
+  const dialog = page.getByRole('dialog').filter({ has: page.getByTestId('special-entry-confirm-summary') });
+  await expect(dialog).toBeVisible();
+  await dialog.getByRole('button', { name: 'Verbindlich buchen' }).click();
+  await expect(dialog).toHaveCount(0);
+};
+
 test('posts, replays, and conflict-blocks one immutable source revision', async () => {
   const { page } = desktop;
   const accounts = await pickPostingAccounts(page);
@@ -129,20 +137,22 @@ test('posts a Sonderbuchung through the browser and opens inline journal details
 
   await page.getByRole('textbox', { name: 'Quellbeleg' }).fill(sourceId);
   await page.getByRole('textbox', { name: 'Buchungsdatum' }).fill('2026-04-15');
-  await page.getByRole('combobox', { name: 'Workflow' }).selectOption('fiscal_close');
+  // The year-end close has its own panel (FiscalYearClosePanel) and is covered through IPC below; the form books a Rückstellung.
+  await page.getByRole('combobox', { name: 'Workflow' }).selectOption('provision');
   await page.getByText('Fachdaten für Experten bearbeiten').click();
   const factsField = page.getByRole('textbox', { name: 'Domain-Fakten (JSON)' });
   const facts = JSON.parse(await factsField.inputValue());
-  const balances = await seedClosingBalances(page, accounts, facts.closingDate);
+  expect(facts.effectiveDate).toBe('2026-04-15');
   await factsField.fill(JSON.stringify({
     ...facts,
-    revenueAccounts: [accounts.revenue],
-    expenseAccounts: [accounts.expense],
-    retainedEarningsAccount: accounts.retained,
-    balances,
+    previousAmount: 0,
+    targetAmount: 100,
+    expenseAccount: accounts.expense,
+    provisionAccount: accounts.provision,
   }, null, 2));
   await page.getByRole('textbox', { name: 'Audit-Grund', exact: true }).fill('E2E browser source posting');
   await page.getByRole('button', { name: 'Prüfen & verbindlich buchen' }).click();
+  await confirmPost(page);
 
   await expect(page.getByText('Sonderbuchung wurde erfolgreich gebucht.')).toBeVisible();
   const historyRow = page.locator('section[aria-labelledby="source-run-history-heading"] li').filter({ hasText: sourceId });
@@ -154,7 +164,7 @@ test('posts a Sonderbuchung through the browser and opens inline journal details
   await expect(journalDialog).toBeVisible();
   await expect(journalDialog.getByRole('heading', { name: /Journal \d+/ })).toBeVisible();
   await expect(journalDialog.getByText(`Konto ${accounts.expense}`)).toBeVisible();
-  await expect(journalDialog.getByText(`Konto ${accounts.retained}`)).toBeVisible();
+  await expect(journalDialog.getByText(`Konto ${accounts.provision}`)).toBeVisible();
   await page.screenshot({ path: test.info().outputPath('02-journal-detail.png'), fullPage: true });
 });
 
@@ -171,6 +181,7 @@ test('does not claim success for a noop or source-run conflict in the browser', 
   const noopFacts = JSON.parse(await factsField.inputValue());
   await factsField.fill(JSON.stringify({ ...noopFacts, expenseAccount: accounts.expense, provisionAccount: accounts.provision, previousAmount: 25, targetAmount: 25 }, null, 2));
   await page.getByRole('button', { name: 'Prüfen & verbindlich buchen' }).click();
+  await confirmPost(page);
   await expect(page.getByRole('alert')).toContainText('Keine Buchung vorgenommen');
   await expect(page.getByText('Sonderbuchung wurde erfolgreich gebucht.')).toHaveCount(0);
 
@@ -194,7 +205,8 @@ test('does not claim success for a noop or source-run conflict in the browser', 
   await conflictFactsField.fill(JSON.stringify({ ...changedFacts, expenseAccount: accounts.expense, provisionAccount: accounts.provision, previousAmount: 0, targetAmount: 11 }, null, 2));
   await page.getByRole('textbox', { name: 'Audit-Grund', exact: true }).fill('E2E conflict must not book');
   await page.getByRole('button', { name: 'Prüfen & verbindlich buchen' }).click();
-  await expect(page.getByRole('alert')).toContainText(/Source revision already exists|Konflikt beim Quelllauf/);
+  await confirmPost(page);
+  await expect(page.getByRole('alert')).toContainText(/Source revision already exists|Konflikt beim Quelllauf|schon einen Buchungslauf mit anderen Angaben/);
   await expect(page.getByText('Sonderbuchung wurde erfolgreich gebucht.')).toHaveCount(0);
   await page.screenshot({ path: test.info().outputPath('01-conflict-not-reported-as-success.png'), fullPage: true });
 });

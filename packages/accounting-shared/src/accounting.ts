@@ -147,6 +147,15 @@ export interface BookingDraftEntity {
   validationIssues: ValidationIssue[];
   updatedAt: string;
   isVirtualProjection?: boolean;
+  /** Ausnahme handling of the bank line (owner, pause, resolution); kept with the draft. */
+  exceptionCase?: DraftExceptionCase;
+}
+
+export interface DraftExceptionCase {
+  state: 'open' | 'snoozed' | 'resolved';
+  owner?: string;
+  snoozedUntil?: string;
+  resolutionNote?: string;
 }
 
 export interface JournalLineEntity {
@@ -267,6 +276,8 @@ export interface ProBankTransaction {
   suggestionReason?: string;
   suggestionLayer?: 'rule' | 'counterparty' | 'bayes' | 'keyword' | 'fallback';
   suggestionConfidence?: number;
+  /** Belege archived on the line; set only when there is at least one. */
+  receiptDocumentCount?: number;
 }
 
 export type LedgerChart = 'SKR03' | 'SKR04';

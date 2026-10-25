@@ -19,6 +19,9 @@ import {
   TemplateEditorPage,
   TemplatesPage,
 } from '@billme/desktop-renderer/components/AppPages';
+import { type SettingsExtraSection } from '@billme/desktop-renderer/components/SettingsView';
+import { ListChecks } from 'lucide-react';
+import { ProBookingRulesSettings } from './components/ProBookingRulesSettings';
 import { DashboardLayout } from './components/DashboardLayout';
 import { OnboardingWizard } from './components/OnboardingWizard';
 
@@ -29,7 +32,11 @@ const ClientsPage = lazyRouteComponent(() => import('@billme/desktop-renderer/co
 const ProjectsPage = lazyRouteComponent(() => import('@billme/desktop-renderer/components/ProjectsView'), 'ProjectsView');
 const ProjectDetailPage = lazyRouteComponent(() => import('@billme/desktop-renderer/components/ProjectDetailView'), 'ProjectDetailView');
 const ArticlesPage = lazyRouteComponent(() => import('@billme/desktop-renderer/components/ArticlesView'), 'ArticlesView');
-const SettingsPage = lazyRouteComponent(() => import('@billme/desktop-renderer/components/SettingsView'), 'SettingsView');
+const LazySettingsView = lazyRouteComponent(() => import('@billme/desktop-renderer/components/SettingsView'), 'SettingsView');
+const PRO_SETTINGS: SettingsExtraSection[] = [
+  { group: 'Buchhaltung', id: 'rules', label: 'Buchungsregeln', icon: ListChecks, desc: 'Regeln, Overrides & Probelauf', render: () => <ProBookingRulesSettings /> },
+];
+const SettingsPage: React.FC = () => <LazySettingsView extraSections={PRO_SETTINGS} />;
 const RecurringPage = lazyRouteComponent(() => import('@billme/desktop-renderer/components/RecurringView'), 'RecurringView');
 const TaxFilingPage = lazyRouteComponent(() => import('@billme/desktop-renderer/components/TaxFilingCenter'), 'TaxFilingCenter');
 const ProAccountingPage = React.lazy(() => import('./components/ProAccountingPage').then((module) => ({ default: module.ProAccountingPage })));

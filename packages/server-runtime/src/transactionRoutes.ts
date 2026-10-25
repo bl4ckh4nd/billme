@@ -18,6 +18,7 @@ import {
   setServerTransactionRecurring,
   unlinkServerTransaction,
   periodClosedMessage,
+  createPostgresProAccountingRepository,
 } from '@billme/server-data';
 import { ApiError, typedRoute } from './http.js';
 import { createMutationContext, requireDatabase, requireMutationSessionFor, requireSession, toMutationActor } from './runtimeContext.js';
@@ -56,6 +57,7 @@ const csvMappingSchema = z.object({
   dateColumn: z.string().min(1),
   amountColumn: z.string().min(1),
   counterpartyColumn: z.string().optional(),
+  counterpartyIbanColumn: z.string().optional(),
   purposeColumn: z.string().optional(),
   statusColumn: z.string().optional(),
   externalIdColumn: z.string().optional(),
@@ -279,6 +281,14 @@ export const registerTransactionRoutes = (app: FastifyInstance, product: 'lite' 
         const result = await commitServerTransactionImport(requireDatabase(app), session.scope, { ...body, path, mapping: { ...body.mapping, currencyExpected: 'EUR' } }, toMutationActor(session), product);
         const upload = uploads.get(body.path);
         if (upload) upload.committed = true;
+        if (product === 'pro' && result.imported > 0) {
+          // The rows are committed; a failed auto-post leaves them for manual booking instead of failing the import.
+          try {
+            await createPostgresProAccountingRepository(requireDatabase(app)).autoPostAfterImport(session.scope, createMutationContext(session, 'Automatisch gebucht nach Import'));
+          } catch (error) {
+            request.log.warn({ err: error }, 'auto-post after import failed');
+          }
+        }
         return result;
       } catch (error) {
         return mapImportError(error);

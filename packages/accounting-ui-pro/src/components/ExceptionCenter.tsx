@@ -5,9 +5,10 @@ import { accountingErrorText } from '@billme/accounting-shared';
 import { getFlagLabel } from '../domain/selectors';
 import { useAccountingWorkspace } from '../AccountingWorkspaceContext';
 import { Transaction, UserRole } from '../types';
+import type { ProAccountingDataAdapter, TransitOverview } from '../services/accountingDataAdapter';
 import { StatusBadge } from './IssueBadges';
 
-type ExceptionFilter = 'all' | 'open' | 'snoozed' | 'resolved' | 'errors' | 'warnings' | 'missing_receipt' | 'duplicates' | 'period_locked';
+type ExceptionFilter = 'all' | 'open' | 'snoozed' | 'resolved' | 'errors' | 'warnings' | 'missing_receipt' | 'duplicates' | 'period_locked' | 'transit';
 
 interface ExceptionCenterProps {
   role: UserRole;
@@ -15,6 +16,7 @@ interface ExceptionCenterProps {
   transactions: Transaction[];
   onOpenTransaction: (transactionId: string) => void;
   onRefresh: () => void;
+  dataAdapter?: ProAccountingDataAdapter;
 }
 
 const filterLabels: Record<ExceptionFilter, string> = {
@@ -27,6 +29,7 @@ const filterLabels: Record<ExceptionFilter, string> = {
   missing_receipt: 'Ohne Beleg',
   duplicates: 'Dubletten',
   period_locked: 'Periode gesperrt',
+  transit: 'Geldtransit offen',
 };
 
 const approvalLabels = { not_required: 'Nicht nötig', pending: 'Offen', approved: 'Freigegeben', rejected: 'Abgelehnt' } as const;
@@ -63,7 +66,7 @@ function matchesFilter(tx: Transaction, filter: ExceptionFilter) {
   }
 }
 
-export default function ExceptionCenter({ role, canMutateExceptions = true, transactions, onOpenTransaction, onRefresh }: ExceptionCenterProps) {
+export default function ExceptionCenter({ role, canMutateExceptions = true, transactions, onOpenTransaction, onRefresh, dataAdapter }: ExceptionCenterProps) {
   const store = useAccountingWorkspace();
   const { assignExceptionOwner, dispatchBookingAction, getBookingDraftByTransactionId, reopenException, resolveException, snoozeException } = store;
   const [filter, setFilter] = useState<ExceptionFilter>('all');
@@ -74,6 +77,13 @@ export default function ExceptionCenter({ role, canMutateExceptions = true, tran
   const [mutationError, setMutationError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
 
+  const [transit, setTransit] = useState<TransitOverview | null>(null);
+  useEffect(() => {
+    void dataAdapter?.getTransitOverview?.().then(setTransit).catch(() => setTransit(null));
+  }, [dataAdapter, transactions]);
+  // Months still open at their end; none when the transfers net out across months.
+  const openTransitMonths = transit && transit.openBalance !== 0 ? transit.months.filter((month) => month.cumulative !== 0).length : 0;
+  const filters = (Object.keys(filterLabels) as ExceptionFilter[]).filter((key) => key !== 'transit' || Boolean(dataAdapter?.getTransitOverview));
   const items = useMemo(() => transactions.filter((tx) => matchesFilter(tx, filter)), [transactions, filter]);
   const selectedTx = items.find((tx) => tx.id === selectedId) ?? items[0] ?? null;
   const selectedDraft = selectedTx ? getBookingDraftByTransactionId(selectedTx.id) : undefined;
@@ -115,7 +125,7 @@ export default function ExceptionCenter({ role, canMutateExceptions = true, tran
               </div>
             </div>
             <div className="flex flex-wrap gap-1.25">
-              {(Object.keys(filterLabels) as ExceptionFilter[]).map((key) => (
+              {filters.map((key) => (
                 // Raw button: the filter chip of InboxQueueTabs; @billme/ui has no chip button.
                 <button
                   key={key}
@@ -130,11 +140,14 @@ export default function ExceptionCenter({ role, canMutateExceptions = true, tran
                   )}
                 >
                   {filterLabels[key]}
+                  {key === 'transit' && openTransitMonths > 0 && <span className="ml-1.25 font-mono tabular-nums">{openTransitMonths}</span>}
                 </button>
               ))}
             </div>
           </div>
-          {items.length === 0 ? (
+          {filter === 'transit' ? (
+            <TransitMonths overview={transit} />
+          ) : items.length === 0 ? (
             <EmptyState title="Keine Einträge für den Filter." />
           ) : (
             <ul className="max-h-140 overflow-y-auto">
@@ -180,7 +193,16 @@ export default function ExceptionCenter({ role, canMutateExceptions = true, tran
         </Card>
 
         <div className="flex min-w-0 flex-col gap-3.5">
-          {!selectedTx || !selectedDraft ? (
+          {filter === 'transit' ? (
+            <Card padding="sm">
+              <p className="text-control text-foreground">
+                Umbuchungen zwischen eigenen Konten laufen über Geldtransit {transit?.transitAccountNumber}. Sind beide Seiten gebucht, steht das Konto auf null.
+              </p>
+              <p className="mt-1.5 text-caption text-muted">
+                Bleibt ein Saldo, fehlt eine Seite: Buchen Sie den Gegenumsatz im Bankabgleich auf {transit?.transitAccountNumber}, oder importieren Sie die Umsätze des anderen Kontos.
+              </p>
+            </Card>
+          ) : !selectedTx || !selectedDraft ? (
             <Card padding="none">
               <EmptyState title="Keine Ausnahme ausgewählt." />
             </Card>
@@ -398,5 +420,43 @@ export default function ExceptionCenter({ role, canMutateExceptions = true, tran
         </div>
       </div>
     </div>
+  );
+}
+
+const money = (amount: number) => new Intl.NumberFormat('de-DE', { style: 'currency', currency: 'EUR' }).format(amount);
+const monthLabel = (period: string) => new Date(`${period}-01T00:00:00Z`).toLocaleDateString('de-DE', { month: 'short', year: 'numeric', timeZone: 'UTC' });
+
+/** Geldtransit per month; the running balance shows where a side is missing. */
+function TransitMonths({ overview }: { overview: TransitOverview | null }) {
+  if (!overview) return <EmptyState title="Geldtransit wird geladen." />;
+  if (overview.openBalance === 0) {
+    return <EmptyState title="Geldtransit ist ausgeglichen." description="Jede gebuchte Umbuchung hat ihre Gegenseite." />;
+  }
+  return (
+    <>
+      <CardHeader as="h3" title={`Saldo Geldtransit ${overview.transitAccountNumber} je Monat`} className="border-b border-border px-3.5 py-3" />
+      <table className="w-full text-control">
+        <thead>
+          <tr className="text-caption text-muted">
+            <th scope="col" className="px-3.5 py-1.5 text-left font-medium">Monat</th>
+            <th scope="col" className="px-3.5 py-1.5 text-right font-medium">Soll</th>
+            <th scope="col" className="px-3.5 py-1.5 text-right font-medium">Haben</th>
+            <th scope="col" className="px-3.5 py-1.5 text-right font-medium">Stand</th>
+          </tr>
+        </thead>
+        <tbody>
+          {overview.months.map((month) => (
+            <tr key={month.period} className="border-t border-border">
+              <td className="px-3.5 py-1.5 text-foreground">{monthLabel(month.period)}</td>
+              <td className="px-3.5 py-1.5 text-right font-mono tabular-nums">{money(month.debit)}</td>
+              <td className="px-3.5 py-1.5 text-right font-mono tabular-nums">{money(month.credit)}</td>
+              <td className={cn('px-3.5 py-1.5 text-right font-mono font-semibold tabular-nums', month.cumulative === 0 ? 'text-success-text' : 'text-warning-text')}>
+                {month.cumulative === 0 ? 'ausgeglichen' : money(month.cumulative)}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </>
   );
 }

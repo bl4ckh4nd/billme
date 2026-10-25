@@ -342,4 +342,27 @@ describe('pro renderer client against the embedded backend', () => {
     for (const entry of await journal(h)) assert.equal(entry.lines.reduce((sum, line) => sum + Math.round(line.debitAmount * 100) - Math.round(line.creditAmount * 100), 0), 0, `entry ${entry.entryNumber}`);
     assert.equal((await api().audit.verify()).ok, true);
   });
+
+  test('transfers between own accounts through the client: FinTS IBAN column, Geldtransit suggestion, transit balance', async () => {
+    const giro = `giro-${randomUUID().slice(0, 6)}`; const card = `card-${randomUUID().slice(0, 6)}`;
+    await api().accounts.upsert({ account: { id: giro, name: 'Transfer Giro', iban: 'DE89370400440532013000', balance: 0, transactions: [], type: 'bank', color: '#000000', defaultSkrAccountNumber: '1200' } });
+    await api().accounts.upsert({ account: { id: card, name: 'Transfer Karte', iban: 'DE03500105170000004021', balance: 0, transactions: [], type: 'credit', color: '#000000', defaultSkrAccountNumber: '1240' } });
+    const csv = ['Buchungstag;Auftraggeber/Empfänger;IBAN;Verwendungszweck;Betrag;Währung', '03.04.2026;American Express;DE03 5001 0517 0000 0040 21;Kartenabrechnung;-1248,30;EUR'].join('\n');
+    const preview = await api().finance.importPreview({ fileName: `transfer-${randomUUID().slice(0, 6)}.csv`, contentBase64: Buffer.from(csv).toString('base64'), profile: 'fints' });
+    assert.equal(preview.suggestedMapping.counterpartyIbanColumn, 'IBAN');
+    assert.equal((await api().finance.importCommit({ path: preview.path, accountId: giro, profile: 'fints', mapping: preview.suggestedMapping })).errors.length, 0);
+
+    const out = (await api().pro.listBankTransactions()).find((row) => row.accountId === giro && row.amount === -1248.3)!;
+    assert.deepEqual([out.counterpartyIban, out.suggestionLayer, out.suggestedAccountNumber, out.isTransfer], ['DE03500105170000004021', 'rule', '1360', true]);
+    const draft = (await api().pro.getDraftByTransactionId({ transactionId: out.id }))!;
+    assert.deepEqual(draft.lines.map((line) => [line.accountNumber, line.debitAmount, line.creditAmount]), [['1360', 1248.3, 0], ['1200', 0, 1248.3]]);
+    assert.equal(draft.ruleTrace?.[0]?.name, 'Umbuchung zwischen eigenen Konten');
+
+    await api().pro.dispatchDraftAction({ transactionId: out.id, action: 'submit_for_review' });
+    const approved = await api().pro.dispatchDraftAction({ transactionId: out.id, action: 'approve' });
+    assert.deepEqual((await api().pro.postDraft({ draftId: approved.id, postingDate: approved.postingDate })).issues, []);
+    const transit = await api().pro.getTransitOverview();
+    assert.equal(transit.transitAccountNumber, '1360');
+    assert.equal(transit.months.find((month) => month.period === '2026-04')!.balance, 1248.3, 'the card side is not booked yet');
+  });
 });

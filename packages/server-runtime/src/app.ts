@@ -81,6 +81,7 @@ import {
   articleSchema,
   ledgerAccountSchema,
   proListAccountSuggestionRulesArgsSchema,
+  accountSuggestionRuleSchema,
   proListTaxCaseAccountMappingsArgsSchema,
   proListTaxCasesArgsSchema,
   proUpsertAccountSuggestionRuleArgsSchema,
@@ -97,6 +98,7 @@ import { assertOfferContentEditable, assertInvoiceContentEditable, cancelUnpaidR
 import { ApiError, registerErrorHandler, typedRoute } from './http.js';
 import { registerServerApiOrpc } from './orpc.js';
 import { registerProAccountingRoutes, type ProAccountingRouteOptions } from './proAccountingRoutes.js';
+import { mapped as mappedBookingError, registerProBookingRuleRoutes } from './proBookingRuleRoutes.js';
 import { registerTaxFilingRoutes } from './taxFilingRoutes.js';
 import { registerLiteEurRoutes } from './liteEurRoutes.js';
 import { registerLiteCashRoutes } from './liteCashRoutes.js';
@@ -1445,24 +1447,7 @@ const registerProRoutes = (app: FastifyInstance) => {
     method: 'GET',
     url: `${prefix}/accounting/account-suggestion-rules`,
     query: proListAccountSuggestionRulesArgsSchema,
-    response: z.array(
-      z.object({
-        id: z.string().min(1),
-        tenantId: z.string().min(1),
-        chart: z.enum(['SKR03', 'SKR04']),
-        priority: z.number().int(),
-        field: z.enum(['counterparty', 'purpose', 'any']),
-        operator: z.enum(['contains', 'equals', 'startsWith']),
-        value: z.string().min(1),
-        targetAccountNumber: z.string().min(1),
-        flowType: z.enum(['income', 'expense', 'any']),
-        active: z.boolean(),
-        createdAt: z.string().min(1),
-        updatedAt: z.string().min(1),
-        hitCount: z.number().int().nonnegative().optional(),
-        lastHitAt: z.string().optional(),
-      }),
-    ),
+    response: z.array(accountSuggestionRuleSchema),
     async handler({ request, query }) {
       const session = await requireSession(app, 'pro', request.headers.authorization);
       return createPostgresProAccountingCatalogRepository(requireDatabase(app)).listAccountSuggestionRules(session.scope, query);
@@ -1472,24 +1457,11 @@ const registerProRoutes = (app: FastifyInstance) => {
   typedRoute(app, {
     method: 'POST',
     url: `${prefix}/accounting/account-suggestion-rules`,
-    body: proUpsertAccountSuggestionRuleArgsSchema.extend({ reason: z.string().trim().min(1) }),
-    response: z.object({
-      id: z.string().min(1),
-      tenantId: z.string().min(1),
-      chart: z.enum(['SKR03', 'SKR04']),
-      priority: z.number().int(),
-      field: z.enum(['counterparty', 'purpose', 'any']),
-      operator: z.enum(['contains', 'equals', 'startsWith']),
-      value: z.string().min(1),
-      targetAccountNumber: z.string().min(1),
-      flowType: z.enum(['income', 'expense', 'any']),
-      active: z.boolean(),
-      createdAt: z.string().min(1),
-      updatedAt: z.string().min(1),
-    }),
+    body: proUpsertAccountSuggestionRuleArgsSchema.and(z.object({ reason: z.string().trim().min(1) })),
+    response: accountSuggestionRuleSchema,
     async handler({ request, body }) {
       const session = await requireMutationSession(app, request.headers.authorization);
-      return createPostgresProAccountingCatalogRepository(requireDatabase(app)).upsertAccountSuggestionRule(session.scope, { ...body, tenantId: undefined, mutation: createMutationContext(session, body.reason) });
+      return mappedBookingError(createPostgresProAccountingCatalogRepository(requireDatabase(app)).upsertAccountSuggestionRule(session.scope, { ...body, tenantId: undefined, mutation: createMutationContext(session, body.reason) }));
     },
   });
 
@@ -1759,6 +1731,7 @@ export const buildServerApi = async (options: BuildServerApiOptions = {}): Promi
     registerProRoutes(app);
     registerTaxAuditExportRoute(app);
     registerProAccountingRoutes(app, { openRouterVlmService: options.openRouterVlmService });
+    registerProBookingRuleRoutes(app);
     registerLiteEurRoutes(app);
     registerLiteCashRoutes(app);
     registerLiteVatRoutes(app);
@@ -1790,6 +1763,7 @@ export const buildServerApi = async (options: BuildServerApiOptions = {}): Promi
       registerProRoutes(app);
       registerTaxAuditExportRoute(app);
       registerProAccountingRoutes(app, { openRouterVlmService: options.openRouterVlmService });
+      registerProBookingRuleRoutes(app);
       registerAuditRoutes(app, 'pro');
       registerEurRuleRoutes(app, 'pro');
     } else {

@@ -38,6 +38,7 @@ export interface DashboardFlows {
 }
 
 const EUR_MIN_TAX_YEAR = 2025;
+type TransferMarks = Array<{ id: string; isTransfer?: boolean; sourceTransactionId?: string }>;
 const NEUTRAL_KINDS = new Set(['transit', 'private-withdrawal', 'private-contribution']);
 const monthKey = (date: Date) => `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
 
@@ -61,13 +62,15 @@ export const aggregateFlows = (
   transactions: readonly Transaction[],
   eurItems: readonly EurItem[] | null,
   now: Date,
+  /** Double entry: bank rows booked as a transfer between own accounts (Geldtransit). */
+  transferIds: ReadonlySet<string> = new Set(),
 ): Omit<DashboardFlows, 'liquidity' | 'accountCount'> => {
   const months = lastTwelveMonths(now);
   const byMonth = new Map(months.map((month) => [month.key, month]));
   const byCounterparty = new Map<string, { label: string; value: number }>();
   let openTransactionCount = 0;
   // Geldtransit and Privatentnahme/-einlage move money but are neither income nor expense.
-  const neutral = new Set((eurItems ?? []).filter((item) => item.sourceType === 'transaction' && NEUTRAL_KINDS.has(item.kind ?? '')).map((item) => item.sourceId));
+  const neutral = new Set([...(eurItems ?? []).filter((item) => item.sourceType === 'transaction' && NEUTRAL_KINDS.has(item.kind ?? '')).map((item) => item.sourceId), ...transferIds]);
 
   const decided = new Set((eurItems ?? []).filter((item) => item.sourceType === 'transaction' && isDecidedEurItem(item)).map((item) => item.sourceId));
   for (const tx of transactions) {
@@ -146,13 +149,17 @@ export const useDashboardFlows = (profitDetermination: 'eur' | 'double_entry' | 
       const years = profitDetermination === 'eur'
         ? [now.getFullYear() - 1, now.getFullYear()].filter((year) => year >= EUR_MIN_TAX_YEAR)
         : [];
-      const [accounts, transactions, itemLists] = await Promise.all([
+      const [accounts, transactions, itemLists, proLines] = await Promise.all([
         ipc.accounts.list(),
         ipc.transactions.list({}),
         Promise.all(years.map((taxYear) => fetchEurItems(queryClient, taxYear))),
+        // Pro marks a transfer between own accounts on its bank lines; Lite has its Geldtransit kind in the EÜR items.
+        // A Lite profile an older version left on double entry has no Pro routes: no marks then.
+        profitDetermination === 'double_entry' ? getRendererApi('pro').pro.listBankTransactions().catch((): TransferMarks => []) : Promise.resolve<TransferMarks>([]),
       ]);
+      const transferIds = new Set(proLines.filter((line) => line.isTransfer).map((line) => line.sourceTransactionId ?? line.id));
       return {
-        ...aggregateFlows(transactions, years.length > 0 ? itemLists.flat() : null, now),
+        ...aggregateFlows(transactions, years.length > 0 ? itemLists.flat() : null, now, transferIds),
         liquidity: accounts.length > 0 ? [...currentAccountBalances(accounts, transactions).values()].reduce((sum, balance) => sum + balance, 0) : null,
         accountCount: accounts.length,
       };

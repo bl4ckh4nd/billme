@@ -93,6 +93,12 @@ const isAllowedPortalBaseUrl = (value: string): boolean => {
   }
 };
 
+export const transitOverviewSchema = z.object({
+  transitAccountNumber: z.string(),
+  months: z.array(z.object({ period: z.string(), debit: z.number(), credit: z.number(), balance: z.number(), cumulative: z.number() })),
+  openBalance: z.number(),
+});
+
 export const transactionSchema = z.object({
   id: z.string(),
   date: z.string(),
@@ -111,6 +117,9 @@ export const transactionSchema = z.object({
   suggestionConfidence: z.number().optional(),
   /** Belege archived on the bank line (Pro). */
   receiptDocumentCount: z.number().int().positive().optional(),
+  counterpartyIban: z.string().optional(),
+  isTransfer: z.boolean().optional(),
+  sourceTransactionId: z.string().optional(),
 });
 
 export const eurClassificationSchema = z.object({
@@ -281,7 +290,67 @@ export const ledgerAccountSchema = z.object({
   updatedAt: z.string(),
 });
 
-export const accountSuggestionRuleSchema = z.object({
+export const bookingRuleConditionSchema = z.object({
+  field: z.enum(['counterparty', 'purpose', 'any', 'iban', 'amount', 'account']),
+  operator: z.enum(['contains', 'equals', 'startsWith', 'regex', 'gte', 'lte', 'between']),
+  value: z.string().max(200),
+  valueTo: z.string().max(40).optional(),
+});
+
+export const bookingRuleActionsSchema = z.object({
+  accountNumber: z.string().optional(),
+  taxCaseKey: z.string().optional(),
+  deductiblePercent: z.number().min(0).max(100).optional(),
+  flowType: z.enum(['income', 'expense']).optional(),
+  memo: z.string().max(200).optional(),
+});
+
+/** Advanced rule fields (Regel-Engine); absent on legacy single-condition rules. */
+export const bookingRuleFieldsSchema = z.object({
+  name: z.string().max(80).optional(),
+  stage: z.enum(['base', 'override']).optional(),
+  logic: z.enum(['and', 'or']).optional(),
+  conditions: z.array(bookingRuleConditionSchema).max(12).optional(),
+  actions: bookingRuleActionsSchema.optional(),
+  autoPost: z.boolean().optional(),
+  stop: z.boolean().optional(),
+});
+
+export const ruleTraceEntrySchema = z.object({
+  ruleId: z.string().optional(),
+  name: z.string(),
+  stage: z.enum(['base', 'override']),
+  matched: z.boolean(),
+  applied: z.array(z.enum(['accountNumber', 'taxCaseKey', 'deductiblePercent', 'flowType', 'memo'])),
+  skipped: z.enum(['stopped', 'base_already_set']).optional(),
+});
+
+const ruleApplicationSideSchema = z.object({
+  accountNumber: z.string().optional(),
+  taxCaseKey: z.string().optional(),
+  bookingText: z.string().optional(),
+  ruleNames: z.array(z.string()).optional(),
+});
+
+/** Probelauf of "Auf Bestand anwenden": what would change, what stays protected. */
+export const ruleApplicationPreviewSchema = z.object({
+  hash: z.string(),
+  rows: z.array(z.object({
+    transactionId: z.string(),
+    date: z.string(),
+    counterparty: z.string(),
+    amount: z.number(),
+    kind: z.enum(['new', 'update', 'protected', 'posted']),
+    note: z.string().optional(),
+    before: ruleApplicationSideSchema,
+    after: ruleApplicationSideSchema,
+  })),
+  counts: z.object({ new: z.number().int(), update: z.number().int(), protected: z.number().int(), posted: z.number().int() }),
+});
+
+export const proApplyRulesArgsSchema = z.object({ previewHash: z.string().min(1) });
+
+export const accountSuggestionRuleSchema = bookingRuleFieldsSchema.extend({
   id: z.string(),
   tenantId: z.string(),
   chart: ledgerChartSchema,
@@ -303,17 +372,20 @@ export const proListAccountSuggestionRulesArgsSchema = z.object({
   activeOnly: queryBooleanSchema,
 });
 
-export const proUpsertAccountSuggestionRuleArgsSchema = z.object({
+export const proUpsertAccountSuggestionRuleArgsSchema = bookingRuleFieldsSchema.extend({
   id: z.string().optional(),
   chart: ledgerChartSchema,
   priority: z.number().int(),
+  // Legacy single condition; a rule with `conditions` and `actions` may leave them empty.
   field: z.enum(['counterparty', 'purpose', 'any']),
   operator: z.enum(['contains', 'equals', 'startsWith']),
-  value: z.string().min(1),
-  targetAccountNumber: z.string().min(1),
+  value: z.string(),
+  targetAccountNumber: z.string(),
   flowType: z.enum(['income', 'expense', 'any']).optional(),
   active: z.boolean().optional(),
   reason: z.string().trim().min(1).optional(),
+}).refine((rule) => (rule.conditions?.length ?? 0) > 0 || (rule.value.trim() !== '' && rule.targetAccountNumber.trim() !== ''), {
+  message: 'A rule needs conditions or a value and a target account.',
 });
 
 export const proDeleteAccountSuggestionRuleArgsSchema = z.object({
@@ -478,6 +550,8 @@ export const bookingDraftEntitySchema = z.object({
     snoozedUntil: z.string().optional(),
     resolutionNote: z.string().optional(),
   }).optional(),
+  ruleTrace: z.array(ruleTraceEntrySchema).optional(),
+  ruleFingerprint: z.string().optional(),
 });
 
 /** A change of the Ausnahme of a bank line: only the given fields change; the reason is audited. */

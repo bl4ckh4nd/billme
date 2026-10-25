@@ -133,6 +133,8 @@ export interface Transaction {
   owner?: string;
   exceptionCase?: ExceptionCase;
   isVirtualPosted?: boolean;
+  /** Which layer proposed `suggestion`: a rule, the remembered counterparty, … */
+  suggestionLayer?: 'rule' | 'counterparty' | 'bayes' | 'keyword' | 'fallback';
 }
 
 export interface JournalLine {
@@ -204,6 +206,8 @@ export interface BookingDraft {
   lines: JournalLine[];
   validationIssues: ValidationIssue[];
   isVirtualProjection?: boolean;
+  /** Booking rules evaluated for this draft: which matched and which fields each set. */
+  ruleTrace?: Array<{ name: string; stage: 'base' | 'override'; matched: boolean; applied: string[]; skipped?: 'stopped' | 'base_already_set' }>;
   activity: ActivityEvent[];
   assignedTo?: string;
   approval: {

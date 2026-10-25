@@ -82,7 +82,7 @@ interface ReconciliationWorkbenchProps {
   /** Invoice matching and rule statistics; without them the workbench shows neither. */
   dataAdapter?: ProAccountingDataAdapter;
   /** Opens the host's rule editor. */
-  onManageRules?: () => void;
+  onManageRules?: (transactionId?: string) => void;
   /** Opens Offene Posten with the invoice preselected, where the payment is settled with a ledger entry. */
   onOpenInvoice?: (invoiceId: string) => void;
 }
@@ -682,6 +682,16 @@ export default function ReconciliationWorkbench({
                         <p className="mt-1.5 text-caption text-muted">
                           Entwurf enthält {draft.lines.length} Buchungszeilen und {draft.validationIssues.length} Validierungshinweise.
                         </p>
+                        {draft.ruleTrace?.some((entry) => entry.matched) && (
+                          <ol aria-label="Regel-Trace" className="mt-1.5 flex flex-col gap-0.5 text-caption">
+                            {draft.ruleTrace.filter((entry) => entry.matched || entry.skipped === 'stopped').map((entry) => (
+                              <li key={`${entry.stage}-${entry.name}`} className={entry.matched ? 'text-foreground' : 'text-muted line-through'}>
+                                {entry.stage === 'base' ? 'Basis' : 'Override'} „{entry.name}“
+                                {entry.matched ? ` setzt ${entry.applied.map((field) => TRACE_FIELD_LABELS[field] ?? field).join(', ')}` : ' (nach Stopp übersprungen)'}
+                              </li>
+                            ))}
+                          </ol>
+                        )}
                         <div className="mt-2.25 flex flex-wrap gap-2">
                           <Button size="sm" onClick={runPrimaryAction} disabled={!primary || !splitIsValid || mutationBusy}>
                             <CheckCircle2 size={14} aria-hidden="true" />
@@ -891,8 +901,13 @@ export default function ReconciliationWorkbench({
                   ? <Badge tone="warning">{staleRules.length} greifen nicht mehr</Badge>
                   : <Badge tone="success">alle greifen</Badge>)}
                 <span className="flex-1" />
+                {onManageRules && selectedTx && (
+                  <Button variant="secondary" size="sm" onClick={() => onManageRules(selectedTx.id)}>
+                    Regel aus diesem Umsatz
+                  </Button>
+                )}
                 {onManageRules && (
-                  <Button variant="secondary" size="sm" onClick={onManageRules}>
+                  <Button variant="secondary" size="sm" onClick={() => onManageRules()}>
                     Regeln bearbeiten
                   </Button>
                 )}
@@ -909,12 +924,14 @@ export default function ReconciliationWorkbench({
                     const stale = staleRules.includes(rule);
                     const months = Math.max(1, Math.floor(daysSince(rule.lastHitAt ?? rule.createdAt) / 30.44));
                     return (
-                      <li key={rule.id} aria-label={`Regel ${rule.value}`} className="flex flex-wrap items-start gap-2.5 border-b border-border px-3 py-2.75 last:border-b-0">
+                      <li key={rule.id} aria-label={`Regel ${rule.name ?? rule.value}`} className="flex flex-wrap items-start gap-2.5 border-b border-border px-3 py-2.75 last:border-b-0">
                         <span className="min-w-0 flex-1">
                           <span className="text-label text-foreground">
-                            Wenn {RULE_FIELD_LABELS[rule.field]} {RULE_OPERATOR_LABELS[rule.operator]} „{rule.value}“
+                            {rule.name ?? <>Wenn {RULE_FIELD_LABELS[rule.field]} {RULE_OPERATOR_LABELS[rule.operator]} „{rule.value}“</>}
                           </span>
-                          <span className="block text-caption text-muted">dann Konto {rule.targetAccountNumber}</span>
+                          <span className="block text-caption text-muted">
+                            {rule.stage === 'override' ? 'Override:' : 'dann'} {ruleResultText(rule)}
+                          </span>
                           <span className="block text-caption text-muted tabular-nums">
                             {rule.hitCount
                               ? `${rule.hitCount} Treffer, zuletzt ${rule.lastHitAt ? new Date(rule.lastHitAt).toLocaleDateString('de-DE') : 'unbekannt'}`
@@ -935,3 +952,10 @@ export default function ReconciliationWorkbench({
     </div>
   );
 }
+
+const TRACE_FIELD_LABELS: Record<string, string> = { accountNumber: 'Konto', taxCaseKey: 'Steuerfall', deductiblePercent: 'Abzug', flowType: 'Flusstyp', memo: 'Buchungstext' };
+
+const ruleResultText = (rule: AccountSuggestionRuleSummary) => {
+  const account = rule.actions ? rule.actions.accountNumber : rule.targetAccountNumber;
+  return [account && `Konto ${account}`, rule.actions?.taxCaseKey].filter(Boolean).join(' · ') || 'ändert einzelne Felder';
+};

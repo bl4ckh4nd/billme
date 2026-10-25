@@ -40,7 +40,6 @@ import type {
   ReportResult,
 } from '@billme/accounting-shared';
 import type { OposBankTransaction } from '@billme/accounting-ui-pro';
-import { ProAccountRulesModal } from './ProAccountRulesModal';
 import {
   mapBwa01Report,
   mapEurReport,
@@ -165,7 +164,8 @@ const mapTransactions = (
     const draft = draftsByTransactionId.get(row.id);
     const workflowStatus: ProUiTransaction['workflowStatus'] =
       row.status === 'booked' || row.linkedInvoiceId ? 'posted' : draft?.workflowStatus ?? 'imported';
-    const missingReceipt = !row.linkedInvoiceId && !row.receiptDocumentCount;
+    // A transfer between own accounts has no receipt: the other bank statement is the evidence.
+    const missingReceipt = !row.linkedInvoiceId && !row.receiptDocumentCount && !row.isTransfer;
     const draftIssues = draft?.validationIssues ?? [];
     const draftErrors = draftIssues.filter((issue) => issue.severity === 'error').length;
     const draftWarnings = draftIssues.filter((issue) => issue.severity === 'warning').length;
@@ -182,6 +182,7 @@ const mapTransactions = (
       // The fallback layer is only the chart's first expense/revenue account, not a proposal.
       suggestion: row.suggestionLayer === 'fallback' ? undefined : row.suggestedAccountNumber,
       suggestionConfidence: row.suggestionLayer === 'fallback' ? undefined : row.suggestionConfidence,
+      suggestionLayer: row.suggestionLayer,
       hasReceipt: !missingReceipt,
       issueCounts: {
         errors: draftErrors,
@@ -248,6 +249,7 @@ const mapEntityDraftToUiDraft = (
     })),
     activity: [],
     isVirtualProjection: draft.isVirtualProjection,
+    ruleTrace: draft.ruleTrace,
     assignedTo: undefined,
     approval: {
       required: false,
@@ -361,7 +363,6 @@ export const ProAccountingPage: React.FC<{ view?: unknown; onViewChange?: (view:
     },
   });
   const importSkr = useImportSkrMutation();
-  const [showRulesModal, setShowRulesModal] = React.useState(false);
   const [importMessage, setImportMessage] = React.useState<string | null>(null);
   const [importFailed, setImportFailed] = React.useState(false);
   const [adapterBusy, setAdapterBusy] = React.useState(false);
@@ -938,6 +939,9 @@ export const ProAccountingPage: React.FC<{ view?: unknown; onViewChange?: (view:
       listAccountSuggestionRules() {
         return ipc.pro.listAccountSuggestionRules({ chart: activeChart });
       },
+      getTransitOverview() {
+        return ipc.pro.getTransitOverview();
+      },
     });
   }, [accountNames, activeChart, bankAccounts, invalidateProQueries, queryClient, runMutation]);
 
@@ -985,7 +989,7 @@ export const ProAccountingPage: React.FC<{ view?: unknown; onViewChange?: (view:
         title={areaTitle}
         description={areaSubtitle}
         actions={(view === 'inbox' || view === 'reconciliation' || view === undefined) ? (
-          <Button variant="secondary" onClick={() => setShowRulesModal(true)}>
+          <Button variant="secondary" onClick={() => { window.location.hash = '#/settings?section=rules'; }}>
             <Settings2 size={16} aria-hidden="true" />
             Regeln
           </Button>
@@ -1004,7 +1008,7 @@ export const ProAccountingPage: React.FC<{ view?: unknown; onViewChange?: (view:
           view={view}
           onViewChange={onViewChange}
           onOpenTaxFiling={onOpenTaxFiling}
-          onManageRules={() => setShowRulesModal(true)}
+          onManageRules={(transactionId) => { window.location.hash = `#/settings?section=rules${transactionId ? `&ruleFrom=${encodeURIComponent(transactionId)}` : ''}`; }}
           seed={seed}
           dataAdapter={dataAdapter}
           busy={adapterBusy}
@@ -1020,15 +1024,6 @@ export const ProAccountingPage: React.FC<{ view?: unknown; onViewChange?: (view:
           }}
         />
       </div>
-      {showRulesModal && (
-        <ProAccountRulesModal
-          chartFramework={(seed.chartFramework ?? 'SKR03') as 'SKR03' | 'SKR04'}
-          onClose={() => setShowRulesModal(false)}
-          onRulesChanged={() => {
-            void queryClient.invalidateQueries({ queryKey: ['pro-accounting', 'transactions'] });
-          }}
-        />
-      )}
     </div>
   );
 };

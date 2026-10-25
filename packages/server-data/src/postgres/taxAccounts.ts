@@ -17,7 +17,7 @@ export type LedgerChart = 'SKR03' | 'SKR04';
 export const ACCOUNT_ROLE_DEFAULTS: Record<LedgerChart, Record<string, string>> = {
   SKR03: {
     accounts_receivable: '1400', accounts_payable: '1600', bank: '1200', revenue: '8400', expense: '4900', asset: '0480',
-    output_vat: '1776', output_vat_deferred: '1766', input_vat: '1576', cash: '1000',
+    output_vat: '1776', output_vat_deferred: '1766', input_vat: '1576', cash: '1000', transit: '1360',
     output_vat_7: '1771', output_vat_deferred_7: '1761', input_vat_7: '1571',
     revenue_7: '8300', revenue_small_business: '8195', revenue_exempt: '8100', revenue_rc_13b: '8337', revenue_eu_supply: '8125',
     revenue_eu_service: '8336', revenue_export: '8120', revenue_outside_scope: '8338',
@@ -28,7 +28,7 @@ export const ACCOUNT_ROLE_DEFAULTS: Record<LedgerChart, Record<string, string>> 
   },
   SKR04: {
     accounts_receivable: '1200', accounts_payable: '3300', bank: '1800', revenue: '4400', expense: '6300', asset: '0670',
-    output_vat: '3806', output_vat_deferred: '3816', input_vat: '1406', cash: '1600',
+    output_vat: '3806', output_vat_deferred: '3816', input_vat: '1406', cash: '1600', transit: '1460',
     output_vat_7: '3801', output_vat_deferred_7: '3811', input_vat_7: '1401',
     revenue_7: '4300', revenue_small_business: '4185', revenue_exempt: '4100', revenue_rc_13b: '4337', revenue_eu_supply: '4125',
     revenue_eu_service: '4336', revenue_export: '4120', revenue_outside_scope: '4338',

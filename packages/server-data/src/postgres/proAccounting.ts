@@ -19,7 +19,22 @@ import type {
 import type { ProAccountingCatalogRepository, ProWorkflowRepository, TenantScope } from '@billme/server-core';
 import { migrateCanvasTemplate, type LegacyCanvasElement } from '@billme/server-core';
 import { and, asc, count, desc, eq, ilike, isNull, or, sql } from 'drizzle-orm';
-import { accountSuggestionRuleMatches } from '@billme/finance-intelligence';
+import { accountSuggestionRuleMatches, parseRuleAmount, ruleRegexError } from '@billme/finance-intelligence';
+import { advancedRuleFields } from './accountSuggestions.js';
+
+/** Drops empty action fields and checks the deductible share. */
+const cleanRuleActions = (actions: NonNullable<UpsertAccountSuggestionRuleInput['actions']>) => {
+  const out: NonNullable<UpsertAccountSuggestionRuleInput['actions']> = {};
+  if (actions.accountNumber?.trim()) out.accountNumber = actions.accountNumber.trim();
+  if (actions.taxCaseKey?.trim()) out.taxCaseKey = actions.taxCaseKey.trim();
+  if (actions.deductiblePercent !== undefined && actions.deductiblePercent !== null) {
+    if (!(actions.deductiblePercent >= 0 && actions.deductiblePercent <= 100)) throw new Error('RULE_DEDUCTIBLE_INVALID');
+    out.deductiblePercent = actions.deductiblePercent;
+  }
+  if (actions.flowType) out.flowType = actions.flowType;
+  if (actions.memo?.trim()) out.memo = actions.memo.trim().slice(0, 200);
+  return out;
+};
 import { runInTransaction, type PostgresQueryable, type PostgresTransactionClient } from './connection.js';
 import { appendWithClient } from './audit.js';
 import { usableAccountNumbers } from './tenantLedgerAccounts.js';
@@ -739,10 +754,17 @@ export const saveServerAccountKeyword = async (db: PostgresQueryable, record: Se
   return record;
 };
 export const saveServerAccountSuggestionRule = async (db: PostgresQueryable, rule: AccountSuggestionRule): Promise<AccountSuggestionRule> => {
-  await upsert(db, schema.accountSuggestionRules, { id: rule.id, tenantId: rule.tenantId, chart: rule.chart, priority: rule.priority, field: rule.field, operator: rule.operator, value: rule.value, targetAccountNumber: rule.targetAccountNumber, flowType: rule.flowType, active: rule.active, createdAt: rule.createdAt, updatedAt: rule.updatedAt }, schema.accountSuggestionRules.id,
-    { tenantId: rule.tenantId, chart: rule.chart, priority: rule.priority, field: rule.field, operator: rule.operator, value: rule.value, targetAccountNumber: rule.targetAccountNumber, flowType: rule.flowType, active: rule.active, updatedAt: rule.updatedAt });
+  const advanced = {
+    name: rule.name ?? null, stage: rule.stage ?? 'base', logic: rule.logic ?? 'and',
+    conditionsJson: rule.conditions?.length ? JSON.stringify(rule.conditions) : null, actionsJson: rule.actions ? JSON.stringify(rule.actions) : null,
+    autoPost: rule.autoPost ?? false, stopProcessing: rule.stop ?? false,
+  };
+  await upsert(db, schema.accountSuggestionRules, { id: rule.id, tenantId: rule.tenantId, chart: rule.chart, priority: rule.priority, field: rule.field, operator: rule.operator, value: rule.value, targetAccountNumber: rule.targetAccountNumber, flowType: rule.flowType, active: rule.active, createdAt: rule.createdAt, updatedAt: rule.updatedAt, ...advanced }, schema.accountSuggestionRules.id,
+    { tenantId: rule.tenantId, chart: rule.chart, priority: rule.priority, field: rule.field, operator: rule.operator, value: rule.value, targetAccountNumber: rule.targetAccountNumber, flowType: rule.flowType, active: rule.active, updatedAt: rule.updatedAt, ...advanced });
   return rule;
 };
+
+
 export const saveServerProWorkflowEntry = async (db: PostgresQueryable, record: ServerProWorkflowRecord): Promise<ServerProWorkflowRecord> => {
   await upsert(db, schema.proWorkflowEntries, { tenantId: record.tenantId, transactionId: record.transactionId, transactionJson: record.transactionJson, draftJson: record.draftJson, updatedAt: record.updatedAt },
     [schema.proWorkflowEntries.tenantId, schema.proWorkflowEntries.transactionId], { transactionJson: record.transactionJson, draftJson: record.draftJson, updatedAt: record.updatedAt });
@@ -996,7 +1018,7 @@ export const createPostgresProAccountingCatalogRepository = (
       id: row.id!, tenantId: row.tenantId!, chart: row.chart as TaxCaseAccountMapping['chart'], priority: row.priority!,
       field: row.field as AccountSuggestionRuleField, operator: row.operator as AccountSuggestionRuleOperator, value: row.value!,
       targetAccountNumber: row.targetAccountNumber!, flowType: row.flowType as AccountSuggestionRuleFlowType, active: Boolean(row.active),
-      createdAt: row.createdAt!, updatedAt: row.updatedAt!,
+      createdAt: row.createdAt!, updatedAt: row.updatedAt!, ...advancedRuleFields(row),
     }));
     // Hit statistics are derived from posted bank bookings instead of stored counters, so they
     // stay correct after reversals, imports and rule edits: a booking counts for the first
@@ -1019,8 +1041,9 @@ export const createPostgresProAccountingCatalogRepository = (
       const item = { flowType: entry.type === 'income' ? 'income' as const : 'expense' as const, counterparty: entry.counterparty ?? '', purpose: entry.purpose ?? '' };
       const accounts = new Set(entry.accounts.split(','));
       for (const chartRules of byChart.values()) {
-        const rule = chartRules.find((candidate) => accountSuggestionRuleMatches(candidate, item));
-        if (!rule || !accounts.has(rule.targetAccountNumber)) continue;
+        const rule = chartRules.find((candidate) => (candidate.stage ?? 'base') === 'base' && accountSuggestionRuleMatches(candidate, item));
+        const target = rule?.actions?.accountNumber ?? rule?.targetAccountNumber;
+        if (!rule || !target || !accounts.has(target)) continue;
         const current = hits.get(rule.id) ?? { count: 0, last: '' };
         hits.set(rule.id, { count: current.count + 1, last: entry.posting_date > current.last ? entry.posting_date : current.last });
       }
@@ -1034,7 +1057,29 @@ export const createPostgresProAccountingCatalogRepository = (
   async upsertAccountSuggestionRule(scope, input) {
     return inTaxMappingTransaction(db, async (tx) => {
       const tenantId = getTenantId(scope);
-      if (!(await usableAccountNumbers(tx, tenantId, input.chart, [input.targetAccountNumber.trim()])).has(input.targetAccountNumber.trim())) throw new Error(`UNKNOWN_ACCOUNT:${input.targetAccountNumber.trim()}`);
+      const actions = input.actions ? cleanRuleActions(input.actions) : undefined;
+      const conditions = input.conditions?.map((condition) => ({ ...condition, value: condition.value.trim(), ...(condition.valueTo ? { valueTo: condition.valueTo.trim() } : {}) }));
+      if (input.conditions && !conditions?.length) throw new Error('RULE_CONDITIONS_REQUIRED');
+      for (const condition of conditions ?? []) {
+        if (!condition.value) throw new Error('RULE_CONDITION_VALUE_REQUIRED');
+        const regexError = condition.operator === 'regex' ? ruleRegexError(condition.value) : undefined;
+        if (regexError) throw new Error(`RULE_REGEX_INVALID:${regexError}`);
+        if (condition.field === 'amount' && [condition.value, ...(condition.operator === 'between' ? [condition.valueTo ?? ''] : [])].some((value) => Number.isNaN(parseRuleAmount(value)))) throw new Error('RULE_AMOUNT_INVALID');
+      }
+      // The legacy projection keeps older readers (rule list, hit statistics) working.
+      const firstText = conditions?.find((condition) => ['counterparty', 'purpose', 'any'].includes(condition.field) && condition.operator !== 'regex');
+      const targetAccountNumber = (actions ? actions.accountNumber ?? '' : input.targetAccountNumber).trim();
+      if (!actions && !targetAccountNumber) throw new Error('RULE_ACTION_REQUIRED');
+      if (actions && Object.keys(actions).length === 0) throw new Error('RULE_ACTION_REQUIRED');
+      if ((input.stage ?? 'base') === 'base' && actions && !actions.accountNumber) throw new Error('RULE_BASE_ACCOUNT_REQUIRED');
+      if (targetAccountNumber) {
+        // A deactivated account of the tenant is no target either.
+        if (!(await usableAccountNumbers(tx, tenantId, input.chart, [targetAccountNumber])).has(targetAccountNumber)) throw new Error(`UNKNOWN_ACCOUNT:${targetAccountNumber}`);
+      }
+      if (actions?.taxCaseKey) {
+        const taxCase = await executeSql(tx, sql`SELECT 1 FROM tax_cases WHERE key=${actions.taxCaseKey} LIMIT 1`);
+        if (!taxCase.rows.length) throw new Error(`UNKNOWN_TAX_CASE:${actions.taxCaseKey}`);
+      }
       const now = nowIso();
       const existing = input.id ? await executeSql(tx, sql`SELECT id,tenant_id,created_at FROM account_suggestion_rules WHERE id=${input.id} LIMIT 1`) : { rows: [] };
       const existingRow = existing.rows[0] as { id: string; tenant_id: string; created_at: string } | undefined;
@@ -1043,12 +1088,19 @@ export const createPostgresProAccountingCatalogRepository = (
         tenantId,
         chart: input.chart,
         priority: input.priority,
-        field: input.field,
-        operator: input.operator,
-        value: input.value.trim(),
-        targetAccountNumber: input.targetAccountNumber.trim(),
+        field: (firstText?.field ?? input.field) as AccountSuggestionRuleField,
+        operator: (firstText?.operator ?? input.operator) as AccountSuggestionRuleOperator,
+        value: (firstText?.value ?? input.value).trim(),
+        targetAccountNumber,
         flowType: input.flowType ?? 'any',
         active: input.active !== false,
+        ...(input.name?.trim() ? { name: input.name.trim() } : {}),
+        stage: input.stage ?? 'base',
+        logic: input.logic ?? 'and',
+        ...(conditions ? { conditions } : {}),
+        ...(actions ? { actions } : {}),
+        autoPost: input.autoPost ?? false,
+        stop: input.stop ?? false,
         createdAt: existingRow?.tenant_id === tenantId ? existingRow.created_at : now,
         updatedAt: now,
       };

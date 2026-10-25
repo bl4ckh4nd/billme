@@ -108,6 +108,7 @@ const DATEV_ROLE_ACCOUNTS: Record<'SKR03' | 'SKR04', Record<string, readonly [st
     input_vat_rc_13b: ['1577', 'Abziehbare Vorsteuer nach § 13b UStG 19 %'], output_vat_rc_13b: ['1787', 'Umsatzsteuer nach § 13b UStG 19 %'],
     input_vat_ige: ['1574', 'Abziehbare Vorsteuer aus innergemeinschaftlichem Erwerb 19 %'], output_vat_ige: ['1774', 'Umsatzsteuer aus innergemeinschaftlichem Erwerb 19 %'],
     input_vat_ige_7: ['1572', 'Abziehbare Vorsteuer aus innergemeinschaftlichem Erwerb'], output_vat_ige_7: ['1772', 'Umsatzsteuer aus innergemeinschaftlichem Erwerb'],
+    transit: ['1360', 'Geldtransit'],
   },
   SKR04: {
     accounts_receivable: ['1200', 'Forderungen aus Lieferungen und Leistungen'],
@@ -133,15 +134,15 @@ const DATEV_ROLE_ACCOUNTS: Record<'SKR03' | 'SKR04', Record<string, readonly [st
     input_vat_rc_13b: ['1407', 'Abziehbare Vorsteuer nach § 13b UStG 19 %'], output_vat_rc_13b: ['3837', 'Umsatzsteuer nach § 13b UStG 19 %'],
     input_vat_ige: ['1404', 'Abziehbare Vorsteuer aus innergemeinschaftlichem Erwerb 19 %'], output_vat_ige: ['3804', 'Umsatzsteuer aus innergemeinschaftlichem Erwerb 19 %'],
     input_vat_ige_7: ['1402', 'Abziehbare Vorsteuer aus innergemeinschaftlichem Erwerb'], output_vat_ige_7: ['3802', 'Umsatzsteuer aus innergemeinschaftlichem Erwerb'],
+    transit: ['1460', 'Geldtransit'],
   },
 };
-/** Accounts the posting paths use without a role: Bewirtung 70/30, Privat, Geldtransit, Skonti/USt without a rate. */
+/** Accounts the posting paths use without a role: Bewirtung 70/30, Privat, Skonti/USt without a rate. */
 const DATEV_FIXED_ACCOUNTS: ReadonlyArray<readonly ['SKR03' | 'SKR04', string, string]> = [
   ['SKR03', '4650', 'Bewirtungskosten'], ['SKR03', '4654', 'Nicht abzugsfähige Bewirtungskosten'],
   ['SKR04', '6640', 'Bewirtungskosten'], ['SKR04', '6644', 'Nicht abzugsfähige Bewirtungskosten'],
   ['SKR03', '1800', 'Privatentnahmen allgemein'], ['SKR03', '1890', 'Privateinlagen'],
   ['SKR04', '2100', 'Privatentnahmen allgemein'], ['SKR04', '2180', 'Privateinlagen'],
-  ['SKR03', '1360', 'Geldtransit'], ['SKR04', '1460', 'Geldtransit'],
   ['SKR03', '1760', 'Umsatzsteuer nicht fällig'], ['SKR04', '3810', 'Umsatzsteuer nicht fällig'],
   ['SKR03', '8730', 'Gewährte Skonti'], ['SKR04', '4730', 'Gewährte Skonti'],
 ];

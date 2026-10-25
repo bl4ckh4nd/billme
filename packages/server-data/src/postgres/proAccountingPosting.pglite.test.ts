@@ -310,3 +310,21 @@ test('generisches Storno von Anlagen- und Zahlungsjournalen wird abgewiesen', as
     assert.equal(await count(database, 'journal_entries'), 3);
   });
 });
+
+test('Bankseite des Entwurfs kommt aus dem SKR-Konto des Finanzkontos', async () => {
+  await withFixture(async ({ database, repository }) => {
+    await database.query(`INSERT INTO accounts (id,tenant_id,name,iban,balance,default_skr_account_number,type,color) VALUES ('card-1','tenant-a','Amex','DE03500105170000004021',0,'1820','credit','#000'),('cash-1','tenant-a','Ohne SKR','DE01',0,NULL,'bank','#000')`);
+    await database.query(
+      `INSERT INTO bank_transactions (id,tenant_id,account_id,date,amount,type,counterparty,purpose,status,created_at,updated_at) VALUES ('tx-card','tenant-a','card-1','2026-03-02',-65.44,'expense','Adobe','Creative Cloud','pending',$1,$1),('tx-card-in','tenant-a','card-1','2026-03-03',42.1,'income','Amex','Gutschrift','pending',$1,$1),('tx-noskr','tenant-a','cash-1','2026-03-04',-10,'expense','Kiosk','Zeitung','pending',$1,$1)`,
+      [stamp],
+    );
+    const expense = (await repository.getDraftByTransactionId(scope, 'tx-card'))!;
+    assert.equal(expense.lines[1]!.accountNumber, '1820');
+    assert.equal(expense.lines[1]!.creditAmount, 65.44);
+    const income = (await repository.getDraftByTransactionId(scope, 'tx-card-in'))!;
+    assert.equal(income.lines[0]!.accountNumber, '1820');
+    // Without an SKR number on the account the chart's bank role stays the fallback.
+    const fallback = (await repository.getDraftByTransactionId(scope, 'tx-noskr'))!;
+    assert.equal(fallback.lines[1]!.accountNumber, '1200');
+  });
+});

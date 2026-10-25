@@ -147,6 +147,10 @@ export interface BookingDraftEntity {
   validationIssues: ValidationIssue[];
   updatedAt: string;
   isVirtualProjection?: boolean;
+  /** Which booking rules ran on this draft and what each set. */
+  ruleTrace?: RuleTraceEntry[];
+  /** Hash of lines and text as the engine wrote them; a mismatch means the draft was edited by hand. */
+  ruleFingerprint?: string;
   /** Ausnahme handling of the bank line (owner, pause, resolution); kept with the draft. */
   exceptionCase?: DraftExceptionCase;
 }
@@ -279,6 +283,11 @@ export interface ProBankTransaction {
   suggestionConfidence?: number;
   /** Belege archived on the line; set only when there is at least one. */
   receiptDocumentCount?: number;
+  counterpartyIban?: string;
+  /** The suggestion books on Geldtransit: a transfer between own accounts, which needs no receipt. */
+  isTransfer?: boolean;
+  /** The legacy bank row (`transactions`) this line mirrors, for views that read that list. */
+  sourceTransactionId?: string;
 }
 
 export type LedgerChart = 'SKR03' | 'SKR04';
@@ -357,7 +366,44 @@ export type AccountSuggestionRuleField = 'counterparty' | 'purpose' | 'any';
 export type AccountSuggestionRuleOperator = 'contains' | 'equals' | 'startsWith';
 export type AccountSuggestionRuleFlowType = 'income' | 'expense' | 'any';
 
-export interface AccountSuggestionRule {
+/** One condition of a booking rule; `account` compares the own financial account id, `amount` the absolute bank amount. */
+export interface BookingRuleCondition {
+  field: 'counterparty' | 'purpose' | 'any' | 'iban' | 'amount' | 'account';
+  operator: 'contains' | 'equals' | 'startsWith' | 'regex' | 'gte' | 'lte' | 'between';
+  value: string;
+  valueTo?: string;
+}
+
+/** What a matching rule proposes; unset fields leave the earlier stage's value. */
+export interface BookingRuleActions {
+  accountNumber?: string;
+  taxCaseKey?: string;
+  deductiblePercent?: number;
+  flowType?: 'income' | 'expense';
+  memo?: string;
+}
+
+/** Advanced booking-rule fields; a rule without them is the legacy single condition. */
+export interface BookingRuleFields {
+  name?: string;
+  stage?: 'base' | 'override';
+  logic?: 'and' | 'or';
+  conditions?: BookingRuleCondition[];
+  actions?: BookingRuleActions;
+  autoPost?: boolean;
+  stop?: boolean;
+}
+
+export interface RuleTraceEntry {
+  ruleId?: string;
+  name: string;
+  stage: 'base' | 'override';
+  matched: boolean;
+  applied: Array<keyof BookingRuleActions>;
+  skipped?: 'stopped' | 'base_already_set';
+}
+
+export interface AccountSuggestionRule extends BookingRuleFields {
   id: string;
   tenantId: string;
   chart: LedgerChart;
@@ -375,7 +421,7 @@ export interface AccountSuggestionRule {
   lastHitAt?: string;
 }
 
-export interface UpsertAccountSuggestionRuleInput {
+export interface UpsertAccountSuggestionRuleInput extends BookingRuleFields {
   id?: string;
   tenantId?: string;
   chart: LedgerChart;

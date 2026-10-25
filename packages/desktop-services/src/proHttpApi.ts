@@ -39,6 +39,8 @@ import {
   taxCaseAccountMappingSchema,
   taxCaseDefinitionSchema,
   transactionSchema,
+  transitOverviewSchema,
+  ruleApplicationPreviewSchema,
   openRouterVlmAnalyzeInputSchema,
   openRouterVlmAnalyzeResultSchema,
   openRouterVlmConfigSchema,
@@ -628,6 +630,15 @@ export const createProWebClient = (config: ProWebClientConfig) => {
     },
     listAccountingTransactions() {
       return requestJson({ parser: parseArray(transactionSchema) }, '/api/v1/pro/accounting/transactions');
+    },
+    getTransitOverview() {
+      return requestJson({ parser: transitOverviewSchema }, '/api/v1/pro/accounting/transit');
+    },
+    previewRuleApplication() {
+      return requestJson({ parser: ruleApplicationPreviewSchema }, '/api/v1/pro/accounting/rules/preview');
+    },
+    applyRules(previewHash: string, reason: string) {
+      return requestJson({ method: 'POST', body: { previewHash, reason }, parser: z.object({ updated: z.number().int() }) }, '/api/v1/pro/accounting/rules/apply');
     },
     getAccountingDraftByTransactionId(transactionId: string) {
       return requestJson(
@@ -1406,6 +1417,18 @@ export const createProHttpBillmeApi = ({ fallback, onInvoke, downloadBlob, ...cl
           ipcRoutes[key].args.parse(args);
           const result = await client.listAccountingTransactions();
           return ipcRoutes[key].result.parse(result) as IpcResult<K>;
+        }
+        case 'pro:getTransitOverview': {
+          ipcRoutes[key].args.parse(args);
+          return ipcRoutes[key].result.parse(await client.getTransitOverview()) as IpcResult<K>;
+        }
+        case 'pro:previewRuleApplication': {
+          ipcRoutes[key].args.parse(args);
+          return ipcRoutes[key].result.parse(await client.previewRuleApplication()) as IpcResult<K>;
+        }
+        case 'pro:applyRules': {
+          const parsedArgs = ipcRoutes[key].args.parse(args) as IpcArgs<'pro:applyRules'>;
+          return ipcRoutes[key].result.parse(await client.applyRules(parsedArgs.previewHash, 'Buchungsregeln auf Bestand angewendet')) as IpcResult<K>;
         }
         case 'pro:getDraftByTransactionId': {
           const parsedArgs = ipcRoutes[key].args.parse(args) as IpcArgs<'pro:getDraftByTransactionId'>;

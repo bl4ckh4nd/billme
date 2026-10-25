@@ -352,8 +352,8 @@ export const commitServerTransactionImport = async (
         await query(session,
           `INSERT INTO bank_transactions
             (id, tenant_id, account_id, date, amount, type, counterparty, purpose,
-             linked_invoice_id, status, source_transaction_id, created_at, updated_at)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NULL, $9, $10, $11, $11)`,
+             linked_invoice_id, status, source_transaction_id, created_at, updated_at, counterparty_iban)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NULL, $9, $10, $11, $11, $12)`,
           [
             randomUUID(), tenant(scope), input.accountId, row.parsed.date, line.amount, line.type, line.counterparty, line.purpose,
             // Accounting workflow status: a freshly imported bank line is never in the
@@ -361,6 +361,8 @@ export const commitServerTransactionImport = async (
             'pending',
             transactionId,
             bankTransactionTimestamp,
+            // The counterparty IBAN belongs to the bank line itself, not to a split-off fee line.
+            line === lines[0] ? row.parsed.counterpartyIban ?? null : null,
           ],
         );
         imported += 1;

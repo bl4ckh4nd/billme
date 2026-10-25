@@ -39,6 +39,9 @@ interface InboxViewProps {
   onQueueChange?: (queue: InboxQueueKey) => void;
 }
 
+// Which layer produced the suggestion; Bayes and keyword guesses stay unlabelled.
+const LAYER_LABEL: Partial<Record<NonNullable<Transaction['suggestionLayer']>, string>> = { rule: 'Regel', counterparty: 'Gemerkt' };
+
 function formatCurrency(amount: number, currency: string) {
   return new Intl.NumberFormat('de-DE', { style: 'currency', currency }).format(amount);
 }
@@ -592,7 +595,10 @@ export default function InboxView({
                     </button>
                   </TableCell>
                   <TableCell className="text-right">
-                    <IssueBadges transaction={tx} />
+                    <span className="inline-flex flex-wrap justify-end gap-1">
+                      {tx.suggestionLayer && LAYER_LABEL[tx.suggestionLayer] && <Badge tone="neutral">{LAYER_LABEL[tx.suggestionLayer]}</Badge>}
+                      <IssueBadges transaction={tx} />
+                    </span>
                   </TableCell>
                   <TableCell numeric className={`whitespace-nowrap font-medium ${amountTone(tx.amount)}`}>
                     {formatCurrency(tx.amount, tx.currency)}

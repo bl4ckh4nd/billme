@@ -195,6 +195,14 @@ export interface ProAccountingDataAdapter {
   postIncomingInvoiceAccounting?: (invoiceId: string, options: { reason: string; softLockOverride?: boolean; overrideReason?: string }) => Promise<AccountingPostingPreview>;
   findInvoiceMatches?: (transactionId: string) => Promise<InvoiceMatchCandidate[]>;
   listAccountSuggestionRules?: () => Promise<AccountSuggestionRuleSummary[]>;
+  getTransitOverview?: () => Promise<TransitOverview>;
+}
+
+/** Geldtransit balance per month; a balance left over means one side of a transfer is not booked yet. */
+export interface TransitOverview {
+  transitAccountNumber: string;
+  months: Array<{ period: string; debit: number; credit: number; balance: number; cumulative: number }>;
+  openBalance: number;
 }
 
 export interface ManualJournalEntryInput {
@@ -242,6 +250,9 @@ export interface AccountSuggestionRuleSummary {
   createdAt: string;
   hitCount?: number;
   lastHitAt?: string;
+  name?: string;
+  stage?: 'base' | 'override';
+  actions?: { accountNumber?: string; taxCaseKey?: string };
 }
 
 export interface ReportSnapshotRecord {

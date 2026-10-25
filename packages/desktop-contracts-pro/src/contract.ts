@@ -78,6 +78,9 @@ import {
   accountingPeriodStatusSchema,
   proPostManualJournalEntryArgsSchema,
   proBankLedgerReconciliationRowSchema,
+  transitOverviewSchema,
+  ruleApplicationPreviewSchema,
+  proApplyRulesArgsSchema,
 } from './schemas';
 
 const okSchema = z.object({ ok: z.literal(true) });
@@ -100,6 +103,9 @@ const transactionSchema = z.object({
   suggestionLayer: z.enum(['rule', 'counterparty', 'bayes', 'keyword', 'fallback']).optional(),
   suggestionConfidence: z.number().optional(),
   receiptDocumentCount: z.number().int().positive().optional(),
+  counterpartyIban: z.string().optional(),
+  isTransfer: z.boolean().optional(),
+  sourceTransactionId: z.string().optional(),
 });
 
 const invoiceMatchSuggestionSchema = z.object({
@@ -519,6 +525,21 @@ export const ipcRoutes = {
     channel: 'pro:deleteAccountSuggestionRule',
     args: proDeleteAccountSuggestionRuleArgsSchema,
     result: okSchema,
+  },
+  'pro:getTransitOverview': {
+    channel: 'pro:getTransitOverview',
+    args: z.undefined(),
+    result: transitOverviewSchema,
+  },
+  'pro:previewRuleApplication': {
+    channel: 'pro:previewRuleApplication',
+    args: z.undefined(),
+    result: ruleApplicationPreviewSchema,
+  },
+  'pro:applyRules': {
+    channel: 'pro:applyRules',
+    args: proApplyRulesArgsSchema,
+    result: z.object({ updated: z.number().int() }),
   },
   'pro:getDraftByTransactionId': {
     channel: 'pro:getDraftByTransactionId',

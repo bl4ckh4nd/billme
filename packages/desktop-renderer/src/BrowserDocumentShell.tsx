@@ -22,6 +22,15 @@ type Props = {
   mount: (element: HTMLElement, context: BrowserMountContext) => Promise<() => void>;
 };
 
+/**
+ * The API address the web container was started with (`BILLME_PUBLIC_API_URL`, written to /runtime-config.js by the
+ * image's entrypoint), so one image serves any server. Ignored unless it is a plain http(s) URL.
+ */
+export const runtimeApiUrl = (): string | undefined => {
+  const value = (globalThis as { __BILLME_RUNTIME__?: { apiUrl?: unknown } }).__BILLME_RUNTIME__?.apiUrl;
+  return typeof value === 'string' && /^https?:\/\/[^\s"'<>]+$/.test(value.trim()) ? value.trim().replace(/\/+$/, '') : undefined;
+};
+
 /** `?invite=` and `?reset=` links from mails; read once, removed from the address after use. */
 const readLink = (): { kind: 'invite' | 'reset'; token: string } | null => {
   const params = new URLSearchParams(window.location.search);
@@ -64,7 +73,9 @@ function RendererHost({ session, mount, onLogout, product, loadWorkspaces }: {
   </main> : <div ref={host} className="min-h-screen" />;
 }
 
-export function BrowserDocumentShell({ product, defaultApiUrl, sessionStorageKey, apiUrlStorageKey, initialCredentials, mount }: Props) {
+export function BrowserDocumentShell({ product, defaultApiUrl: buildApiUrl, sessionStorageKey, apiUrlStorageKey, initialCredentials, mount }: Props) {
+  // An address typed in at login wins, then the container's runtime setting, then the one built into the bundle.
+  const defaultApiUrl = React.useMemo(() => runtimeApiUrl() ?? buildApiUrl, [buildApiUrl]);
   const [apiUrl, setApiUrl] = React.useState(() => localStorage.getItem(apiUrlStorageKey) ?? defaultApiUrl);
   const [mode, setMode] = React.useState<AuthScreenMode>('checking');
   const [session, setSession] = React.useState<Session | null>(null);

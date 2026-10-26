@@ -26,7 +26,7 @@ test('every check finds its case, a finding can be marked OK and opened again, p
     '2;06.01.2026;ER-VST;Papier Beispiel;4930;100,00;;',
     '2;;;;1576;19,00;;',
     '2;;;;1200;;119,00;',
-    '3;07.01.2026;AR-OHNE;Kunde Beispiel GmbH;1200;500,00;;',
+    '3;07.01.2026;AR-OHNE;Kunde Beispiel GmbH, Umsatzart: Gutschrift;1200;500,00;;',
     '3;;;;8400;;500,00;',
     '4;08.01.2026;GS-ERL;Erstattung Beispiel Versand;1200;119,00;;',
     '4;;;;8400;;119,00;USt19',
@@ -52,7 +52,7 @@ test('every check finds its case, a finding can be marked OK and opened again, p
   assert.deepEqual(refs('foreign_vat'), ['ER-AWS'], 'the German supplier with 19 % is no finding');
   assert.deepEqual(refs('vat_without_case'), ['ER-VST']);
   assert.deepEqual(refs('revenue_without_vat'), ['AR-OHNE']);
-  assert.deepEqual(refs('refund_as_revenue'), ['GS-ERL']);
+  assert.deepEqual(refs('refund_as_revenue'), ['GS-ERL'], 'the bank\'s "Umsatzart: Gutschrift" of an incoming payment is no refund');
   assert.deepEqual(refs('duplicate'), ['D-2'], 'the second of two equal payments');
   assert.deepEqual(refs('transit_open'), ['2026-01']);
   assert.deepEqual(refs('private_on_corporation'), corporation ? ['PE-1'] : []);
@@ -73,7 +73,7 @@ test('every check finds its case, a finding can be marked OK and opened again, p
   const energy = partners.partners.find((partner) => partner.name === 'Strom Beispiel Energie');
   assert.deepEqual([energy?.expense, energy?.count], [160, 2], 'two payments, one partner');
   assert.ok(!partners.partners.some((partner) => partner.name === 'Kreditkarte'), 'an own transfer has no partner');
-  assert.deepEqual(partners.partners.find((partner) => partner.name === 'Kunde Beispiel GmbH')?.income, 500);
+  assert.deepEqual(partners.partners.find((partner) => partner.name === 'Kunde Beispiel GmbH')?.income, 500, 'the payee ends before the bank\'s Umsatzart');
   const detail = await get<{ months: Array<{ period: string; expense: number }>; entries: Array<{ reference?: string }> }>(h, `/accounting/analytics/partners/detail?name=${encodeURIComponent('Strom Beispiel Energie')}`);
   assert.deepEqual(detail.months, [{ period: '2026-01', income: 0, expense: 160 }]);
   assert.deepEqual(detail.entries.map((entry) => entry.reference), ['D-2', 'D-1']);

@@ -11,6 +11,12 @@ function euro(value: number) {
   return new Intl.NumberFormat('de-DE', { style: 'currency', currency: 'EUR' }).format(value);
 }
 
+/** Change against the comparison as a signed percentage of its absolute value. */
+function deviation(current: number, compare: number) {
+  const change = (current - compare) / Math.abs(compare);
+  return `${change >= 0 ? '+' : ''}${new Intl.NumberFormat('de-DE', { style: 'percent', maximumFractionDigits: 0 }).format(change)}`;
+}
+
 interface GuvViewProps {
   report: GuvReport | null;
   onSelectLine: (line: GuvLine) => void;
@@ -49,6 +55,8 @@ export default function GuvView({ report, onSelectLine, title = 'Gewinn- und Ver
     () => (report ? flattenVisible(report.lines, effectiveExpanded) : []),
     [report, effectiveExpanded],
   );
+  // "Vergleich: Vorjahr" fills amountCompare on every line: then Vorjahr and Abweichung get their own columns.
+  const compared = Boolean(report?.totalsCompare) || visibleLines.some(({ line }) => line.amountCompare !== undefined);
 
   const retryAction = onRetry ? (
     <Button type="button" size="sm" variant="secondary" onClick={onRetry}>
@@ -82,10 +90,11 @@ export default function GuvView({ report, onSelectLine, title = 'Gewinn- und Ver
           {
             label: 'Ergebnis',
             value: euro(report.totals.result),
+            ...(report.totalsCompare ? { sublabel: `Vorjahr ${euro(report.totalsCompare.result)}` } : {}),
             tone: report.totals.result >= 0 ? 'ok' : 'danger',
           },
-          { label: 'Umsätze', value: euro(report.totals.revenue) },
-          { label: 'Aufwendungen', value: euro(report.totals.expenses) },
+          { label: 'Umsätze', value: euro(report.totals.revenue), ...(report.totalsCompare ? { sublabel: `Vorjahr ${euro(report.totalsCompare.revenue)}` } : {}) },
+          { label: 'Aufwendungen', value: euro(report.totals.expenses), ...(report.totalsCompare ? { sublabel: `Vorjahr ${euro(report.totalsCompare.expenses)}` } : {}) },
           {
             label: 'Qualität',
             value: `${report.quality.unmappedAccounts.length} ungemappt`,
@@ -131,6 +140,8 @@ export default function GuvView({ report, onSelectLine, title = 'Gewinn- und Ver
               <TableRow>
                 <TableHead>Position</TableHead>
                 <TableHead numeric className="w-40">Aktuell</TableHead>
+                {compared ? <TableHead numeric className="w-40">Vorjahr</TableHead> : null}
+                {compared ? <TableHead numeric className="w-44">Abweichung</TableHead> : null}
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -178,6 +189,15 @@ export default function GuvView({ report, onSelectLine, title = 'Gewinn- und Ver
                     <TableCell numeric className={`font-medium ${line.amountCurrent < 0 ? 'text-error-text' : ''}`}>
                       {euro(line.amountCurrent)}
                     </TableCell>
+                    {compared ? (
+                      <TableCell numeric muted>{euro(line.amountCompare ?? 0)}</TableCell>
+                    ) : null}
+                    {compared ? (
+                      <TableCell numeric className="tabular-nums">
+                        {euro(line.amountCurrent - (line.amountCompare ?? 0))}
+                        {line.amountCompare ? <span className="ml-1.5 text-caption text-muted">{deviation(line.amountCurrent, line.amountCompare)}</span> : null}
+                      </TableCell>
+                    ) : null}
                   </TableRow>
                 );
               })}

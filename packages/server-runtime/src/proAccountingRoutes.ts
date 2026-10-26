@@ -22,7 +22,7 @@ import type {
   IncomingInvoiceEntity,
 } from '@billme/accounting-shared';
 import { CorrectionSettlementError, INCOMING_INVOICE_DOCUMENT_UPLOAD_BODY_LIMIT } from '@billme/accounting-shared';
-import { createPostgresProAccountingRepository, listDatevPartyRows, runJournalImport, freezeServerEurSnapshot, getServerEurReport, getServerEurSnapshot, listServerEurAnnexFacts, listServerEurCashFacts, listServerEurCashItems, listServerEurSnapshots, saveServerEurAnnexFact, saveServerEurCashFact, saveServerEurClassificationFact } from '@billme/server-data';
+import { createPostgresProAccountingRepository, getLedgerOverview, listDatevPartyRows, runJournalImport, freezeServerEurSnapshot, getServerEurReport, getServerEurSnapshot, listServerEurAnnexFacts, listServerEurCashFacts, listServerEurCashItems, listServerEurSnapshots, saveServerEurAnnexFact, saveServerEurCashFact, saveServerEurClassificationFact } from '@billme/server-data';
 import {
   accountingAccountMappingSchema,
   accountingBackfillPreviewSchema,
@@ -50,6 +50,8 @@ import {
   proPostManualJournalEntryArgsSchema,
   proImportJournalArgsSchema,
   proJournalImportResultSchema,
+  proLedgerOverviewArgsSchema,
+  proLedgerOverviewSchema,
   openItemSchema,
   standaloneAccountingSourceFactSchema,
   transactionSchema,
@@ -904,6 +906,23 @@ export const registerProAccountingRoutes = (app: FastifyInstance, options: ProAc
       const session = await requireMutationSession(app, request.headers.authorization);
       const { reason, ...input } = body;
       return repositoryFor(app).postManualJournalEntry(session.scope, { ...input, mutation: mutationFor(session, reason) });
+    },
+  });
+
+  // Overview figures from the journal: Erträge/Aufwand per month, money accounts, Aufwand per BWA cost type.
+  typedRoute(app, {
+    method: 'GET',
+    url: `${prefix}/analytics/overview`,
+    query: proLedgerOverviewArgsSchema,
+    response: proLedgerOverviewSchema,
+    async handler({ request, query }) {
+      const session = await requireProSession(app, request.headers.authorization);
+      try {
+        return await getLedgerOverview(requireDatabase(app), session.scope, query);
+      } catch (error) {
+        if (error instanceof Error && error.message === 'LEDGER_OVERVIEW_RANGE_INVALID') throw new ApiError(400, 'Zeitraum ungültig: von muss vor bis liegen.');
+        throw error;
+      }
     },
   });
 

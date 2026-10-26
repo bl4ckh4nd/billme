@@ -93,7 +93,11 @@ interface ReportsViewProps {
   onOpenInvoice?: (invoiceId: string) => void;
   onOpenIncomingInvoice?: (invoiceId: string) => void;
   onOpenJournalEntry?: (journalEntryId: string) => void;
+  /** Opens a tab on a range (both ISO dates), e.g. a month clicked in the overview. Applied whenever it changes. */
+  request?: { tab?: string; from?: string; to?: string };
 }
+
+const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
 
 const hasEurFilingProvenance = (report: unknown): boolean => {
   if (!report || typeof report !== 'object') return false;
@@ -122,7 +126,7 @@ export default function ReportsView(props: ReportsViewProps) {
   );
 }
 
-function ReportsViewContent({ dataAdapter, chartFramework, businessReportingProfile, profile = 'all', availableTabs, role = 'admin', onOpenTransaction, onOpenInvoice, onOpenIncomingInvoice, onOpenJournalEntry }: ReportsViewProps) {
+function ReportsViewContent({ dataAdapter, chartFramework, businessReportingProfile, profile = 'all', availableTabs, role = 'admin', onOpenTransaction, onOpenInvoice, onOpenIncomingInvoice, onOpenJournalEntry, request }: ReportsViewProps) {
   const visibleTabs = useMemo(() => {
     if (availableTabs) return availableTabs;
     if (businessReportingProfile) return reportTabsForBusinessProfile(businessReportingProfile);
@@ -143,6 +147,16 @@ function ReportsViewContent({ dataAdapter, chartFramework, businessReportingProf
       return defaultReportFilters(chartFramework ?? businessReportingProfile?.chart ?? current.chart, businessReportingProfile, current.asOfDate);
     });
   }, [businessReportingProfile?.chart, businessReportingProfile?.fiscalYearStart, businessReportingProfile?.legalForm, businessReportingProfile?.profitDetermination, chartFramework]);
+  // A requested range replaces the period (custom, no preset); a requested tab opens when the profile offers it.
+  // Keyed by its values: applied once per change (and again after a profile change resets the period above);
+  // a later change in the toolbar stays.
+  const requestKey = `${request?.tab ?? ''}|${request?.from ?? ''}|${request?.to ?? ''}`;
+  useEffect(() => {
+    if (request?.tab && visibleTabs.includes(request.tab as ReportTabId)) setActiveTab(request.tab as ReportTabId);
+    const from = request?.from; const to = request?.to;
+    if (!from || !to || !ISO_DATE.test(from) || !ISO_DATE.test(to) || from > to) return;
+    setFilters((current) => ({ ...current, asOfDate: to, periodFrom: from.slice(0, 7), periodTo: to.slice(0, 7), periodFromDate: from, periodToDate: to, periodPreset: undefined }));
+  }, [requestKey, businessReportingProfile?.chart, businessReportingProfile?.profitDetermination, chartFramework]);
   const [susaReport, setSusaReport] = useState<SusaReport | null>(null);
   const [balanceSheetPreview, setBalanceSheetPreview] = useState<BalanceSheetPreview | null>(null);
   const [eurReport, setEurReport] = useState<GuvReport | null>(null);

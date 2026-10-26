@@ -211,8 +211,8 @@ test('override validation rejects unknown catalog keys, empty fields and a forei
   assert.equal(await count(database, `SELECT COUNT(*)::int AS c FROM report_account_mappings`), 0);
 
   await assert.rejects(() => repo.upsertAccountMappingOverride(scope, { ...base, asOfDate: '2026-02-30' } as never), /REPORT_MAPPING_DATE_INVALID/);
-  // Years after the latest catalogue use it provisionally; years before the first catalogue stay refused.
-  await assert.rejects(() => repo.upsertAccountMappingOverride(scope, { ...base, asOfDate: '2024-01-01' } as never), /PUBLIC_REPORT_CATALOG_UNAVAILABLE:2024/);
+  // Years outside the catalogues use the nearest one provisionally (a taken-over 2024 checks against 2025): its positions only.
+  await assert.rejects(() => repo.upsertAccountMappingOverride(scope, { ...base, asOfDate: '2024-01-01', positionKey: 'arbitrary' } as never), /REPORT_POSITION_INVALID/);
 
   const saved: any = await repo.upsertAccountMappingOverride(scope, base as never);
   assert.equal(saved.reportType, 'bwa01');

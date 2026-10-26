@@ -307,7 +307,14 @@ export const PUBLIC_MANAGEMENT_GUV_SMALL_2026 = catalog('management-guv-small-20
  * (ReportSnapshot.catalogProvisional) until its own catalogue is added after checking §§ 266/275 HGB again.
  */
 export const LATEST_REPORT_CATALOG_YEAR = 2026;
-export const reportCatalogYear = (year: number): number => (year > LATEST_REPORT_CATALOG_YEAR ? LATEST_REPORT_CATALOG_YEAR : year);
+/**
+ * The oldest year with its own report catalogues. An earlier year (a bookkeeping taken over from another program)
+ * runs on these, marked provisional the same way: §§ 266/275 HGB have the 2025 structure since BilRUG (2016), and
+ * BWA 01 and the management GuV are no legal forms.
+ */
+export const EARLIEST_REPORT_CATALOG_YEAR = 2025;
+export const reportCatalogYear = (year: number): number =>
+  (year > LATEST_REPORT_CATALOG_YEAR ? LATEST_REPORT_CATALOG_YEAR : year < EARLIEST_REPORT_CATALOG_YEAR ? EARLIEST_REPORT_CATALOG_YEAR : year);
 
 export const getPublicReportCatalogs = (requestedYear: number): PublicReportCatalog[] => {
   const year = reportCatalogYear(requestedYear);

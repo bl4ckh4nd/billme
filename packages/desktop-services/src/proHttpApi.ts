@@ -988,6 +988,10 @@ export const createProWebClient = (config: ProWebClientConfig) => {
     importJournal(input: unknown) {
       return requestJson({ method: 'POST', body: input, parser: (payload) => payload }, '/api/v1/pro/accounting/journal/import');
     },
+    getLedgerOverview(query: { from?: string; to?: string }) {
+      const params = new URLSearchParams(Object.entries(query).filter(([, value]) => Boolean(value)) as Array<[string, string]>);
+      return requestJson({ parser: (payload) => payload }, `/api/v1/pro/accounting/analytics/overview${params.size ? `?${params}` : ''}`);
+    },
     prepareTaxExport(input: unknown) {
       return requestJson({ method: 'POST', body: input, parser: (payload) => payload }, '/api/v1/pro/accounting/tax-exports/prepare');
     },
@@ -1329,6 +1333,10 @@ export const createProHttpBillmeApi = ({ fallback, onInvoke, downloadBlob, ...cl
         case 'pro:importJournal': {
           const parsedArgs = ipcRoutes[key].args.parse(args);
           return ipcRoutes[key].result.parse(await client.importJournal(parsedArgs)) as IpcResult<K>;
+        }
+        case 'pro:getLedgerOverview': {
+          const parsedArgs = ipcRoutes[key].args.parse(args ?? {}) as IpcArgs<'pro:getLedgerOverview'>;
+          return ipcRoutes[key].result.parse(await client.getLedgerOverview(parsedArgs)) as IpcResult<K>;
         }
         case 'pro:prepareTaxExport': {
           const parsedArgs = ipcRoutes[key].args.parse(args);

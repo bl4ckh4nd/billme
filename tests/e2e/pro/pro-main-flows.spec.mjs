@@ -408,10 +408,12 @@ test('Übersicht shows the result of the month from the postings', async () => {
   await nav(page, 'Übersicht');
   await expect(page.getByRole('heading', { name: 'Übersicht', level: 1 })).toBeVisible();
   await expect(page.getByText('Umsatz im laufenden Monat')).toBeVisible();
-  const tile = page.getByText('Berichtskontenzuordnung unvollständig').locator('..');
+  // The tile reads the journal (Erträge minus Aufwand by BWA position): the result is there before any report mapping.
+  const tile = page.getByText('Erträge minus Aufwand laut Buchhaltung').locator('..');
   await expect(tile).toContainText(/Ergebnis/);
-  await expect(tile).not.toContainText('0,00 €');
+  await expect(tile).toContainText('1.000,00 €');
   await page.screenshot({ path: shot('01-overview'), fullPage: true });
+  // The management GuV itself still asks for its positions.
   const tabs = await openReports(page);
   await tabs.getByRole('button', { name: 'Management-GuV', exact: true }).click();
   await mapAccount(page, '8400', 'management-guv', 'Betriebliche Erlöse');
@@ -421,7 +423,7 @@ test('Übersicht shows the result of the month from the postings', async () => {
   const monthEnd = `${month}-${String(new Date(Number(month.slice(0, 4)), Number(month.slice(5, 7)), 0).getDate()).padStart(2, '0')}`;
   expect(await invokeDesktopIpc(page, 'pro:getGuvReport', { from: `${month}-01`, to: monthEnd })).toMatchObject({ blocking: false, netResult: 1000 });
   await nav(page, 'Übersicht');
-  await expect(page.getByText('Umsatz minus Aufwand').locator('..')).toContainText('1.000,00 €');
+  await expect(page.getByText('Erträge minus Aufwand laut Buchhaltung').locator('..')).toContainText('1.000,00 €');
 });
 
 test('exports the DATEV Buchungsstapel from the UI and leaves the file', async () => {

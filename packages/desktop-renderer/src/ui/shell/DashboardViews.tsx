@@ -20,6 +20,7 @@ import { getRendererProduct } from '../../runtime-api';
 import { useLiteVatReport, vatMonthPeriod } from '../../components/eur/LiteVatPanel';
 import { SkeletonLoader } from '../components/SkeletonLoader';
 import { useDashboardFlows, useMonthResult } from './dashboardFlows';
+import { LedgerExpenseCard, LedgerFlowsCard, LedgerYearsCard, useLedgerDashboard } from './LedgerDashboardCards';
 
 const formatCurrency = (amount: number) => {
   return new Intl.NumberFormat('de-DE', { style: 'currency', currency: 'EUR' }).format(amount);
@@ -172,7 +173,11 @@ const DashboardHomeContent: React.FC<ViewProps & { settings: AppSettings }> = ({
   const profitDetermination = settings.onboardingCompleted ? settings.businessReportingProfile?.profitDetermination : undefined;
   const flowsQuery = useDashboardFlows(profitDetermination);
   const flows = flowsQuery.data;
-  const monthResultQuery = useMonthResult(profitDetermination, settings.businessReportingProfile?.chart);
+  // Double entry in Pro: KPIs and charts from the journal, so a ledger without bank lines (journal import) shows too.
+  const ledgerMode = !isLite && profitDetermination === 'double_entry';
+  const ledger = useLedgerDashboard(ledgerMode);
+  const ledgerLiquidity = ledgerMode && ledger.base.data && ledger.base.data.liquidity.accounts.length > 0 ? ledger.base.data.liquidity : undefined;
+  const monthResultQuery = useMonthResult(ledgerMode ? undefined : profitDetermination, settings.businessReportingProfile?.chart);
   const monthResult = monthResultQuery.isError ? undefined : monthResultQuery.data;
   const [chartRange, setChartRange] = useState<'6' | '12'>('12');
   const [chartAsTable, setChartAsTable] = useState(false);
@@ -460,14 +465,14 @@ const DashboardHomeContent: React.FC<ViewProps & { settings: AppSettings }> = ({
           <Metric
             marker="tick"
             label="Liquidität"
-            value={flows?.liquidity == null ? '–' : formatCurrency(flows.liquidity)}
-            hint={flowsQuery.isError ? 'Konten nicht erreichbar' : !profitDetermination ? 'Nach der Einrichtung verfügbar' : !flows ? 'Wird geladen' : flows.liquidity == null ? (
+            value={ledgerLiquidity ? formatCurrency(ledgerLiquidity.total) : flows?.liquidity == null ? '–' : formatCurrency(flows.liquidity)}
+            hint={ledgerLiquidity ? `Laut Buchhaltung, ${ledgerLiquidity.accounts.length === 1 ? `Konto ${ledgerLiquidity.accounts[0]!.accountNumber}` : `${ledgerLiquidity.accounts.length} Geldkonten`}` : flowsQuery.isError ? 'Konten nicht erreichbar' : !profitDetermination ? 'Nach der Einrichtung verfügbar' : !flows ? 'Wird geladen' : flows.liquidity == null ? (
               <span>
                 Noch kein Konto angelegt.{' '}
                 <button type="button" className="font-medium text-foreground underline underline-offset-2" onClick={() => onNavigate('accounts')}>Bankkonto anlegen</button>
               </span>
             ) : `Anfangssaldo plus Kontoumsätze${flows.accountCount === 1 ? '' : `, ${flows.accountCount} Konten`}`}
-            tone={flows?.liquidity != null && flows.liquidity < 0 ? 'error' : 'neutral'}
+            tone={(ledgerLiquidity?.total ?? flows?.liquidity ?? 0) < 0 ? 'error' : 'neutral'}
           />
         </div>
         <div className="rounded-tile border border-border bg-surface px-4 py-3.5">
@@ -483,22 +488,31 @@ const DashboardHomeContent: React.FC<ViewProps & { settings: AppSettings }> = ({
           <Metric
             marker="tick"
             label={`Ergebnis ${nowMonthLabel}`}
-            value={monthResult == null ? '–' : formatCurrency(monthResult)}
-            hint={monthResultQuery.isError ? (/REPORT_CHART_MISMATCH/.test(String(monthResultQuery.error)) ? 'Kontenrahmen in Profil und Buchhaltung weichen ab' : /REPORT_MAPPING_BLOCKED/.test(String(monthResultQuery.error)) ? 'Berichtskontenzuordnung unvollständig' : 'Auswertung nicht erreichbar') : !profitDetermination ? 'Nach der Einrichtung verfügbar' : monthResult == null ? 'Wird geladen' : 'Umsatz minus Aufwand'}
-            tone={monthResult == null ? 'neutral' : monthResult >= 0 ? 'success' : 'error'}
+            value={ledgerMode ? (ledger.monthResult == null ? '–' : formatCurrency(ledger.monthResult)) : monthResult == null ? '–' : formatCurrency(monthResult)}
+            hint={ledgerMode ? (ledger.base.isError ? 'Buchhaltung nicht erreichbar' : ledger.monthResult == null ? 'Wird geladen' : ledger.monthBooked ? 'Erträge minus Aufwand laut Buchhaltung' : `Noch nichts gebucht im ${nowMonthLabel}`) : monthResultQuery.isError ? (/REPORT_CHART_MISMATCH/.test(String(monthResultQuery.error)) ? 'Kontenrahmen in Profil und Buchhaltung weichen ab' : /REPORT_MAPPING_BLOCKED/.test(String(monthResultQuery.error)) ? 'Berichtskontenzuordnung unvollständig' : 'Auswertung nicht erreichbar') : !profitDetermination ? 'Nach der Einrichtung verfügbar' : monthResult == null ? 'Wird geladen' : 'Umsatz minus Aufwand'}
+            tone={(ledgerMode ? ledger.monthResult : monthResult) == null || (ledgerMode && !ledger.monthBooked) ? 'neutral' : (ledgerMode ? ledger.monthResult! : monthResult!) >= 0 ? 'success' : 'error'}
           />
         </div>
         <div className="rounded-tile border border-border bg-surface px-4 py-3.5">
           <Metric
             marker="tick"
             label="Umsatzsteuer"
-            value={isLite && !vatQuery.data ? '–' : formatCurrency(taxEstimate.vat)}
-            hint={isLite ? vatQuery.isError ? 'Steuerdaten nicht erreichbar' : vatQuery.data?.preparationComplete ? `Vorbereitung ${taxEstimate.periodLabel}` : 'Vorbereitung enthält offene Prüfpunkte' : taxEstimate.vat > 0 ? `fällig am ${taxEstimate.dueLabel}, in ${taxDueDays} Tagen` : `Keine Zahllast für ${taxEstimate.periodLabel}`}
-            tone={taxEstimate.vat > 0 && taxDueDays <= 7 ? 'warning' : 'neutral'}
+            value={ledgerMode ? (ledger.vatPayable == null ? '–' : formatCurrency(ledger.vatPayable)) : isLite && !vatQuery.data ? '–' : formatCurrency(taxEstimate.vat)}
+            hint={ledgerMode ? (ledger.vat.isError ? 'UStVA nicht erreichbar' : ledger.vatPayable == null ? 'Wird geladen' : ledger.vatPayable > 0 ? `UStVA-Zahllast ${nowMonthLabel}, fällig in ${taxDueDays} Tagen` : `Keine Zahllast für ${nowMonthLabel} laut Buchhaltung`) : isLite ? vatQuery.isError ? 'Steuerdaten nicht erreichbar' : vatQuery.data?.preparationComplete ? `Vorbereitung ${taxEstimate.periodLabel}` : 'Vorbereitung enthält offene Prüfpunkte' : taxEstimate.vat > 0 ? `fällig am ${taxEstimate.dueLabel}, in ${taxDueDays} Tagen` : `Keine Zahllast für ${taxEstimate.periodLabel}`}
+            tone={(ledgerMode ? ledger.vatPayable ?? 0 : taxEstimate.vat) > 0 && taxDueDays <= 7 ? 'warning' : 'neutral'}
           />
         </div>
       </section>
 
+      {ledgerMode ? (
+        <>
+          <div className={twoColumns}>
+            <LedgerFlowsCard ledger={ledger} onNavigate={onNavigate} />
+            <LedgerExpenseCard ledger={ledger} onNavigate={onNavigate} />
+          </div>
+          <LedgerYearsCard ledger={ledger} onNavigate={onNavigate} />
+        </>
+      ) : (
       <div className={twoColumns}>
 
       {/* Income against expense, twelve months. */}
@@ -662,6 +676,7 @@ const DashboardHomeContent: React.FC<ViewProps & { settings: AppSettings }> = ({
       </section>
 
       </div>
+      )}
 
       <div className="grid grid-cols-[repeat(auto-fit,minmax(min(21.25rem,100%),1fr))] items-start gap-3.5">
 

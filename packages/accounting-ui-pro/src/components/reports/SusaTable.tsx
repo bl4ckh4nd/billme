@@ -70,7 +70,7 @@ export default function SusaTable({ report, onSelectRow, onRetry }: SusaTablePro
     <div className="space-y-3.5">
       <ReportSummaryCards
         cards={[
-          { label: 'Umgemappte Konten', value: String(report.quality.unmappedAccounts), tone: report.quality.unmappedAccounts ? 'warning' : 'ok' },
+          { label: 'Ungemappte Konten', value: String(report.quality.unmappedAccounts), tone: report.quality.unmappedAccounts ? 'warning' : 'ok' },
           { label: 'Konten', value: String(report.rows.length) },
           { label: 'Warnungen', value: String(report.quality.warnings), tone: report.quality.warnings ? 'warning' : 'ok' },
         ]}

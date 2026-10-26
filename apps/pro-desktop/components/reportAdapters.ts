@@ -177,6 +177,39 @@ export const mapEngineReport = (report: EngineReport | EngineReportPayload): Guv
   };
 };
 
+type GuvLine = GuvReport['lines'][number];
+
+/** The same range one year earlier; 29 February becomes the 28th. */
+export const previousYearRange = (range: { from?: string; to?: string }): { from?: string; to?: string } => {
+  const shift = (date?: string) => {
+    if (!date || !/^\d{4}-\d{2}-\d{2}$/.test(date)) return date;
+    const year = Number(date.slice(0, 4)) - 1;
+    const monthDay = date.slice(5) === '02-29' ? '02-28' : date.slice(5);
+    return `${year}-${monthDay}`;
+  };
+  return { from: shift(range.from), to: shift(range.to) };
+};
+
+/**
+ * Vorjahr column: every position gets the amount of the same position in the earlier report (0 when it had none);
+ * positions only the earlier report has are listed with 0 now, before the result line.
+ */
+export const withPreviousYear = (current: GuvReport, previous: GuvReport): GuvReport => {
+  const earlier = new Map<string, GuvLine>();
+  const collect = (lines: GuvLine[]) => lines.forEach((line) => { earlier.set(line.id, line); if (line.children) collect(line.children); });
+  collect(previous.lines);
+  const seen = new Set<string>();
+  const merge = (lines: GuvLine[]): GuvLine[] => lines.map((line) => {
+    seen.add(line.id);
+    return { ...line, amountCompare: earlier.get(line.id)?.amountCurrent ?? 0, ...(line.children ? { children: merge(line.children) } : {}) };
+  });
+  const lines = merge(current.lines);
+  const missing = previous.lines.filter((line) => !seen.has(line.id) && !line.isSubtotal).map((line) => ({ ...line, amountCurrent: 0, amountCompare: line.amountCurrent, children: undefined }));
+  const resultAt = lines.findIndex((line) => line.id === 'net-result');
+  if (missing.length) lines.splice(resultAt === -1 ? lines.length : resultAt, 0, ...missing);
+  return { ...current, lines, totalsCompare: previous.totals };
+};
+
 export const mapBwa01Report = mapEngineReport;
 export const mapManagementGuvReport = mapEngineReport;
 export const mapHgbGuvReport = mapEngineReport;

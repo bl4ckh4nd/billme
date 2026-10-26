@@ -70,10 +70,19 @@ const financeRoute = createRoute({
 
 const AccountingPage: React.FC = () => {
   const view = useRouterState({ select: (state) => (state.location.search as { view?: unknown }).view });
+  // `tab`, `from` and `to` open Auswertungen on a range (e.g. a month clicked in the overview).
+  const tab = useRouterState({ select: (state) => (state.location.search as { tab?: unknown }).tab });
+  const from = useRouterState({ select: (state) => (state.location.search as { from?: unknown }).from });
+  const to = useRouterState({ select: (state) => (state.location.search as { to?: unknown }).to });
+  const reportRequest = React.useMemo(() => ({
+    ...(typeof tab === 'string' ? { tab } : {}),
+    ...(typeof from === 'string' ? { from } : {}),
+    ...(typeof to === 'string' ? { to } : {}),
+  }), [tab, from, to]);
   const navigate = useNavigate();
   return (
     <React.Suspense fallback={null}>
-      <ProAccountingPage view={view ?? 'inbox'} onViewChange={(next) => void navigate({ to: '/accounting', search: { view: next } })} onOpenTaxFiling={() => void navigate({ to: '/tax-filing' })} />
+      <ProAccountingPage view={view ?? 'inbox'} reportRequest={reportRequest} onViewChange={(next) => void navigate({ to: '/accounting', search: { view: next } })} onOpenTaxFiling={() => void navigate({ to: '/tax-filing' })} />
     </React.Suspense>
   );
 };

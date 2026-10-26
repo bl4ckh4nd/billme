@@ -88,6 +88,8 @@ export interface GuvReport {
     expenses: number;
     result: number;
   };
+  /** Totals of the comparison period (Vorjahr) when the filter asks for one; the lines carry `amountCompare`. */
+  totalsCompare?: GuvReport['totals'];
   quality: {
     unmappedAccounts: ReportUnmappedAccount[];
     warnings: number;

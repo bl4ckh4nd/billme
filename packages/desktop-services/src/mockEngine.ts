@@ -4389,6 +4389,11 @@ const invoke = async <K extends IpcRouteKey>(key: K, args: IpcArgs<K>): Promise<
       throw new Error('Freie Buchungen sind in der Demo nicht möglich.');
     case 'pro:importJournal':
       throw new Error('Der Journal-Import ist in der Demo nicht möglich.');
+    case 'pro:getLedgerOverview': {
+      // The demo has no journal: an empty range, so the overview keeps its bank-line figures.
+      const range = (args ?? {}) as { from?: string; to?: string };
+      return { chart: 'SKR03', from: range.from ?? '', to: range.to ?? '', months: [], liquidity: { total: 0, accounts: [] }, expenseBreakdown: [], revenueBreakdown: [] } as IpcResult<K>;
+    }
     case 'pro:getBankLedgerReconciliation':
       return [] as IpcResult<K>;
     case 'pro:prepareTaxExport':

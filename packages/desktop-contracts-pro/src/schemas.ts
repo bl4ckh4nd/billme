@@ -708,6 +708,24 @@ export const proJournalImportResultSchema = z.object({
   })),
 });
 export type ProJournalImportResult = z.infer<typeof proJournalImportResultSchema>;
+/** Overview figures from the journal: Erträge/Aufwand per month, money accounts, Aufwand per BWA cost type. */
+export const proLedgerOverviewArgsSchema = z.object({
+  from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+  to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+});
+const ledgerOverviewBreakdownSchema = z.array(z.object({ key: z.string(), label: z.string(), value: z.number() }));
+export const proLedgerOverviewSchema = z.object({
+  chart: z.enum(['SKR03', 'SKR04']),
+  from: z.string(),
+  to: z.string(),
+  months: z.array(z.object({ period: z.string(), revenue: z.number(), expense: z.number(), result: z.number() })),
+  firstPeriod: z.string().optional(),
+  lastPeriod: z.string().optional(),
+  liquidity: z.object({ total: z.number(), accounts: z.array(z.object({ accountNumber: z.string(), name: z.string().optional(), balance: z.number() })) }),
+  expenseBreakdown: ledgerOverviewBreakdownSchema,
+  revenueBreakdown: ledgerOverviewBreakdownSchema,
+});
+export type ProLedgerOverview = z.infer<typeof proLedgerOverviewSchema>;
 export const proBankLedgerReconciliationRowSchema = z.object({
   ledgerAccountNumber: z.string(),
   bankAccountIds: z.array(z.string()),

@@ -534,6 +534,11 @@ export const incomingInvoiceDocuments = pgTable("incoming_invoice_documents", {
   createdAt: text("created_at"), updatedAt: text("updated_at"),
 });
 
+export const ledgerCheckDismissals = pgTable("ledger_check_dismissals", {
+  id: text("id"), tenantId: text("tenant_id"), checkKey: text("check_key"), subjectKey: text("subject_key"),
+  reason: text("reason"), dismissedBy: text("dismissed_by"), createdAt: text("created_at"),
+});
+
 export const bankTransactionDocuments = pgTable("bank_transaction_documents", {
   id: text("id"), tenantId: text("tenant_id"), bankTransactionId: text("bank_transaction_id"),
   originalFilename: text("original_filename"), mimeType: text("mime_type"), byteLength: integer("byte_length"),

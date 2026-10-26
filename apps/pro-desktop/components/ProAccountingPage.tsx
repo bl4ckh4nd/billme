@@ -331,6 +331,8 @@ const AREA_TITLES: Record<string, [string, string?]> = {
   receipts: ['Belege'],
   tax: ['Steuer', 'Umsatzsteuer, Fristen und Zahlungen ans Finanzamt.'],
   money: ['Geldkonten', 'Bank, Kasse und Kreditkarten je Jahr, aus dem Journal.'],
+  partners: ['Geschäftspartner', 'Woher das Geld kam und wohin es ging, aus dem Journal.'],
+  checks: ['Prüfungen', 'Auffälligkeiten im Journal prüfen, korrigieren oder als OK markieren.'],
 };
 
 /** `view` comes from the route (`/accounting?view=`) so the shell navigation can open an area directly. */
@@ -875,6 +877,18 @@ export const ProAccountingPage: React.FC<{ view?: unknown; onViewChange?: (view:
       getMoneyAccountYear(input) {
         return ipc.pro.getMoneyAccountYear(input);
       },
+      getLedgerChecks(range) {
+        return ipc.pro.getLedgerChecks(range);
+      },
+      setLedgerCheckDismissal(input) {
+        return runMutation(() => ipc.pro.setLedgerCheckDismissal(input));
+      },
+      getLedgerPartners(range) {
+        return ipc.pro.getLedgerPartners(range);
+      },
+      getLedgerPartnerDetail(input) {
+        return ipc.pro.getLedgerPartnerDetail(input);
+      },
       getBankLedgerReconciliation() {
         return ipc.pro.getBankLedgerReconciliation();
       },
@@ -1029,6 +1043,7 @@ export const ProAccountingPage: React.FC<{ view?: unknown; onViewChange?: (view:
           onViewChange={onViewChange}
           onOpenTaxFiling={onOpenTaxFiling}
           reportRequest={reportRequest}
+          onChecksChanged={() => void queryClient.invalidateQueries({ queryKey: ['pro-ledger-checks'] })}
           onManageRules={(transactionId) => { window.location.hash = `#/settings?section=rules${transactionId ? `&ruleFrom=${encodeURIComponent(transactionId)}` : ''}`; }}
           seed={seed}
           dataAdapter={dataAdapter}

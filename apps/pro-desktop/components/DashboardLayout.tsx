@@ -18,6 +18,7 @@ const NAV_ITEMS: readonly ProNavItem[] = [
   { id: 'dashboard', label: 'Übersicht', icon: KontorIcon.overview, group: 'Arbeit', to: '/' },
   { id: 'booking', label: 'Buchen', icon: KontorIcon.booking, group: 'Arbeit', to: '/accounting', search: { view: 'inbox' }, action: 'Nächsten Umsatz buchen' },
   { id: 'reconciliation', label: 'Bankabgleich', icon: KontorIcon.bank, group: 'Arbeit', to: '/accounting', search: { view: 'reconciliation' } },
+  { id: 'checks', label: 'Prüfungen', icon: KontorIcon.checks, group: 'Arbeit', to: '/accounting', search: { view: 'checks' }, profit: 'double_entry', subtitle: 'Auffälligkeiten im Journal' },
   { id: 'exceptions', label: 'Ausnahmen', icon: KontorIcon.exceptions, group: 'Arbeit', to: '/accounting', search: { view: 'exceptions' }, profit: 'double_entry' },
   { id: 'receipts', label: 'Belege', icon: KontorIcon.receipts, group: 'Arbeit', to: '/accounting', search: { view: 'receipts' }, profit: 'double_entry', subtitle: 'Eingang, Zuordnung und Prüfstatus' },
   { id: 'accounts', label: 'Konten', icon: KontorIcon.accounts, group: 'Arbeit', to: '/accounts' },
@@ -28,6 +29,7 @@ const NAV_ITEMS: readonly ProNavItem[] = [
   { id: 'articles', label: 'Leistungen', icon: KontorIcon.articles, group: 'Verkauf', to: '/articles' },
   { id: 'opos', label: 'Offene Posten', icon: KontorIcon.openItems, group: 'Verkauf', to: '/accounting', search: { view: 'opos' }, profit: 'double_entry', subtitle: 'Forderungen und Verbindlichkeiten' },
   { id: 'reports', label: 'Auswertungen', icon: KontorIcon.reports, group: 'Abschluss', to: '/accounting', search: { view: 'reports' } },
+  { id: 'partners', label: 'Geschäftspartner', icon: KontorIcon.clients, group: 'Abschluss', to: '/accounting', search: { view: 'partners' }, profit: 'double_entry', subtitle: 'Einnahmen und Ausgaben je Partner' },
   { id: 'money', label: 'Geldkonten', icon: KontorIcon.money, group: 'Abschluss', to: '/accounting', search: { view: 'money' }, profit: 'double_entry', subtitle: 'Bank, Kasse und Kreditkarten je Jahr' },
   // UStVA, ZM/OSS-Vorbereitung and the period locks they set live together under Steuer (pro-abschluss B8/B19).
   { id: 'tax', label: 'Steuer', icon: KontorIcon.tax, group: 'Abschluss', to: '/accounting', search: { view: 'tax' } },
@@ -52,6 +54,14 @@ export const DashboardLayout: React.FC<Props> = (props) => {
     enabled: profit === 'double_entry',
   });
   const openBankCount = profit === 'double_entry' ? bankRows?.filter((row) => row.status !== 'booked' && !row.linkedInvoiceId).length : undefined;
+  // Prüfungen: open errors and warnings of the journal checks (the Prüfungen view refreshes this key after a change).
+  const { data: checks } = useQuery({
+    queryKey: ['pro-ledger-checks'],
+    queryFn: () => ipc.pro.getLedgerChecks({}),
+    enabled: profit === 'double_entry',
+    staleTime: 60_000,
+  });
+  const openCheckCount = checks ? checks.openErrors + checks.openWarnings : undefined;
   // Until the profile is set up every area stays reachable.
   const navItems = React.useMemo(
     () =>
@@ -67,9 +77,10 @@ export const DashboardLayout: React.FC<Props> = (props) => {
           return profit === 'eur' ? { ...booking, to: '/eur', search: undefined } : booking;
         }
         if (profit === 'eur' && item.id === 'reconciliation') return { ...item, to: '/accounts', search: undefined };
+        if (item.id === 'checks') return { ...item, count: openCheckCount };
         return item;
       }),
-    [profit, chart, openEurCount, openBankCount],
+    [profit, chart, openEurCount, openBankCount, openCheckCount],
   );
   return <ShellDashboardLayout {...props} navItems={navItems} titlebar={<Titlebar />} />;
 };

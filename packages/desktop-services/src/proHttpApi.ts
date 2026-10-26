@@ -999,6 +999,21 @@ export const createProWebClient = (config: ProWebClientConfig) => {
       const params = new URLSearchParams(Object.entries(query).filter(([, value]) => value !== undefined).map(([key, value]) => [key, String(value)]));
       return requestJson({ parser: (payload) => payload }, `/api/v1/pro/accounting/analytics/money-account${params.size ? `?${params}` : ''}`);
     },
+    getLedgerChecks(query: { from?: string; to?: string }) {
+      const params = new URLSearchParams(Object.entries(query).filter(([, value]) => Boolean(value)) as Array<[string, string]>);
+      return requestJson({ parser: (payload) => payload }, `/api/v1/pro/accounting/analytics/checks${params.size ? `?${params}` : ''}`);
+    },
+    setLedgerCheckDismissal(input: unknown) {
+      return requestJson({ method: 'POST', body: input, parser: (payload) => payload }, '/api/v1/pro/accounting/analytics/checks/dismissal');
+    },
+    getLedgerPartners(query: { from?: string; to?: string }) {
+      const params = new URLSearchParams(Object.entries(query).filter(([, value]) => Boolean(value)) as Array<[string, string]>);
+      return requestJson({ parser: (payload) => payload }, `/api/v1/pro/accounting/analytics/partners${params.size ? `?${params}` : ''}`);
+    },
+    getLedgerPartnerDetail(query: { name: string; from?: string; to?: string }) {
+      const params = new URLSearchParams(Object.entries(query).filter(([, value]) => Boolean(value)) as Array<[string, string]>);
+      return requestJson({ parser: (payload) => payload }, `/api/v1/pro/accounting/analytics/partners/detail?${params}`);
+    },
     getLedgerOverview(query: { from?: string; to?: string }) {
       const params = new URLSearchParams(Object.entries(query).filter(([, value]) => Boolean(value)) as Array<[string, string]>);
       return requestJson({ parser: (payload) => payload }, `/api/v1/pro/accounting/analytics/overview${params.size ? `?${params}` : ''}`);
@@ -1356,6 +1371,22 @@ export const createProHttpBillmeApi = ({ fallback, onInvoke, downloadBlob, ...cl
         case 'pro:getMoneyAccountYear': {
           const parsedArgs = ipcRoutes[key].args.parse(args ?? {}) as IpcArgs<'pro:getMoneyAccountYear'>;
           return ipcRoutes[key].result.parse(await client.getMoneyAccountYear(parsedArgs)) as IpcResult<K>;
+        }
+        case 'pro:getLedgerChecks': {
+          const parsedArgs = ipcRoutes[key].args.parse(args ?? {}) as IpcArgs<'pro:getLedgerChecks'>;
+          return ipcRoutes[key].result.parse(await client.getLedgerChecks(parsedArgs)) as IpcResult<K>;
+        }
+        case 'pro:setLedgerCheckDismissal': {
+          const parsedArgs = ipcRoutes[key].args.parse(args);
+          return ipcRoutes[key].result.parse(await client.setLedgerCheckDismissal(parsedArgs)) as IpcResult<K>;
+        }
+        case 'pro:getLedgerPartners': {
+          const parsedArgs = ipcRoutes[key].args.parse(args ?? {}) as IpcArgs<'pro:getLedgerPartners'>;
+          return ipcRoutes[key].result.parse(await client.getLedgerPartners(parsedArgs)) as IpcResult<K>;
+        }
+        case 'pro:getLedgerPartnerDetail': {
+          const parsedArgs = ipcRoutes[key].args.parse(args) as IpcArgs<'pro:getLedgerPartnerDetail'>;
+          return ipcRoutes[key].result.parse(await client.getLedgerPartnerDetail(parsedArgs)) as IpcResult<K>;
         }
         case 'pro:getLedgerOverview': {
           const parsedArgs = ipcRoutes[key].args.parse(args ?? {}) as IpcArgs<'pro:getLedgerOverview'>;

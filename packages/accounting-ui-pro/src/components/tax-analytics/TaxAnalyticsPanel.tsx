@@ -3,6 +3,7 @@ import {
   Badge, BarList, Card, CardHeader, EmptyState, ErrorState, Metric, SegmentedControl, Select, Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
   TimeSeriesChart,
 } from '@billme/ui';
+import { readAnalysisYear, writeAnalysisYear } from '@billme/accounting-shared';
 import type { MoneyAccountYear, ProAccountingDataAdapter, TaxPayments, VatAnalytics } from '../../services/accountingDataAdapter';
 
 void React;
@@ -60,7 +61,10 @@ export default function TaxAnalyticsPanel({ dataAdapter, onSelectPeriod, onOpenE
         const last = Math.max(...account.accounts.map((entry) => entry.lastYear));
         const list = Number.isFinite(first) ? Array.from({ length: last - first + 1 }, (_, index) => last - index) : [new Date().getFullYear()];
         setYears(list);
-        setYear((value) => value || String(list[0]));
+        // The year chosen in another analysis, when this account history has it.
+        const shared = readAnalysisYear();
+        const preferred = shared === 'all' && list.length > 1 ? 'all' : shared && list.includes(Number(shared)) ? shared : String(list[0]);
+        setYear((value) => value || preferred);
       })
       .catch(() => { if (current) { const now = new Date().getFullYear(); setYears([now]); setYear((value) => value || String(now)); } });
     return () => { current = false; };
@@ -101,7 +105,7 @@ export default function TaxAnalyticsPanel({ dataAdapter, onSelectPeriod, onOpenE
           title={<span id="tax-analytics-heading">Steuer-Übersicht</span>}
           subtitle="Aus dem Journal: Umsatzsteuer je Zeitraum mit Fristen, Zahlungen ans Finanzamt, größte Steuerposten. Nur lesend."
           actions={
-            <Select aria-label="Steuerjahr" value={year} onChange={(event) => setYear(event.target.value)}>
+            <Select aria-label="Steuerjahr" value={year} onChange={(event) => { setYear(event.target.value); writeAnalysisYear(event.target.value); }}>
               {years.map((entry) => <option key={entry} value={String(entry)}>{entry}</option>)}
               {years.length > 1 ? <option value="all">Alle Jahre</option> : null}
             </Select>

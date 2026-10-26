@@ -87,6 +87,13 @@ import {
   proTaxPaymentsSchema,
   proMoneyAccountYearArgsSchema,
   proMoneyAccountYearSchema,
+  proLedgerChecksArgsSchema,
+  proLedgerChecksSchema,
+  proSetLedgerCheckDismissalArgsSchema,
+  proLedgerPartnersArgsSchema,
+  proLedgerPartnersSchema,
+  proLedgerPartnerDetailArgsSchema,
+  proLedgerPartnerDetailSchema,
   proBankLedgerReconciliationRowSchema,
   transitOverviewSchema,
   ruleApplicationPreviewSchema,
@@ -758,6 +765,13 @@ export const ipcRoutes = {
   'pro:getTaxPayments': { channel: 'pro:getTaxPayments', args: proTaxPaymentsArgsSchema, result: proTaxPaymentsSchema },
   /** One money account over a year: balances, flows per month, counter accounts, payees. */
   'pro:getMoneyAccountYear': { channel: 'pro:getMoneyAccountYear', args: proMoneyAccountYearArgsSchema, result: proMoneyAccountYearSchema },
+  /** Checks on the journal (Prüfungen) with their findings and what is marked OK. */
+  'pro:getLedgerChecks': { channel: 'pro:getLedgerChecks', args: proLedgerChecksArgsSchema, result: proLedgerChecksSchema },
+  /** Marks a finding of a check as OK (with a reason) or opens it again. */
+  'pro:setLedgerCheckDismissal': { channel: 'pro:setLedgerCheckDismissal', args: proSetLedgerCheckDismissalArgsSchema, result: z.object({ dismissed: z.boolean() }) },
+  /** Business partners behind the money movements of the journal. */
+  'pro:getLedgerPartners': { channel: 'pro:getLedgerPartners', args: proLedgerPartnersArgsSchema, result: proLedgerPartnersSchema },
+  'pro:getLedgerPartnerDetail': { channel: 'pro:getLedgerPartnerDetail', args: proLedgerPartnerDetailArgsSchema, result: proLedgerPartnerDetailSchema },
   'pro:getBankLedgerReconciliation': { channel: 'pro:getBankLedgerReconciliation', args: z.undefined(), result: z.array(proBankLedgerReconciliationRowSchema) },
   /** UStVA / ZM / OSS preparation (a frozen, export-only artifact; the UStVA soft-locks its months). Never a submission. */
   'pro:prepareTaxExport': { channel: 'pro:prepareTaxExport', args: proPrepareTaxExportArgsSchema, result: z.object({ run: z.object({ id: z.string() }).passthrough(), artifact: proTaxExportArtifactSchema, replayed: z.boolean() }) },

@@ -15,3 +15,4 @@ export * from './moneyAccounts';
 export * from './yearEndAccounts';
 export * from './accountingErrors';
 export * from './ustvaKennziffern';
+export * from './analysisYear';

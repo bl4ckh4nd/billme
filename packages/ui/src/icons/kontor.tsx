@@ -54,6 +54,8 @@ export const KontorIcon = {
   projects: kontorIcon('KontorProjects', ['M2 5h12v8H2z', 'M5.5 5V3h5v2', 'M2 9h12']),
   assets: kontorIcon('KontorAssets', ['M3 14V2h7v12', 'M10 6h3v8', 'M1.5 14h13', 'M5.5 5h2M5.5 8h2M5.5 11h2']),
   special: kontorIcon('KontorSpecial', ['M8 2 14 5 8 8 2 5 8 2Z', 'm2 8 6 3 6-3', 'm2 11 6 3 6-3']),
+  // Drawn for this app: a balance moving over time (Geldkonten).
+  money: kontorIcon('KontorMoney', ['M2 14h12', 'M2.5 10.5 6 7l2.5 2.5L13 5', 'M10.5 5H13v2.5']),
   accounts: kontorIcon('KontorAccounts', ['M2 4.5h12v9H2z', 'M3.5 4.5 11 2.5v2', 'M10.5 8h3.5v2.5h-3.5z']),
   templates: kontorIcon('KontorTemplates', ['M2 2h12v12H2z', 'M2 6h12', 'M7 6v8']),
   system: kontorIcon('KontorSystem', ['M2 3h12v8H2z', 'M8 11v3', 'M5 14h6']),

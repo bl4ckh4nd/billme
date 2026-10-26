@@ -466,7 +466,14 @@ const DashboardHomeContent: React.FC<ViewProps & { settings: AppSettings }> = ({
             marker="tick"
             label="Liquidität"
             value={ledgerLiquidity ? formatCurrency(ledgerLiquidity.total) : flows?.liquidity == null ? '–' : formatCurrency(flows.liquidity)}
-            hint={ledgerLiquidity ? `Laut Buchhaltung, ${ledgerLiquidity.accounts.length === 1 ? `Konto ${ledgerLiquidity.accounts[0]!.accountNumber}` : `${ledgerLiquidity.accounts.length} Geldkonten`}` : flowsQuery.isError ? 'Konten nicht erreichbar' : !profitDetermination ? 'Nach der Einrichtung verfügbar' : !flows ? 'Wird geladen' : flows.liquidity == null ? (
+            hint={ledgerLiquidity ? (
+              <span>
+                Laut Buchhaltung,{' '}
+                <button type="button" className="font-medium text-foreground underline underline-offset-2" onClick={() => onNavigate('accounting', { view: 'money' })}>
+                  {ledgerLiquidity.accounts.length === 1 ? `Konto ${ledgerLiquidity.accounts[0]!.accountNumber}` : `${ledgerLiquidity.accounts.length} Geldkonten`}
+                </button>
+              </span>
+            ) : flowsQuery.isError ? 'Konten nicht erreichbar' : !profitDetermination ? 'Nach der Einrichtung verfügbar' : !flows ? 'Wird geladen' : flows.liquidity == null ? (
               <span>
                 Noch kein Konto angelegt.{' '}
                 <button type="button" className="font-medium text-foreground underline underline-offset-2" onClick={() => onNavigate('accounts')}>Bankkonto anlegen</button>

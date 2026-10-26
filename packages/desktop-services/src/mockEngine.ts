@@ -4389,6 +4389,16 @@ const invoke = async <K extends IpcRouteKey>(key: K, args: IpcArgs<K>): Promise<
       throw new Error('Freie Buchungen sind in der Demo nicht möglich.');
     case 'pro:importJournal':
       throw new Error('Der Journal-Import ist in der Demo nicht möglich.');
+    case 'pro:getVatAnalytics': {
+      const range = args as { from: string; to: string; granularity?: 'month' | 'quarter' };
+      return { from: range.from, to: range.to, granularity: range.granularity ?? 'month', permanentExtension: false, periods: [], totals: { outputTax: 0, inputTax: 0, payable: 0 }, topLines: [] } as IpcResult<K>;
+    }
+    case 'pro:getTaxPayments': {
+      const range = args as { from: string; to: string };
+      return { from: range.from, to: range.to, topics: [] } as IpcResult<K>;
+    }
+    case 'pro:getMoneyAccountYear':
+      throw new Error('Geldkonten aus dem Journal gibt es in der Demo nicht.');
     case 'pro:getLedgerOverview': {
       // The demo has no journal: an empty range, so the overview keeps its bank-line figures.
       const range = (args ?? {}) as { from?: string; to?: string };

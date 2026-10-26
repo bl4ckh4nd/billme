@@ -64,7 +64,7 @@ test('a sole proprietor sets up Pro with double-entry bookkeeping, and settings 
   await nav.getByRole('button', { name: 'Auswertungen' }).click();
   const tabs = page.getByRole('main').getByRole('group', { name: 'Bericht' });
   for (const label of ['SuSa', 'BWA01', 'Management-GuV', 'HGB-GuV', 'Bilanz']) await expect(tabs.getByRole('button', { name: label, exact: true })).toBeVisible();
-  await nav.getByRole('button', { name: 'Konten' }).click();
+  await nav.getByRole('button', { name: 'Konten', exact: true }).click();
   await expect(page.getByRole('heading', { name: 'Konten', level: 1 })).toBeVisible();
   await expect(page.getByRole('main')).not.toContainText('EÜR');
   await expect(page.getByRole('radio', { name: 'EÜR klassifizieren' }).or(page.getByRole('button', { name: 'EÜR klassifizieren' }))).toHaveCount(0);

@@ -81,6 +81,12 @@ import {
   proJournalImportResultSchema,
   proLedgerOverviewArgsSchema,
   proLedgerOverviewSchema,
+  proVatAnalyticsArgsSchema,
+  proVatAnalyticsSchema,
+  proTaxPaymentsArgsSchema,
+  proTaxPaymentsSchema,
+  proMoneyAccountYearArgsSchema,
+  proMoneyAccountYearSchema,
   proBankLedgerReconciliationRowSchema,
   transitOverviewSchema,
   ruleApplicationPreviewSchema,
@@ -746,6 +752,12 @@ export const ipcRoutes = {
   'pro:importJournal': { channel: 'pro:importJournal', args: proImportJournalArgsSchema, result: proJournalImportResultSchema },
   /** Overview figures from the journal (also without bank lines): months, money accounts, Aufwand per BWA cost type. */
   'pro:getLedgerOverview': { channel: 'pro:getLedgerOverview', args: proLedgerOverviewArgsSchema, result: proLedgerOverviewSchema },
+  /** UStVA per month or quarter from the journal, with Frist and status, and the largest tax lines. */
+  'pro:getVatAnalytics': { channel: 'pro:getVatAnalytics', args: proVatAnalyticsArgsSchema, result: proVatAnalyticsSchema },
+  /** Payments to and from the tax offices per topic (Umsatzsteuer, Lohnsteuer, Ertragsteuern, sonstige). */
+  'pro:getTaxPayments': { channel: 'pro:getTaxPayments', args: proTaxPaymentsArgsSchema, result: proTaxPaymentsSchema },
+  /** One money account over a year: balances, flows per month, counter accounts, payees. */
+  'pro:getMoneyAccountYear': { channel: 'pro:getMoneyAccountYear', args: proMoneyAccountYearArgsSchema, result: proMoneyAccountYearSchema },
   'pro:getBankLedgerReconciliation': { channel: 'pro:getBankLedgerReconciliation', args: z.undefined(), result: z.array(proBankLedgerReconciliationRowSchema) },
   /** UStVA / ZM / OSS preparation (a frozen, export-only artifact; the UStVA soft-locks its months). Never a submission. */
   'pro:prepareTaxExport': { channel: 'pro:prepareTaxExport', args: proPrepareTaxExportArgsSchema, result: z.object({ run: z.object({ id: z.string() }).passthrough(), artifact: proTaxExportArtifactSchema, replayed: z.boolean() }) },

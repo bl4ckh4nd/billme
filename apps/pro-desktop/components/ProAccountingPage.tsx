@@ -329,10 +329,12 @@ const AREA_TITLES: Record<string, [string, string?]> = {
   opos: ['Offene Posten', 'Forderungen und Verbindlichkeiten'],
   special: ['Sonderbuchungen', 'Korrekturen und Abschlussbuchungen.'],
   receipts: ['Belege'],
+  tax: ['Steuer', 'Umsatzsteuer, Fristen und Zahlungen ans Finanzamt.'],
+  money: ['Geldkonten', 'Bank, Kasse und Kreditkarten je Jahr, aus dem Journal.'],
 };
 
 /** `view` comes from the route (`/accounting?view=`) so the shell navigation can open an area directly. */
-export const ProAccountingPage: React.FC<{ view?: unknown; onViewChange?: (view: string) => void; onOpenTaxFiling?: () => void; reportRequest?: { tab?: string; from?: string; to?: string } }> = ({ view, onViewChange, onOpenTaxFiling, reportRequest }) => {
+export const ProAccountingPage: React.FC<{ view?: unknown; onViewChange?: (view: string) => void; onOpenTaxFiling?: () => void; reportRequest?: { tab?: string; from?: string; to?: string; account?: string; year?: string } }> = ({ view, onViewChange, onOpenTaxFiling, reportRequest }) => {
   const queryClient = useQueryClient();
   const { data: settings } = useSettingsQuery();
   const settingsRef = React.useRef(settings);
@@ -863,6 +865,15 @@ export const ProAccountingPage: React.FC<{ view?: unknown; onViewChange?: (view:
       },
       importJournal(input) {
         return ipc.pro.importJournal(input);
+      },
+      getVatAnalytics(range) {
+        return ipc.pro.getVatAnalytics(range);
+      },
+      getTaxPayments(range) {
+        return ipc.pro.getTaxPayments(range);
+      },
+      getMoneyAccountYear(input) {
+        return ipc.pro.getMoneyAccountYear(input);
       },
       getBankLedgerReconciliation() {
         return ipc.pro.getBankLedgerReconciliation();

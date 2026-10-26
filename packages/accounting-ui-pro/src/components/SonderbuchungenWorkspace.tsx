@@ -4,7 +4,8 @@ import { JournalEntryDetailModal } from './JournalEntryDetail';
 import PeriodLockPanel from './PeriodLockPanel';
 import ManualEntryPanel from './ManualEntryPanel';
 import JournalImportPanel from './JournalImportPanel';
-import UstvaPanel from './UstvaPanel';
+import UstvaPanel, { type UstvaPanelRequest } from './UstvaPanel';
+import TaxAnalyticsPanel from './tax-analytics/TaxAnalyticsPanel';
 import FiscalYearClosePanel from './FiscalYearClosePanel';
 import type { BusinessReportingProfile } from '../domain/reportTypes';
 import { userFacingReference } from '../domain/references';
@@ -347,6 +348,7 @@ export default function SonderbuchungenWorkspace({ dataAdapter, role = 'admin', 
   const [historyError, setHistoryError] = useState<string | null>(null);
   // UStVA preparation and the fiscal-year close soft-lock months on the server; reload the month list after both.
   const [periodRefresh, setPeriodRefresh] = useState(0);
+  const [ustvaRequest, setUstvaRequest] = useState<UstvaPanelRequest | undefined>();
   const historyRequestId = useRef(0);
   const mounted = useRef(true);
   const canMutate = permissionContextForRole(role).canMutate;
@@ -606,7 +608,8 @@ export default function SonderbuchungenWorkspace({ dataAdapter, role = 'admin', 
       ) : null}
       {area === 'tax' ? (
         <>
-      <UstvaPanel dataAdapter={dataAdapter} initialMonth={localToday().slice(0, 7)} onOpenEntry={setSelectedJournalEntryId} />
+      <TaxAnalyticsPanel dataAdapter={dataAdapter} onOpenEntry={setSelectedJournalEntryId} onSelectPeriod={(period) => setUstvaRequest({ ...period, key: Date.now() })} />
+      <UstvaPanel dataAdapter={dataAdapter} initialMonth={localToday().slice(0, 7)} onOpenEntry={setSelectedJournalEntryId} request={ustvaRequest} />
       <section aria-labelledby="tax-preparation-heading">
         <Card padding="none">
           <CardHeader className={cardHeadClass} title={<span id="tax-preparation-heading">Steuerliche Vorbereitung / Export</span>} subtitle="Friert die Meldung des Zeitraums als Prüfstand ein (UStVA mit Kennzahlen, ZM je USt-IdNr., OSS) und sperrt die Monate einer UStVA weich. Keine Übermittlung an ELSTER oder das BZSt." />

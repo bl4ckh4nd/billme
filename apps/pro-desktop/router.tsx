@@ -74,11 +74,16 @@ const AccountingPage: React.FC = () => {
   const tab = useRouterState({ select: (state) => (state.location.search as { tab?: unknown }).tab });
   const from = useRouterState({ select: (state) => (state.location.search as { from?: unknown }).from });
   const to = useRouterState({ select: (state) => (state.location.search as { to?: unknown }).to });
+  // `account` and `year` open Geldkonten on one account and year.
+  const account = useRouterState({ select: (state) => (state.location.search as { account?: unknown }).account });
+  const year = useRouterState({ select: (state) => (state.location.search as { year?: unknown }).year });
   const reportRequest = React.useMemo(() => ({
     ...(typeof tab === 'string' ? { tab } : {}),
     ...(typeof from === 'string' ? { from } : {}),
     ...(typeof to === 'string' ? { to } : {}),
-  }), [tab, from, to]);
+    ...(typeof account === 'string' || typeof account === 'number' ? { account: String(account) } : {}),
+    ...(typeof year === 'string' || typeof year === 'number' ? { year: String(year) } : {}),
+  }), [tab, from, to, account, year]);
   const navigate = useNavigate();
   return (
     <React.Suspense fallback={null}>

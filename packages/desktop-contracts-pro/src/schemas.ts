@@ -726,6 +726,58 @@ export const proLedgerOverviewSchema = z.object({
   revenueBreakdown: ledgerOverviewBreakdownSchema,
 });
 export type ProLedgerOverview = z.infer<typeof proLedgerOverviewSchema>;
+/** UStVA per month or quarter with Frist and status, plus the largest tax lines of the range. */
+export const proVatAnalyticsArgsSchema = z.object({ from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/), to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/), granularity: z.enum(['month', 'quarter']).optional() });
+export const proVatAnalyticsSchema = z.object({
+  from: z.string(),
+  to: z.string(),
+  granularity: z.enum(['month', 'quarter']),
+  permanentExtension: z.boolean(),
+  periods: z.array(z.object({
+    key: z.string(), from: z.string(), to: z.string(), outputTax: z.number(), inputTax: z.number(), payable: z.number(), lineCount: z.number().int(),
+    deadline: z.string(), preparedAt: z.string().optional(), status: z.enum(['prepared', 'due', 'open', 'past']),
+  })),
+  totals: z.object({ outputTax: z.number(), inputTax: z.number(), payable: z.number() }),
+  topLines: z.array(z.object({
+    entryId: z.string().optional(), entryNumber: z.number().int().optional(), postingDate: z.string(), reference: z.string().optional(),
+    kennziffer: z.string(), direction: z.string(), taxCaseKey: z.string(), netAmount: z.number(), taxAmount: z.number(),
+  })),
+});
+export type ProVatAnalytics = z.infer<typeof proVatAnalyticsSchema>;
+/** Payments to and from the tax offices per topic, from entries that move a money account. */
+export const proTaxPaymentsArgsSchema = z.object({ from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/), to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/) });
+export const proTaxPaymentsSchema = z.object({
+  from: z.string(),
+  to: z.string(),
+  topics: z.array(z.object({
+    key: z.enum(['vat', 'wage', 'income', 'other']),
+    label: z.string(),
+    accounts: z.array(z.object({ accountNumber: z.string(), name: z.string().optional() })),
+    paid: z.number(), refunded: z.number(), net: z.number(),
+    months: z.array(z.object({ period: z.string(), paid: z.number(), refunded: z.number() })),
+    entries: z.array(z.object({ entryId: z.string(), entryNumber: z.number().int(), postingDate: z.string(), reference: z.string().optional(), bookingText: z.string(), accountNumber: z.string(), amount: z.number() })),
+  })),
+});
+export type ProTaxPayments = z.infer<typeof proTaxPaymentsSchema>;
+/** One money account (Bank, Kasse, Kreditkarte) over a year. */
+export const proMoneyAccountYearArgsSchema = z.object({ accountNumber: z.string().regex(/^\d{4,8}$/).optional(), year: z.number().int().min(1990).max(2100).optional() });
+export const proMoneyAccountYearSchema = z.object({
+  chart: z.enum(['SKR03', 'SKR04']),
+  accounts: z.array(z.object({ accountNumber: z.string(), name: z.string().optional(), firstYear: z.number().int(), lastYear: z.number().int() })),
+  accountNumber: z.string(),
+  name: z.string().optional(),
+  year: z.number().int(),
+  openingBalance: z.number(),
+  closingBalance: z.number(),
+  inflow: z.number(),
+  outflow: z.number(),
+  entryCount: z.number().int(),
+  months: z.array(z.object({ period: z.string(), inflow: z.number(), outflow: z.number(), balance: z.number() })),
+  counterAccounts: z.array(z.object({ accountNumber: z.string(), name: z.string().optional(), position: z.string().optional(), inflow: z.number(), outflow: z.number(), count: z.number().int() })),
+  topInflows: z.array(z.object({ label: z.string(), amount: z.number(), count: z.number().int() })),
+  topOutflows: z.array(z.object({ label: z.string(), amount: z.number(), count: z.number().int() })),
+});
+export type ProMoneyAccountYear = z.infer<typeof proMoneyAccountYearSchema>;
 export const proBankLedgerReconciliationRowSchema = z.object({
   ledgerAccountNumber: z.string(),
   bankAccountIds: z.array(z.string()),

@@ -22,7 +22,7 @@ import type {
   IncomingInvoiceEntity,
 } from '@billme/accounting-shared';
 import { CorrectionSettlementError, INCOMING_INVOICE_DOCUMENT_UPLOAD_BODY_LIMIT } from '@billme/accounting-shared';
-import { createPostgresProAccountingRepository, getLedgerOverview, listDatevPartyRows, runJournalImport, freezeServerEurSnapshot, getServerEurReport, getServerEurSnapshot, listServerEurAnnexFacts, listServerEurCashFacts, listServerEurCashItems, listServerEurSnapshots, saveServerEurAnnexFact, saveServerEurCashFact, saveServerEurClassificationFact } from '@billme/server-data';
+import { createPostgresProAccountingRepository, getLedgerOverview, getMoneyAccountYear, getTaxPayments, getVatAnalytics, listDatevPartyRows, runJournalImport, freezeServerEurSnapshot, getServerEurReport, getServerEurSnapshot, listServerEurAnnexFacts, listServerEurCashFacts, listServerEurCashItems, listServerEurSnapshots, saveServerEurAnnexFact, saveServerEurCashFact, saveServerEurClassificationFact } from '@billme/server-data';
 import {
   accountingAccountMappingSchema,
   accountingBackfillPreviewSchema,
@@ -52,6 +52,12 @@ import {
   proJournalImportResultSchema,
   proLedgerOverviewArgsSchema,
   proLedgerOverviewSchema,
+  proVatAnalyticsArgsSchema,
+  proVatAnalyticsSchema,
+  proTaxPaymentsArgsSchema,
+  proTaxPaymentsSchema,
+  proMoneyAccountYearArgsSchema,
+  proMoneyAccountYearSchema,
   openItemSchema,
   standaloneAccountingSourceFactSchema,
   transactionSchema,
@@ -923,6 +929,45 @@ export const registerProAccountingRoutes = (app: FastifyInstance, options: ProAc
         if (error instanceof Error && error.message === 'LEDGER_OVERVIEW_RANGE_INVALID') throw new ApiError(400, 'Zeitraum ungültig: von muss vor bis liegen.');
         throw error;
       }
+    },
+  });
+
+  const analyticsError = (error: unknown): never => {
+    if (error instanceof Error && error.message === 'ANALYTICS_RANGE_INVALID') throw new ApiError(400, 'Zeitraum ungültig: von muss vor bis liegen.');
+    if (error instanceof Error && error.message === 'MONEY_ACCOUNT_INVALID') throw new ApiError(400, 'Kein Geldkonto (Kasse, Bank, Kreditkarte) mit Buchungen.');
+    throw error;
+  };
+  // UStVA per month or quarter from the journal, with Frist and status.
+  typedRoute(app, {
+    method: 'GET',
+    url: `${prefix}/analytics/vat`,
+    query: proVatAnalyticsArgsSchema,
+    response: proVatAnalyticsSchema,
+    async handler({ request, query }) {
+      const session = await requireProSession(app, request.headers.authorization);
+      return getVatAnalytics(requireDatabase(app), session.scope, query).catch(analyticsError);
+    },
+  });
+  // Payments to and from the tax offices per topic.
+  typedRoute(app, {
+    method: 'GET',
+    url: `${prefix}/analytics/tax-payments`,
+    query: proTaxPaymentsArgsSchema,
+    response: proTaxPaymentsSchema,
+    async handler({ request, query }) {
+      const session = await requireProSession(app, request.headers.authorization);
+      return getTaxPayments(requireDatabase(app), session.scope, query).catch(analyticsError);
+    },
+  });
+  // One money account over a year.
+  typedRoute(app, {
+    method: 'GET',
+    url: `${prefix}/analytics/money-account`,
+    query: proMoneyAccountYearArgsSchema.extend({ year: z.coerce.number().int().min(1990).max(2100).optional() }),
+    response: proMoneyAccountYearSchema,
+    async handler({ request, query }) {
+      const session = await requireProSession(app, request.headers.authorization);
+      return getMoneyAccountYear(requireDatabase(app), session.scope, query).catch(analyticsError);
     },
   });
 

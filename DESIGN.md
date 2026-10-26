@@ -645,7 +645,8 @@ Layout above.
 - **Metric** — Label, tabular figure and hint; a tone tick plus the label carries status, never colour alone. The `sparkline` slot sits beside the figure.
 - **Sparkline** — Word-sized trend line (no axes) for a `Metric` or a figure; the last point is the current period, and its label names the latest direction for screen readers. Only where a real per-period series exists.
 - **Avatar**, **Kbd**, **Spinner** — Initials, key caps and the only loading spinner.
-- **BarChart** — Single-series SVG bars with a hover value and a screen-reader table; the current period is the one lime bar.
+- **BarChart** — SVG bars for one measure, optionally a hatched comparison series and a dashed reference line, with a hover value and a screen-reader table; the current period is the one lime bar.
+- **TimeSeriesChart** — Figures over time on Recharts (the only place Recharts is styled): `solid` bars for the measure in focus, `hatched` for the context, `downward` series below the zero line (Erträge up, Aufwand down in one stack) and a `foreground-secondary` line for a balance. Lime only on `highlightKey`; no animation; `onSelect` opens a period, and the screen-reader table carries a button per period for it.
 - **Donut** — 134px ring with the total in the centre (value above its label) and the legend to its right; segments are `accent`, then `donut-2` … `donut-5`.
 
 Overlay motion is shared: `useExitTransition` keeps a closing overlay mounted for its exit, and `useAnchoredPosition` places a portalled overlay and sets its `--origin`.

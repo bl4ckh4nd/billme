@@ -9,6 +9,8 @@ export * from './database.js';
 export * from './importDesktop.js';
 export * from './migrations.js';
 export * from './proAccounting.js';
+export * from './journalImport.js';
+export * from './ledgerOverview.js';
 export * from './drizzle.js';
 export * from './schema.js';
 export * from './taxFilingRepository.js';

@@ -22,7 +22,7 @@ import type {
   IncomingInvoiceEntity,
 } from '@billme/accounting-shared';
 import { CorrectionSettlementError, INCOMING_INVOICE_DOCUMENT_UPLOAD_BODY_LIMIT } from '@billme/accounting-shared';
-import { createPostgresProAccountingRepository, listDatevPartyRows, freezeServerEurSnapshot, getServerEurReport, getServerEurSnapshot, listServerEurAnnexFacts, listServerEurCashFacts, listServerEurCashItems, listServerEurSnapshots, saveServerEurAnnexFact, saveServerEurCashFact, saveServerEurClassificationFact } from '@billme/server-data';
+import { createPostgresProAccountingRepository, getLedgerOverview, listDatevPartyRows, runJournalImport, freezeServerEurSnapshot, getServerEurReport, getServerEurSnapshot, listServerEurAnnexFacts, listServerEurCashFacts, listServerEurCashItems, listServerEurSnapshots, saveServerEurAnnexFact, saveServerEurCashFact, saveServerEurClassificationFact } from '@billme/server-data';
 import {
   accountingAccountMappingSchema,
   accountingBackfillPreviewSchema,
@@ -48,6 +48,10 @@ import {
   ledgerBalanceRowSchema,
   proBankLedgerReconciliationRowSchema,
   proPostManualJournalEntryArgsSchema,
+  proImportJournalArgsSchema,
+  proJournalImportResultSchema,
+  proLedgerOverviewArgsSchema,
+  proLedgerOverviewSchema,
   openItemSchema,
   standaloneAccountingSourceFactSchema,
   transactionSchema,
@@ -98,6 +102,8 @@ const serviceFor = (app: FastifyInstance) => {
   return { ...createProAccountingService(legacyRepository), ...createProAccountingAssetService(repository), repository };
 };
 
+/** A 20 MB journal file as base64 plus the JSON around it. */
+const JOURNAL_IMPORT_BODY_LIMIT = 28_500_000;
 const reasonSchema = z.string().trim().min(1, 'reason is required');
 const decodeIncomingInvoiceDocument = (value: string): Uint8Array => {
   if (value.length % 4 !== 0 || !/^[A-Za-z0-9+/]+={0,2}$/.test(value)) throw new Error('INCOMING_INVOICE_DOCUMENT_INVALID_BASE64');
@@ -900,6 +906,37 @@ export const registerProAccountingRoutes = (app: FastifyInstance, options: ProAc
       const session = await requireMutationSession(app, request.headers.authorization);
       const { reason, ...input } = body;
       return repositoryFor(app).postManualJournalEntry(session.scope, { ...input, mutation: mutationFor(session, reason) });
+    },
+  });
+
+  // Overview figures from the journal: Erträge/Aufwand per month, money accounts, Aufwand per BWA cost type.
+  typedRoute(app, {
+    method: 'GET',
+    url: `${prefix}/analytics/overview`,
+    query: proLedgerOverviewArgsSchema,
+    response: proLedgerOverviewSchema,
+    async handler({ request, query }) {
+      const session = await requireProSession(app, request.headers.authorization);
+      try {
+        return await getLedgerOverview(requireDatabase(app), session.scope, query);
+      } catch (error) {
+        if (error instanceof Error && error.message === 'LEDGER_OVERVIEW_RANGE_INVALID') throw new ApiError(400, 'Zeitraum ungültig: von muss vor bis liegen.');
+        throw error;
+      }
+    },
+  });
+
+  // Journal import: a DATEV Buchungsstapel or a journal CSV of another bookkeeping; a dry run checks, the real run books all or nothing.
+  typedRoute(app, {
+    method: 'POST',
+    url: `${prefix}/journal/import`,
+    body: proImportJournalArgsSchema,
+    bodyLimit: JOURNAL_IMPORT_BODY_LIMIT,
+    response: proJournalImportResultSchema,
+    async handler({ request, body }) {
+      const session = await requireMutationSession(app, request.headers.authorization);
+      const { reason, ...input } = body;
+      return runJournalImport(requireDatabase(app), session.scope, { ...input, mutation: mutationFor(session, reason) });
     },
   });
 

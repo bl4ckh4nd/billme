@@ -7,6 +7,7 @@ import {
   userFacingReference,
   NATIVE_EUR_2025_RANGE,
   reportDateRange,
+  type GuvReport,
   type ReportFilterState,
   type ProAccountingDataAdapter,
   type ProAccountingSeed,
@@ -44,6 +45,8 @@ import {
   mapBwa01Report,
   mapEurReport,
   mapGuvReport,
+  previousYearRange,
+  withPreviousYear,
   mapHgbGuvReport,
   mapHgbBilanzReport,
   mapManagementGuvReport,
@@ -71,6 +74,14 @@ const withGermanErrors = <T extends object>(adapter: T): T => {
 
 const reportPeriodRange = (filters: ReportFilterState): { from?: string; to?: string } =>
   reportDateRange(filters);
+
+/** Loads a GuV-like report for the filter's range and, with "Vergleich: Vorjahr", the same range one year earlier. */
+const withComparison = async (filters: ReportFilterState, load: (range: { from?: string; to?: string }) => Promise<GuvReport>): Promise<GuvReport> => {
+  const range = reportPeriodRange(filters);
+  const current = await load(range);
+  if (filters.compareMode !== 'prev_year' || !range.from || !range.to) return current;
+  return withPreviousYear(current, await load(previousYearRange(range)));
+};
 
 const nativeEurRange = (taxYear: number) => taxYear === 2026
   ? { from: '2026-01-01', to: '2026-12-31', label: '2026' }
@@ -321,7 +332,7 @@ const AREA_TITLES: Record<string, [string, string?]> = {
 };
 
 /** `view` comes from the route (`/accounting?view=`) so the shell navigation can open an area directly. */
-export const ProAccountingPage: React.FC<{ view?: unknown; onViewChange?: (view: string) => void; onOpenTaxFiling?: () => void }> = ({ view, onViewChange, onOpenTaxFiling }) => {
+export const ProAccountingPage: React.FC<{ view?: unknown; onViewChange?: (view: string) => void; onOpenTaxFiling?: () => void; reportRequest?: { tab?: string; from?: string; to?: string } }> = ({ view, onViewChange, onOpenTaxFiling, reportRequest }) => {
   const queryClient = useQueryClient();
   const { data: settings } = useSettingsQuery();
   const settingsRef = React.useRef(settings);
@@ -627,9 +638,7 @@ export const ProAccountingPage: React.FC<{ view?: unknown; onViewChange?: (view:
       },
       async getGuvReport(filters) {
         activeReportFilters = filters;
-        const range = reportPeriodRange(filters);
-        const report = await ipc.pro.getGuvReport(range);
-        return mapGuvReport(report);
+        return withComparison(filters, async (range) => mapGuvReport(await ipc.pro.getGuvReport(range)));
       },
       async getEurReport(filters) {
         const year = Number(filters.asOfDate.slice(0, 4));
@@ -697,18 +706,15 @@ export const ProAccountingPage: React.FC<{ view?: unknown; onViewChange?: (view:
       },
       async getBwaReport(filters) {
         activeReportFilters = filters;
-        const report = await runReportingReport('bwa01', reportPeriodRange(filters));
-        return mapBwa01Report(report as ReportResult<Bwa01Report>);
+        return withComparison(filters, async (range) => mapBwa01Report(await runReportingReport('bwa01', range) as ReportResult<Bwa01Report>));
       },
       async getManagementGuvReport(filters) {
         activeReportFilters = filters;
-        const report = await runReportingReport('management-guv', reportPeriodRange(filters));
-        return mapManagementGuvReport(report as ReportResult<ManagementGuvReport>);
+        return withComparison(filters, async (range) => mapManagementGuvReport(await runReportingReport('management-guv', range) as ReportResult<ManagementGuvReport>));
       },
       async getHgbGuvReport(filters) {
         activeReportFilters = filters;
-        const report = await runReportingReport('hgb-guv', reportPeriodRange(filters));
-        return mapHgbGuvReport(report as ReportResult<HgbGuvReport>);
+        return withComparison(filters, async (range) => mapHgbGuvReport(await runReportingReport('hgb-guv', range) as ReportResult<HgbGuvReport>));
       },
       async getBalanceSheetPreview(filters) {
         const pro = ipc.pro;
@@ -854,6 +860,9 @@ export const ProAccountingPage: React.FC<{ view?: unknown; onViewChange?: (view:
       },
       postManualJournalEntry(input) {
         return ipc.pro.postManualJournalEntry(input);
+      },
+      importJournal(input) {
+        return ipc.pro.importJournal(input);
       },
       getBankLedgerReconciliation() {
         return ipc.pro.getBankLedgerReconciliation();
@@ -1008,6 +1017,7 @@ export const ProAccountingPage: React.FC<{ view?: unknown; onViewChange?: (view:
           view={view}
           onViewChange={onViewChange}
           onOpenTaxFiling={onOpenTaxFiling}
+          reportRequest={reportRequest}
           onManageRules={(transactionId) => { window.location.hash = `#/settings?section=rules${transactionId ? `&ruleFrom=${encodeURIComponent(transactionId)}` : ''}`; }}
           seed={seed}
           dataAdapter={dataAdapter}

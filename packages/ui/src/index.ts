@@ -68,6 +68,7 @@ export { Avatar, initialsOf, type AvatarProps, type AvatarSize } from './compone
 export { Metric, type MetricProps, type MetricSize, type MetricTone } from './components/Metric';
 export { Spinner, type SpinnerProps, type SpinnerSize } from './components/Spinner';
 export { BarChart, niceMax, type BarChartProps, type BarDatum } from './components/BarChart';
+export { TimeSeriesChart, type TimeSeriesChartProps, type TimeSeriesDatum, type TimeSeriesSeries } from './components/TimeSeriesChart';
 export { Sparkline, type SparklineProps } from './components/Sparkline';
 export { CardHeader, type CardHeaderProps } from './components/CardHeader';
 export { HatchedProgress, type HatchedProgressProps } from './components/HatchedProgress';

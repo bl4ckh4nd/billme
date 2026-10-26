@@ -632,6 +632,7 @@ export const journalEntryEntitySchema = z.object({
     'loan_schedule',
     'payroll_batch',
     'shareholder_flow',
+    'journal_import',
   ]).optional(),
   sourceKey: z.string().optional(),
   reversedEntryId: z.string().optional(),
@@ -661,6 +662,70 @@ export const proPostManualJournalEntryArgsSchema = z.object({
   softLockOverride: z.boolean().optional(),
   overrideReason: z.string().optional(),
 });
+/** Journal import (DATEV Buchungsstapel or journal CSV): a dry run checks, the real run books the whole file or nothing. */
+export const proImportJournalArgsSchema = z.object({
+  reason: z.string().trim().min(1),
+  format: z.enum(['datev', 'journal_csv']),
+  fileName: z.string().max(255).optional(),
+  /** The file as base64, at most 20 MB. */
+  contentBase64: z.string().min(1).max(28_000_000),
+  dryRun: z.boolean(),
+  softLockOverride: z.boolean().optional(),
+  overrideReason: z.string().optional(),
+});
+const journalImportIssueSchema = z.object({ row: z.number().int(), message: z.string(), blocking: z.boolean() });
+export const proJournalImportResultSchema = z.object({
+  format: z.enum(['datev', 'journal_csv']),
+  fileName: z.string().optional(),
+  fileSha256: z.string(),
+  dryRun: z.boolean(),
+  posted: z.boolean(),
+  source: z.object({
+    chart: z.enum(['SKR03', 'SKR04']).optional(), from: z.string().optional(), to: z.string().optional(), label: z.string().optional(),
+    accountLength: z.number().int().optional(), consultantNumber: z.string().optional(), clientNumber: z.string().optional(),
+  }),
+  entryCount: z.number().int(),
+  newCount: z.number().int(),
+  importedCount: z.number().int(),
+  invalidCount: z.number().int(),
+  postedCount: z.number().int(),
+  debitTotal: z.number(),
+  firstDate: z.string().optional(),
+  lastDate: z.string().optional(),
+  missingAccounts: z.array(z.string()),
+  issues: z.array(journalImportIssueSchema),
+  entries: z.array(z.object({
+    key: z.string(),
+    rows: z.array(z.number().int()),
+    postingDate: z.string(),
+    reference: z.string(),
+    bookingText: z.string(),
+    status: z.enum(['new', 'imported', 'invalid']),
+    lines: z.array(z.object({
+      accountNumber: z.string(), accountName: z.string().optional(), debitAmount: z.number(), creditAmount: z.number(),
+      taxCaseKey: z.string().optional(), taxAmount: z.number().optional(), memo: z.string().optional(),
+    })),
+  })),
+});
+export type ProJournalImportResult = z.infer<typeof proJournalImportResultSchema>;
+/** Overview figures from the journal: Erträge/Aufwand per month, money accounts, Aufwand per BWA cost type. */
+export const proLedgerOverviewArgsSchema = z.object({
+  from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+  to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+});
+const ledgerOverviewBreakdownSchema = z.array(z.object({ key: z.string(), label: z.string(), value: z.number() }));
+export const proLedgerOverviewSchema = z.object({
+  chart: z.enum(['SKR03', 'SKR04']),
+  from: z.string(),
+  to: z.string(),
+  months: z.array(z.object({ period: z.string(), revenue: z.number(), expense: z.number(), result: z.number() })),
+  firstPeriod: z.string().optional(),
+  lastPeriod: z.string().optional(),
+  liquidity: z.object({ total: z.number(), accounts: z.array(z.object({ accountNumber: z.string(), name: z.string().optional(), balance: z.number() })) }),
+  expenseBreakdown: ledgerOverviewBreakdownSchema,
+  revenueBreakdown: ledgerOverviewBreakdownSchema,
+});
+export type ProLedgerOverview = z.infer<typeof proLedgerOverviewSchema>;
 export const proBankLedgerReconciliationRowSchema = z.object({
   ledgerAccountNumber: z.string(),
   bankAccountIds: z.array(z.string()),

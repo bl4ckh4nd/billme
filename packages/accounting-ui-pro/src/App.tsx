@@ -54,6 +54,8 @@ export interface ProAccountingWorkspaceProps {
   onManageRules?: (transactionId?: string) => void;
   /** Opens the host's ELSTER page from the Steuer area. */
   onOpenTaxFiling?: () => void;
+  /** Auswertungen opened on a range and tab (`?view=reports&tab=&from=&to=`), e.g. from a chart of the overview. */
+  reportRequest?: { tab?: string; from?: string; to?: string };
 }
 
 export default function App(props: ProAccountingWorkspaceProps) {
@@ -74,7 +76,7 @@ export default function App(props: ProAccountingWorkspaceProps) {
   return <AccountingWorkspaceContext.Provider value={store}><Workspace {...props} /></AccountingWorkspaceContext.Provider>;
 }
 
-function Workspace({ seed, dataAdapter, role = 'admin', assetsAvailable = true, busy = false, view, onViewChange, onManageRules, onOpenTaxFiling }: ProAccountingWorkspaceProps) {
+function Workspace({ seed, dataAdapter, role = 'admin', assetsAvailable = true, busy = false, view, onViewChange, onManageRules, onOpenTaxFiling, reportRequest }: ProAccountingWorkspaceProps) {
   const [oposInvoiceId, setOposInvoiceId] = useState<string | null>(null);
   const [requestedView, setCurrentView] = useState<AppView>(isAccountingView(view) ? view : 'inbox');
 
@@ -262,6 +264,7 @@ function Workspace({ seed, dataAdapter, role = 'admin', assetsAvailable = true, 
               role={role}
               onOpenTransaction={handleOpenTransaction}
               onOpenJournalEntry={setSelectedJournalEntryId}
+              request={reportRequest}
             />
           ) : currentView === 'opos' ? (
             <OposView key={oposInvoiceId ?? 'opos'} dataAdapter={dataAdapter} role={role} initialInvoiceId={oposInvoiceId ?? undefined} />

@@ -556,6 +556,16 @@ describe('pro reporting', () => {
       assert.deepEqual([current.snapshot.catalogYear, current.snapshot.catalogProvisional], [2026, false]);
     });
 
+    test('2023 (a bookkeeping taken over) runs on the 2025 catalogue and says so', async () => {
+      for (const kind of ['hgb-guv', 'bwa01', 'management-guv'] as const) {
+        const earlier = await get<any>(e, `/accounting/reports/${kind}?from=2023-01-01&to=2023-12-31`);
+        assert.deepEqual([earlier.snapshot.catalogYear, earlier.snapshot.catalogProvisional], [2025, true], kind);
+        assert.ok(earlier.mappingHealth.warnings.some((warning: string) => /Berichtskatalog 2025 vorläufig für 2023/.test(warning)), kind);
+      }
+      const positions = await e.raw('GET', '/accounting/mappings/positions?reportType=bwa01&asOfDate=2023-06-30');
+      assert.equal(positions.status, 200, `mapping positions for 2023: ${positions.text}`);
+    });
+
     test('SuSa rows carry the account name', async () => {
       const susa = await get<{ rows: Array<{ accountNumber: string; accountName?: string }> }>(e, '/accounting/reports/susa?from=2026-01-01&to=2026-12-31');
       const name = (account: string) => susa.rows.find((candidate) => candidate.accountNumber === account)?.accountName;

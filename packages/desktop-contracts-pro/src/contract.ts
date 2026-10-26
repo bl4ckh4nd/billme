@@ -77,6 +77,10 @@ import {
   accountingPeriodStatusChangeSchema,
   accountingPeriodStatusSchema,
   proPostManualJournalEntryArgsSchema,
+  proImportJournalArgsSchema,
+  proJournalImportResultSchema,
+  proLedgerOverviewArgsSchema,
+  proLedgerOverviewSchema,
   proBankLedgerReconciliationRowSchema,
   transitOverviewSchema,
   ruleApplicationPreviewSchema,
@@ -738,6 +742,10 @@ export const ipcRoutes = {
   'pro:listOpenItemPayments': { channel: 'pro:listOpenItemPayments', args: z.undefined(), result: z.array(proOpenItemPaymentSchema) },
   'pro:reverseOpenItemPayment': { channel: 'pro:reverseOpenItemPayment', args: proReverseOpenItemPaymentArgsSchema, result: proOpenItemPaymentReversalSchema },
   'pro:postManualJournalEntry': { channel: 'pro:postManualJournalEntry', args: proPostManualJournalEntryArgsSchema, result: journalEntryEntitySchema },
+  /** DATEV Buchungsstapel or journal CSV of another bookkeeping: dryRun checks, otherwise the whole file is booked or nothing. */
+  'pro:importJournal': { channel: 'pro:importJournal', args: proImportJournalArgsSchema, result: proJournalImportResultSchema },
+  /** Overview figures from the journal (also without bank lines): months, money accounts, Aufwand per BWA cost type. */
+  'pro:getLedgerOverview': { channel: 'pro:getLedgerOverview', args: proLedgerOverviewArgsSchema, result: proLedgerOverviewSchema },
   'pro:getBankLedgerReconciliation': { channel: 'pro:getBankLedgerReconciliation', args: z.undefined(), result: z.array(proBankLedgerReconciliationRowSchema) },
   /** UStVA / ZM / OSS preparation (a frozen, export-only artifact; the UStVA soft-locks its months). Never a submission. */
   'pro:prepareTaxExport': { channel: 'pro:prepareTaxExport', args: proPrepareTaxExportArgsSchema, result: z.object({ run: z.object({ id: z.string() }).passthrough(), artifact: proTaxExportArtifactSchema, replayed: z.boolean() }) },

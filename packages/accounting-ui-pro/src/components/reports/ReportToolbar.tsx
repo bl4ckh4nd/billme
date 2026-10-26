@@ -41,7 +41,8 @@ export default function ReportToolbar({ filters, onChange, activeTab, onExport, 
       periodTo: range?.to.slice(0, 7) ?? filters.periodTo,
       periodFromDate: range?.from,
       periodToDate: range?.to,
-      compareMode: nextPreset === 'prev_year' ? 'prev_year' : 'none',
+      // The comparison is its own choice: switching the period keeps it.
+      compareMode: filters.compareMode,
     });
   };
   const setAsOfDate = (asOfDate: string) => {
@@ -67,14 +68,16 @@ export default function ReportToolbar({ filters, onChange, activeTab, onExport, 
       <div className="flex flex-wrap items-end gap-2">
         <Select
           label="Zeitraum"
-          value={filters.periodPreset ?? 'current'}
-          onChange={(event) => setPreset(event.target.value as ReportFilterState['periodPreset'])}
+          value={filters.periodPreset ?? 'custom'}
+          onChange={(event) => { if (event.target.value !== 'custom') setPreset(event.target.value as ReportFilterState['periodPreset']); }}
           disabled={lockNativeEurPeriod}
           aria-describedby={lockNativeEurPeriod ? nativeEurPeriodDescriptionId : undefined}
         >
           <option value="current">Aktuelle Periode</option>
           <option value="ytd">Jahr bis heute</option>
           <option value="prev_year">Vorjahr</option>
+          {/* A range typed into "Periode von/bis" or opened from the overview has no preset. */}
+          {filters.periodPreset ? null : <option value="custom">Eigener Zeitraum</option>}
         </Select>
         <Input
           label="Stichtag"
@@ -100,6 +103,16 @@ export default function ReportToolbar({ filters, onChange, activeTab, onExport, 
           disabled={lockNativeEurPeriod}
           aria-describedby={lockNativeEurPeriod ? nativeEurPeriodDescriptionId : undefined}
         />
+        {activeTab === 'bwa01' || activeTab === 'management_guv' || activeTab === 'hgb_guv' ? (
+          <Select
+            label="Vergleich"
+            value={filters.compareMode === 'prev_year' ? 'prev_year' : 'none'}
+            onChange={(event) => onChange({ ...filters, compareMode: event.target.value === 'prev_year' ? 'prev_year' : 'none' })}
+          >
+            <option value="none">Ohne Vergleich</option>
+            <option value="prev_year">Vorjahr</option>
+          </Select>
+        ) : null}
         <div className="ml-auto flex flex-wrap gap-2">
           <Button
             type="button"

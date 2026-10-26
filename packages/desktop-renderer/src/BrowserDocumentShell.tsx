@@ -3,6 +3,10 @@ import { authUserSchema, authSessionInfoSchema, createServerApiClient, type Auth
 import { AuthScreen, ErrorState, type AuthScreenCredentials, type AuthScreenMode, type InvitationPreview } from '@billme/ui';
 import type { RendererWorkspaces } from './runtime-api';
 import { createWorkspaceClient, type WorkspaceSession } from './workspaceClient';
+import { ensureRandomUuid } from './randomUuid';
+
+// Plain http in the LAN is no secure context: give the app crypto.randomUUID before anything renders.
+ensureRandomUuid();
 
 type Session = { token: string; user: AuthUser; apiUrl: string };
 export type BrowserMountContext = {

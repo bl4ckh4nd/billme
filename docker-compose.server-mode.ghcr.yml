@@ -106,6 +106,9 @@ services:
   web:
     image: ghcr.io/bl4ckh4nd/billme/web:${BILLME_IMAGE_TAG:-latest}
     restart: unless-stopped
+    environment:
+      # The API browsers call; read at container start, so the published image fits any server.
+      BILLME_PUBLIC_API_URL: ${BILLME_PUBLIC_API_URL:-}
     depends_on:
       server-api:
         condition: service_healthy
@@ -117,6 +120,8 @@ services:
   web-pro:
     image: ghcr.io/bl4ckh4nd/billme/web-pro:${BILLME_IMAGE_TAG:-latest}
     restart: unless-stopped
+    environment:
+      BILLME_PUBLIC_API_URL: ${BILLME_PUBLIC_API_URL:-}
     depends_on:
       server-api:
         condition: service_healthy

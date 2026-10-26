@@ -71,7 +71,9 @@ const CHECKS: Record<LedgerCheckKey, { label: string; description: string; sever
 
 /** Text hints of a provider abroad (currency, place, legal form, well-known non-German services). */
 const FOREIGN = /\b(USD|GBP|CHF|SEK|DKK|PLN)\b|Originalbetrag|Wechselkurs|\bIreland\b|\bIrland\b|\bDublin\b|Luxemb|San Francisco|New York|Seattle|Palo Alto|Mountain View|Redmond|\bDelaware\b|\bUSA?\b|\bInc\b\.?|\bLLC\b|\bLtd\b\.?|\bLimited\b|\bB\.V\.|\bAWS\b|aws\.amazon|Amazon Web Services|Google Cloud|OpenAI|GitHub|Namecheap|Cloudflare|DigitalOcean|Zapier|Atlassian|Slack|Notion|Figma|Webflow|Bitwarden|\bmake\.com/i;
-const REFUND = /erstatt|gutschrift|rückerstatt|refund|retoure|storno|zurückerstattet/i;
+/** A refund in the text. "Gutschrift" alone is how banks name any incoming transfer ("Umsatzart: Gutschrift"); only a credit note counts. */
+const REFUND = /erstatt|rückerstatt|rückgutschrift|refund|retoure|storno|zurückerstattet|gutschrift\s+(zu|zur|für|nr\b|rechnung|re\b)/i;
+const BANK_TRANSACTION_TYPE = /Umsatzart:\s*[^,;]+/gi;
 const REVENUE_POSITIONS = new Set(['revenue', 'special-operating-income']);
 
 type Line = { entry_id: string; entry_number: string; posting_date: string; reference: string | null; booking_text: string; source_type: string | null; account_number: string; debit_amount: string; credit_amount: string; tax_case_key: string | null; counterparty: string | null };
@@ -131,7 +133,7 @@ export const getLedgerChecks = async (db: PostgresQueryable, scope: TenantScope,
       const privateLine = entryLines.find((line) => /^\d{4}$/.test(line.account_number) && Number(line.account_number) >= privateRange[0]! && Number(line.account_number) <= privateRange[1]!);
       if (privateLine) entryFinding('private_on_corporation', entryLines, `Konto ${privateLine.account_number}`, { accountNumber: String(privateLine.account_number), amount: euro(amountOf(privateLine)) });
     }
-    const text = entryLines.map((line) => `${line.booking_text} ${line.counterparty ?? ''}`).join(' ');
+    const text = entryLines.map((line) => `${line.booking_text} ${line.counterparty ?? ''}`).join(' ').replace(BANK_TRANSACTION_TYPE, ' ');
     const foreign = entryLines.find((line) => (line.tax_case_key === 'DE_STD_19' || line.tax_case_key === 'DE_STD_7') && amountOf(line) > 0 && isProfitAndLossAccount(chart, String(line.account_number)));
     if (foreign && FOREIGN.test(text)) entryFinding('foreign_vat', entryLines, `${foreign.tax_case_key === 'DE_STD_7' ? '7' : '19'} % Vorsteuer auf Konto ${foreign.account_number}`, { accountNumber: String(foreign.account_number), amount: euro(amountOf(foreign)) });
     for (const line of entryLines) {

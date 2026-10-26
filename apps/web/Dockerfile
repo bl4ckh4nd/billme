@@ -17,6 +17,7 @@ RUN pnpm -C apps/web build
 FROM nginx:1.27-alpine
 
 COPY docker/nginx-spa.conf /etc/nginx/conf.d/default.conf
+COPY --chmod=755 docker/runtime-config.sh /docker-entrypoint.d/40-billme-runtime-config.sh
 COPY --from=build /app/apps/web/dist /usr/share/nginx/html
 
 EXPOSE 8080

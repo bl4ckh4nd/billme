@@ -33,7 +33,7 @@ Edit `.env.server-mode` before the first start:
 - optionally set `SMTP_PASSWORD` or `RESEND_API_KEY` if queued email delivery should be enabled
 - optionally set `BILLME_PORTAL_PUBLISH_API_KEY` and `BILLME_PUBLIC_PORTAL_URL` for the public portal
 
-`BILLME_PUBLIC_API_URL` is baked into the two web images at build time. Rebuild `web` and `web-pro` after changing it.
+`BILLME_PUBLIC_API_URL` is read when the `web` and `web-pro` containers start (`docker/runtime-config.sh` writes `/runtime-config.js`), so a restart applies a new address and one image serves any server. It is also the build default (`VITE_SERVER_API_URL`) for an image started without it. An address a person typed in at login wins over both.
 
 Two optional settings serve the `billme` CLI:
 

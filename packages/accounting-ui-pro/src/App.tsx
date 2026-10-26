@@ -7,6 +7,7 @@ import ReconciliationWorkbench from './components/ReconciliationWorkbench';
 import ExceptionCenter from './components/ExceptionCenter';
 import AssetManagementView from './components/AssetManagementView';
 import ReportsView from './components/ReportsView';
+import MoneyAccountView from './components/money-accounts/MoneyAccountView';
 import OposView from './components/OposView';
 import ReceiptsInbox from './components/ReceiptsInbox';
 import WorkbenchQueue from './components/WorkbenchQueue';
@@ -20,11 +21,11 @@ import { AccountingWorkspaceContext, useAccountingWorkspace } from './Accounting
 import { Account, BookingDraft, Transaction, UserRole } from './types';
 import { reportTabsForBusinessProfile, type BusinessReportingProfile } from './domain/reportTypes';
 
-export type AppView = 'inbox' | 'editor' | 'reconciliation' | 'exceptions' | 'assets' | 'reports' | 'opos' | 'special' | 'tax' | 'receipts';
+export type AppView = 'inbox' | 'editor' | 'reconciliation' | 'exceptions' | 'assets' | 'reports' | 'opos' | 'special' | 'tax' | 'receipts' | 'money';
 
 const SAMPLE_DATA_HINT = 'Ohne verbundene Datenquelle zeigen Buchungen, Ausnahmen und Auswertungen einen Demo-Datensatz.';
 
-const ROUTABLE_VIEWS: readonly AppView[] = ['inbox', 'editor', 'reconciliation', 'exceptions', 'assets', 'reports', 'opos', 'special', 'tax', 'receipts'];
+const ROUTABLE_VIEWS: readonly AppView[] = ['inbox', 'editor', 'reconciliation', 'exceptions', 'assets', 'reports', 'opos', 'special', 'tax', 'receipts', 'money'];
 const isAccountingView = (value: unknown): value is AppView =>
   typeof value === 'string' && (ROUTABLE_VIEWS as readonly string[]).includes(value);
 
@@ -54,8 +55,9 @@ export interface ProAccountingWorkspaceProps {
   onManageRules?: (transactionId?: string) => void;
   /** Opens the host's ELSTER page from the Steuer area. */
   onOpenTaxFiling?: () => void;
-  /** Auswertungen opened on a range and tab (`?view=reports&tab=&from=&to=`), e.g. from a chart of the overview. */
-  reportRequest?: { tab?: string; from?: string; to?: string };
+  /** Auswertungen opened on a range and tab (`?view=reports&tab=&from=&to=`), e.g. from a chart of the overview;
+   * Geldkonten on an account and year (`?view=money&account=&year=`). */
+  reportRequest?: { tab?: string; from?: string; to?: string; account?: string; year?: string };
 }
 
 export default function App(props: ProAccountingWorkspaceProps) {
@@ -266,6 +268,8 @@ function Workspace({ seed, dataAdapter, role = 'admin', assetsAvailable = true, 
               onOpenJournalEntry={setSelectedJournalEntryId}
               request={reportRequest}
             />
+          ) : currentView === 'money' ? (
+            <MoneyAccountView key={`${reportRequest?.account ?? ''}-${reportRequest?.year ?? ''}`} dataAdapter={dataAdapter} request={reportRequest} />
           ) : currentView === 'opos' ? (
             <OposView key={oposInvoiceId ?? 'opos'} dataAdapter={dataAdapter} role={role} initialInvoiceId={oposInvoiceId ?? undefined} />
           ) : currentView === 'receipts' ? (

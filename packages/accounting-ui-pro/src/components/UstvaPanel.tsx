@@ -32,12 +32,22 @@ const csvAmount = (value: number) => value.toFixed(2).replace('.', ',');
  * UStVA from the ledger: the Kennzahlen of the form for a month, quarter or year, each with the journal lines
  * behind it. Looking at it locks nothing; it is a preparation, not a transmission to ELSTER.
  */
-export default function UstvaPanel({ dataAdapter, initialMonth, onOpenEntry }: { dataAdapter?: ProAccountingDataAdapter; initialMonth: string; onOpenEntry?: (entryId: string) => void }) {
+/** A period chosen elsewhere (e.g. a row of the Fristen table); `key` changes on every request, so the same period can be asked again. */
+export interface UstvaPanelRequest { span: 'month' | 'quarter'; month: string; key: number }
+
+export default function UstvaPanel({ dataAdapter, initialMonth, onOpenEntry, request }: { dataAdapter?: ProAccountingDataAdapter; initialMonth: string; onOpenEntry?: (entryId: string) => void; request?: UstvaPanelRequest }) {
   const [span, setSpan] = useState<Span>('month');
   const [month, setMonth] = useState(initialMonth);
   const [view, setView] = useState<UstvaComputation | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [open, setOpen] = useState<string | null>(null);
+  const sectionRef = React.useRef<HTMLElement>(null);
+  useEffect(() => {
+    if (!request) return;
+    setSpan(request.span);
+    setMonth(request.month);
+    sectionRef.current?.scrollIntoView?.({ behavior: 'smooth', block: 'start' });
+  }, [request]);
   const valid = /^\d{4}-(0[1-9]|1[0-2])$/.test(month);
   const range = valid ? ustvaRange(span, month) : null;
   const from = range?.from;
@@ -67,7 +77,7 @@ export default function UstvaPanel({ dataAdapter, initialMonth, onOpenEntry }: {
   };
 
   return (
-    <section aria-labelledby="ustva-heading" data-testid="ustva-panel">
+    <section ref={sectionRef} aria-labelledby="ustva-heading" data-testid="ustva-panel">
       <Card padding="none" className="overflow-hidden">
         <CardHeader
           className="border-b border-border px-3.5 py-3"

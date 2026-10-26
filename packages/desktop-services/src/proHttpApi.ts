@@ -988,6 +988,17 @@ export const createProWebClient = (config: ProWebClientConfig) => {
     importJournal(input: unknown) {
       return requestJson({ method: 'POST', body: input, parser: (payload) => payload }, '/api/v1/pro/accounting/journal/import');
     },
+    getVatAnalytics(query: { from: string; to: string; granularity?: string }) {
+      const params = new URLSearchParams(Object.entries(query).filter(([, value]) => Boolean(value)) as Array<[string, string]>);
+      return requestJson({ parser: (payload) => payload }, `/api/v1/pro/accounting/analytics/vat?${params}`);
+    },
+    getTaxPayments(query: { from: string; to: string }) {
+      return requestJson({ parser: (payload) => payload }, `/api/v1/pro/accounting/analytics/tax-payments?${new URLSearchParams(query)}`);
+    },
+    getMoneyAccountYear(query: { accountNumber?: string; year?: number }) {
+      const params = new URLSearchParams(Object.entries(query).filter(([, value]) => value !== undefined).map(([key, value]) => [key, String(value)]));
+      return requestJson({ parser: (payload) => payload }, `/api/v1/pro/accounting/analytics/money-account${params.size ? `?${params}` : ''}`);
+    },
     getLedgerOverview(query: { from?: string; to?: string }) {
       const params = new URLSearchParams(Object.entries(query).filter(([, value]) => Boolean(value)) as Array<[string, string]>);
       return requestJson({ parser: (payload) => payload }, `/api/v1/pro/accounting/analytics/overview${params.size ? `?${params}` : ''}`);
@@ -1333,6 +1344,18 @@ export const createProHttpBillmeApi = ({ fallback, onInvoke, downloadBlob, ...cl
         case 'pro:importJournal': {
           const parsedArgs = ipcRoutes[key].args.parse(args);
           return ipcRoutes[key].result.parse(await client.importJournal(parsedArgs)) as IpcResult<K>;
+        }
+        case 'pro:getVatAnalytics': {
+          const parsedArgs = ipcRoutes[key].args.parse(args) as IpcArgs<'pro:getVatAnalytics'>;
+          return ipcRoutes[key].result.parse(await client.getVatAnalytics(parsedArgs)) as IpcResult<K>;
+        }
+        case 'pro:getTaxPayments': {
+          const parsedArgs = ipcRoutes[key].args.parse(args) as IpcArgs<'pro:getTaxPayments'>;
+          return ipcRoutes[key].result.parse(await client.getTaxPayments(parsedArgs)) as IpcResult<K>;
+        }
+        case 'pro:getMoneyAccountYear': {
+          const parsedArgs = ipcRoutes[key].args.parse(args ?? {}) as IpcArgs<'pro:getMoneyAccountYear'>;
+          return ipcRoutes[key].result.parse(await client.getMoneyAccountYear(parsedArgs)) as IpcResult<K>;
         }
         case 'pro:getLedgerOverview': {
           const parsedArgs = ipcRoutes[key].args.parse(args ?? {}) as IpcArgs<'pro:getLedgerOverview'>;

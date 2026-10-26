@@ -11,6 +11,7 @@ export * from './migrations.js';
 export * from './proAccounting.js';
 export * from './journalImport.js';
 export * from './ledgerOverview.js';
+export * from './taxAnalytics.js';
 export * from './drizzle.js';
 export * from './schema.js';
 export * from './taxFilingRepository.js';

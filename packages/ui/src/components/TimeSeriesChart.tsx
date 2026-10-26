@@ -22,6 +22,8 @@ export interface TimeSeriesSeries {
   downward?: boolean;
   /** Bars with the same stack share a column (an upward and a downward series form one diverging bar). */
   stack?: string;
+  /** `right`: its own scale on the right, e.g. a balance next to monthly flows that are much smaller. */
+  axis?: 'left' | 'right';
 }
 
 export interface TimeSeriesChartProps {
@@ -84,6 +86,7 @@ export const TimeSeriesChart: React.FC<TimeSeriesChartProps> = ({
   })), [data, series]);
   const hasNegative = rows.some((row) => series.some((entry) => Number((row as Record<string, unknown>)[entry.key]) < 0));
   const hasHatched = series.some((entry) => entry.kind === 'bar' && entry.style === 'hatched');
+  const hasRightAxis = series.some((entry) => entry.axis === 'right');
   const showLegend = series.length > 1;
 
   const select = (index: unknown) => {
@@ -127,20 +130,22 @@ export const TimeSeriesChart: React.FC<TimeSeriesChartProps> = ({
           <ComposedChart
             data={rows}
             stackOffset="sign"
-            margin={{ top: 8, right: 8, bottom: 0, left: 0 }}
+            margin={{ top: 8, right: hasRightAxis ? 0 : 8, bottom: 0, left: 0 }}
             onClick={onSelect ? (state) => select(state?.activeTooltipIndex ?? state?.activeIndex) : undefined}
             accessibilityLayer={false}
           >
             <CartesianGrid vertical={false} stroke={COLOR.grid} />
             <XAxis dataKey="label" tickLine={false} axisLine={false} interval="preserveStartEnd" minTickGap={14} tick={{ fill: COLOR.muted, fontSize: 11 }} />
-            <YAxis width={AXIS_WIDTH} tickLine={false} axisLine={false} tickFormatter={(value: number) => formatAxis(value)} tick={{ fill: COLOR.muted, fontSize: 11 }} />
-            {hasNegative && <ReferenceLine y={0} stroke={COLOR.zero} strokeWidth={1} />}
+            <YAxis yAxisId="left" width={AXIS_WIDTH} tickLine={false} axisLine={false} tickFormatter={(value: number) => formatAxis(value)} tick={{ fill: COLOR.muted, fontSize: 11 }} />
+            {hasRightAxis && <YAxis yAxisId="right" orientation="right" width={AXIS_WIDTH} tickLine={false} axisLine={false} tickFormatter={(value: number) => formatAxis(value)} tick={{ fill: COLOR.line, fontSize: 11 }} />}
+            {hasNegative && <ReferenceLine yAxisId="left" y={0} stroke={COLOR.zero} strokeWidth={1} />}
             <Tooltip cursor={{ fill: COLOR.cursor, opacity: 0.6 }} content={renderTooltip} isAnimationActive={false} />
             {series.map((entry) => entry.kind === 'bar' ? (
               <Bar
                 key={entry.key}
                 dataKey={entry.key}
                 name={entry.label}
+                yAxisId={entry.axis ?? 'left'}
                 stackId={entry.stack}
                 isAnimationActive={false}
                 maxBarSize={28}
@@ -157,6 +162,7 @@ export const TimeSeriesChart: React.FC<TimeSeriesChartProps> = ({
                 key={entry.key}
                 dataKey={entry.key}
                 name={entry.label}
+                yAxisId={entry.axis ?? 'left'}
                 type="linear"
                 stroke={COLOR.line}
                 strokeWidth={2}
@@ -179,7 +185,7 @@ export const TimeSeriesChart: React.FC<TimeSeriesChartProps> = ({
               ) : (
                 <span className="size-2.25 rounded-xs bg-foreground" />
               )}
-              {entry.label}
+              {entry.label}{entry.axis === 'right' && hasRightAxis ? ' (rechte Achse)' : ''}
             </span>
           ))}
         </figcaption>

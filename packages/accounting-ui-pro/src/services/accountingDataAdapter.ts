@@ -177,6 +177,12 @@ export interface ProAccountingDataAdapter {
   postManualJournalEntry?: (input: ManualJournalEntryInput) => Promise<JournalEntryEntity>;
   /** DATEV Buchungsstapel or journal CSV of another bookkeeping: dryRun checks, otherwise the whole file is booked or nothing. */
   importJournal?: (input: JournalImportInput) => Promise<JournalImportResult>;
+  /** UStVA per month or quarter from the journal, with Frist and status, and the largest tax lines. */
+  getVatAnalytics?: (range: { from: string; to: string; granularity: 'month' | 'quarter' }) => Promise<VatAnalytics>;
+  /** Payments to and from the tax offices per topic. */
+  getTaxPayments?: (range: { from: string; to: string }) => Promise<TaxPayments>;
+  /** One money account (Bank, Kasse, Kreditkarte) over a year; without arguments the first account, its last year. */
+  getMoneyAccountYear?: (input: { accountNumber?: string; year?: number }) => Promise<MoneyAccountYear>;
   /** Booked bank lines against the ledger account of their bank account. */
   getBankLedgerReconciliation?: () => Promise<BankLedgerReconciliationRow[]>;
   /** VAT per tax case plus the UStVA Kennzahlen of a range, live from the ledger (no lock). */
@@ -217,6 +223,48 @@ export interface ManualJournalEntryInput {
   idempotencyKey: string;
   softLockOverride?: boolean;
   overrideReason?: string;
+}
+
+export interface VatAnalytics {
+  from: string;
+  to: string;
+  granularity: 'month' | 'quarter';
+  permanentExtension: boolean;
+  periods: Array<{ key: string; from: string; to: string; outputTax: number; inputTax: number; payable: number; lineCount: number; deadline: string; preparedAt?: string; status: 'prepared' | 'due' | 'open' | 'past' }>;
+  totals: { outputTax: number; inputTax: number; payable: number };
+  topLines: Array<{ entryId?: string; entryNumber?: number; postingDate: string; reference?: string; kennziffer: string; direction: string; taxCaseKey: string; netAmount: number; taxAmount: number }>;
+}
+
+export interface TaxPayments {
+  from: string;
+  to: string;
+  topics: Array<{
+    key: 'vat' | 'wage' | 'income' | 'other';
+    label: string;
+    accounts: Array<{ accountNumber: string; name?: string }>;
+    paid: number;
+    refunded: number;
+    net: number;
+    months: Array<{ period: string; paid: number; refunded: number }>;
+    entries: Array<{ entryId: string; entryNumber: number; postingDate: string; reference?: string; bookingText: string; accountNumber: string; amount: number }>;
+  }>;
+}
+
+export interface MoneyAccountYear {
+  chart: 'SKR03' | 'SKR04';
+  accounts: Array<{ accountNumber: string; name?: string; firstYear: number; lastYear: number }>;
+  accountNumber: string;
+  name?: string;
+  year: number;
+  openingBalance: number;
+  closingBalance: number;
+  inflow: number;
+  outflow: number;
+  entryCount: number;
+  months: Array<{ period: string; inflow: number; outflow: number; balance: number }>;
+  counterAccounts: Array<{ accountNumber: string; name?: string; position?: string; inflow: number; outflow: number; count: number }>;
+  topInflows: Array<{ label: string; amount: number; count: number }>;
+  topOutflows: Array<{ label: string; amount: number; count: number }>;
 }
 
 export interface JournalImportInput {

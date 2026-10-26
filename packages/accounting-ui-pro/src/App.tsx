@@ -8,6 +8,8 @@ import ExceptionCenter from './components/ExceptionCenter';
 import AssetManagementView from './components/AssetManagementView';
 import ReportsView from './components/ReportsView';
 import MoneyAccountView from './components/money-accounts/MoneyAccountView';
+import PartnersView from './components/partners/PartnersView';
+import ChecksView from './components/checks/ChecksView';
 import OposView from './components/OposView';
 import ReceiptsInbox from './components/ReceiptsInbox';
 import WorkbenchQueue from './components/WorkbenchQueue';
@@ -21,11 +23,11 @@ import { AccountingWorkspaceContext, useAccountingWorkspace } from './Accounting
 import { Account, BookingDraft, Transaction, UserRole } from './types';
 import { reportTabsForBusinessProfile, type BusinessReportingProfile } from './domain/reportTypes';
 
-export type AppView = 'inbox' | 'editor' | 'reconciliation' | 'exceptions' | 'assets' | 'reports' | 'opos' | 'special' | 'tax' | 'receipts' | 'money';
+export type AppView = 'inbox' | 'editor' | 'reconciliation' | 'exceptions' | 'assets' | 'reports' | 'opos' | 'special' | 'tax' | 'receipts' | 'money' | 'partners' | 'checks';
 
 const SAMPLE_DATA_HINT = 'Ohne verbundene Datenquelle zeigen Buchungen, Ausnahmen und Auswertungen einen Demo-Datensatz.';
 
-const ROUTABLE_VIEWS: readonly AppView[] = ['inbox', 'editor', 'reconciliation', 'exceptions', 'assets', 'reports', 'opos', 'special', 'tax', 'receipts', 'money'];
+const ROUTABLE_VIEWS: readonly AppView[] = ['inbox', 'editor', 'reconciliation', 'exceptions', 'assets', 'reports', 'opos', 'special', 'tax', 'receipts', 'money', 'partners', 'checks'];
 const isAccountingView = (value: unknown): value is AppView =>
   typeof value === 'string' && (ROUTABLE_VIEWS as readonly string[]).includes(value);
 
@@ -58,6 +60,8 @@ export interface ProAccountingWorkspaceProps {
   /** Auswertungen opened on a range and tab (`?view=reports&tab=&from=&to=`), e.g. from a chart of the overview;
    * Geldkonten on an account and year (`?view=money&account=&year=`). */
   reportRequest?: { tab?: string; from?: string; to?: string; account?: string; year?: string };
+  /** A finding of the Prüfungen was marked OK or opened again (the host refreshes its count). */
+  onChecksChanged?: () => void;
 }
 
 export default function App(props: ProAccountingWorkspaceProps) {
@@ -78,7 +82,7 @@ export default function App(props: ProAccountingWorkspaceProps) {
   return <AccountingWorkspaceContext.Provider value={store}><Workspace {...props} /></AccountingWorkspaceContext.Provider>;
 }
 
-function Workspace({ seed, dataAdapter, role = 'admin', assetsAvailable = true, busy = false, view, onViewChange, onManageRules, onOpenTaxFiling, reportRequest }: ProAccountingWorkspaceProps) {
+function Workspace({ seed, dataAdapter, role = 'admin', assetsAvailable = true, busy = false, view, onViewChange, onManageRules, onOpenTaxFiling, reportRequest, onChecksChanged }: ProAccountingWorkspaceProps) {
   const [oposInvoiceId, setOposInvoiceId] = useState<string | null>(null);
   const [requestedView, setCurrentView] = useState<AppView>(isAccountingView(view) ? view : 'inbox');
 
@@ -270,6 +274,10 @@ function Workspace({ seed, dataAdapter, role = 'admin', assetsAvailable = true, 
             />
           ) : currentView === 'money' ? (
             <MoneyAccountView key={`${reportRequest?.account ?? ''}-${reportRequest?.year ?? ''}`} dataAdapter={dataAdapter} request={reportRequest} />
+          ) : currentView === 'partners' ? (
+            <PartnersView dataAdapter={dataAdapter} onOpenEntry={setSelectedJournalEntryId} />
+          ) : currentView === 'checks' ? (
+            <ChecksView dataAdapter={dataAdapter} canMutate={permissionContextForRole(role).canMutate} onOpenEntry={setSelectedJournalEntryId} onChanged={onChecksChanged} />
           ) : currentView === 'opos' ? (
             <OposView key={oposInvoiceId ?? 'opos'} dataAdapter={dataAdapter} role={role} initialInvoiceId={oposInvoiceId ?? undefined} />
           ) : currentView === 'receipts' ? (

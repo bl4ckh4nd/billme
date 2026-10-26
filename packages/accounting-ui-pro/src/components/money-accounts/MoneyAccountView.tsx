@@ -4,6 +4,7 @@ import {
   BarList, Card, CardHeader, EmptyState, ErrorState, IconButton, Metric, Select, Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
   TimeSeriesChart,
 } from '@billme/ui';
+import { readAnalysisYear, writeAnalysisYear } from '@billme/accounting-shared';
 import type { MoneyAccountYear, ProAccountingDataAdapter } from '../../services/accountingDataAdapter';
 
 void React;
@@ -28,8 +29,9 @@ type Props = {
 export default function MoneyAccountView({ dataAdapter, request }: Props) {
   const [selection, setSelection] = useState<{ accountNumber?: string; year?: number }>(() => ({
     ...(request?.account && /^\d{4,8}$/.test(request.account) ? { accountNumber: request.account } : {}),
-    ...(request?.year && /^\d{4}$/.test(request.year) ? { year: Number(request.year) } : {}),
+    ...(request?.year && /^\d{4}$/.test(request.year) ? { year: Number(request.year) } : /^\d{4}$/.test(readAnalysisYear() ?? '') ? { year: Number(readAnalysisYear()) } : {}),
   }));
+  const showYear = (year: number) => { setSelection({ accountNumber: data?.accountNumber, year }); writeAnalysisYear(String(year)); };
   const [data, setData] = useState<MoneyAccountYear | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [retry, setRetry] = useState(0);
@@ -61,9 +63,9 @@ export default function MoneyAccountView({ dataAdapter, request }: Props) {
           {data.accounts.map((entry) => <option key={entry.accountNumber} value={entry.accountNumber}>{entry.accountNumber}{entry.name ? ` ${entry.name}` : ''}</option>)}
         </Select>
         <div className="flex items-center gap-1">
-          <IconButton aria-label="Vorjahr" disabled={!canPrevious} onClick={() => setSelection({ accountNumber: data.accountNumber, year: data.year - 1 })}><ChevronLeft size={16} aria-hidden="true" /></IconButton>
+          <IconButton aria-label="Vorjahr" disabled={!canPrevious} onClick={() => showYear(data.year - 1)}><ChevronLeft size={16} aria-hidden="true" /></IconButton>
           <span className="min-w-[3.5rem] text-center text-heading font-semibold tabular-nums" aria-live="polite">{data.year}</span>
-          <IconButton aria-label="Folgejahr" disabled={!canNext} onClick={() => setSelection({ accountNumber: data.accountNumber, year: data.year + 1 })}><ChevronRight size={16} aria-hidden="true" /></IconButton>
+          <IconButton aria-label="Folgejahr" disabled={!canNext} onClick={() => showYear(data.year + 1)}><ChevronRight size={16} aria-hidden="true" /></IconButton>
         </div>
         <p className="text-caption text-muted">{data.entryCount} Buchungen{account ? `, Buchungen ${account.firstYear}–${account.lastYear}` : ''}</p>
       </div>

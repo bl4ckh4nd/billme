@@ -4397,6 +4397,14 @@ const invoke = async <K extends IpcRouteKey>(key: K, args: IpcArgs<K>): Promise<
       const range = args as { from: string; to: string };
       return { from: range.from, to: range.to, topics: [] } as IpcResult<K>;
     }
+    case 'pro:getLedgerChecks':
+      return { openErrors: 0, openWarnings: 0, openInfos: 0, checks: [] } as IpcResult<K>;
+    case 'pro:setLedgerCheckDismissal':
+      throw new Error('Prüfungen lassen sich in der Demo nicht abhaken.');
+    case 'pro:getLedgerPartners':
+      return { partners: [] } as IpcResult<K>;
+    case 'pro:getLedgerPartnerDetail':
+      throw new Error('Geschäftspartner aus dem Journal gibt es in der Demo nicht.');
     case 'pro:getMoneyAccountYear':
       throw new Error('Geldkonten aus dem Journal gibt es in der Demo nicht.');
     case 'pro:getLedgerOverview': {

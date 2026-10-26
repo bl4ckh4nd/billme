@@ -22,7 +22,7 @@ import type {
   IncomingInvoiceEntity,
 } from '@billme/accounting-shared';
 import { CorrectionSettlementError, INCOMING_INVOICE_DOCUMENT_UPLOAD_BODY_LIMIT } from '@billme/accounting-shared';
-import { createPostgresProAccountingRepository, getLedgerOverview, getMoneyAccountYear, getTaxPayments, getVatAnalytics, listDatevPartyRows, runJournalImport, freezeServerEurSnapshot, getServerEurReport, getServerEurSnapshot, listServerEurAnnexFacts, listServerEurCashFacts, listServerEurCashItems, listServerEurSnapshots, saveServerEurAnnexFact, saveServerEurCashFact, saveServerEurClassificationFact } from '@billme/server-data';
+import { createPostgresProAccountingRepository, getLedgerChecks, getLedgerPartnerDetail, getLedgerPartners, setLedgerCheckDismissal, getLedgerOverview, getMoneyAccountYear, getTaxPayments, getVatAnalytics, listDatevPartyRows, runJournalImport, freezeServerEurSnapshot, getServerEurReport, getServerEurSnapshot, listServerEurAnnexFacts, listServerEurCashFacts, listServerEurCashItems, listServerEurSnapshots, saveServerEurAnnexFact, saveServerEurCashFact, saveServerEurClassificationFact } from '@billme/server-data';
 import {
   accountingAccountMappingSchema,
   accountingBackfillPreviewSchema,
@@ -58,6 +58,13 @@ import {
   proTaxPaymentsSchema,
   proMoneyAccountYearArgsSchema,
   proMoneyAccountYearSchema,
+  proLedgerChecksArgsSchema,
+  proLedgerChecksSchema,
+  proSetLedgerCheckDismissalArgsSchema,
+  proLedgerPartnersArgsSchema,
+  proLedgerPartnersSchema,
+  proLedgerPartnerDetailArgsSchema,
+  proLedgerPartnerDetailSchema,
   openItemSchema,
   standaloneAccountingSourceFactSchema,
   transactionSchema,
@@ -957,6 +964,48 @@ export const registerProAccountingRoutes = (app: FastifyInstance, options: ProAc
     async handler({ request, query }) {
       const session = await requireProSession(app, request.headers.authorization);
       return getTaxPayments(requireDatabase(app), session.scope, query).catch(analyticsError);
+    },
+  });
+  // Checks on the journal (Prüfungen).
+  typedRoute(app, {
+    method: 'GET',
+    url: `${prefix}/analytics/checks`,
+    query: proLedgerChecksArgsSchema,
+    response: proLedgerChecksSchema,
+    async handler({ request, query }) {
+      const session = await requireProSession(app, request.headers.authorization);
+      return getLedgerChecks(requireDatabase(app), session.scope, query).catch(analyticsError);
+    },
+  });
+  typedRoute(app, {
+    method: 'POST',
+    url: `${prefix}/analytics/checks/dismissal`,
+    body: proSetLedgerCheckDismissalArgsSchema,
+    response: z.object({ dismissed: z.boolean() }),
+    async handler({ request, body }) {
+      const session = await requireMutationSession(app, request.headers.authorization);
+      return setLedgerCheckDismissal(requireDatabase(app), session.scope, { ...body, mutation: mutationFor(session, body.reason) });
+    },
+  });
+  // Business partners behind the money movements.
+  typedRoute(app, {
+    method: 'GET',
+    url: `${prefix}/analytics/partners`,
+    query: proLedgerPartnersArgsSchema,
+    response: proLedgerPartnersSchema,
+    async handler({ request, query }) {
+      const session = await requireProSession(app, request.headers.authorization);
+      return getLedgerPartners(requireDatabase(app), session.scope, query).catch(analyticsError);
+    },
+  });
+  typedRoute(app, {
+    method: 'GET',
+    url: `${prefix}/analytics/partners/detail`,
+    query: proLedgerPartnerDetailArgsSchema,
+    response: proLedgerPartnerDetailSchema,
+    async handler({ request, query }) {
+      const session = await requireProSession(app, request.headers.authorization);
+      return getLedgerPartnerDetail(requireDatabase(app), session.scope, query).catch(analyticsError);
     },
   });
   // One money account over a year.

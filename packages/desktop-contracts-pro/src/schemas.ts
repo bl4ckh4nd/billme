@@ -778,6 +778,45 @@ export const proMoneyAccountYearSchema = z.object({
   topOutflows: z.array(z.object({ label: z.string(), amount: z.number(), count: z.number().int() })),
 });
 export type ProMoneyAccountYear = z.infer<typeof proMoneyAccountYearSchema>;
+const ledgerCheckKeySchema = z.enum(['vat_without_case', 'private_on_corporation', 'foreign_vat', 'revenue_without_vat', 'refund_as_revenue', 'duplicate', 'transit_open', 'unmapped_account']);
+/** Checks on the journal (Prüfungen); without a range over the whole journal. */
+export const proLedgerChecksArgsSchema = z.object({ from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(), to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional() });
+export const proLedgerChecksSchema = z.object({
+  from: z.string().optional(),
+  to: z.string().optional(),
+  openErrors: z.number().int(),
+  openWarnings: z.number().int(),
+  openInfos: z.number().int(),
+  checks: z.array(z.object({
+    key: ledgerCheckKeySchema,
+    label: z.string(),
+    description: z.string(),
+    severity: z.enum(['error', 'warning', 'info']),
+    openCount: z.number().int(),
+    dismissedCount: z.number().int(),
+    findings: z.array(z.object({
+      subjectKey: z.string(), entryId: z.string().optional(), entryNumber: z.number().int().optional(), postingDate: z.string().optional(), reference: z.string().optional(),
+      bookingText: z.string().optional(), accountNumber: z.string().optional(), amount: z.number().optional(), detail: z.string(),
+      dismissed: z.object({ reason: z.string(), at: z.string(), by: z.string().optional() }).optional(),
+    })),
+  })),
+});
+export type ProLedgerChecks = z.infer<typeof proLedgerChecksSchema>;
+/** Marks a finding as OK with a reason, or opens it again. */
+export const proSetLedgerCheckDismissalArgsSchema = z.object({ checkKey: ledgerCheckKeySchema, subjectKey: z.string().trim().min(1).max(200), dismissed: z.boolean(), reason: z.string().trim().min(1) });
+/** Business partners behind the money movements of the journal. */
+export const proLedgerPartnersArgsSchema = z.object({ from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(), to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional() });
+export const proLedgerPartnersSchema = z.object({
+  from: z.string().optional(),
+  to: z.string().optional(),
+  partners: z.array(z.object({ name: z.string(), income: z.number(), expense: z.number(), net: z.number(), count: z.number().int(), firstDate: z.string(), lastDate: z.string(), topAccount: z.string().optional() })),
+});
+export const proLedgerPartnerDetailArgsSchema = z.object({ name: z.string().trim().min(1).max(200), from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(), to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional() });
+export const proLedgerPartnerDetailSchema = z.object({
+  name: z.string(), income: z.number(), expense: z.number(), net: z.number(), count: z.number().int(),
+  months: z.array(z.object({ period: z.string(), income: z.number(), expense: z.number() })),
+  entries: z.array(z.object({ entryId: z.string(), entryNumber: z.number().int(), postingDate: z.string(), reference: z.string().optional(), bookingText: z.string(), amount: z.number() })),
+});
 export const proBankLedgerReconciliationRowSchema = z.object({
   ledgerAccountNumber: z.string(),
   bankAccountIds: z.array(z.string()),

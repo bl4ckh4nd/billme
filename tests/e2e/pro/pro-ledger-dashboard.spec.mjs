@@ -59,6 +59,8 @@ test('a ledger taken over by journal import fills the overview; a month opens it
   });
   expect(imported.postedCount, JSON.stringify(imported.issues)).toBe(49);
 
+  // As after an import in Sonderbuchungen: the overview opens afresh (it was already open before the IPC import).
+  await page.goto(appUrl(baseUrl, '/accounting?view=special'));
   await page.goto(appUrl(baseUrl, '/'));
   const flows = page.locator('section', { has: page.locator('#dashboard-ledger-flows') });
   await expect(flows).toBeVisible();

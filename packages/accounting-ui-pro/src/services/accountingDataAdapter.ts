@@ -183,6 +183,13 @@ export interface ProAccountingDataAdapter {
   getTaxPayments?: (range: { from: string; to: string }) => Promise<TaxPayments>;
   /** One money account (Bank, Kasse, Kreditkarte) over a year; without arguments the first account, its last year. */
   getMoneyAccountYear?: (input: { accountNumber?: string; year?: number }) => Promise<MoneyAccountYear>;
+  /** Checks on the journal (Prüfungen); without a range over the whole journal. */
+  getLedgerChecks?: (range: { from?: string; to?: string }) => Promise<LedgerChecks>;
+  /** Marks a finding as OK with a reason, or opens it again. */
+  setLedgerCheckDismissal?: (input: { checkKey: LedgerCheckKey; subjectKey: string; dismissed: boolean; reason: string }) => Promise<{ dismissed: boolean }>;
+  /** Business partners behind the money movements of the journal. */
+  getLedgerPartners?: (range: { from?: string; to?: string }) => Promise<LedgerPartners>;
+  getLedgerPartnerDetail?: (input: { name: string; from?: string; to?: string }) => Promise<LedgerPartnerDetail>;
   /** Booked bank lines against the ledger account of their bank account. */
   getBankLedgerReconciliation?: () => Promise<BankLedgerReconciliationRow[]>;
   /** VAT per tax case plus the UStVA Kennzahlen of a range, live from the ledger (no lock). */
@@ -248,6 +255,44 @@ export interface TaxPayments {
     months: Array<{ period: string; paid: number; refunded: number }>;
     entries: Array<{ entryId: string; entryNumber: number; postingDate: string; reference?: string; bookingText: string; accountNumber: string; amount: number }>;
   }>;
+}
+
+export type LedgerCheckKey = 'vat_without_case' | 'private_on_corporation' | 'foreign_vat' | 'revenue_without_vat' | 'refund_as_revenue' | 'duplicate' | 'transit_open' | 'unmapped_account';
+
+export interface LedgerChecks {
+  from?: string;
+  to?: string;
+  openErrors: number;
+  openWarnings: number;
+  openInfos: number;
+  checks: Array<{
+    key: LedgerCheckKey;
+    label: string;
+    description: string;
+    severity: 'error' | 'warning' | 'info';
+    openCount: number;
+    dismissedCount: number;
+    findings: Array<{
+      subjectKey: string; entryId?: string; entryNumber?: number; postingDate?: string; reference?: string; bookingText?: string;
+      accountNumber?: string; amount?: number; detail: string; dismissed?: { reason: string; at: string; by?: string };
+    }>;
+  }>;
+}
+
+export interface LedgerPartners {
+  from?: string;
+  to?: string;
+  partners: Array<{ name: string; income: number; expense: number; net: number; count: number; firstDate: string; lastDate: string; topAccount?: string }>;
+}
+
+export interface LedgerPartnerDetail {
+  name: string;
+  income: number;
+  expense: number;
+  net: number;
+  count: number;
+  months: Array<{ period: string; income: number; expense: number }>;
+  entries: Array<{ entryId: string; entryNumber: number; postingDate: string; reference?: string; bookingText: string; amount: number }>;
 }
 
 export interface MoneyAccountYear {

@@ -5,6 +5,7 @@ import {
   Card, CardHeader, Donut, EmptyState, ErrorState, IconButton, Menu, Select, Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
   TimeSeriesChart, cn,
 } from '@billme/ui';
+import { readAnalysisYear, writeAnalysisYear } from '@billme/accounting-shared';
 import { getRendererApi } from '../../runtime-api';
 import { SkeletonLoader } from '../components/SkeletonLoader';
 
@@ -78,8 +79,9 @@ export const useLedgerDashboard = (enabled: boolean) => {
   const now = useMemo(() => new Date(), []);
   const base = useOverview(enabled, null);
   const extent = { firstPeriod: base.data?.firstPeriod, lastPeriod: base.data?.lastPeriod };
-  const [range, setRange] = useState<LedgerRange>('12');
-  const [rangeTouched, setRangeTouched] = useState(false);
+  // A year chosen in another analysis (Steuer, Geldkonten, Partner) opens the charts on it.
+  const [range, setRange] = useState<LedgerRange>(() => readAnalysisYear() ?? '12');
+  const [rangeTouched, setRangeTouched] = useState(() => Boolean(readAnalysisYear()));
   // Nothing booked in the last twelve months (e.g. a ledger taken over up to last year): open on the last year with bookings.
   useEffect(() => {
     if (rangeTouched || !base.data?.lastPeriod) return;
@@ -119,7 +121,7 @@ export const useLedgerDashboard = (enabled: boolean) => {
   }, [extent.firstPeriod, extent.lastPeriod, now]);
   return {
     base, chart, all, vat, years, range, rangeOptions,
-    setRange: (next: LedgerRange) => { setRangeTouched(true); setRange(next); },
+    setRange: (next: LedgerRange) => { setRangeTouched(true); setRange(next); if (/^(\d{4}|all)$/.test(next)) writeAnalysisYear(next); },
     currentMonth,
     monthResult: base.data?.months.at(-1)?.result,
     monthBooked: Boolean(base.data?.months.at(-1) && (base.data.months.at(-1)!.revenue !== 0 || base.data.months.at(-1)!.expense !== 0)),

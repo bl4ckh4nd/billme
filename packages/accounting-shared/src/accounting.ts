@@ -78,7 +78,9 @@ export type JournalSourceType =
   | 'fx_valuation'
   | 'loan_schedule'
   | 'payroll_batch'
-  | 'shareholder_flow';
+  | 'shareholder_flow'
+  /** Booked entries read from a DATEV Buchungsstapel or a journal CSV of another bookkeeping. */
+  | 'journal_import';
 
 export interface LedgerBalance {
   accountNumber: string;

@@ -855,6 +855,9 @@ export const ProAccountingPage: React.FC<{ view?: unknown; onViewChange?: (view:
       postManualJournalEntry(input) {
         return ipc.pro.postManualJournalEntry(input);
       },
+      importJournal(input) {
+        return ipc.pro.importJournal(input);
+      },
       getBankLedgerReconciliation() {
         return ipc.pro.getBankLedgerReconciliation();
       },

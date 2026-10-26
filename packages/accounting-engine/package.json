@@ -6,7 +6,8 @@
   "scripts": {},
   "exports": {
     ".": "./src/index.ts",
-    "./datev-export": "./src/datev-export.ts"
+    "./datev-export": "./src/datev-export.ts",
+    "./journal-import": "./src/journal-import.ts"
   },
   "dependencies": {
     "@billme/accounting-shared": "workspace:*",

@@ -22,7 +22,7 @@ import type {
   IncomingInvoiceEntity,
 } from '@billme/accounting-shared';
 import { CorrectionSettlementError, INCOMING_INVOICE_DOCUMENT_UPLOAD_BODY_LIMIT } from '@billme/accounting-shared';
-import { createPostgresProAccountingRepository, listDatevPartyRows, freezeServerEurSnapshot, getServerEurReport, getServerEurSnapshot, listServerEurAnnexFacts, listServerEurCashFacts, listServerEurCashItems, listServerEurSnapshots, saveServerEurAnnexFact, saveServerEurCashFact, saveServerEurClassificationFact } from '@billme/server-data';
+import { createPostgresProAccountingRepository, listDatevPartyRows, runJournalImport, freezeServerEurSnapshot, getServerEurReport, getServerEurSnapshot, listServerEurAnnexFacts, listServerEurCashFacts, listServerEurCashItems, listServerEurSnapshots, saveServerEurAnnexFact, saveServerEurCashFact, saveServerEurClassificationFact } from '@billme/server-data';
 import {
   accountingAccountMappingSchema,
   accountingBackfillPreviewSchema,
@@ -48,6 +48,8 @@ import {
   ledgerBalanceRowSchema,
   proBankLedgerReconciliationRowSchema,
   proPostManualJournalEntryArgsSchema,
+  proImportJournalArgsSchema,
+  proJournalImportResultSchema,
   openItemSchema,
   standaloneAccountingSourceFactSchema,
   transactionSchema,
@@ -98,6 +100,8 @@ const serviceFor = (app: FastifyInstance) => {
   return { ...createProAccountingService(legacyRepository), ...createProAccountingAssetService(repository), repository };
 };
 
+/** A 20 MB journal file as base64 plus the JSON around it. */
+const JOURNAL_IMPORT_BODY_LIMIT = 28_500_000;
 const reasonSchema = z.string().trim().min(1, 'reason is required');
 const decodeIncomingInvoiceDocument = (value: string): Uint8Array => {
   if (value.length % 4 !== 0 || !/^[A-Za-z0-9+/]+={0,2}$/.test(value)) throw new Error('INCOMING_INVOICE_DOCUMENT_INVALID_BASE64');
@@ -900,6 +904,20 @@ export const registerProAccountingRoutes = (app: FastifyInstance, options: ProAc
       const session = await requireMutationSession(app, request.headers.authorization);
       const { reason, ...input } = body;
       return repositoryFor(app).postManualJournalEntry(session.scope, { ...input, mutation: mutationFor(session, reason) });
+    },
+  });
+
+  // Journal import: a DATEV Buchungsstapel or a journal CSV of another bookkeeping; a dry run checks, the real run books all or nothing.
+  typedRoute(app, {
+    method: 'POST',
+    url: `${prefix}/journal/import`,
+    body: proImportJournalArgsSchema,
+    bodyLimit: JOURNAL_IMPORT_BODY_LIMIT,
+    response: proJournalImportResultSchema,
+    async handler({ request, body }) {
+      const session = await requireMutationSession(app, request.headers.authorization);
+      const { reason, ...input } = body;
+      return runJournalImport(requireDatabase(app), session.scope, { ...input, mutation: mutationFor(session, reason) });
     },
   });
 

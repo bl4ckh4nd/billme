@@ -985,6 +985,9 @@ export const createProWebClient = (config: ProWebClientConfig) => {
     postManualJournalEntry(input: unknown) {
       return requestJson({ method: 'POST', body: input, parser: (payload) => payload }, '/api/v1/pro/accounting/journal');
     },
+    importJournal(input: unknown) {
+      return requestJson({ method: 'POST', body: input, parser: (payload) => payload }, '/api/v1/pro/accounting/journal/import');
+    },
     prepareTaxExport(input: unknown) {
       return requestJson({ method: 'POST', body: input, parser: (payload) => payload }, '/api/v1/pro/accounting/tax-exports/prepare');
     },
@@ -1322,6 +1325,10 @@ export const createProHttpBillmeApi = ({ fallback, onInvoke, downloadBlob, ...cl
         case 'pro:postManualJournalEntry': {
           const parsedArgs = ipcRoutes[key].args.parse(args);
           return ipcRoutes[key].result.parse(await client.postManualJournalEntry(parsedArgs)) as IpcResult<K>;
+        }
+        case 'pro:importJournal': {
+          const parsedArgs = ipcRoutes[key].args.parse(args);
+          return ipcRoutes[key].result.parse(await client.importJournal(parsedArgs)) as IpcResult<K>;
         }
         case 'pro:prepareTaxExport': {
           const parsedArgs = ipcRoutes[key].args.parse(args);

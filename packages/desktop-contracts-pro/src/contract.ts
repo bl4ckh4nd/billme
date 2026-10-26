@@ -77,6 +77,8 @@ import {
   accountingPeriodStatusChangeSchema,
   accountingPeriodStatusSchema,
   proPostManualJournalEntryArgsSchema,
+  proImportJournalArgsSchema,
+  proJournalImportResultSchema,
   proBankLedgerReconciliationRowSchema,
   transitOverviewSchema,
   ruleApplicationPreviewSchema,
@@ -738,6 +740,8 @@ export const ipcRoutes = {
   'pro:listOpenItemPayments': { channel: 'pro:listOpenItemPayments', args: z.undefined(), result: z.array(proOpenItemPaymentSchema) },
   'pro:reverseOpenItemPayment': { channel: 'pro:reverseOpenItemPayment', args: proReverseOpenItemPaymentArgsSchema, result: proOpenItemPaymentReversalSchema },
   'pro:postManualJournalEntry': { channel: 'pro:postManualJournalEntry', args: proPostManualJournalEntryArgsSchema, result: journalEntryEntitySchema },
+  /** DATEV Buchungsstapel or journal CSV of another bookkeeping: dryRun checks, otherwise the whole file is booked or nothing. */
+  'pro:importJournal': { channel: 'pro:importJournal', args: proImportJournalArgsSchema, result: proJournalImportResultSchema },
   'pro:getBankLedgerReconciliation': { channel: 'pro:getBankLedgerReconciliation', args: z.undefined(), result: z.array(proBankLedgerReconciliationRowSchema) },
   /** UStVA / ZM / OSS preparation (a frozen, export-only artifact; the UStVA soft-locks its months). Never a submission. */
   'pro:prepareTaxExport': { channel: 'pro:prepareTaxExport', args: proPrepareTaxExportArgsSchema, result: z.object({ run: z.object({ id: z.string() }).passthrough(), artifact: proTaxExportArtifactSchema, replayed: z.boolean() }) },

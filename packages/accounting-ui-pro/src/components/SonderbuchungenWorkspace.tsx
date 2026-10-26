@@ -3,6 +3,7 @@ import { Button, Card, CardHeader, ConfirmDialog, EmptyState, Field, Input, Sele
 import { JournalEntryDetailModal } from './JournalEntryDetail';
 import PeriodLockPanel from './PeriodLockPanel';
 import ManualEntryPanel from './ManualEntryPanel';
+import JournalImportPanel from './JournalImportPanel';
 import UstvaPanel from './UstvaPanel';
 import FiscalYearClosePanel from './FiscalYearClosePanel';
 import type { BusinessReportingProfile } from '../domain/reportTypes';
@@ -528,6 +529,7 @@ export default function SonderbuchungenWorkspace({ dataAdapter, role = 'admin', 
       {area === 'special' ? (
         <>
       <ManualEntryPanel dataAdapter={dataAdapter} accounts={accounts} chart={chart} canMutate={canMutate} corporation={businessReportingProfile?.legalForm === 'gmbh' || businessReportingProfile?.legalForm === 'ug'} onPosted={(entryId) => { setSelectedJournalEntryId(entryId); setPeriodRefresh((value) => value + 1); }} />
+      <JournalImportPanel dataAdapter={dataAdapter} canMutate={canMutate} onImported={() => setPeriodRefresh((value) => value + 1)} />
       <section aria-labelledby="special-entry-form-heading">
         <Card padding="none">
           <CardHeader className={cardHeadClass} title={<span id="special-entry-form-heading">1. Vorgang und Angaben</span>} subtitle={selectedWorkflow.description} />

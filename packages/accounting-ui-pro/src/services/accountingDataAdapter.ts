@@ -175,6 +175,8 @@ export interface ProAccountingDataAdapter {
   reallocateOpenItemPayment?: (paymentId: string, input: { reason: string; partyId: string; allocations: Array<{ openItemId: string; amount: number }>; allocationEventId: string }) => Promise<unknown>;
   /** Freie Buchung (Buchungssatz) with Beleg, text and reason; a line with a tax key is gross. */
   postManualJournalEntry?: (input: ManualJournalEntryInput) => Promise<JournalEntryEntity>;
+  /** DATEV Buchungsstapel or journal CSV of another bookkeeping: dryRun checks, otherwise the whole file is booked or nothing. */
+  importJournal?: (input: JournalImportInput) => Promise<JournalImportResult>;
   /** Booked bank lines against the ledger account of their bank account. */
   getBankLedgerReconciliation?: () => Promise<BankLedgerReconciliationRow[]>;
   /** VAT per tax case plus the UStVA Kennzahlen of a range, live from the ledger (no lock). */
@@ -215,6 +217,44 @@ export interface ManualJournalEntryInput {
   idempotencyKey: string;
   softLockOverride?: boolean;
   overrideReason?: string;
+}
+
+export interface JournalImportInput {
+  reason: string;
+  format: 'datev' | 'journal_csv';
+  fileName?: string;
+  contentBase64: string;
+  dryRun: boolean;
+  softLockOverride?: boolean;
+  overrideReason?: string;
+}
+
+export interface JournalImportResult {
+  format: 'datev' | 'journal_csv';
+  fileName?: string;
+  fileSha256: string;
+  dryRun: boolean;
+  posted: boolean;
+  source: { chart?: 'SKR03' | 'SKR04'; from?: string; to?: string; label?: string; accountLength?: number; consultantNumber?: string; clientNumber?: string };
+  entryCount: number;
+  newCount: number;
+  importedCount: number;
+  invalidCount: number;
+  postedCount: number;
+  debitTotal: number;
+  firstDate?: string;
+  lastDate?: string;
+  missingAccounts: string[];
+  issues: Array<{ row: number; message: string; blocking: boolean }>;
+  entries: Array<{
+    key: string;
+    rows: number[];
+    postingDate: string;
+    reference: string;
+    bookingText: string;
+    status: 'new' | 'imported' | 'invalid';
+    lines: Array<{ accountNumber: string; accountName?: string; debitAmount: number; creditAmount: number; taxCaseKey?: string; taxAmount?: number; memo?: string }>;
+  }>;
 }
 
 export interface BankLedgerReconciliationRow {

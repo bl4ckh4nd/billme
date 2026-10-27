@@ -801,7 +801,7 @@ export const createProWebClient = (config: ProWebClientConfig) => {
       return requestJson({ method: 'POST', body: input, parser: reportSnapshotParser }, '/api/v1/pro/accounting/reports/snapshots');
     },
     getAccountMappingHealth(chart?: 'SKR03' | 'SKR04', reportType?: 'bwa01' | 'management-guv' | 'hgb-guv' | 'hgb-bilanz', asOfDate?: string) {
-      return requestJson({ parser: z.object({ chart: z.enum(['SKR03', 'SKR04']).optional(), unmapped: z.array(z.object({ accountNumber: z.string(), statementType: z.string() })).optional() }), query: chart || reportType || asOfDate ? { chart, reportType, asOfDate } : undefined }, '/api/v1/pro/accounting/mappings/health');
+      return requestJson({ parser: z.object({ chart: z.enum(['SKR03', 'SKR04']).optional(), unmapped: z.array(z.object({ accountNumber: z.string(), statementType: z.string(), accountName: z.string().optional() })).optional() }), query: chart || reportType || asOfDate ? { chart, reportType, asOfDate } : undefined }, '/api/v1/pro/accounting/mappings/health');
     },
     listReportMappingPositions(reportType: 'bwa01' | 'management-guv' | 'hgb-guv' | 'hgb-bilanz', asOfDate: string) {
       return requestJson({ parser: parseArray(z.object({ key: z.string(), label: z.string(), kind: z.enum(['heading', 'line', 'subtotal', 'result']), side: z.enum(['asset', 'liability']).optional() })), query: { reportType, asOfDate } }, '/api/v1/pro/accounting/mappings/positions');
@@ -1647,6 +1647,7 @@ export const createProHttpBillmeApi = ({ fallback, onInvoke, downloadBlob, ...cl
             unmapped: (report.unmapped ?? []).map((item) => ({
               accountNumber: item.accountNumber,
               statement: parsedArgs.statement ?? item.statementType,
+              ...(item.accountName ? { accountName: item.accountName } : {}),
             })),
           };
           return ipcRoutes[key].result.parse(result) as IpcResult<K>;

@@ -4466,7 +4466,10 @@ const invoke = async <K extends IpcRouteKey>(key: K, args: IpcArgs<K>): Promise<
         unmapped: balances
           .map((balance) => balance.accountNumber)
           .filter((accountNumber) => !mockReportAccountIsCovered(accountNumber))
-          .map((accountNumber) => ({ accountNumber, statement })),
+          .map((accountNumber) => {
+            const accountName = mockLedgerAccounts.find((row) => row.accountNumber === accountNumber)?.name;
+            return { accountNumber, statement, ...(accountName ? { accountName } : {}) };
+          }),
       } as IpcResult<K>;
     }
 

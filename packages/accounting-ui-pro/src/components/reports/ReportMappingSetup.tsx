@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Button, Input, Select } from '@billme/ui';
+import { X } from 'lucide-react';
+import { Button, HelpHint, IconButton, Input, Modal, Select, cn, useActionFeedback } from '@billme/ui';
 import type { ProAccountingDataAdapter } from '../../services/accountingDataAdapter';
 import { permissionContextForRole } from '../../domain/permissions';
 import type { UserRole } from '../../types';
@@ -50,9 +51,10 @@ export default function ReportMappingSetup({ dataAdapter, chart, role, statement
   const [selections, setSelections] = useState<Record<string, { statement: ReportMappingStatement; position: string }>>({});
   const [reason, setReason] = useState('');
   const [loading, setLoading] = useState(false);
-  const [saving, setSaving] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [notice, setNotice] = useState<string | null>(null);
+  const [open, setOpen] = useState(false);
+  const { notify } = useActionFeedback('report-mapping');
   const loadRequestId = useRef(0);
   const mounted = useRef(true);
 
@@ -61,7 +63,6 @@ export default function ReportMappingSetup({ dataAdapter, chart, role, statement
     if (!enabled || !dataAdapter?.getReportMappingHealth || !dataAdapter.listReportMappingPositions) return;
     setLoading(true);
     setError(null);
-    setNotice(null);
     try {
       const healths = await Promise.all(statements.map((statement) => dataAdapter.getReportMappingHealth!({ chart, statement, asOfDate })));
       const nextHealth = normalizeHealth({
@@ -102,149 +103,181 @@ export default function ReportMappingSetup({ dataAdapter, chart, role, statement
     };
   }, []);
 
-  const mutationDisabled = !canMutate || loading || Boolean(saving) || !reason.trim();
-
-  const save = async (entry: ReportMappingMissingAccount) => {
-    if (!dataAdapter?.upsertReportMappingOverride) return;
-    const id = rowId(entry);
-    const selected = selections[id];
+  const missingRows = useMemo(() => health?.unmapped ?? [], [health]);
+  const groups = useMemo(() => {
+    const byStatement = new Map<ReportMappingStatement, ReportMappingMissingAccount[]>();
+    for (const entry of missingRows) byStatement.set(entry.statement, [...(byStatement.get(entry.statement) ?? []), entry]);
+    return [...byStatement];
+  }, [missingRows]);
+  const chosen = missingRows.flatMap((entry) => {
+    const selected = selections[rowId(entry)];
     const position = selected && positions[selected.statement]?.find((item) => item.key === selected.position);
-    if (!selected || !position) {
-      setError('Bitte wählen Sie eine erlaubte Report-Position aus dem Katalog.');
-      return;
-    }
+    return position ? [{ entry, statement: selected.statement, position }] : [];
+  });
+
+  // Sequential on purpose: each override is its own audited mutation, and a failure stops the rest.
+  const saveAll = async () => {
+    if (!dataAdapter?.upsertReportMappingOverride || !chosen.length) return;
     if (!reason.trim()) {
       setError('Bitte geben Sie einen Audit-Grund für das Mapping an.');
       return;
     }
-    setSaving(id);
+    setSaving(true);
     setError(null);
-    setNotice(null);
-    const input: ReportMappingOverrideInput = {
-      chart,
-      asOfDate: validFrom,
-      accountNumber: entry.accountNumber,
-      statement: selected.statement,
-      position: position.key,
-      label: position.label,
-      ...(position.side ? { side: position.side } : {}),
-      reason: reason.trim(),
-    };
+    let saved = 0;
     try {
-      await dataAdapter.upsertReportMappingOverride(input);
-      setNotice(`Mapping für Konto ${entry.accountNumber} gespeichert.`);
+      for (const { entry, statement, position } of chosen) {
+        const input: ReportMappingOverrideInput = {
+          chart,
+          asOfDate: validFrom,
+          accountNumber: entry.accountNumber,
+          statement,
+          position: position.key,
+          label: position.label,
+          ...(position.side ? { side: position.side } : {}),
+          reason: reason.trim(),
+        };
+        await dataAdapter.upsertReportMappingOverride(input);
+        saved += 1;
+      }
       setReason('');
-      onMappingChanged?.();
+      if (saved === missingRows.length) setOpen(false);
+      notify('success', saved === 1 ? `Konto ${chosen[0]!.entry.accountNumber} zugeordnet.` : `${saved} Konten zugeordnet.`);
     } catch (saveError) {
-      setError(saveError instanceof Error ? saveError.message : 'Mapping konnte nicht gespeichert werden.');
+      const failed = chosen[saved]!.entry.accountNumber;
+      setError(`Konto ${failed}: ${saveError instanceof Error ? saveError.message : 'Mapping konnte nicht gespeichert werden.'}${saved ? ` ${saved} davor gespeichert.` : ''}`);
     } finally {
-      setSaving(null);
+      setSaving(false);
+      if (saved) {
+        onMappingChanged?.();
+        void load();
+      }
     }
   };
 
-  const missingRows = useMemo(() => health?.unmapped ?? [], [health]);
   if (!enabled) return null;
+  const blocked = Boolean(activeReportMapping?.blocked);
+  // Nothing to do: the report status badge already says the mapping is fine.
+  if (!error && (!health || (missingRows.length === 0 && !blocked))) return null;
 
-  const checkButton = (
-    <Button type="button" size="sm" variant="secondary" onClick={() => void load()} disabled={loading || Boolean(saving)} aria-busy={loading}>
-      {loading ? 'Prüfe Mapping…' : 'Mapping prüfen'}
-    </Button>
-  );
-
-  if (health && missingRows.length === 0 && !activeReportMapping?.blocked && !error && !notice) {
-    return (
-      <section className="flex flex-wrap items-center gap-3 rounded-control border border-success-border bg-success-bg px-3 py-2 text-control text-success-text" aria-labelledby="report-mapping-title">
-        <h2 id="report-mapping-title" className="sr-only">Report-Konten einrichten</h2>
-        <p className="min-w-0 flex-1" role="status">Alle Konten sind report-spezifisch zugeordnet.</p>
-        {checkButton}
-      </section>
-    );
-  }
+  const statementLabels = [...new Set(missingRows.map((entry) => reportMappingStatementLabel(entry.statement)))].join(', ');
+  const preview = missingRows.slice(0, 3).map((entry) => entry.accountNumber).join(' · ');
+  const title = blocked ? 'Export gesperrt' : missingRows.length === 1 ? '1 Konto ohne Position' : `${missingRows.length} Konten ohne Position`;
+  const detail = !health
+    ? error
+    : missingRows.length === 0
+      ? `Mapping unvollständig für ${activeReportMapping?.label}`
+      : blocked
+        ? `${missingRows.length === 1 ? '1 Konto' : `${missingRows.length} Konten`} ohne Position in ${statementLabels}`
+        : `in ${statementLabels}`;
+  const validFromLabel = validFrom.split('-').reverse().join('.');
 
   return (
-    <section className="rounded-card border border-border bg-surface" aria-labelledby="report-mapping-title">
-      <div className="flex flex-wrap items-start justify-between gap-3 border-b border-border px-3.5 py-3">
-        <div className="min-w-48 flex-1">
-          <h2 id="report-mapping-title" className="text-section text-foreground">Report-Konten einrichten</h2>
-          <p className="mt-0.5 text-caption text-muted">Fehlende Konten werden je Report-Katalog eingerichtet. Positionen stammen ausschließlich aus dem erlaubten Katalog.</p>
-        </div>
-        {checkButton}
-      </div>
+    <>
+      <section
+        className={cn(
+          'flex flex-wrap items-center gap-x-3 gap-y-1 rounded-control border py-1.5 pl-3 pr-1.5',
+          blocked || !health ? 'border-error-border bg-error-bg' : 'border-warning-border bg-warning-bg',
+        )}
+        aria-labelledby="report-mapping-title"
+      >
+        <h2 id="report-mapping-title" className={cn('text-control font-semibold', blocked || !health ? 'text-error-text' : 'text-warning-text')}>
+          {health ? title : 'Mapping-Prüfung fehlgeschlagen'}
+        </h2>
+        <p className="min-w-0 flex-1 truncate text-caption text-foreground-secondary" role="status">
+          {detail}
+          {health && missingRows.length ? <> · <span className="font-mono">{preview}</span>{missingRows.length > 3 ? ` +${missingRows.length - 3}` : ''}</> : null}
+        </p>
+        {health && missingRows.length ? (
+          <Button type="button" size="sm" variant={canMutate ? 'primary' : 'secondary'} onClick={() => { setError(null); setOpen(true); }}>
+            {canMutate ? 'Zuordnen' : 'Ansehen'}
+          </Button>
+        ) : (
+          <Button type="button" size="sm" variant="secondary" onClick={() => void load()} disabled={loading} aria-busy={loading}>
+            {loading ? 'Prüfe…' : 'Erneut prüfen'}
+          </Button>
+        )}
+      </section>
 
-      <div className="space-y-3 p-3.5">
-        {activeReportMapping?.blocked ? (
-          <div className="rounded-control border border-error-border bg-error-bg px-3 py-2.5 text-control text-error-text" role="alert">
-            <div className="font-semibold">Mapping unvollständig für {activeReportMapping.label}</div>
-            <p className="mt-1">Export und Abschluss dieses Reports bleiben gesperrt, bis alle Konten zugeordnet sind.</p>
-            {health && missingRows.length === 0 ? (
-              <p className="mt-1 text-caption">Die übrigen Report-Kataloge sind vollständig zugeordnet.</p>
+      <Modal open={open} onClose={() => { if (!saving) setOpen(false); }} placement="right" titleId="report-mapping-sheet-title" descriptionId="report-mapping-sheet-description" ariaBusy={saving}>
+        <div className="flex items-start gap-3 border-b border-border px-4 py-3">
+          <div className="min-w-0 flex-1">
+            <h2 id="report-mapping-sheet-title" className="text-section text-foreground">Report-Konten zuordnen</h2>
+            <p id="report-mapping-sheet-description" className="mt-0.5 text-caption text-muted">
+              {chart} · gültig ab {validFromLabel} · {chosen.length} von {missingRows.length} gewählt
+            </p>
+          </div>
+          <IconButton aria-label="Schließen" size="sm" variant="ghost" onClick={() => setOpen(false)} disabled={saving}>
+            <X size={16} aria-hidden="true" />
+          </IconButton>
+        </div>
+
+        <div className="min-h-0 flex-1 overflow-y-auto px-4 pb-3">
+          {error ? <div className="mt-3 rounded-control border border-error-border bg-error-bg px-3 py-2.5 text-control text-error-text" role="alert" aria-live="assertive">{error}</div> : null}
+          {groups.map(([statement, entries]) => (
+            <section key={statement} aria-labelledby={`report-mapping-group-${statement}`}>
+              <h3 id={`report-mapping-group-${statement}`} className="mt-4 mb-1 text-caption font-semibold text-muted">
+                {reportMappingStatementLabel(statement)} · {entries.length}
+              </h3>
+              <ul className="divide-y divide-border border-y border-border">
+                {entries.map((entry) => {
+                  const id = rowId(entry);
+                  const selected = selections[id] ?? { statement: entry.statement, position: '' };
+                  const allowedPositions = positions[selected.statement] ?? [];
+                  return (
+                    <li key={id} className="grid grid-cols-[3.5rem_minmax(0,1fr)_minmax(0,14rem)] items-center gap-2 py-1.5">
+                      <span className="font-mono text-control font-semibold text-foreground">{entry.accountNumber}</span>
+                      <span className="truncate text-control text-foreground-secondary" title={entry.accountName}>{entry.accountName ?? 'Ohne Bezeichnung'}</span>
+                      <Select
+                        id={`report-mapping-position-${id}`}
+                        aria-label={`Position für Konto ${entry.accountNumber}`}
+                        value={selected.position}
+                        disabled={!canMutate || saving || allowedPositions.length === 0}
+                        onChange={(event) => setSelections((current) => ({ ...current, [id]: { ...selected, position: event.target.value } }))}
+                        className={selected.position ? 'border-accent' : undefined}
+                        fullWidth
+                      >
+                        <option value="">Position …</option>
+                        {allowedPositions.map((position) => <option key={position.key} value={position.key}>{position.label}{position.side ? ` · ${position.side === 'asset' ? 'Aktiva' : 'Passiva'}` : ''}</option>)}
+                      </Select>
+                    </li>
+                  );
+                })}
+              </ul>
+            </section>
+          ))}
+        </div>
+
+        <div className="space-y-2 border-t border-border bg-surface-sunken px-4 py-3">
+          {canMutate ? (
+            <Input
+              id="report-mapping-reason"
+              label="Audit-Grund für Mapping-Änderungen"
+              value={reason}
+              onChange={(event) => setReason(event.target.value)}
+              placeholder="z. B. Kontenabstimmung Monatsabschluss"
+              maxLength={500}
+              required
+              fullWidth
+            />
+          ) : <p className="text-caption text-muted" role="status">Ihre Rolle darf Report-Mappings nur lesen.</p>}
+          <div className="flex items-center gap-2">
+            <span className="flex min-w-0 flex-1 items-center gap-1 text-caption text-muted">
+              Positionen nur aus dem erlaubten Katalog
+              <HelpHint label="Herkunft der Kataloge">
+                <p><strong>BWA-Katalog:</strong> Die öffentliche Positionsstruktur ist mit verifizierter Provenienz hinterlegt.</p>
+                <p className="mt-1"><strong>DATEV:</strong> Der lizenzierte Konten-/Positionsinhalt wird nicht eingebettet. Verwenden Sie den externen DATEV-Import-Gate.</p>
+              </HelpHint>
+            </span>
+            <Button type="button" variant="secondary" onClick={() => setOpen(false)} disabled={saving}>Abbrechen</Button>
+            {canMutate ? (
+              <Button type="button" onClick={() => void saveAll()} disabled={saving || loading || !chosen.length || !reason.trim()} aria-busy={saving}>
+                {saving ? 'Speichere…' : chosen.length ? `${chosen.length} zuordnen` : 'Zuordnen'}
+              </Button>
             ) : null}
           </div>
-        ) : health && missingRows.length === 0 ? (
-          <p className="rounded-control border border-success-border bg-success-bg px-3 py-2.5 text-control text-success-text" role="status">Alle Konten sind report-spezifisch zugeordnet.</p>
-        ) : null}
-        {loading && !health ? <p className="text-control text-muted" role="status" aria-live="polite">Lade fehlende Report-Konten…</p> : null}
-        {error ? <div className="rounded-control border border-error-border bg-error-bg px-3 py-2.5 text-control text-error-text" role="alert" aria-live="assertive">{error}</div> : null}
-        {notice ? <div className="rounded-control border border-success-border bg-success-bg px-3 py-2.5 text-control text-success-text" role="status" aria-live="polite">{notice}</div> : null}
-
-        {missingRows.length > 0 ? (
-          <>
-            <div className="max-w-xl">
-              <Input
-                id="report-mapping-reason"
-                label="Audit-Grund für Mapping-Änderungen"
-                value={reason}
-                onChange={(event) => setReason(event.target.value)}
-                placeholder="z. B. Kontenabstimmung Monatsabschluss"
-                maxLength={500}
-                required
-                fullWidth
-              />
-            </div>
-            <div className="divide-y divide-border border-y border-border">
-              {missingRows.map((entry) => {
-                const id = rowId(entry);
-                const selected = selections[id] ?? { statement: entry.statement, position: '' };
-                const allowedPositions = positions[selected.statement] ?? [];
-                const selectedPosition = allowedPositions.find((position) => position.key === selected.position);
-                return (
-                  <div key={id} className="grid gap-2 py-3 lg:grid-cols-[6rem_12rem_minmax(0,1fr)_auto] lg:items-start">
-                    <div>
-                      <div className="mb-1 text-caption font-medium text-foreground-secondary">Konto</div>
-                      <div className="flex min-h-8.5 items-center font-mono text-control font-semibold text-foreground">{entry.accountNumber}</div>
-                    </div>
-                    <div>
-                      <div className="mb-1 text-caption font-medium text-foreground-secondary">Report</div>
-                      <div className="flex min-h-8.5 items-center text-control text-foreground">{reportMappingStatementLabel(entry.statement)}</div>
-                    </div>
-                    <Select
-                      id={`report-mapping-position-${id}`}
-                      label="Erlaubte Position"
-                      value={selected.position}
-                      disabled={!canMutate || Boolean(saving) || allowedPositions.length === 0}
-                      onChange={(event) => setSelections((current) => ({ ...current, [id]: { ...selected, position: event.target.value } }))}
-                      hint={selectedPosition?.side ? `Seite aus Katalog: ${selectedPosition.side === 'asset' ? 'Aktiva' : 'Passiva'}` : undefined}
-                      fullWidth
-                    >
-                      <option value="">Position auswählen…</option>
-                      {allowedPositions.map((position) => <option key={position.key} value={position.key}>{position.label}{position.side ? ` · ${position.side === 'asset' ? 'Aktiva' : 'Passiva'}` : ''}</option>)}
-                    </Select>
-                    <Button type="button" variant="secondary" className="lg:mt-5" onClick={() => void save(entry)} disabled={mutationDisabled || !selectedPosition || saving === id} aria-busy={saving === id}>
-                      {saving === id ? 'Speichere…' : 'Zuordnen'}
-                    </Button>
-                  </div>
-                );
-              })}
-            </div>
-            {!canMutate ? <p className="text-caption text-muted" role="status">Ihre Rolle darf Report-Mappings nur lesen.</p> : null}
-          </>
-        ) : null}
-
-        <div className="space-y-1 text-caption text-muted">
-          <p><strong>BWA-Katalog:</strong> Die öffentliche Positionsstruktur ist mit verifizierter Provenienz hinterlegt.</p>
-          <p><strong>DATEV:</strong> Der lizenzierte Konten-/Positionsinhalt wird nicht eingebettet. Verwenden Sie den externen DATEV-Import-Gate.</p>
         </div>
-      </div>
-    </section>
+      </Modal>
+    </>
   );
 }

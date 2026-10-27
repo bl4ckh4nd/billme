@@ -3,6 +3,7 @@ export type ReportMappingSide = 'asset' | 'liability';
 
 export interface ReportMappingMissingAccount {
   accountNumber: string;
+  accountName?: string;
   statement: ReportMappingStatement;
 }
 

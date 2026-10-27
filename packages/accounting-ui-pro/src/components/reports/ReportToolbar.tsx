@@ -10,12 +10,13 @@ interface ReportToolbarProps {
   onExport?: (format: 'pdf' | 'csv') => void;
   exporting?: boolean;
   exportBlockedReason?: string;
+  hideExportBlockedReason?: boolean;
   /** Native EÜR is currently a fixed, print-only 2025 report. */
   lockNativeEurPeriod?: boolean;
   nativeEurTaxYear?: number;
 }
 
-export default function ReportToolbar({ filters, onChange, activeTab, onExport, exporting = false, exportBlockedReason, lockNativeEurPeriod = false, nativeEurTaxYear = 2025 }: ReportToolbarProps) {
+export default function ReportToolbar({ filters, onChange, activeTab, onExport, exporting = false, exportBlockedReason, hideExportBlockedReason = false, lockNativeEurPeriod = false, nativeEurTaxYear = 2025 }: ReportToolbarProps) {
   const nativeEurPeriodDescriptionId = 'native-eur-period-description';
   const forceNativeEurPeriod = () => onChange({
     ...filters,
@@ -141,7 +142,7 @@ export default function ReportToolbar({ filters, onChange, activeTab, onExport, 
           {nativeEurTaxYear === 2025 ? 'Die native EÜR ist derzeit nur für das Druckformular 2025 verfügbar. Der Zeitraum ist deshalb fest auf 01.01.2025–31.12.2025 eingestellt.' : `Die native EÜR ist für das Katalogjahr ${nativeEurTaxYear} verfügbar. Der Zeitraum ist deshalb fest auf 01.01.${nativeEurTaxYear}–31.12.${nativeEurTaxYear} eingestellt.`}
         </p>
       ) : null}
-      {exportBlockedReason ? <p className="text-caption text-error-text" role="status">{exportBlockedReason}</p> : null}
+      {exportBlockedReason && !hideExportBlockedReason ? <p className="text-caption text-error-text" role="status">{exportBlockedReason}</p> : null}
     </div>
   );
 }

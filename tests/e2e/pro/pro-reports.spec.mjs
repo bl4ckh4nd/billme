@@ -45,7 +45,9 @@ test('shows the SuSa from the seeded postings, keeps the Management-GuV closed u
   for (const [tab, label] of [['Management-GuV', 'Management-GuV']]) {
     await tabs.getByRole('button', { name: tab, exact: true }).click();
     await expect(tabs.getByRole('button', { name: tab, exact: true })).toHaveAttribute('aria-pressed', 'true');
-    await expect(main.getByRole('alert').filter({ hasText: `Mapping unvollständig für ${label}` })).toBeVisible();
+    await expect(main.getByRole('region', { name: 'Export gesperrt' })).toContainText(`ohne Position in ${label}`);
+    // The strip carries the reason once; the toolbar only disables the export buttons.
+    await expect(main.getByText(/^Export nicht verfügbar/)).toHaveCount(0);
     await expect(main.getByRole('alert').filter({ hasText: 'Auswertung blockiert: Konten-Mapping unvollständig' })).toBeVisible();
     await expect(main.getByRole('button', { name: 'PDF' })).toBeDisabled();
     await expect(main.getByRole('button', { name: 'CSV' })).toBeDisabled();

@@ -171,6 +171,13 @@ const reportMappings = async (db: PostgresQueryable, scope: TenantScope, chart: 
   }).filter((mapping): mapping is ReportingMapping => mapping !== null);
 };
 
+// Tenant name first, then the shipped chart name; SuSa and the mapping health show the same label.
+const ledgerAccountNames = async (db: PostgresQueryable, tenantId: string, chart: string, accountNumbers: string[]): Promise<Map<string, string | undefined>> => {
+  if (!accountNumbers.length) return new Map();
+  const rows = await q<any>(db, `SELECT n.account_number,COALESCE(t.name,g.name) AS name FROM unnest($3::text[]) AS n(account_number) LEFT JOIN tenant_ledger_accounts t ON t.tenant_id=$1 AND t.chart=$2 AND t.account_number=n.account_number LEFT JOIN ledger_accounts g ON g.chart=$2 AND g.account_number=n.account_number`, [tenantId, chart, accountNumbers]);
+  return new Map(rows.map((row) => [String(row.account_number), row.name == null ? undefined : String(row.name)]));
+};
+
 const eurBalanceAccounts = async (db: PostgresQueryable, scope: TenantScope, chart: 'SKR03' | 'SKR04', reportType: string): Promise<Set<string>> => {
   if (reportType !== 'bwa01' && reportType !== 'management-guv') return new Set();
   const row = (await q<any>(db, `SELECT settings_json FROM server_settings WHERE tenant_id=$1`, [tenant(scope)]))[0];
@@ -1007,7 +1014,7 @@ export type ProAccountingReportRepository = Omit<ProAccountingRepository, 'getGu
   listReportSnapshots(scope: TenantScope, reportType?: string): Promise<ReportSnapshotRecord[]>;
   getReportSnapshot(scope: TenantScope, id: string): Promise<ReportSnapshotRecord>;
   saveReportSnapshot(scope: TenantScope, input: { reportType: string; args: unknown; payload: unknown; mutation?: AccountingMutationContext }): Promise<ReportSnapshotRecord>;
-  getAccountMappingHealth(scope: TenantScope, chart?: 'SKR03' | 'SKR04', reportType?: ReportMappingType, asOfDate?: string): Promise<{ chart: string; reportType?: string; unmapped: Array<{ accountNumber: string; statementType: string }> }>;
+  getAccountMappingHealth(scope: TenantScope, chart?: 'SKR03' | 'SKR04', reportType?: ReportMappingType, asOfDate?: string): Promise<{ chart: string; reportType?: string; unmapped: Array<{ accountNumber: string; statementType: string; accountName?: string }> }>;
   listReportMappingPositions(scope: TenantScope, reportType: ReportMappingType, asOfDate: string): Promise<ReturnType<typeof listReportMappingPositions>>;
   upsertAccountMappingOverride(scope: TenantScope, input: { chart: 'SKR03' | 'SKR04'; asOfDate: string; accountNumber: string; statementType: ReportMappingType; positionKey: string; positionLabel: string; balanceSide?: 'asset' | 'liability'; mutation?: AccountingMutationContext }): Promise<unknown>;
 };
@@ -1312,7 +1319,7 @@ export const createPostgresProAccountingRepository = (db: PostgresQueryable): Pr
     const asOfDate = args.to ?? args.asOfDate;
     const balances = await this.getLedgerBalances(scope, { ...args, fromDate, asOfDate });
     const chart = requestedChart ?? (await policy(db, tenant(scope))).activeChart;
-    const names = new Map((await q<any>(db, `SELECT n.account_number,COALESCE(t.name,g.name) AS name FROM unnest($3::text[]) AS n(account_number) LEFT JOIN tenant_ledger_accounts t ON t.tenant_id=$1 AND t.chart=$2 AND t.account_number=n.account_number LEFT JOIN ledger_accounts g ON g.chart=$2 AND g.account_number=n.account_number`, [tenant(scope), chart, balances.map((row) => row.accountNumber)])).map((row) => [String(row.account_number), row.name == null ? undefined : String(row.name)]));
+    const names = await ledgerAccountNames(db, tenant(scope), chart, balances.map((row) => row.accountNumber));
     const rows = balances.map((row) => ({ ...row, accountName: names.get(row.accountNumber) }));
     return { from: fromDate, to: asOfDate, chart: requestedChart, asOfDate: asOfDate ?? now().slice(0, 10), rows, totals: { debit: round(rows.reduce((s, r) => s + r.debitTurnover, 0)), credit: round(rows.reduce((s, r) => s + r.creditTurnover, 0)), balance: round(rows.reduce((s, r) => s + r.closingBalance, 0)) } };
   },
@@ -1399,7 +1406,9 @@ export const createPostgresProAccountingRepository = (db: PostgresQueryable): Pr
     const size = await reportProfile(db, tenant(scope), activeChart, requested).then((profile) => profile.size, () => 'small' as const);
     const covered = new Set(defaultReportMappings(activeChart, rows.map((row) => String(row.account_number)), size, effectiveAsOfDate, () => false, requested === 'bwa01' ? 'bwa01' : 'hgb-guv')
       .filter((mapping) => mapping.statement === 'hgb-bilanz' || mapping.statement === 'bwa01' || requested === 'hgb-guv' || requested === 'hgb-bilanz').map((mapping) => mapping.accountNumber));
-    return { chart: activeChart, reportType: requested, unmapped: rows.filter((row) => !excluded.has(String(row.account_number)) && !covered.has(String(row.account_number))).map((r) => ({ accountNumber: String(r.account_number), statementType: String(r.statement_type) })) };
+    const unmapped = rows.filter((row) => !excluded.has(String(row.account_number)) && !covered.has(String(row.account_number)));
+    const names = await ledgerAccountNames(db, tenant(scope), activeChart, unmapped.map((row) => String(row.account_number)));
+    return { chart: activeChart, reportType: requested, unmapped: unmapped.map((r) => ({ accountNumber: String(r.account_number), statementType: String(r.statement_type), accountName: names.get(String(r.account_number)) })) };
   },
   async listReportMappingPositions(scope, reportType, asOfDate) {
     const p = await policy(db, tenant(scope));

@@ -309,14 +309,24 @@ const bookRent = async (page) => {
   return transaction;
 };
 
-/** Maps one account for one report catalog in "Report-Konten einrichten" and waits until it leaves the open list. */
-const mapAccount = async (page, account, statement, positionLabel) => {
-  const main = page.getByRole('main');
-  const position = page.locator(`[id="report-mapping-position-${account}:${statement}"]`);
-  await main.getByRole('textbox', { name: 'Audit-Grund für Mapping-Änderungen' }).fill('E2E Kontenzuordnung');
-  await position.selectOption({ label: positionLabel });
-  await main.locator('div').filter({ has: position }).filter({ has: page.getByRole('button', { name: 'Zuordnen' }) }).last().getByRole('button', { name: 'Zuordnen' }).click();
-  await position.waitFor({ state: 'detached' });
+/**
+ * Opens "Report-Konten zuordnen" from the mapping strip, picks a position per account and saves them in one go;
+ * waits until the mapped accounts leave the open list.
+ */
+const mapAccounts = async (page, rows, screenshot) => {
+  if (screenshot) await page.screenshot({ path: shot(`${screenshot}-strip`) });
+  await page.getByRole('main').getByRole('button', { name: 'Zuordnen', exact: true }).click();
+  const sheet = page.getByRole('dialog', { name: 'Report-Konten zuordnen' });
+  for (const [account, statement, positionLabel] of rows) {
+    await sheet.locator(`[id="report-mapping-position-${account}:${statement}"]`).selectOption({ label: positionLabel });
+  }
+  await sheet.getByRole('textbox', { name: 'Audit-Grund für Mapping-Änderungen' }).fill('E2E Kontenzuordnung');
+  if (screenshot) await page.screenshot({ path: shot(`${screenshot}-sheet`) });
+  await sheet.getByRole('button', { name: `${rows.length} zuordnen` }).click();
+  for (const [account, statement] of rows) {
+    await page.locator(`[id="report-mapping-position-${account}:${statement}"]`).waitFor({ state: 'detached' });
+  }
+  if (await sheet.isVisible()) await sheet.getByRole('button', { name: 'Schließen' }).click();
 };
 
 /** A year with revenue (invoice + seeded invoices) and one expense; the expected figures come from the posted ledger. */
@@ -386,9 +396,11 @@ test('Management-GuV shows the year from the postings once its accounts are mapp
 
   // The balance-sheet accounts fall to their SKR range default; the P&L accounts need a management position.
   await tabs.getByRole('button', { name: 'Management-GuV', exact: true }).click();
-  await mapAccount(page, '8400', 'management-guv', 'Betriebliche Erlöse');
-  await mapAccount(page, '8195', 'management-guv', 'Betriebliche Erlöse');
-  await mapAccount(page, '4210', 'management-guv', 'Fixkosten');
+  await mapAccounts(page, [
+    ['8400', 'management-guv', 'Betriebliche Erlöse'],
+    ['8195', 'management-guv', 'Betriebliche Erlöse'],
+    ['4210', 'management-guv', 'Fixkosten'],
+  ], '01-report-mapping');
   await tabs.getByRole('button', { name: 'Management-GuV', exact: true }).click();
   const guv = page.getByRole('table', { name: 'Management-GuV' });
   await expect(guv.getByRole('row', { name: /^Betriebliche Erlöse Konten: .*8400.* 5\.700,50 €/ })).toBeVisible();
@@ -416,9 +428,11 @@ test('Übersicht shows the result of the month from the postings', async () => {
   // The management GuV itself still asks for its positions.
   const tabs = await openReports(page);
   await tabs.getByRole('button', { name: 'Management-GuV', exact: true }).click();
-  await mapAccount(page, '8400', 'management-guv', 'Betriebliche Erlöse');
   // The seeded Kleinunternehmer revenue account blocks the management GuV until it has a position too.
-  await mapAccount(page, '8195', 'management-guv', 'Betriebliche Erlöse');
+  await mapAccounts(page, [
+    ['8400', 'management-guv', 'Betriebliche Erlöse'],
+    ['8195', 'management-guv', 'Betriebliche Erlöse'],
+  ]);
   const month = today().slice(0, 7);
   const monthEnd = `${month}-${String(new Date(Number(month.slice(0, 4)), Number(month.slice(5, 7)), 0).getDate()).padStart(2, '0')}`;
   expect(await invokeDesktopIpc(page, 'pro:getGuvReport', { from: `${month}-01`, to: monthEnd })).toMatchObject({ blocking: false, netResult: 1000 });

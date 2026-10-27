@@ -25,6 +25,8 @@ export interface ModalProps {
   initialFocusRef?: React.RefObject<HTMLElement | null>;
   dismissOnBackdrop?: boolean;
   ariaBusy?: boolean;
+  /** `right` docks the panel to the right edge at full height (side sheet). */
+  placement?: 'center' | 'right';
   className?: string;
   children: React.ReactNode;
 }
@@ -39,6 +41,7 @@ export const Modal: React.FC<ModalProps> = ({
   initialFocusRef,
   dismissOnBackdrop = true,
   ariaBusy = false,
+  placement = 'center',
   className,
   children,
 }) => {
@@ -142,7 +145,8 @@ export const Modal: React.FC<ModalProps> = ({
       <div
         ref={overlayRef}
         className={cn(
-          'ui-enter-fade fixed inset-0 z-[var(--z-overlay)] flex items-start justify-center overflow-y-auto bg-ink-950/45 px-4 pb-4 pt-[8vh]',
+          'ui-enter-fade fixed inset-0 z-[var(--z-overlay)] flex bg-ink-950/45',
+          placement === 'right' ? 'justify-end' : 'items-start justify-center overflow-y-auto px-4 pb-4 pt-[8vh]',
           closing && 'opacity-0 duration-(--dur-overlay-exit)',
         )}
         onClick={(event) => {
@@ -158,8 +162,11 @@ export const Modal: React.FC<ModalProps> = ({
           aria-busy={ariaBusy || undefined}
           tabIndex={-1}
           className={cn(
-            'ui-enter-panel w-full max-w-140 rounded-modal border border-border bg-surface shadow-lift',
-            closing && 'translate-y-1 scale-[0.98] opacity-0 duration-(--dur-overlay-exit)',
+            'ui-enter-panel w-full border border-border bg-surface shadow-lift',
+            placement === 'right'
+              ? 'flex h-full max-w-140 flex-col border-y-0 border-r-0'
+              : 'max-w-140 rounded-modal',
+            closing && (placement === 'right' ? 'opacity-0 duration-(--dur-overlay-exit)' : 'translate-y-1 scale-[0.98] opacity-0 duration-(--dur-overlay-exit)'),
             className,
           )}
         >

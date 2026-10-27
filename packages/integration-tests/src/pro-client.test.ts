@@ -28,6 +28,7 @@ const stableJson = (value: unknown): string => {
  * - a Storno of a bank booking that leaves the draft "Gebucht", or a re-posting that hands back the reversed entry as booked
  * - canonical GuV amounts/range lost while projecting the IPC report
  * - a server response the client's schema no longer accepts
+ * - mapping health without the ledger account names the setup panel shows next to each account
  * - the UStVA Kennzahlen or a tax preparation that do not parse through the client
  * - a mutation sent without the reason / allocation event id / reservation id
  *   the server requires, instead of being refused before the request leaves
@@ -190,6 +191,8 @@ describe('pro renderer client against the embedded backend', () => {
     assert.deepEqual((await api().pro.getReportMappingHealth({ statement: 'hgb-guv', asOfDate: '2026-12-31' })).unmapped, []);
     const unmapped = await api().pro.getReportMappingHealth({ statement: 'management-guv', asOfDate: '2026-12-31' });
     assert.ok(unmapped.unmapped.length > 0 && unmapped.unmapped.every((row) => row.statement === 'management-guv'), JSON.stringify(unmapped));
+    // 4930 (Bürobedarf) is posted by the fixtures and named in the shipped SKR03 catalog.
+    assert.ok(unmapped.unmapped.find((row) => row.accountNumber === '4930')?.accountName, JSON.stringify(unmapped));
     const positions = await api().pro.listReportMappingPositions({ statement: 'hgb-guv', asOfDate: '2026-12-31' });
     assert.ok(positions.some((position) => position.key === 'revenue'));
     for (const account of ['8400', '4900', '4930']) {

@@ -698,6 +698,8 @@ function ReportsViewContent({ dataAdapter, chartFramework, businessReportingProf
         onExport={exportReport}
         exporting={exporting}
         exportBlockedReason={exportBlockedReason}
+        // The mapping strip below already says why; the toolbar only disables the buttons.
+        hideExportBlockedReason={Boolean(activeQuality && reportIsMappingBlocked(activeQuality) && !activeReportLoading && !activeReportLoadError && !activeReportUnavailable)}
         lockNativeEurPeriod={activeTab === 'eur'}
         nativeEurTaxYear={eurTaxYear}
       />

@@ -9,6 +9,16 @@ export default defineConfig(({ mode }) => {
 
   return {
     main: {
+      plugins: [
+        {
+          // `pg` only reaches for pg-native through its optional `.native` getter. In dev builds Vite
+          // would replace the missing module with a stub that throws on load and breaks the PGlite start.
+          name: 'stub-pg-native',
+          enforce: 'pre',
+          resolveId: (id: string) => (id === 'pg-native' ? '\0stub-pg-native' : null),
+          load: (id: string) => (id === '\0stub-pg-native' ? 'export default null;' : null),
+        },
+      ],
       build: {
         outDir: 'dist/main',
         lib: {

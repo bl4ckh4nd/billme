@@ -512,8 +512,8 @@ const InlineDocumentFields: React.FC<InlineDocumentFieldsProps> = ({ fields, def
         </div>
       </div>
 
-      <div className="pointer-events-auto absolute" style={{ left: meta.x, top: meta.y, width: meta.width, height: meta.height }} data-inline-tax-fields>
-        <div className="group/tax absolute bottom-0 right-0">
+      <div className="pointer-events-none absolute" style={{ left: meta.x, top: meta.y, width: meta.width, height: meta.height }} data-inline-tax-fields>
+        <div className="group/tax pointer-events-auto absolute bottom-0 right-0">
           <button type="button" aria-label="Details bearbeiten" aria-expanded={taxDetailsOpen} onClick={() => setTaxDetailsOpen(!taxDetailsOpen)} className="inline-flex min-h-6 items-center justify-center border-0 bg-white px-1 text-[10px] text-muted hover:text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring">Details</button>
           <div className={`absolute right-0 top-full z-30 mt-1 w-80 rounded-card border border-border bg-surface p-2 text-xs text-foreground shadow-lift ${taxDetailsOpen ? 'pointer-events-auto visible opacity-100' : 'pointer-events-none invisible opacity-0 group-hover/tax:pointer-events-auto group-hover/tax:visible group-hover/tax:opacity-100 group-focus-within/tax:pointer-events-auto group-focus-within/tax:visible group-focus-within/tax:opacity-100'}`}>
             <div className="mb-1 space-y-1">

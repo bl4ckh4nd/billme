@@ -194,6 +194,9 @@ export const startDesktopMain = <TBackend extends DesktopBackend>(options: Deskt
     setTimeout(() => app.quit(), 3000);
   });
 
+  // The UI is German; Chromium takes the format of <input type="date"> from this locale (dd.mm.yyyy), not from the OS.
+  app.commandLine.appendSwitch('lang', 'de-DE');
+
   app.whenReady().then(async () => {
     const e2eUserDataDir = process.env.BILLME_E2E_USER_DATA_DIR;
     if (e2eUserDataDir) {

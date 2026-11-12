@@ -300,6 +300,7 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
   const [kindFilter, setKindFilter] = useState<KindFilter>('all');
   const [chainAmountInput, setChainAmountInput] = useState('');
   const [chainAmountError, setChainAmountError] = useState<string | null>(null);
+  const [chainDateInput, setChainDateInput] = useState('');
   const [chainIssuePending, setChainIssuePending] = useState(false);
   const pendingChainOperationRef = useRef<{ id: string; intentKey: string } | null>(null);
 
@@ -649,11 +650,11 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
   };
 
   /** Resolves to the refusal message, or null when the document was created. */
-  const persistChainDocument = (action: ChainAction, amount?: number, source: Invoice | Offer | undefined = selectedDocument): Promise<string | null> => {
+  const persistChainDocument = (action: ChainAction, amount?: number, source: Invoice | Offer | undefined = selectedDocument, documentDate?: string): Promise<string | null> => {
     if (!source || chainIssuePending) return Promise.resolve(null);
     return (async () => {
       try {
-        const today = localIsoDate();
+        const today = documentDate || localIsoDate();
         const reasonByAction: Record<ChainAction, string> = {
           order_confirmation: 'Auftragsbestätigung aus angenommenem Angebot erstellt',
           delivery_note: 'Lieferschein aus Auftragsbestätigung erstellt',
@@ -729,6 +730,7 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
         ? correctableAmount(source, invoices)
         : orderSettlement(invoices, source).remaining;
       setChainAmountInput(open.toFixed(2));
+      setChainDateInput(localIsoDate());
       setChainAmountError(null);
       setChainAmountDialog({ action, source });
       return;
@@ -754,6 +756,7 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
   const cancelChainAmount = () => {
     setChainAmountDialog(null);
     setChainAmountInput('');
+    setChainDateInput('');
     setChainAmountError(null);
   };
 
@@ -766,9 +769,13 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
       setChainAmountError('Bitte einen gültigen Betrag größer als 0 eingeben.');
       return;
     }
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(chainDateInput)) {
+      setChainAmountError('Bitte ein gültiges Rechnungsdatum angeben.');
+      return;
+    }
     const { action, source } = chainAmountDialog;
     // The dialog stays open with the typed amount until the document exists.
-    void persistChainDocument(action, amount, source).then((refusal) => {
+    void persistChainDocument(action, amount, source, chainDateInput).then((refusal) => {
       if (refusal === null) cancelChainAmount();
       else setChainAmountError(refusal);
     });
@@ -1339,6 +1346,14 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
                 onChange={(event) => { setChainAmountInput(event.target.value); setChainAmountError(null); }}
                 aria-invalid={Boolean(chainAmountError)}
                 aria-describedby={chainAmountError ? 'chain-amount-error' : undefined}
+              />
+              <Input
+                id="chain-date"
+                label={chainAmountDialog && (chainAmountDialog.action === 'credit_note' || chainAmountDialog.action === 'cancellation_invoice') ? 'Datum' : 'Rechnungsdatum'}
+                type="date"
+                fullWidth
+                value={chainDateInput}
+                onChange={(event) => { setChainDateInput(event.target.value); setChainAmountError(null); }}
               />
               {chainAmountError && <p id="chain-amount-error" role="alert" className="text-caption font-medium text-error-text">{chainAmountError}</p>}
             </div>

@@ -35,7 +35,7 @@ on:
 jobs:
   validate:
     name: Validate (Typecheck, Tests, Build)
-    runs-on: ubuntu-latest
+    runs-on: instabox-medium
     permissions:
       contents: read
     steps:
@@ -87,7 +87,7 @@ jobs:
         run: pnpm -C apps/offer-portal build
 
       - name: E2E smoke (desktop + pro)
-        run: xvfb-run -a pnpm test:e2e:smoke
+        run: xvfb-run -a pnpm test:e2e:smoke --workers=4
 
   server-packages:
     name: Server packages (Typecheck, Tests)
@@ -168,7 +168,7 @@ jobs:
 
   e2e-server-smoke:
     name: E2E smoke (server mode)
-    runs-on: ubuntu-latest
+    runs-on: instabox-medium
     timeout-minutes: 45
     permissions:
       contents: read
@@ -220,7 +220,7 @@ jobs:
 
   e2e-server-pro-full:
     name: Full E2E (server mode, Pro accounting)
-    runs-on: ubuntu-latest
+    runs-on: instabox-medium
     timeout-minutes: 60
     permissions:
       contents: read

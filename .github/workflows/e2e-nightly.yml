@@ -37,12 +37,13 @@ jobs:
         run: pnpm exec playwright install --with-deps chromium && pnpm test:e2e:lifecycle --workers=4
 
       - name: Upload Playwright report
-        if: always()
+        if: failure()
         uses: actions/upload-artifact@v4
         with:
           name: playwright-report-desktop-full
           path: playwright-report
           if-no-files-found: ignore
+          retention-days: 3
 
   e2e-server-full:
     name: Full E2E (Server mode)
@@ -75,15 +76,16 @@ jobs:
         run: pnpm test:e2e:server:full
 
       - name: Upload Playwright report
-        if: always()
+        if: failure()
         uses: actions/upload-artifact@v4
         with:
           name: playwright-report-server-full
           path: playwright-report
           if-no-files-found: ignore
+          retention-days: 3
 
       - name: Upload server-mode diagnostics
-        if: always()
+        if: failure()
         uses: actions/upload-artifact@v4
         with:
           name: server-mode-diagnostics-full
@@ -92,3 +94,4 @@ jobs:
             !test-results/server-mode/**/compose.env
             !test-results/server-mode/**/runtime-state.json
           if-no-files-found: ignore
+          retention-days: 3

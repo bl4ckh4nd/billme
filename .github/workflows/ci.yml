@@ -54,7 +54,7 @@ jobs:
           cache: pnpm
 
       - name: Install native runtime libraries
-        run: sudo apt-get update && sudo apt-get install -y libsecret-1-0
+        run: sudo apt-get update && sudo apt-get install -y libsecret-1-0 poppler-utils
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
@@ -91,7 +91,7 @@ jobs:
 
   server-packages:
     name: Server packages (Typecheck, Tests)
-    runs-on: ubuntu-latest
+    runs-on: instabox-medium
     permissions:
       contents: read
     steps:
@@ -200,15 +200,16 @@ jobs:
         run: pnpm test:e2e:server:smoke
 
       - name: Upload Playwright report
-        if: always()
+        if: failure()
         uses: actions/upload-artifact@v4
         with:
           name: playwright-report-server-smoke
           path: playwright-report
           if-no-files-found: ignore
+          retention-days: 3
 
       - name: Upload server-mode diagnostics
-        if: always()
+        if: failure()
         uses: actions/upload-artifact@v4
         with:
           name: server-mode-diagnostics-smoke
@@ -217,6 +218,7 @@ jobs:
             !test-results/server-mode/**/compose.env
             !test-results/server-mode/**/runtime-state.json
           if-no-files-found: ignore
+          retention-days: 3
 
   e2e-server-pro-full:
     name: Full E2E (server mode, Pro accounting)
@@ -227,6 +229,9 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Install PDF tools
+        run: sudo apt-get update && sudo apt-get install -y poppler-utils
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
@@ -252,15 +257,16 @@ jobs:
         run: pnpm test:e2e:server:full:pro
 
       - name: Upload Playwright report
-        if: always()
+        if: failure()
         uses: actions/upload-artifact@v4
         with:
           name: playwright-report-server-pro-full
           path: playwright-report
           if-no-files-found: ignore
+          retention-days: 3
 
       - name: Upload server-mode diagnostics
-        if: always()
+        if: failure()
         uses: actions/upload-artifact@v4
         with:
           name: server-mode-diagnostics-pro-full
@@ -269,3 +275,4 @@ jobs:
             !test-results/server-mode/**/compose.env
             !test-results/server-mode/**/runtime-state.json
           if-no-files-found: ignore
+          retention-days: 3

@@ -54,7 +54,7 @@ jobs:
           cache: pnpm
 
       - name: Install native runtime libraries
-        run: sudo apt-get update && sudo apt-get install -y libsecret-1-0
+        run: sudo apt-get update && sudo apt-get install -y libsecret-1-0 poppler-utils
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
@@ -229,6 +229,9 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Install PDF tools
+        run: sudo apt-get update && sudo apt-get install -y poppler-utils
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v4

@@ -13,7 +13,7 @@ permissions:
 jobs:
   release-please:
     name: Release Please
-    runs-on: instabox-medium
+    runs-on: ubuntu-latest
     steps:
       - name: Run release-please
         uses: googleapis/release-please-action@v4

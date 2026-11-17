@@ -20,7 +20,7 @@ permissions:
 jobs:
   validate:
     name: Validate (Lite + shared billing)
-    runs-on: instabox-medium
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -49,7 +49,7 @@ jobs:
 
   server-accounting-gate:
     name: Validate (Lite Postgres and browser)
-    runs-on: instabox-medium
+    runs-on: ubuntu-latest
     timeout-minutes: 60
     permissions:
       contents: read
@@ -106,7 +106,7 @@ jobs:
       fail-fast: false
       matrix:
         os:
-          - instabox-medium
+          - ubuntu-latest
           - macos-latest
           - windows-latest
         app:
@@ -160,7 +160,7 @@ jobs:
   publish:
     name: Publish GitHub Release
     needs: [build, server-accounting-gate]
-    runs-on: instabox-medium
+    runs-on: ubuntu-latest
     steps:
       - name: Download release artifacts
         uses: actions/download-artifact@v4

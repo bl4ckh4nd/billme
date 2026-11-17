@@ -13,7 +13,7 @@ on:
 jobs:
   validate-einvoice:
     name: Validate ZUGFeRD + PDF/A
-    runs-on: instabox-medium
+    runs-on: ubuntu-latest
     permissions:
       contents: read
     steps:

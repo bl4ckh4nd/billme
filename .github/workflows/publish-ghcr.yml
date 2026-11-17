@@ -29,7 +29,7 @@ on:
 jobs:
   publish:
     name: Publish ${{ matrix.service }}
-    runs-on: instabox-medium
+    runs-on: ubuntu-latest
     permissions:
       contents: read
       packages: write
@@ -120,7 +120,7 @@ jobs:
         include:
           - arch: amd64
             platform: linux/amd64
-            runner: instabox-medium
+            runner: ubuntu-latest
           - arch: arm64
             platform: linux/arm64
             runner: ubuntu-24.04-arm
@@ -155,7 +155,7 @@ jobs:
 
   publish-server-worker-manifest:
     name: Publish server-worker manifest
-    runs-on: instabox-medium
+    runs-on: ubuntu-latest
     needs: publish-server-worker-architecture
     permissions:
       contents: read

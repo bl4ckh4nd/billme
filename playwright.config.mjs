@@ -79,8 +79,8 @@ export default defineConfig({
   timeout: isServerMode ? 180_000 : 120_000,
   fullyParallel: !isServerMode,
   forbidOnly: Boolean(process.env.CI),
-  retries: process.env.CI ? 2 : 0,
-  workers: isServerMode ? 1 : isFull ? 1 : process.env.CI ? 1 : undefined,
+  retries: isServerMode && process.env.CI ? 2 : 0,
+  workers: isServerMode || isFull ? 1 : undefined,
   reporter: process.env.CI ? [['github'], ['html', { open: 'never' }]] : 'list',
   use: {
     trace: 'retain-on-failure',

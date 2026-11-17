@@ -8,7 +8,7 @@ on:
 jobs:
   e2e-desktop-full:
     name: Full E2E (Desktop + Pro)
-    runs-on: instabox-medium
+    runs-on: ubuntu-latest
     timeout-minutes: 45
     permissions:
       contents: read
@@ -50,7 +50,7 @@ jobs:
 
   e2e-server-full:
     name: Full E2E (Server mode)
-    runs-on: instabox-medium
+    runs-on: ubuntu-latest
     timeout-minutes: 60
     permissions:
       contents: read

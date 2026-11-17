@@ -12,7 +12,7 @@ permissions:
 jobs:
   commitlint:
     name: Lint Commit Messages
-    runs-on: instabox-medium
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4

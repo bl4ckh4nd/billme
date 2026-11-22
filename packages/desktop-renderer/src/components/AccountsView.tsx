@@ -10,6 +10,7 @@ import { ImportHistoryModal } from './ImportHistoryModal';
 import { useDeferredDelete } from '../hooks/useDeferredDelete';
 import { getRendererProduct, ipc } from '../runtime-api';
 import { useSettingsQuery } from '../hooks/useSettings';
+import { useEurSettledTransactionIds } from '../hooks/useEurSettledTransactionIds';
 import { currentAccountBalances } from '../ui/shell/dashboardFlows';
 import { formatIban } from '@billme/desktop-utils/iban';
 
@@ -80,7 +81,7 @@ export function AccountsView<TAccount extends AccountsViewAccount>({
     [accounts, pendingDeleteAccountIds, leavingAccountIds],
   );
 
-  const { data: unmatchedTransactions = [], isError: unmatchedError } = useQuery({
+  const { data: unlinkedTransactions = [], isError: unmatchedError } = useQuery({
     queryKey: ['transactions', { unlinkedOnly: true }],
     queryFn: () => ipc.transactions.list({ type: 'income', unlinkedOnly: true }),
   });
@@ -94,6 +95,9 @@ export function AccountsView<TAccount extends AccountsViewAccount>({
   // Pro with doppelter Buchführung has no EÜR: no query, no EÜR line (pro-buchhaltung B4, server-web B17).
   const { data: settings } = useSettingsQuery();
   const eurAvailable = !(getRendererProduct() === 'pro' && settings?.businessReportingProfile?.profitDetermination === 'double_entry');
+  // A Privateinlage, Geldtransit or excluded line waits for no invoice.
+  const eurSettledIds = useEurSettledTransactionIds(eurAvailable);
+  const unmatchedTransactions = unlinkedTransactions.filter((transaction) => !eurSettledIds.has(transaction.id));
   const { data: unclassifiedEurTransactions = [], isError: unclassifiedEurError } = useQuery({
     enabled: eurAvailable,
     queryKey: ['eur', 'accounts-unclassified-transactions', DEFAULT_EUR_TAX_YEAR],

@@ -166,6 +166,7 @@ const eurCashItemSchema = z.object({
   flowType: z.enum(['income', 'expense']),
   accountId: z.string().optional(),
   linkedViaInvoice: z.boolean().optional(),
+  transactionId: z.string().optional(),
   counterparty: z.string(),
   purpose: z.string(),
   vatWarning: z.string().optional(),

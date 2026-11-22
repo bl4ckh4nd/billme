@@ -5,6 +5,7 @@ import { createProHttpBillmeApi } from '@billme/desktop-services/proHttpApi';
 import { startPro, type ProHarness } from './harness.js';
 import { today } from './fixtures.js';
 import { bankCsv, draft, issue, journal } from './pro-fixtures.js';
+import { bankAccount, importBankRows } from './reports-fixtures.js';
 
 const stableJson = (value: unknown): string => {
   if (value === undefined) return 'null';
@@ -316,6 +317,22 @@ describe('pro renderer client against the embedded backend', () => {
     assert.equal(done.status, 'completed');
     const pkg = await api().tax.auditExportPackage({ from: '2026-01-01', to: '2026-12-31' });
     assert.ok(pkg);
+  });
+
+  test('an EÜR item names the bank line the Bankabgleich lists, so a Privateinlage can be left out there', async () => {
+    const accountId = `bank-settled-${randomUUID().slice(0, 6)}`;
+    await api().accounts.upsert({ account: bankAccount(accountId) } as never);
+    const purpose = `Erstes Geld ${randomUUID().slice(0, 6)}`;
+    await importBankRows(api() as never, accountId, [['2026-11-10', 100, 'Inhaber', purpose]]);
+    const bankLine = (await api().transactions.list({ type: 'income', unlinkedOnly: true })).find((tx) => tx.purpose === purpose)!;
+    assert.ok(bankLine, 'the Einlage is an unlinked income line in the Bankabgleich');
+    const item = (await api().eur.listItems({ taxYear: 2026 })).find((candidate) => candidate.purpose === purpose)!;
+    // Pro lists the bank_transactions mirror: its own id is not the one the Bankabgleich shows.
+    assert.notEqual(item.sourceId, bankLine.id);
+    assert.equal(item.transactionId, bankLine.id);
+    await api().eur.saveCashFact({ sourceType: 'transaction', sourceId: item.sourceId, taxYear: 2026, kind: 'private-contribution', amountNet: 100, reason: 'Privateinlage' });
+    const settled = (await api().eur.listItems({ taxYear: 2026 })).find((candidate) => candidate.purpose === purpose)!;
+    assert.deepEqual([settled.kind, settled.transactionId], ['private-contribution', bankLine.id]);
   });
 
   test('in the browser the Prüferpaket arrives as downloads whose bytes match the manifest', async () => {

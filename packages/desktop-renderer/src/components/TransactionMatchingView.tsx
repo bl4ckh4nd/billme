@@ -9,6 +9,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { getRendererProduct, ipc } from '../runtime-api';
 import { Spinner } from '../ui/components/Spinner';
 import { useSettingsQuery } from '../hooks/useSettings';
+import { useEurSettledTransactionIds } from '../hooks/useEurSettledTransactionIds';
 import { isNeutralEurKind, neutralEurKindLabels, type NeutralEurKind } from './eur/categories';
 import type { Transaction, Invoice as InvoiceType } from '@billme/desktop-core/types';
 
@@ -120,7 +121,12 @@ export const TransactionMatchingView: React.FC<{ initialTab?: MatchingTab }> = (
       });
     },
   });
-  const transactions = (transactionsQuery.data ?? []).filter((transaction) => !transaction.matchedManualEntryId);
+  const { data: settings } = useSettingsQuery();
+  // Pro with doppelter Buchführung has no EÜR (and no Buchen decisions to read).
+  const eurAvailable = !(isProProduct && settings?.businessReportingProfile?.profitDetermination === 'double_entry');
+  // "Nur unzugeordnete" leaves out what "Buchen" settled as Privat, Geldtransit or excluded: no invoice pays it.
+  const eurSettledIds = useEurSettledTransactionIds(eurAvailable);
+  const transactions = (transactionsQuery.data ?? []).filter((transaction) => !transaction.matchedManualEntryId && (showLinked || !eurSettledIds.has(transaction.id)));
 
   const matchesQuery = useQuery({
     queryKey: ['transaction-matches', selectedTransaction?.id],
@@ -198,7 +204,6 @@ export const TransactionMatchingView: React.FC<{ initialTab?: MatchingTab }> = (
   const [eurLineId, setEurLineId] = useState('');
   const [eurVatMode, setEurVatMode] = useState<'none' | 'default'>('none');
   const [eurVatRate, setEurVatRate] = useState<number | undefined>(undefined);
-  const { data: settings } = useSettingsQuery();
   const configuredVatRate = settings?.legal?.defaultVatRate ?? 0;
   const standardVatRate = configuredVatRate > 0 ? configuredVatRate : 19;
   const [eurDecision, setEurDecision] = useState<EurDecision>('flow');

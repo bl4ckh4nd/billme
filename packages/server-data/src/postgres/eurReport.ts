@@ -63,6 +63,8 @@ export interface ServerEurCashItem {
   /** Manual entries only: Bank, Bar or nicht zahlungswirksam; missing on entries saved before migration 0046. */
   paymentMethod?: CashPaymentMethod;
   linkedViaInvoice?: boolean;
+  /** The bank line as the Bankabgleich lists it (transactions.id); Pro's sourceId is its bank_transactions mirror. */
+  transactionId?: string;
   counterparty: string;
   purpose: string;
   vatWarning?: string;
@@ -121,6 +123,7 @@ type CashSource = {
   invoiceType?: 'outgoing_invoice' | 'incoming_invoice';
   invoiceId?: string;
   classificationSourceIds?: string[];
+  transactionId?: string;
   sourceNet?: number;
   warning?: string;
   /** A cash entry matched to a bank line of the other direction: a Barabhebung or Bareinzahlung, one Geldtransit. */
@@ -255,6 +258,7 @@ const listCashSources = async (db: PostgresQueryable, scope: TenantScope, from: 
         counterparty: String(bank.counterparty ?? ''),
         purpose: `${String(bank.purpose ?? '')}${year !== yearOf(String(bank.date)) ? TEN_DAY_NOTE : ''}`,
         classificationSourceIds: aliases,
+        transactionId: String(bank.id),
         warning: bank.linked_invoice_id && allocation.length !== 1 ? `CASH_ALLOCATION_REVIEW_REQUIRED:${bank.id}` : undefined,
       });
     }
@@ -308,12 +312,12 @@ const listCashSources = async (db: PostgresQueryable, scope: TenantScope, from: 
     });
   }
   // The Pro EÜR profile has no booking-draft step: an imported (pending) bank line is money that flowed and is classified like a booked one.
-  const banks = await q<Record<string, unknown>>(db, `SELECT id,account_id,date,amount,type,counterparty,purpose,linked_invoice_id FROM bank_transactions WHERE tenant_id=$1 AND status IN ('booked','pending') AND date >= $2 AND date <= $3 ORDER BY date,id`, [t, from, to]);
+  const banks = await q<Record<string, unknown>>(db, `SELECT id,account_id,date,amount,type,counterparty,purpose,linked_invoice_id,source_transaction_id FROM bank_transactions WHERE tenant_id=$1 AND status IN ('booked','pending') AND date >= $2 AND date <= $3 ORDER BY date,id`, [t, from, to]);
   for (const bank of banks) {
     const id = String(bank.id);
     if (representedBanks.has(id)) continue;
     const invoiceId = typeof bank.linked_invoice_id === 'string' && bank.linked_invoice_id ? bank.linked_invoice_id : undefined;
-    result.push({ sourceType: 'transaction', sourceId: id, date: String(bank.date), amountGross: Math.abs(Number(bank.amount) || 0), flowType: bank.type === 'expense' ? 'expense' : 'income', accountId: bank.account_id ? String(bank.account_id) : undefined, linkedViaInvoice: Boolean(invoiceId), counterparty: String(bank.counterparty ?? ''), purpose: String(bank.purpose ?? ''), invoiceType: invoiceId ? 'outgoing_invoice' : undefined, invoiceId });
+    result.push({ sourceType: 'transaction', sourceId: id, date: String(bank.date), amountGross: Math.abs(Number(bank.amount) || 0), flowType: bank.type === 'expense' ? 'expense' : 'income', accountId: bank.account_id ? String(bank.account_id) : undefined, linkedViaInvoice: Boolean(invoiceId), counterparty: String(bank.counterparty ?? ''), purpose: String(bank.purpose ?? ''), invoiceType: invoiceId ? 'outgoing_invoice' : undefined, invoiceId, transactionId: typeof bank.source_transaction_id === 'string' && bank.source_transaction_id ? bank.source_transaction_id : undefined });
   }
   return result;
 };
@@ -407,7 +411,7 @@ export const listServerEurCashItems = async (db: PostgresQueryable, scope: Tenan
       ?? (source.invoiceId ? facts.get(`invoice:${source.invoiceId}`) : undefined);
     const persistedClassification = classification ?? (fact ? { id: String(fact.id), source_type: source.sourceType, source_id: source.sourceId, eur_line_id: fact.eur_line_id ? String(fact.eur_line_id) : null, excluded: false, vat_mode: 'none', vat_rate: null, note: null, updated_at: '' } : undefined);
     const legacyInvoiceFact = product === 'lite' && fact && fact.source_type === 'invoice' && fact.source_id !== source.sourceId;
-    items.push({ sourceType: source.sourceType, sourceId: source.sourceId, date: source.date, taxYear, amountGross: source.amountGross, amountNet: source.transit ? Math.abs(source.amountGross) : fact && !legacyInvoiceFact ? Number(fact.amount_net) : net.amountNet, flowType: source.flowType, accountId: source.accountId, paymentMethod: source.paymentMethod, linkedViaInvoice: source.linkedViaInvoice, counterparty: basis.counterparty ?? source.counterparty, purpose: source.purpose?.endsWith(TEN_DAY_NOTE) && basis.purpose && !basis.purpose.endsWith(TEN_DAY_NOTE) ? `${basis.purpose}${TEN_DAY_NOTE}` : basis.purpose ?? source.purpose, vatWarning: source.warning ?? (legacyInvoiceFact ? `LEGACY_CASH_FACT_REVIEW_REQUIRED:${source.invoiceId}` : net.warning), kind: source.transit ? 'transit' : fact?.kind as ServerEurCashItem['kind'] | undefined, splits: fact?.splits_json && !legacyInvoiceFact ? parseJsonArray(fact.splits_json) as EurExpenseSplit[] : undefined, documentNumber: source.documentNumber, classification: persistedClassification ? { id: persistedClassification.id, sourceType: source.sourceType, sourceId: source.sourceId, taxYear, eurLineId: persistedClassification.eur_line_id ?? undefined, excluded: Boolean(persistedClassification.excluded), vatMode: persistedClassification.vat_mode === 'default' ? 'default' : 'none', vatRate: persistedClassification.vat_rate == null ? undefined : Number(persistedClassification.vat_rate), note: persistedClassification.note ?? undefined, updatedAt: persistedClassification.updated_at ?? '' } : undefined });
+    items.push({ sourceType: source.sourceType, sourceId: source.sourceId, date: source.date, taxYear, amountGross: source.amountGross, amountNet: source.transit ? Math.abs(source.amountGross) : fact && !legacyInvoiceFact ? Number(fact.amount_net) : net.amountNet, flowType: source.flowType, accountId: source.accountId, paymentMethod: source.paymentMethod, linkedViaInvoice: source.linkedViaInvoice, ...(source.transactionId ? { transactionId: source.transactionId } : {}), counterparty: basis.counterparty ?? source.counterparty, purpose: source.purpose?.endsWith(TEN_DAY_NOTE) && basis.purpose && !basis.purpose.endsWith(TEN_DAY_NOTE) ? `${basis.purpose}${TEN_DAY_NOTE}` : basis.purpose ?? source.purpose, vatWarning: source.warning ?? (legacyInvoiceFact ? `LEGACY_CASH_FACT_REVIEW_REQUIRED:${source.invoiceId}` : net.warning), kind: source.transit ? 'transit' : fact?.kind as ServerEurCashItem['kind'] | undefined, splits: fact?.splits_json && !legacyInvoiceFact ? parseJsonArray(fact.splits_json) as EurExpenseSplit[] : undefined, documentNumber: source.documentNumber, classification: persistedClassification ? { id: persistedClassification.id, sourceType: source.sourceType, sourceId: source.sourceId, taxYear, eurLineId: persistedClassification.eur_line_id ?? undefined, excluded: Boolean(persistedClassification.excluded), vatMode: persistedClassification.vat_mode === 'default' ? 'default' : 'none', vatRate: persistedClassification.vat_rate == null ? undefined : Number(persistedClassification.vat_rate), note: persistedClassification.note ?? undefined, updatedAt: persistedClassification.updated_at ?? '' } : undefined });
     items[items.length - 1].vatAmountCash = round(source.amountGross - net.amountNet);
     if (basis.sourceNet !== undefined) taxFromSource.add(items[items.length - 1]);
   }

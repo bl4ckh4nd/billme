@@ -842,7 +842,8 @@ export const validateCanonicalEurLines = (rows: ServerEurLineRecord[]): void => 
       && (row.providerPath ?? 'main') === (canonical.providerPath ?? 'main')
       && row.kind === canonical.kind
       && row.exportable === canonical.exportable
-      && row.sortOrder === canonicalEurCatalog.findIndex((line) => line.id === canonical.id)
+      // sort_order is display order only; builds before the catalog was reordered keep their old order
+      // (e.g. Kz 111 at 0 instead of 24), and import does not copy these rows, so it is not validated.
       // Up to v0.4.0 some labels and the Kz 159/199 terms differed (corrected by migration 0046).
       && [canonical, LEGACY_EUR_LINES_2025[row.id]].some((expected) => expected
         && row.label === expected.label

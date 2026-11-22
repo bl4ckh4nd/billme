@@ -75,6 +75,13 @@ import { addBankAccount, approveDraft, bankTransactions, bankTx, getDraft, impor
 const YEAR = new Date().getFullYear();
 const MAP = { dateColumn: 'Date', amountColumn: 'Amount', counterpartyColumn: 'Name', purposeColumn: 'Purpose' };
 const HEADER = 'Date,Amount,Name,Purpose';
+const QONTO_HEADER = 'Status;Abrechnungsdatum (UTC);Abrechnungstag (lokal);Datum des Vorgangs (UTC);Datum des Vorgangs (lokal);Gesamtbetrag (inkl. MwSt.);Soll;Haben;Kontostand;Währung;Gesamtbetrag (inkl. MwSt.) (lokal);Währung (lokal);MwSt.-Betrag insgesamt;Gesamtbetrag (ohne MwSt.);MwSt.-Betrag (7.0%);Betrag (ohne 7.0% MwSt.);MwSt.-Betrag (19.0%);Betrag (ohne 19.0% MwSt.);Kontoname;Konto-IBAN;Name der Gegenpartei;IBAN der Gegenpartei;Zahlungsart;Kartenname;Veranlasst von;E-Mail-Adresse des Initiators;Team;Anhang;Anhang erforderlich;Anhang verloren gegangen;Transaktions-ID;Referenz;Notiz;Bank;Konto ID;Cashflow-Kategorie;Cashflow-Unterkategorie';
+/** One line of a Qonto export; a pending line has no settlement date yet. */
+const qontoLine = (o: { id?: string; status?: string; date: string; soll?: string; haben?: string; name?: string; ref?: string }) => {
+  const settled = o.status === 'Ausstehend' ? '' : o.date;
+  const amount = o.haben ?? o.soll!;
+  return `${o.status ?? 'Abgerechnet'};${settled};${settled};${o.date};${o.date};${amount};${o.soll ?? ''};${o.haben ?? ''};100,00;EUR;${amount};EUR;;${amount};;;;;Hauptkonto;DE02120300000000202051;${o.name ?? 'Max Muster'};DE89370400440532013000;Überweisen;;;;;"";true;false;${o.id ?? 'q-1'};${o.ref ?? 'Erstes Geld'};;Qonto;DE02120300000000202051;;`;
+};
 const money = (value: number) => Math.round((value + Number.EPSILON) * 100) / 100;
 const unique = (label: string) => `${label} ${randomUUID().slice(0, 8)}`;
 
@@ -317,6 +324,30 @@ for (const product of PRODUCTS) describe(`transactions, banking and cash (${prod
       assert.deepEqual([result.suggestedMapping.amountColumn, result.suggestedMapping.feeColumn, result.suggestedMapping.counterpartyColumn, result.suggestedMapping.externalIdColumn], ['Brutto', 'Entgelt', 'Name', 'Transaktionscode']);
       assert.deepEqual(result.rows[0]!.errors, []);
       assert.deepEqual([result.rows[0]!.parsed.amount, result.rows[0]!.parsed.fee, result.rows[0]!.parsed.counterparty, result.rows[0]!.parsed.status], [119, -4.05, 'Delta Webshop', 'booked']);
+    });
+
+    test('a Qonto export (Transaktions-ID, Gesamtbetrag, Soll/Haben, DD-MM-YYYY hh:mm:ss) is detected as Qonto and read', async () => {
+      const csv = `${QONTO_HEADER}\n${qontoLine({ date: '10-11-2026 09:38:48', haben: '100,00' })}\n${qontoLine({ id: 'q-2', date: '12-11-2026 23:59:01', soll: '-23,80', name: 'Hosting GmbH', ref: 'Rechnung 4711' })}\n${qontoLine({ id: 'q-3', date: '13-11-2026 08:00:00', soll: '9,99', name: 'Tool Inc' })}\n${qontoLine({ id: 'q-4', status: 'Abgelehnt', date: '14-11-2026 08:00:00', soll: '-5,00', name: 'Café' })}\n`;
+      const result = await preview(csv);
+      assert.equal(result.profile, 'qonto');
+      assert.deepEqual(
+        [result.suggestedMapping.dateColumn, result.suggestedMapping.amountColumn, result.suggestedMapping.counterpartyColumn, result.suggestedMapping.externalIdColumn, result.suggestedMapping.debitColumn],
+        ['Datum des Vorgangs (lokal)', 'Gesamtbetrag (inkl. MwSt.)', 'Name der Gegenpartei', 'Transaktions-ID', 'Soll'],
+      );
+      assert.deepEqual(result.rows.map((row) => row.errors.length), [0, 0, 0, 1]);
+      assert.deepEqual(result.rows.slice(0, 3).map((row) => [row.parsed.date, row.parsed.amount, row.parsed.type]), [
+        ['2026-11-10', 100, 'income'],
+        ['2026-11-12', -23.8, 'expense'],
+        ['2026-11-13', -9.99, 'expense'],
+      ], 'a value in Soll is money out even when the amount is unsigned');
+      assert.equal(result.suggestedMapping.counterpartyIbanColumn, 'IBAN der Gegenpartei');
+      assert.deepEqual([result.rows[0]!.parsed.counterparty, result.rows[0]!.parsed.purpose, result.rows[0]!.parsed.status], ['Max Muster', 'Erstes Geld', 'booked']);
+      assert.match(result.rows[3]!.errors[0]!, /Abgelehnt/);
+    });
+
+    test('an impossible DD-MM-YYYY date is rejected, not moved to another day', async () => {
+      const result = await preview('Date,Amount\n31-11-2026 10:00:00,10\n30-11-2026,10\n', { mapping: { dateColumn: 'Date', amountColumn: 'Amount' } });
+      assert.deepEqual(result.rows.map((row) => row.parsed.date), [undefined, '2026-11-30']);
     });
 
     test('PayPal and Stripe exports are detected; the gross amount is the payment, the fee its own line; created date used, other currencies flagged', async () => {
@@ -673,6 +704,29 @@ for (const product of PRODUCTS) describe(`transactions, banking and cash (${prod
       assert.notEqual(again.batchId, first.batchId);
       assert.equal(again.imported, 2);
       assert.equal((await txsOf(accountId)).length, 2);
+    });
+  });
+
+  describe('Qonto import', () => {
+    test('a pending Qonto line is taken over once settled, a re-import skips it, a declined line is left out', async () => {
+      const accountId = (await newAccount()).id;
+      const id = `q-${randomUUID().slice(0, 8)}`;
+      const name = unique('Lieferant');
+      const pendingCsv = `${QONTO_HEADER}\n${qontoLine({ id, status: 'Ausstehend', date: `05-08-${YEAR} 14:02:11`, soll: '-49,90', name })}\n`;
+      const first = await h.api.finance.importCommit({ path: await writeCsv(pendingCsv), accountId, mapping: (await preview(pendingCsv)).suggestedMapping, profile: 'qonto' } as never);
+      assert.deepEqual([first.imported, first.errors.length], [1, 0]);
+      assert.equal((await txsOf(accountId))[0]!.status, 'pending');
+
+      const settledCsv = `${QONTO_HEADER}\n${qontoLine({ id, date: `05-08-${YEAR} 14:02:11`, soll: '-49,90', name })}\n${qontoLine({ id: `${id}-x`, status: 'Abgelehnt', date: `06-08-${YEAR} 09:00:00`, soll: '-5,00', name })}\n`;
+      const mapping = (await preview(settledCsv)).suggestedMapping;
+      const second = await h.api.finance.importCommit({ path: await writeCsv(settledCsv), accountId, mapping, profile: 'qonto' } as never);
+      assert.deepEqual([second.imported, second.errors.map((error) => error.rowIndex)], [0, [3]]);
+      const rows = await txsOf(accountId);
+      assert.deepEqual(rows.map((tx) => [tx.date, tx.amount, tx.type, tx.status]), [[`${YEAR}-08-05`, -49.9, 'expense', 'booked']]);
+
+      const again = await h.api.finance.importCommit({ path: await writeCsv(settledCsv), accountId, mapping, profile: 'qonto' } as never);
+      assert.equal(again.imported, 0);
+      assert.equal((await txsOf(accountId)).length, 1);
     });
   });
 

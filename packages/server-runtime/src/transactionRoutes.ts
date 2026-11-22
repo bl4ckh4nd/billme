@@ -64,8 +64,9 @@ const csvMappingSchema = z.object({
   currencyColumn: z.string().optional(),
   currencyExpected: z.string().optional(),
   feeColumn: z.string().optional(),
+  debitColumn: z.string().optional(),
 });
-const csvProfileSchema = z.enum(['auto', 'fints', 'paypal', 'stripe', 'generic']);
+const csvProfileSchema = z.enum(['auto', 'fints', 'paypal', 'stripe', 'qonto', 'generic']);
 const importPreviewBody = z.object({
   path: z.string().min(1).optional(),
   fileName: z.string().trim().min(1).max(255).optional(),
@@ -108,7 +109,7 @@ const importPreviewResponse = z.object({
   fileSha256: z.string(),
   delimiter: z.string(),
   headers: z.array(z.string()),
-  profile: z.enum(['fints', 'paypal', 'stripe', 'generic']),
+  profile: z.enum(['fints', 'paypal', 'stripe', 'qonto', 'generic']),
   suggestedMapping: csvMappingSchema,
   rows: z.array(importPreviewRowSchema),
   stats: z.object({

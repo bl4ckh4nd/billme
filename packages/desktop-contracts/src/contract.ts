@@ -440,7 +440,7 @@ const financeImportPreviewResultSchema = z.object({
   fileSha256: z.string(),
   delimiter: z.string(),
   headers: z.array(z.string()),
-  profile: z.enum(['fints', 'paypal', 'stripe', 'generic']),
+  profile: z.enum(['fints', 'paypal', 'stripe', 'qonto', 'generic']),
   suggestedMapping: csvMappingSchema,
   rows: z.array(
     z.object({

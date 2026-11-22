@@ -230,7 +230,7 @@ export function AccountsView<TAccount extends AccountsViewAccount>({
     }
   };
 
-  const csvProfileLabel: Record<string, string> = { fints: 'Bank (FinTS-Export)', paypal: 'PayPal', stripe: 'Stripe', generic: 'Allgemeines CSV' };
+  const csvProfileLabel: Record<string, string> = { fints: 'Bank (FinTS-Export)', paypal: 'PayPal', stripe: 'Stripe', qonto: 'Qonto', generic: 'Allgemeines CSV' };
 
   return (
     <div className="flex flex-col gap-3.5">
@@ -429,7 +429,7 @@ export function AccountsView<TAccount extends AccountsViewAccount>({
           {csvOptions && (
             <div className="grid grid-cols-2 gap-2.5">
               <Select label="Format" value={csvOptions.profile} onChange={(e) => void updateCsvOptions({ ...csvOptions, profile: e.target.value as CsvOptions['profile'] }, true)} fullWidth>
-                {(['fints', 'paypal', 'stripe', 'generic'] as const).map((profile) => <option key={profile} value={profile}>{csvProfileLabel[profile]}</option>)}
+                {(['fints', 'paypal', 'stripe', 'qonto', 'generic'] as const).map((profile) => <option key={profile} value={profile}>{csvProfileLabel[profile]}</option>)}
               </Select>
               <Select label="Zeichensatz" value={csvOptions.encoding} onChange={(e) => void updateCsvOptions({ ...csvOptions, encoding: e.target.value as CsvOptions['encoding'] })} fullWidth>
                 <option value="utf8">UTF-8</option>

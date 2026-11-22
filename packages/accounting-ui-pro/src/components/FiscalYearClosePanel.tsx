@@ -1,5 +1,5 @@
 import React, { useMemo, useState } from 'react';
-import { Button, Card, CardHeader, ConfirmDialog, Input, Select } from '@billme/ui';
+import { Button, Card, CardHeader, ConfirmDialog, Input, Select, Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@billme/ui';
 import { accountingErrorText, defaultResultAccount, fiscalYearForDate, fiscalYearRange } from '@billme/accounting-shared';
 import { localToday } from '../domain/reportDates';
 import type { Account } from '../types';
@@ -136,18 +136,18 @@ export default function FiscalYearClosePanel({ dataAdapter, accounts, chart, pro
                 <div key={step.kind} className="rounded-control border border-border">
                   <p className="border-b border-border px-3 py-2 text-label text-foreground">{step.kind === 'fiscal_close' ? `Abschlussbuchung zum ${germanDate(step.date)}` : `Saldovortrag zum ${germanDate(step.date)}`}</p>
                   {step.booked ? <p className="px-3 py-2 text-control text-muted">Bereits gebucht.</p> : !step.preview?.lines.length ? <p className="px-3 py-2 text-control text-muted">Keine Salden, nichts zu buchen.</p> : (
-                    <table className="w-full text-control">
-                      <thead><tr className="text-left text-caption text-muted"><th className="px-3 py-1.5 font-medium">Konto</th><th className="px-3 py-1.5 text-right font-medium">Soll</th><th className="px-3 py-1.5 text-right font-medium">Haben</th></tr></thead>
-                      <tbody>
+                    <Table density="compact" bare>
+                      <TableHeader><TableRow><TableHead>Konto</TableHead><TableHead numeric>Soll</TableHead><TableHead numeric>Haben</TableHead></TableRow></TableHeader>
+                      <TableBody>
                         {step.preview.lines.map((line, index) => (
-                          <tr key={`${line.accountNumber}-${index}`} className="border-t border-border">
-                            <td className="px-3 py-1.5"><span className="tabular-nums">{line.accountNumber}</span> <span className="text-muted">{nameOf(line.accountNumber)}</span></td>
-                            <td className="px-3 py-1.5 text-right tabular-nums">{line.debitAmount ? euro(line.debitAmount) : ''}</td>
-                            <td className="px-3 py-1.5 text-right tabular-nums">{line.creditAmount ? euro(line.creditAmount) : ''}</td>
-                          </tr>
+                          <TableRow key={`${line.accountNumber}-${index}`}>
+                            <TableCell><span className="tabular-nums">{line.accountNumber}</span> <span className="text-muted">{nameOf(line.accountNumber)}</span></TableCell>
+                            <TableCell numeric>{line.debitAmount ? euro(line.debitAmount) : ''}</TableCell>
+                            <TableCell numeric>{line.creditAmount ? euro(line.creditAmount) : ''}</TableCell>
+                          </TableRow>
                         ))}
-                      </tbody>
-                    </table>
+                      </TableBody>
+                    </Table>
                   )}
                 </div>
               ))}

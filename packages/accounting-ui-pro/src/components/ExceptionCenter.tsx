@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { AlertTriangle, FileSearch, RefreshCw } from 'lucide-react';
-import { Badge, Button, Card, CardHeader, EmptyState, Input, Textarea, cn, formatEmptyValue } from '@billme/ui';
+import { Badge, Button, Card, CardHeader, EmptyState, Input, Table, TableBody, TableCell, TableHead, TableHeader, TableRow, Textarea, cn, formatEmptyValue } from '@billme/ui';
 import { accountingErrorText } from '@billme/accounting-shared';
 import { getFlagLabel } from '../domain/selectors';
 import { useAccountingWorkspace } from '../AccountingWorkspaceContext';
@@ -435,28 +435,28 @@ function TransitMonths({ overview }: { overview: TransitOverview | null }) {
   return (
     <>
       <CardHeader as="h3" title={`Saldo Geldtransit ${overview.transitAccountNumber} je Monat`} className="border-b border-border px-3.5 py-3" />
-      <table className="w-full text-control">
-        <thead>
-          <tr className="text-caption text-muted">
-            <th scope="col" className="px-3.5 py-1.5 text-left font-medium">Monat</th>
-            <th scope="col" className="px-3.5 py-1.5 text-right font-medium">Soll</th>
-            <th scope="col" className="px-3.5 py-1.5 text-right font-medium">Haben</th>
-            <th scope="col" className="px-3.5 py-1.5 text-right font-medium">Stand</th>
-          </tr>
-        </thead>
-        <tbody>
+      <Table density="compact" bare>
+        <TableHeader>
+          <TableRow>
+            <TableHead className="px-3.5">Monat</TableHead>
+            <TableHead numeric className="px-3.5">Soll</TableHead>
+            <TableHead numeric className="px-3.5">Haben</TableHead>
+            <TableHead numeric className="px-3.5">Stand</TableHead>
+          </TableRow>
+        </TableHeader>
+        <TableBody>
           {overview.months.map((month) => (
-            <tr key={month.period} className="border-t border-border">
-              <td className="px-3.5 py-1.5 text-foreground">{monthLabel(month.period)}</td>
-              <td className="px-3.5 py-1.5 text-right font-mono tabular-nums">{money(month.debit)}</td>
-              <td className="px-3.5 py-1.5 text-right font-mono tabular-nums">{money(month.credit)}</td>
-              <td className={cn('px-3.5 py-1.5 text-right font-mono font-semibold tabular-nums', month.cumulative === 0 ? 'text-success-text' : 'text-warning-text')}>
+            <TableRow key={month.period}>
+              <TableCell className="px-3.5">{monthLabel(month.period)}</TableCell>
+              <TableCell numeric className="px-3.5 font-mono">{money(month.debit)}</TableCell>
+              <TableCell numeric className="px-3.5 font-mono">{money(month.credit)}</TableCell>
+              <TableCell numeric className={cn('px-3.5 font-mono font-semibold', month.cumulative === 0 ? 'text-success-text' : 'text-warning-text')}>
                 {month.cumulative === 0 ? 'ausgeglichen' : money(month.cumulative)}
-              </td>
-            </tr>
+              </TableCell>
+            </TableRow>
           ))}
-        </tbody>
-      </table>
+        </TableBody>
+      </Table>
     </>
   );
 }

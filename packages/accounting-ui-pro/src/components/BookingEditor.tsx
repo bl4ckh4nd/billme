@@ -95,7 +95,7 @@ function BankReceiptSection({ transactionId, hasReceipt, canAttach, api, onAttac
         <ul className="mt-2 flex flex-col gap-1" aria-label="Archivierte Belege">
           {documents.map((doc) => (
             <li key={doc.id}>
-              <button type="button" className="truncate text-left text-caption text-accent underline-offset-2 hover:underline" onClick={() => void download(doc)}>{doc.originalFilename}</button>
+              <button type="button" className="truncate text-left text-caption text-foreground underline underline-offset-2 hover:text-muted" onClick={() => void download(doc)}>{doc.originalFilename}</button>
             </li>
           ))}
         </ul>

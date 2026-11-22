@@ -1,7 +1,7 @@
 import React from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Plus, Trash2 } from 'lucide-react';
-import { Badge, Button, IconButton, Input, Select, SegmentedControl, Switch } from '@billme/ui';
+import { Badge, Button, IconButton, Input, Select, SegmentedControl, Switch, Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@billme/ui';
 import { bookingRuleMatches, parseRuleAmount, ruleRegexError, type BookingRule, type RuleCondition } from '@billme/finance-intelligence';
 import { SettingsCard } from '@billme/desktop-renderer/components/SettingsView';
 import type { IpcArgs, IpcResult } from '@billme/desktop-contracts-pro/contract';
@@ -240,30 +240,28 @@ export const ProBookingRulesSettings: React.FC = () => {
                 <Badge key={kind} tone={kind === 'protected' ? 'warning' : kind === 'posted' ? 'neutral' : 'info'}>{preview.counts[kind]} {KIND_LABELS[kind]}</Badge>
               ))}
             </div>
-            <div className="overflow-x-auto">
-              <table className="w-full text-control" aria-label="Probelauf">
-                <thead>
-                  <tr className="text-caption text-muted">
-                    <th scope="col" className="px-3.5 py-1.5 text-left font-medium">Umsatz</th>
-                    <th scope="col" className="px-3.5 py-1.5 text-right font-medium">Betrag</th>
-                    <th scope="col" className="px-3.5 py-1.5 text-left font-medium">Bisher</th>
-                    <th scope="col" className="px-3.5 py-1.5 text-left font-medium">Neu</th>
-                    <th scope="col" className="px-3.5 py-1.5 text-left font-medium">Status</th>
-                  </tr>
-                </thead>
-                <tbody>
+            <Table density="compact" bare aria-label="Probelauf">
+                <TableHeader>
+                  <TableRow>
+                    <TableHead className="px-3.5">Umsatz</TableHead>
+                    <TableHead numeric className="px-3.5">Betrag</TableHead>
+                    <TableHead className="px-3.5">Bisher</TableHead>
+                    <TableHead className="px-3.5">Neu</TableHead>
+                    <TableHead className="px-3.5">Status</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
                   {preview.rows.map((row) => (
-                    <tr key={row.transactionId} className="border-t border-border align-top">
-                      <td className="px-3.5 py-1.5"><span className="text-foreground">{row.counterparty}</span><span className="block text-caption text-muted">{new Date(row.date).toLocaleDateString('de-DE')}</span></td>
-                      <td className="px-3.5 py-1.5 text-right font-mono tabular-nums">{money(row.amount)}</td>
-                      <td className="px-3.5 py-1.5 font-mono tabular-nums text-muted">{row.before.accountNumber ?? '–'}{row.before.taxCaseKey ? ` · ${row.before.taxCaseKey}` : ''}</td>
-                      <td className="px-3.5 py-1.5"><span className="font-mono tabular-nums text-foreground">{row.after.accountNumber ?? '–'}{row.after.taxCaseKey ? ` · ${row.after.taxCaseKey}` : ''}</span>{row.after.ruleNames && <span className="block text-caption text-muted">{row.after.ruleNames.join(' + ')}</span>}</td>
-                      <td className="px-3.5 py-1.5"><Badge tone={row.kind === 'protected' ? 'warning' : row.kind === 'posted' ? 'neutral' : 'info'}>{KIND_LABELS[row.kind]}</Badge>{row.note && <span className="block text-caption text-muted">{row.note}</span>}</td>
-                    </tr>
+                    <TableRow key={row.transactionId}>
+                      <TableCell className="px-3.5 align-top"><span className="text-foreground">{row.counterparty}</span><span className="block text-caption text-muted">{new Date(row.date).toLocaleDateString('de-DE')}</span></TableCell>
+                      <TableCell numeric className="px-3.5 align-top font-mono">{money(row.amount)}</TableCell>
+                      <TableCell muted className="px-3.5 align-top font-mono tabular-nums">{row.before.accountNumber ?? '–'}{row.before.taxCaseKey ? ` · ${row.before.taxCaseKey}` : ''}</TableCell>
+                      <TableCell className="px-3.5 align-top"><span className="font-mono tabular-nums text-foreground">{row.after.accountNumber ?? '–'}{row.after.taxCaseKey ? ` · ${row.after.taxCaseKey}` : ''}</span>{row.after.ruleNames && <span className="block text-caption text-muted">{row.after.ruleNames.join(' + ')}</span>}</TableCell>
+                      <TableCell className="px-3.5 align-top"><Badge tone={row.kind === 'protected' ? 'warning' : row.kind === 'posted' ? 'neutral' : 'info'}>{KIND_LABELS[row.kind]}</Badge>{row.note && <span className="block text-caption text-muted">{row.note}</span>}</TableCell>
+                    </TableRow>
                   ))}
-                </tbody>
-              </table>
-            </div>
+                </TableBody>
+            </Table>
             <div className="flex flex-wrap items-center gap-2 border-t border-border px-3.5 py-2.5">
               <Button size="sm" onClick={() => void apply()} disabled={busy || preview.counts.new + preview.counts.update === 0}>
                 {preview.counts.new + preview.counts.update} {preview.counts.new + preview.counts.update === 1 ? 'Entwurf' : 'Entwürfe'} neu vorschlagen

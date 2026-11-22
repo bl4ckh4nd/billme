@@ -8,7 +8,8 @@ on:
 jobs:
   e2e-desktop-full:
     name: Full E2E (Desktop + Pro)
-    runs-on: ubuntu-latest
+    # Pinned: ubuntu-latest is 26.04, where Playwright 1.58 cannot install Chromium.
+    runs-on: ubuntu-24.04
     timeout-minutes: 45
     permissions:
       contents: read
@@ -50,7 +51,8 @@ jobs:
 
   e2e-server-full:
     name: Full E2E (Server mode)
-    runs-on: ubuntu-latest
+    # Pinned: ubuntu-latest is 26.04, where Playwright 1.58 cannot install Chromium.
+    runs-on: ubuntu-24.04
     timeout-minutes: 60
     permissions:
       contents: read

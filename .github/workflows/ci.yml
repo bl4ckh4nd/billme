@@ -35,7 +35,8 @@ on:
 jobs:
   validate:
     name: Validate (Typecheck, Tests, Build)
-    runs-on: ubuntu-latest
+    # Pinned: ubuntu-latest is 26.04, where Playwright 1.58 cannot install Chromium.
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
     steps:
@@ -168,7 +169,8 @@ jobs:
 
   e2e-server-smoke:
     name: E2E smoke (server mode)
-    runs-on: ubuntu-latest
+    # Pinned: ubuntu-latest is 26.04, where Playwright 1.58 cannot install Chromium.
+    runs-on: ubuntu-24.04
     timeout-minutes: 45
     permissions:
       contents: read
@@ -222,7 +224,8 @@ jobs:
 
   e2e-server-pro-full:
     name: Full E2E (server mode, Pro accounting)
-    runs-on: ubuntu-latest
+    # Pinned: ubuntu-latest is 26.04, where Playwright 1.58 cannot install Chromium.
+    runs-on: ubuntu-24.04
     timeout-minutes: 60
     permissions:
       contents: read

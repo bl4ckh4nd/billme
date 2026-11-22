@@ -7,7 +7,7 @@ import { runInTransaction, type PostgresQueryable } from './connection.js';
 /**
  * Pro accounting periods (calendar months). `soft_locked` needs an override
  * with a written reason for every posting and can be reopened with a reason.
- * `closed` is the Festschreibung: final, and cumulative — closing a month
+ * `closed` is the Festschreibung: final, and cumulative: closing a month
  * closes every earlier month as well ("festgeschrieben bis einschließlich"),
  * so a backdated posting can never land before a festgeschriebener month.
  */

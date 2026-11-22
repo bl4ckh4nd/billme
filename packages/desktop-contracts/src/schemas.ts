@@ -727,7 +727,7 @@ export const upsertRecurringPayloadSchema = z.object({
   profile: recurringProfileSchema,
 });
 
-export const csvProfileSchema = z.enum(['auto', 'fints', 'paypal', 'stripe', 'generic']);
+export const csvProfileSchema = z.enum(['auto', 'fints', 'paypal', 'stripe', 'qonto', 'generic']);
 
 export const csvMappingSchema = z.object({
   dateColumn: z.string().min(1),
@@ -740,6 +740,7 @@ export const csvMappingSchema = z.object({
   currencyColumn: z.string().optional(),
   currencyExpected: z.string().optional(),
   feeColumn: z.string().optional(),
+  debitColumn: z.string().optional(),
 });
 
 export const financeImportPreviewSchema = z.object({

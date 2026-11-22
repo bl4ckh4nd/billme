@@ -5,7 +5,7 @@ import iconv from 'iconv-lite';
 import Papa from 'papaparse';
 import { logger } from '@billme/desktop-core/utils/logger';
 
-export type CsvProfile = 'fints' | 'paypal' | 'stripe' | 'generic';
+export type CsvProfile = 'fints' | 'paypal' | 'stripe' | 'qonto' | 'generic';
 
 export type CsvMapping = {
   dateColumn: string;
@@ -19,6 +19,8 @@ export type CsvMapping = {
   currencyExpected?: string; // e.g. "EUR"
   /** PayPal/Stripe: the fee of the payment; it becomes its own money line next to the gross amount. */
   feeColumn?: string;
+  /** Qonto: the Soll column; a line with a value there is money out, whatever sign the amount column has. */
+  debitColumn?: string;
 };
 
 export type CsvPreviewRow = {
@@ -119,6 +121,11 @@ export const detectProfile = (headers: string[]): CsvProfile => {
     return 'paypal';
   }
 
+  // Qonto's German export: "Transaktions-ID", "Name der Gegenpartei", "Gesamtbetrag (inkl. MwSt.)", Soll/Haben.
+  if (has('Transaktions-ID') && has('Name der Gegenpartei') && has('Gesamtbetrag (inkl. MwSt.)')) {
+    return 'qonto';
+  }
+
   // FinTS/bank exports often include Buchungstag/Valutadatum/Verwendungszweck/Begünstigter
   if (has('Buchungstag') || has('Valutadatum') || has('Verwendungszweck') || has('Begünstigter/Zahlungspflichtiger')) {
     return 'fints';
@@ -152,6 +159,21 @@ export const suggestedMappingFor = (profile: CsvProfile, headers: string[]): Csv
       externalIdColumn: pickHeader(headers, ['Transaction ID', 'Transaction ID/Order ID', 'Transaktionscode']),
       statusColumn: pickHeader(headers, ['Status']),
       currencyColumn: pickHeader(headers, ['Currency', 'Währung']),
+      currencyExpected: 'EUR',
+    };
+  }
+  if (profile === 'qonto') {
+    return {
+      // The day of the payment is there for pending and settled lines alike, so a pending line is taken over once Qonto settles it.
+      dateColumn: pickHeader(headers, ['Datum des Vorgangs (lokal)', 'Abrechnungstag (lokal)', 'Datum des Vorgangs (UTC)']) ?? headers[0]!,
+      amountColumn: pickHeader(headers, ['Gesamtbetrag (inkl. MwSt.)']) ?? headers[0]!,
+      debitColumn: pickHeader(headers, ['Soll']),
+      counterpartyColumn: pickHeader(headers, ['Name der Gegenpartei']),
+      counterpartyIbanColumn: pickHeader(headers, ['IBAN der Gegenpartei']),
+      purposeColumn: pickHeader(headers, ['Referenz', 'Notiz']),
+      statusColumn: pickHeader(headers, ['Status']),
+      externalIdColumn: pickHeader(headers, ['Transaktions-ID']),
+      currencyColumn: pickHeader(headers, ['Währung']),
       currencyExpected: 'EUR',
     };
   }
@@ -229,6 +251,16 @@ const parseDateToIso = (input: string): string | null => {
     const day = Number(m[1]);
     const month = Number(m[2]);
     const year = Number(m[3]);
+    const d = new Date(Date.UTC(year, month - 1, day));
+    if (d.getUTCFullYear() !== year || d.getUTCMonth() !== month - 1 || d.getUTCDate() !== day) return null;
+    return d.toISOString().slice(0, 10);
+  }
+  // Qonto: DD-MM-YYYY, optionally with a time; the calendar day is taken as written.
+  const dash = /^(\d{2})-(\d{2})-(\d{4})(?:[ T]\d{2}:\d{2}(?::\d{2})?)?$/.exec(s);
+  if (dash) {
+    const day = Number(dash[1]);
+    const month = Number(dash[2]);
+    const year = Number(dash[3]);
     const d = new Date(Date.UTC(year, month - 1, day));
     if (d.getUTCFullYear() !== year || d.getUTCMonth() !== month - 1 || d.getUTCDate() !== day) return null;
     return d.toISOString().slice(0, 10);
@@ -326,8 +358,10 @@ const buildRows = (params: {
     const dateIso = parseDateToIso(dateRaw);
     if (!dateIso) rowErrors.push(`Ungültiges Datum: "${dateRaw}"`);
 
-    const amount = parseGermanNumber(amountRaw);
-    if (amount === null) rowErrors.push(`Ungültiger Betrag: "${amountRaw}"`);
+    const parsedAmount = parseGermanNumber(amountRaw);
+    if (parsedAmount === null) rowErrors.push(`Ungültiger Betrag: "${amountRaw}"`);
+    const debitRaw = params.mapping.debitColumn ? String(raw[params.mapping.debitColumn] ?? '').trim() : '';
+    const amount = parsedAmount !== null && debitRaw && parsedAmount > 0 ? -parsedAmount : parsedAmount;
     const feeRaw = params.mapping.feeColumn ? String(raw[params.mapping.feeColumn] ?? '').trim() : '';
     const feeValue = feeRaw ? parseGermanNumber(feeRaw) : 0;
     if (feeValue === null) rowErrors.push(`Ungültige Gebühr: "${feeRaw}"`);
@@ -349,6 +383,8 @@ const buildRows = (params: {
 
     // "Vorgemerkt" (banks) and "Ausstehend" (PayPal) are not yet booked; a later import of the booked line takes it over.
     const status: 'pending' | 'booked' = /pending|offen|vorgemerkt|ausstehend/i.test(statusRaw) ? 'pending' : 'booked';
+    // A declined card payment (Qonto lists it with the status "Abgelehnt") never moved any money.
+    if (/^(abgelehnt|declined)$/i.test(statusRaw)) rowErrors.push(`Abgelehnte Zahlung wird nicht importiert (Status "${statusRaw}")`);
 
     let type: 'income' | 'expense' | undefined;
     if (amount !== null) {

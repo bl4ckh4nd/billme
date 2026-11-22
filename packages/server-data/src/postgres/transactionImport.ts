@@ -57,7 +57,7 @@ export interface FindTransactionMatchesResult {
  */
 export interface TransactionImportPreviewInput {
   path: string;
-  profile?: 'auto' | 'fints' | 'paypal' | 'stripe' | 'generic';
+  profile?: 'auto' | 'fints' | 'paypal' | 'stripe' | 'qonto' | 'generic';
   mapping?: CsvMapping;
   encoding?: 'utf8' | 'win1252';
   delimiter?: string;
@@ -80,7 +80,7 @@ export const previewServerTransactionImport = (
 export interface TransactionImportCommitInput {
   path: string;
   accountId: string;
-  profile?: 'auto' | 'fints' | 'paypal' | 'stripe' | 'generic';
+  profile?: 'auto' | 'fints' | 'paypal' | 'stripe' | 'qonto' | 'generic';
   mapping: CsvMapping;
   encoding?: 'utf8' | 'win1252';
   delimiter?: string;

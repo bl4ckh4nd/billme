@@ -736,7 +736,7 @@ export const createProWebClient = (config: ProWebClientConfig) => {
     listEurCashItems(query?: Partial<IpcArgs<'eur:listItems'>>) {
       return requestJson({ parser: parseArray(eurCashItemSchema), query: query as Record<string, string | number | boolean | null | undefined> | undefined }, '/api/v1/pro/accounting/reports/eur/items');
     },
-    upsertEurClassification(input: { sourceType: 'transaction' | 'invoice'; sourceId: string; taxYear: number; eurLineId?: string; excluded?: boolean; vatMode?: 'none' | 'default'; vatRate?: number; note?: string; reason: string }) {
+    upsertEurClassification(input: { sourceType: 'transaction' | 'invoice'; sourceId: string; taxYear: number; eurLineId?: string; excluded?: boolean; vatMode?: 'none' | 'default'; vatRate?: number; note?: string; kind?: 'private-withdrawal' | 'private-contribution'; reason: string }) {
       return requestJson({ method: 'PUT', body: input, parser: (payload) => payload }, '/api/v1/pro/accounting/reports/eur/classifications');
     },
     saveEurCashFact(input: { sourceType: 'transaction' | 'invoice'; sourceId: string; taxYear: number; kind: string; amountNet: number; flowType?: 'income' | 'expense'; eurLineId?: string; splits?: unknown[]; reason: string; idempotencyKey?: string }) {

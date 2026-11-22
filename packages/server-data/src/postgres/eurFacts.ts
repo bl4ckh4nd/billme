@@ -200,10 +200,13 @@ const saveClassificationInTransaction = async (db: PostgresTransactionClient, sc
   const saved = (await q(db, 'SELECT * FROM eur_classifications WHERE tenant_id=$1 AND id=$2', [scope.tenantId, id]))[0] ?? record;
   await appendWithClient(db, scope, { occurredAt: now, action: existing ? 'update' : 'create', reason, actor: { type: 'user', id: actor.id, displayName: actor.displayName }, subject: { entityType: 'eur_classification', entityId: `${sourceType}:${sourceId}:${input.taxYear}`, tenantId: scope.tenantId }, change: { before: existing ?? null, after: saved } });
   let kind: string | undefined;
-  if (input.product === 'lite' && !source.transit) {
+  if (!source.transit) {
+    const product = input.product === 'lite' ? 'lite' as const : 'pro' as const;
+    // Pro keeps facts it set elsewhere (Auswertungen: durchlaufende Posten, splits); "Buchen" only owns Privat.
+    const ownedKinds = product === 'lite' ? NEUTRAL_KINDS : ['private-withdrawal', 'private-contribution'];
     // The neutral kind is the payment's cash fact: set it, or drop it when a line (or the old exclusion) is chosen.
     if (input.kind) {
-      kind = (await saveServerEurCashFactInTransaction(db, scope, { sourceType, sourceId, taxYear: input.taxYear, kind: input.kind, amountNet: Math.abs(source.amountGross), product: 'lite', mutation: input.mutation })).kind;
+      kind = (await saveServerEurCashFactInTransaction(db, scope, { sourceType, sourceId, taxYear: input.taxYear, kind: input.kind, amountNet: Math.abs(source.amountGross), product, mutation: input.mutation })).kind;
     } else if (input.splits?.length) {
       // The parts split the net amount of the payment, as the report computes it from the chosen VAT rate.
       const { smallBusiness } = await assertServerEurProfile(db, scope, { taxYear: input.taxYear });
@@ -211,7 +214,7 @@ const saveClassificationInTransaction = async (db: PostgresTransactionClient, sc
       const net = source.sourceNet !== undefined ? Math.abs(source.sourceNet) : smallBusiness || input.vatMode !== 'default' ? gross : gross / (1 + (input.vatRate ?? 0) / 100);
       await saveServerEurCashFactInTransaction(db, scope, { sourceType, sourceId, taxYear: input.taxYear, kind: 'expense', flowType: 'expense', amountNet: amount(net), eurLineId: input.eurLineId, splits: input.splits, product: 'lite', mutation: input.mutation });
     } else {
-      const neutral = (await q(db, 'SELECT * FROM eur_cash_facts WHERE tenant_id=$1 AND source_type=$2 AND source_id=$3 AND tax_year=$4 AND (kind = ANY($5::text[]) OR splits_json IS NOT NULL)', [scope.tenantId, sourceType, sourceId, input.taxYear, NEUTRAL_KINDS]))[0];
+      const neutral = (await q(db, `SELECT * FROM eur_cash_facts WHERE tenant_id=$1 AND source_type=$2 AND source_id=$3 AND tax_year=$4 AND (kind = ANY($5::text[])${product === 'lite' ? ' OR splits_json IS NOT NULL' : ''})`, [scope.tenantId, sourceType, sourceId, input.taxYear, ownedKinds]))[0];
       if (neutral) {
         await db.query('DELETE FROM eur_cash_facts WHERE tenant_id=$1 AND id=$2', [scope.tenantId, neutral.id]);
         await appendWithClient(db, scope, { occurredAt: now, action: 'delete', reason, actor: { type: 'user', id: actor.id, displayName: actor.displayName }, subject: { entityType: 'eur_cash_fact', entityId: `${sourceType}:${sourceId}:${input.taxYear}`, tenantId: scope.tenantId }, change: { before: neutral, after: null } });

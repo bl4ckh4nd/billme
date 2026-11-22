@@ -436,8 +436,7 @@ export const EurView: React.FC = () => {
     setSelectedLineId(activeItem.classification?.eurLineId ?? activeItem.suggestedLineId ?? '');
     setVatMode(activeItem.classification?.vatMode ?? activeItem.suggestedVatMode ?? 'none');
     setVatRate(activeItem.classification?.vatRate ?? activeItem.suggestedVatRate);
-    // Pro keeps its own fact workflow (Auswertungen); here it only knows a line or the exclusion.
-    setDecision(isProProduct ? (activeItem.classification?.excluded ? 'excluded' : 'flow') : decisionOf(activeItem));
+    setDecision(decisionOf(activeItem));
     setTaxNote(activeItem.classification?.note ?? '');
     setHospitalitySplit(Boolean(activeItem.splits?.length));
   }, [activeItem]);
@@ -771,7 +770,7 @@ export const EurView: React.FC = () => {
                 variant="secondary"
                 size="sm"
                 onClick={() =>
-                  void applyBulk(isProProduct ? 'Bulk: Als privat/Transfer markieren' : 'Bulk: Als Geldtransit markieren', () => ({
+                  void applyBulk(isProProduct ? 'Bulk: Als Transfer ausschließen' : 'Bulk: Als Geldtransit markieren', () => ({
                     eurLineId: undefined,
                     excluded: isProProduct,
                     kind: isProProduct ? undefined : 'transit',
@@ -782,7 +781,7 @@ export const EurView: React.FC = () => {
                 disabled={bulkDisabled}
               >
                 <Ban size={14} aria-hidden="true" />
-                {isProProduct ? 'Als privat/Transfer markieren' : 'Als Geldtransit markieren'}
+                {isProProduct ? 'Als Transfer ausschließen' : 'Als Geldtransit markieren'}
               </Button>
               <Button
                 variant="secondary"
@@ -918,7 +917,9 @@ export const EurView: React.FC = () => {
                   <div className="flex flex-wrap items-start gap-2.5 rounded-control border border-info-border bg-info-bg px-3 py-2.5 text-control text-info-text">
                     <Info size={16} className="mt-px shrink-0" aria-hidden="true" />
                     <div className="min-w-0 flex-1">
-                      {!(activeItem.suggestedLineId || activeItem.suggestedKind || activeItem.suggestionReason) && 'Noch kein Vorschlag: bitte Art und Kategorie wählen.'}
+                      {!(activeItem.suggestedLineId || activeItem.suggestedKind || activeItem.suggestionReason) && (isDecided(activeItem)
+                        ? 'Bereits zugeordnet. Du kannst die Zuordnung hier ändern.'
+                        : 'Noch kein Vorschlag: bitte Art und Kategorie wählen.')}
                       {(activeItem.suggestedLineId || activeItem.suggestedKind || activeItem.suggestionReason) && (
                         <div className="flex flex-wrap items-center gap-1.5 text-caption">
                           {activeItem.suggestionLayer && (
@@ -986,12 +987,13 @@ export const EurView: React.FC = () => {
                       onChange={(value) => setDecision(value as Decision)}
                       options={[
                         { value: 'flow', label: activeItem.flowType === 'income' ? 'Einnahme' : 'Ausgabe' },
+                        activeItem.flowType === 'expense'
+                          ? { value: 'private-withdrawal' as const, label: 'Privatentnahme' }
+                          : { value: 'private-contribution' as const, label: 'Privateinlage' },
+                        // Pro has no Kasse to move money to; a transfer between own accounts is left out of the EÜR.
                         ...(isProProduct
-                          ? [{ value: 'excluded' as const, label: 'Privat/Transfer ausschließen' }]
+                          ? [{ value: 'excluded' as const, label: 'Transfer ausschließen' }]
                           : [
-                            activeItem.flowType === 'expense'
-                              ? { value: 'private-withdrawal' as const, label: 'Privatentnahme' }
-                              : { value: 'private-contribution' as const, label: 'Privateinlage' },
                             { value: 'transit' as const, label: 'Geldtransit' },
                             // Exclusions saved before Privat and Geldtransit existed stay visible until reassigned.
                             ...(activeItem.classification?.excluded ? [{ value: 'excluded' as const, label: 'Ausgeschlossen (alt)' }] : []),

@@ -302,7 +302,7 @@ export const TransactionMatchingView: React.FC<{ initialTab?: MatchingTab }> = (
     setEurLineId(eurActive.classification?.eurLineId ?? eurActive.suggestedLineId ?? '');
     setEurVatMode(eurActive.classification?.vatMode ?? 'none');
     setEurVatRate(eurActive.classification?.vatRate);
-    setEurDecision((isProProduct ? undefined : eurKindOf(eurActive)) ?? (eurActive.classification?.excluded ? 'excluded' : 'flow'));
+    setEurDecision(eurKindOf(eurActive) ?? (eurActive.classification?.excluded ? 'excluded' : 'flow'));
   }, [eurActive]);
 
   const applyEurSingle = async () => {
@@ -814,7 +814,7 @@ export const TransactionMatchingView: React.FC<{ initialTab?: MatchingTab }> = (
                     variant="secondary"
                     size="sm"
                     onClick={() =>
-                      void applyEurBulk(isProProduct ? 'Bulk: Als privat/Transfer markieren' : 'Bulk: Als Geldtransit markieren', () => ({
+                      void applyEurBulk(isProProduct ? 'Bulk: Als Transfer ausschließen' : 'Bulk: Als Geldtransit markieren', () => ({
                         eurLineId: undefined,
                         excluded: isProProduct,
                         kind: isProProduct ? undefined : 'transit',
@@ -825,7 +825,7 @@ export const TransactionMatchingView: React.FC<{ initialTab?: MatchingTab }> = (
                     disabled={eurSelected.size === 0 || eurPending || eurReason.trim().length === 0}
                   >
                     <Ban size={14} aria-hidden="true" />
-                    {isProProduct ? 'Als privat/Transfer markieren' : 'Als Geldtransit markieren'}
+                    {isProProduct ? 'Als Transfer ausschließen' : 'Als Geldtransit markieren'}
                   </Button>
                 </div>
               </div>
@@ -1006,28 +1006,23 @@ export const TransactionMatchingView: React.FC<{ initialTab?: MatchingTab }> = (
                       </div>
                     )}
 
-                    {isProProduct ? (
-                      <Checkbox
-                        label="Privat/Transfer ausschließen"
-                        checked={eurExcluded}
-                        onChange={(e) => setEurDecision(e.target.checked ? 'excluded' : 'flow')}
-                      />
-                    ) : (
-                      <Select
-                        id="tm-eur-kind"
-                        label="Art"
-                        value={eurDecision}
-                        onChange={(e) => setEurDecision(e.target.value as EurDecision)}
-                        fullWidth
-                      >
-                        <option value="flow">{eurActive.flowType === 'income' ? 'Betriebseinnahme' : 'Betriebsausgabe'} (Kategorie oben)</option>
-                        {eurActive.flowType === 'expense'
-                          ? <option value="private-withdrawal">{neutralEurKindLabels['private-withdrawal']}</option>
-                          : <option value="private-contribution">{neutralEurKindLabels['private-contribution']}</option>}
-                        <option value="transit">{neutralEurKindLabels.transit}</option>
-                        {eurActive.classification?.excluded && <option value="excluded">Ausgeschlossen (alt): bitte neu zuordnen</option>}
-                      </Select>
-                    )}
+                    <Select
+                      id="tm-eur-kind"
+                      label="Art"
+                      value={eurDecision}
+                      onChange={(e) => setEurDecision(e.target.value as EurDecision)}
+                      fullWidth
+                    >
+                      <option value="flow">{eurActive.flowType === 'income' ? 'Betriebseinnahme' : 'Betriebsausgabe'} (Kategorie oben)</option>
+                      {eurActive.flowType === 'expense'
+                        ? <option value="private-withdrawal">{neutralEurKindLabels['private-withdrawal']}</option>
+                        : <option value="private-contribution">{neutralEurKindLabels['private-contribution']}</option>}
+                      {/* Pro has no Kasse to move money to; a transfer between own accounts is left out of the EÜR. */}
+                      {isProProduct
+                        ? <option value="excluded">Transfer ausschließen</option>
+                        : <option value="transit">{neutralEurKindLabels.transit}</option>}
+                      {!isProProduct && eurActive.classification?.excluded && <option value="excluded">Ausgeschlossen (alt): bitte neu zuordnen</option>}
+                    </Select>
 
                     {reasonInput}
 

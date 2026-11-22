@@ -132,6 +132,8 @@ export const eurClassificationSchema = z.object({
   vatMode: z.enum(['none', 'default']),
   vatRate: z.number().min(0).max(100).optional(),
   note: z.string().optional(),
+  /** Privateinlage/Privatentnahme: a payment that is no income or expense (stored as its cash fact). */
+  kind: z.enum(['private-withdrawal', 'private-contribution']).optional(),
   updatedAt: z.string(),
 });
 
@@ -197,6 +199,8 @@ export const eurUpsertClassificationArgsSchema = z.object({
   vatMode: z.enum(['none', 'default']).optional(),
   vatRate: z.number().min(0).max(100).optional(),
   note: z.string().optional(),
+  /** Privateinlage/Privatentnahme instead of a line; leaving it out with a line or exclusion drops an earlier one. */
+  kind: z.enum(['private-withdrawal', 'private-contribution']).optional(),
 });
 
 export const accountSchema = z.object({

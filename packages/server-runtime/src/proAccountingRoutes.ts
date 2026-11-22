@@ -201,6 +201,8 @@ export const eurClassificationBodySchema = z.object({
   vatMode: z.enum(['none', 'default']).default('none'),
   vatRate: z.number().min(0).max(100).optional(),
   note: z.string().max(1000).optional(),
+  /** Privateinlage/Privatentnahme instead of a line (2026); stored as the payment's cash fact. */
+  kind: z.enum(['private-withdrawal', 'private-contribution']).optional(),
   reason: reasonSchema,
 });
 export const eurCashFactBodySchema = z.object({
@@ -700,8 +702,11 @@ export const registerProAccountingRoutes = (app: FastifyInstance, options: ProAc
           vatMode: body.vatMode,
           vatRate: body.vatRate,
           note: body.note,
+          kind: body.kind,
+          product: 'pro' as const,
           mutation: mutationFor(session, body.reason),
         };
+        if (body.kind && body.taxYear !== 2026) throw new ApiError(400, 'Privateinlage und Privatentnahme gibt es in der EÜR ab dem Steuerjahr 2026.');
         return body.taxYear === 2026
           ? await saveServerEurClassificationFact(requireDatabase(app), session.scope, input)
           : await repositoryFor(app).upsertEurClassification(session.scope, input);
@@ -713,6 +718,8 @@ export const registerProAccountingRoutes = (app: FastifyInstance, options: ProAc
         if (error instanceof Error && error.message === 'EUR_LINE_NOT_FOUND') throw new ApiError(400, 'Die EÜR-Kennziffer ist für den Katalog 2025 nicht vorhanden.');
         if (error instanceof Error && error.message === 'EUR_COMPUTED_LINE_NOT_CLASSIFIABLE') throw new ApiError(400, 'Berechnete EÜR-Zeilen können nicht direkt klassifiziert werden.');
         if (error instanceof Error && error.message === 'EUR_LINE_FLOW_MISMATCH') throw new ApiError(400, 'Die Zielzeile passt nicht zum Einnahmen-/Ausgabenfluss der Quelle.');
+        if (error instanceof Error && error.message === 'EUR_NEUTRAL_KIND_FLOW_MISMATCH') throw new ApiError(400, 'Eine Privateinlage ist ein Zufluss, eine Privatentnahme ein Abfluss.');
+        if (error instanceof Error && error.message === 'EUR_NEUTRAL_FACT_MUST_NOT_HAVE_LINE') throw new ApiError(400, 'Eine Privateinlage oder Privatentnahme hat keine EÜR-Kennziffer und ist nicht ausgeschlossen.');
         throw error;
       }
     },

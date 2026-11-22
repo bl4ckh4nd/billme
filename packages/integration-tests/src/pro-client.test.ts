@@ -5,6 +5,7 @@ import { createProHttpBillmeApi } from '@billme/desktop-services/proHttpApi';
 import { startPro, type ProHarness } from './harness.js';
 import { today } from './fixtures.js';
 import { bankCsv, draft, issue, journal } from './pro-fixtures.js';
+import { bankAccount, importBankRows } from './reports-fixtures.js';
 
 const stableJson = (value: unknown): string => {
   if (value === undefined) return 'null';
@@ -316,6 +317,42 @@ describe('pro renderer client against the embedded backend', () => {
     assert.equal(done.status, 'completed');
     const pkg = await api().tax.auditExportPackage({ from: '2026-01-01', to: '2026-12-31' });
     assert.ok(pkg);
+  });
+
+  test('"Buchen" sets Privateinlage/Privatentnahme in Pro like the CLI; only in its direction; a line replaces it; facts from Auswertungen stay', async () => {
+    const accountId = `bank-privat-${randomUUID().slice(0, 6)}`;
+    await api().accounts.upsert({ account: bankAccount(accountId) } as never);
+    const tag = randomUUID().slice(0, 6);
+    await importBankRows(api() as never, accountId, [
+      ['2026-11-10', 100, 'Inhaber', `Erstes Geld ${tag}`],
+      ['2026-11-11', -40, 'Inhaber', `Privat ${tag}`],
+      ['2026-11-12', -19, 'Amt', `Gebühr durchlaufend ${tag}`],
+    ]);
+    const itemOf = async (purpose: string) => (await api().eur.listItems({ taxYear: 2026 })).find((item) => item.purpose === `${purpose} ${tag}`)!;
+    const classify = (sourceId: string, extra: Record<string, unknown>) =>
+      api().eur.upsertClassification({ sourceType: 'transaction', sourceId, taxYear: 2026, reason: 'Kontoauszug geprüft', ...extra } as never);
+    const contribution = await itemOf('Erstes Geld');
+    const withdrawal = await itemOf('Privat');
+    const before = await api().eur.getReport({ taxYear: 2026 });
+
+    await assert.rejects(classify(contribution.sourceId, { kind: 'private-withdrawal' }), /Zufluss|Abfluss/, 'money coming in is no Entnahme');
+    await assert.rejects(classify(withdrawal.sourceId, { kind: 'private-withdrawal', excluded: true }), /keine EÜR-Kennziffer/);
+    assert.equal((await classify(contribution.sourceId, { kind: 'private-contribution' })).kind, 'private-contribution');
+    assert.equal((await classify(withdrawal.sourceId, { kind: 'private-withdrawal' })).kind, 'private-withdrawal');
+    assert.deepEqual([(await itemOf('Erstes Geld')).kind, (await itemOf('Privat')).kind], ['private-contribution', 'private-withdrawal']);
+    const after = await api().eur.getReport({ taxYear: 2026 });
+    assert.deepEqual(after.summary, before.summary, 'neither is income or expense');
+    assert.equal(after.unclassifiedCount, before.unclassifiedCount - 2);
+
+    const expenseLine = after.rows.find((row) => row.kind === 'expense' && row.kennziffer === '183')!;
+    await classify(withdrawal.sourceId, { eurLineId: expenseLine.lineId });
+    assert.equal((await itemOf('Privat')).kind, undefined, 'the line replaces the Entnahme');
+
+    // A durchlaufender Posten is set under Auswertungen; saving a line in "Buchen" leaves it alone.
+    const passThrough = await itemOf('Gebühr durchlaufend');
+    await api().eur.saveCashFact({ sourceType: 'transaction', sourceId: passThrough.sourceId, taxYear: 2026, kind: 'pass-through', amountNet: 19, reason: 'durchlaufend' });
+    await classify(passThrough.sourceId, { eurLineId: expenseLine.lineId });
+    assert.ok((await api().eur.listCashFacts({ taxYear: 2026 })).some((fact) => fact.sourceId === passThrough.sourceId && fact.kind === 'pass-through'));
   });
 
   test('in the browser the Prüferpaket arrives as downloads whose bytes match the manifest', async () => {

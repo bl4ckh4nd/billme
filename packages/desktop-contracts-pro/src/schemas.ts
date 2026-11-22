@@ -175,6 +175,8 @@ export const eurListItemSchema = z.object({
   flowType: z.enum(['income', 'expense']),
   accountId: z.string().optional(),
   linkedViaInvoice: z.boolean().optional(),
+  /** The bank line as the Bankabgleich lists it; sourceId is its bank_transactions mirror. */
+  transactionId: z.string().optional(),
   counterparty: z.string(),
   purpose: z.string(),
   vatWarning: z.string().optional(),

@@ -1,5 +1,5 @@
 import React, { useRef, useState } from 'react';
-import { Badge, Button, Card, CardHeader, Checkbox, Input, Select } from '@billme/ui';
+import { Badge, Button, Card, CardHeader, Checkbox, Input, Select, Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@billme/ui';
 import type { JournalImportResult, ProAccountingDataAdapter } from '../services/accountingDataAdapter';
 
 void React;
@@ -160,27 +160,27 @@ export default function JournalImportPanel({ dataAdapter, canMutate, onImported 
                 </ul>
               ) : null}
               {result.entries.length ? (
-                <div className="max-h-96 overflow-auto rounded-control border border-border">
-                  <table className="w-full text-caption">
-                    <thead className="sticky top-0 bg-surface text-left text-eyebrow uppercase text-muted">
-                      <tr><th className="px-2 py-1.5">Datum</th><th className="px-2 py-1.5">Beleg</th><th className="px-2 py-1.5">Text</th><th className="px-2 py-1.5">Zeilen</th><th className="px-2 py-1.5">Status</th></tr>
-                    </thead>
-                    <tbody className="divide-y divide-border">
+                <div className="rounded-control border border-border">
+                  <Table density="compact" bare containerClassName="max-h-96" className="text-caption">
+                    <TableHeader>
+                      <TableRow><TableHead className="px-2">Datum</TableHead><TableHead className="px-2">Beleg</TableHead><TableHead className="px-2">Text</TableHead><TableHead className="px-2">Zeilen</TableHead><TableHead className="px-2">Status</TableHead></TableRow>
+                    </TableHeader>
+                    <TableBody>
                       {result.entries.slice(0, PREVIEW_ROWS).map((entry) => (
-                        <tr key={entry.key} className="align-top">
-                          <td className="px-2 py-1.5 tabular-nums">{date(entry.postingDate)}</td>
-                          <td className="px-2 py-1.5">{entry.reference}</td>
-                          <td className="px-2 py-1.5">{entry.bookingText}</td>
-                          <td className="px-2 py-1.5 tabular-nums">
+                        <TableRow key={entry.key}>
+                          <TableCell className="px-2 align-top tabular-nums">{date(entry.postingDate)}</TableCell>
+                          <TableCell className="px-2 align-top">{entry.reference}</TableCell>
+                          <TableCell className="px-2 align-top">{entry.bookingText}</TableCell>
+                          <TableCell className="px-2 align-top tabular-nums">
                             {entry.lines.map((line, index) => (
                               <div key={index}>{line.debitAmount > 0 ? 'S' : 'H'} {line.accountNumber}{line.accountName ? ` ${line.accountName}` : ''} {euro(line.debitAmount || line.creditAmount)}{line.taxCaseKey ? ` · ${line.taxCaseKey}` : ''}</div>
                             ))}
-                          </td>
-                          <td className="px-2 py-1.5"><Badge tone={STATUS[entry.status].tone}>{STATUS[entry.status].label}</Badge></td>
-                        </tr>
+                          </TableCell>
+                          <TableCell className="px-2 align-top"><Badge tone={STATUS[entry.status].tone}>{STATUS[entry.status].label}</Badge></TableCell>
+                        </TableRow>
                       ))}
-                    </tbody>
-                  </table>
+                    </TableBody>
+                  </Table>
                   {result.entryCount > PREVIEW_ROWS ? <p className="px-2 py-1.5 text-caption text-muted">Vorschau der ersten {PREVIEW_ROWS} von {result.entryCount} Buchungen{result.invalidCount ? ', fehlerhafte zuerst' : ''}.</p> : null}
                 </div>
               ) : null}

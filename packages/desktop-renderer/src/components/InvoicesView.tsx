@@ -1961,7 +1961,7 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
                           </div>
                           {isLockedDocument(selectedDocument, documentType) && (
                             <p role="note" className="flex items-start gap-1.5 text-caption text-muted">
-                              <Lock size={13} className="mt-0.5 shrink-0" aria-hidden="true" />
+                              <Lock size={12} className="mt-0.5 shrink-0" aria-hidden="true" />
                               <span>{selectedDocument.status === 'cancelled'
                                 ? 'Storniert und schreibgeschützt. Für eine neue Abrechnung erstellst du eine neue Rechnung.'
                                 : selectedDocument.status === 'paid'

@@ -1,5 +1,5 @@
 import { useState, type FormEvent, type ReactElement } from 'react';
-import { Button, Card, CardHeader, Input } from '@billme/ui';
+import { Button, Card, CardHeader, Input, Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@billme/ui';
 import { useSaveLedgerAccountMutation } from '../hooks/useProLedger';
 
 type LedgerRow = { chart: 'SKR03' | 'SKR04'; accountNumber: string; name: string; source: string; active?: boolean };
@@ -70,16 +70,16 @@ export function LedgerPlanCard({ chart, accounts }: { chart: 'SKR03' | 'SKR04'; 
         </form>
         {notice ? <p role={notice.error ? 'alert' : 'status'} className={`mt-2 text-control ${notice.error ? 'text-error-text' : 'text-foreground'}`}>{notice.text}</p> : null}
         {listed.length ? (
-          <table className="mt-3 w-full text-control">
+          <Table density="compact" containerClassName="mt-3">
             <caption className="sr-only">Eigene und deaktivierte Konten</caption>
-            <thead><tr className="text-left text-muted"><th className="py-1 font-medium">Konto</th><th className="py-1 font-medium">Bezeichnung</th><th className="py-1 font-medium">Status</th><th className="py-1" /></tr></thead>
-            <tbody>
+            <TableHeader><TableRow><TableHead>Konto</TableHead><TableHead>Bezeichnung</TableHead><TableHead>Status</TableHead><TableHead><span className="sr-only">Aktion</span></TableHead></TableRow></TableHeader>
+            <TableBody>
               {listed.map((row) => (
-                <tr key={row.accountNumber} className="border-t border-border">
-                  <td className="py-1 font-mono tabular-nums">{row.accountNumber}</td>
-                  <td className="py-1">{row.name}{row.source === 'tenant' ? <span className="ml-2 text-caption text-muted">eigenes Konto</span> : null}</td>
-                  <td className="py-1">{row.active === false ? 'deaktiviert' : 'aktiv'}</td>
-                  <td className="py-1 text-right">
+                <TableRow key={row.accountNumber}>
+                  <TableCell className="font-mono tabular-nums">{row.accountNumber}</TableCell>
+                  <TableCell>{row.name}{row.source === 'tenant' ? <span className="ml-2 text-caption text-muted">eigenes Konto</span> : null}</TableCell>
+                  <TableCell>{row.active === false ? 'deaktiviert' : 'aktiv'}</TableCell>
+                  <TableCell className="text-right">
                     <Button
                       type="button"
                       variant="ghost"
@@ -89,11 +89,11 @@ export function LedgerPlanCard({ chart, accounts }: { chart: 'SKR03' | 'SKR04'; 
                     >
                       {row.active === false ? 'Aktivieren' : 'Deaktivieren'}
                     </Button>
-                  </td>
-                </tr>
+                  </TableCell>
+                </TableRow>
               ))}
-            </tbody>
-          </table>
+            </TableBody>
+          </Table>
         ) : <p className="mt-3 text-caption text-muted">Noch keine eigenen oder deaktivierten Konten.</p>}
       </Card>
     </section>

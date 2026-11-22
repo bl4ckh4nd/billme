@@ -63,7 +63,7 @@ const isoDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/).refine((value) => !Numbe
 export const liteDatevExportQuerySchema = z.object({ from: isoDate, to: isoDate });
 
 // CP1252 printable range; anything else in a free text becomes '?' so one emoji cannot fail the whole file.
-const CP1252_TEXT = /[^\x20-\x7e\xa0-\xff€‚ƒ„…†‡ˆ‰Š‹ŒŽ‘’“”•–—˜™š›œžŸ]/g;
+const CP1252_TEXT = /[^\x20-\x7e\xa0-\xff€‚ƒ„…†‡ˆ‰Š‹ŒŽ‘’“”•–\u2014˜™š›œžŸ]/g;
 const datevText = (value: string, max: number): string => value.replace(/\s+/g, ' ').replace(CP1252_TEXT, '?').trim().slice(0, max);
 // A document number in a free text: letters, a separator and digits (RE-2026-204, B-4711, 0815-2026-17).
 const DOCUMENT_NUMBER = /\b(?:[A-Za-z]{1,6}[-/]?)?\d{2,}(?:[-/]\d+)+\b|\b[A-Za-z]{1,6}[-/]?\d{3,}\b/;

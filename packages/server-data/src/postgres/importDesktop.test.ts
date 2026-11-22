@@ -6,7 +6,7 @@ import path from 'node:path';
 import test from 'node:test';
 import Database from 'better-sqlite3';
 import { createSingleTenantScope } from '@billme/server-core';
-import { EUR_SOURCE_VERSION_2025 } from '@billme/desktop-services/eurCatalog';
+import { EUR_SOURCE_VERSION_2025, getCatalogForYear } from '@billme/desktop-services/eurCatalog';
 import { createPostgresAuditLogPort, sha256Hex, stableStringify } from './audit.js';
 import { createPostgresPool } from './connection.js';
 import { runPostgresMigrations } from './migrations.js';
@@ -17,6 +17,7 @@ import {
   importDesktopSqliteToPostgres,
   loadAccountMappingsHgb,
   loadLegacyAccountMappingsHgb,
+  validateCanonicalEurLines,
 } from './importDesktop.js';
 import type { ServerReportAccountMappingRecord } from './proAccounting.js';
 
@@ -671,4 +672,29 @@ test('rerunning a fully migrated Postgres database preserves reporting evidence,
     await pool.query('DELETE FROM tenants WHERE id=$1', [tenantId]).catch(() => undefined);
     await pool.end();
   }
+});
+
+test('EÜR catalog validation accepts the display order of older builds but still rejects changed rows', () => {
+  const rows = getCatalogForYear(2025).map((line, index) => ({
+    id: line.id,
+    taxYear: line.year,
+    kennziffer: line.kennziffer,
+    providerPath: line.providerPath,
+    label: line.label,
+    kind: line.kind,
+    exportable: line.exportable,
+    sortOrder: index,
+    computedFromJson: JSON.stringify(line.computedFromIds ?? []),
+    computedTermsJson: JSON.stringify(line.computedTerms ?? []),
+    sourceVersion: EUR_SOURCE_VERSION_2025,
+    createdAt: '2026-01-01T00:00:00.000Z',
+    updatedAt: '2026-01-01T00:00:00.000Z',
+  }));
+  // An older build listed Kz 111 first; the order is display-only.
+  const legacyOrder = rows.map((row) => ({ ...row, sortOrder: row.id === 'E2025_KZ111' ? 0 : row.sortOrder }));
+  assert.doesNotThrow(() => validateCanonicalEurLines(legacyOrder));
+  assert.throws(
+    () => validateCanonicalEurLines(legacyOrder.map((row) => (row.id === 'E2025_KZ111' ? { ...row, label: 'tampered' } : row))),
+    /does not match canonical 2025 catalog: E2025_KZ111/,
+  );
 });
